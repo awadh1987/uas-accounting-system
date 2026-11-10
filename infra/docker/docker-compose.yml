@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: uas
+      POSTGRES_PASSWORD: uas_change_me
+      POSTGRES_DB: uas_accounting
+    ports:
+      - "5432:5432"
+    volumes:
+      - uas_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uas -d uas_accounting"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  uas-web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql://uas:uas_change_me@postgres:5432/uas_accounting?schema=public"
+      NEXT_PUBLIC_APP_NAME: "النظام المحاسبي الموحد (UAS)"
+    ports:
+      - "3000:3000"
+
+volumes:
+  uas_pg_data:
+
