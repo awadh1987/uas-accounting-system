@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>وضع عدم الاتصال | النظام المحاسبي الموحد (UAS)</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, 'Cairo', sans-serif;
+      background: #f8fafc;
+      color: #0f172a;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    .card {
+      max-width: 420px;
+      width: 100%;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 1.5rem;
+      padding: 2rem;
+      text-align: center;
+      box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
+    }
+    .badge {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 1rem;
+      border-radius: 1rem;
+      background: #059669;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 1.25rem;
+    }
+    button {
+      margin-top: 1.25rem;
+      background: #059669;
+      color: #fff;
+      border: none;
+      border-radius: 0.75rem;
+      padding: 0.75rem 1.5rem;
+      font-weight: 700;
+      cursor: pointer;
+      min-height: 44px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">UAS</div>
+    <h2>أنت تعمل حالياً بدون اتصال بالإنترنت</h2>
+    <p>يدعم النظام المحاسبي الموحد العمل الميداني وحفظ العمليات في IndexedDB ثم مزامنتها لاحقاً.</p>
+    <button onclick="window.location.href='/'">إعادة المحاولة / فتح النظام</button>
+  </div>
+</body>
+</html>
+

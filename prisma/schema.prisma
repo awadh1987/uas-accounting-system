@@ -1,0 +1,229 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Note: For Supabase PostgreSQL deployment, set provider = "postgresql"
+// and apply Row-Level Security (RLS) policies + REVOKE UPDATE, DELETE on ImmutableAuditLog.
+
+model SystemSettings {
+  id              String   @id @default("default")
+  orgName         String   @default("النظام المحاسبي الموحد Unified Accounting System (UAS)")
+  logoText        String   @default("UAS")
+  defaultLang     String   @default("ar")
+  defaultTheme    String   @default("emerald")
+  defaultCurrency String   @default("YER")
+  updatedAt       DateTime @updatedAt
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("محاسب رئيسي (Accountant)")
+  active       Boolean  @default(true)
+  avatarChar   String   @default("م")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Project {
+  id                  String                  @id @default(cuid())
+  name                String
+  type                String                  @default("مشروع رئيسي") // MAIN | SUB
+  parentProjectId     String?
+  parentProject       Project?                @relation("ProjectHierarchy", fields: [parentProjectId], references: [id], onDelete: SetNull)
+  subProjects         Project[]               @relation("ProjectHierarchy")
+  estimatedValue      Float                   @default(0)
+  plannedHarvestCount Int                     @default(1)
+  notes               String                  @default("")
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  harvestCycles       HarvestCycle[]
+  expenses            OperatingExpense[]
+  workerWages         WorkerWageEntry[]
+  sales               SaleTransaction[]
+  inventoryBatches    HarvestInventoryBatch[]
+  adjustments         AdjustmentEntry[]
+}
+
+model HarvestCycle {
+  id               String                  @id @default(cuid())
+  projectId        String
+  project          Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name             String
+  sortOrder        Int                     @default(0)
+  isLocked         Boolean                 @default(false)
+  lockedByUserId   String?
+  lockedAt         DateTime?
+  createdAt        DateTime                @default(now())
+  expenses         OperatingExpense[]
+  workerWages      WorkerWageEntry[]
+  sales            SaleTransaction[]
+  inventoryBatches HarvestInventoryBatch[]
+  adjustments      AdjustmentEntry[]
+
+  @@unique([projectId, name])
+}
+
+model TreasuryAccount {
+  id            String               @id @default(cuid())
+  name          String
+  type          String               @default("CASH") // CASH | BANK | WALLET
+  accountNumber String
+  currencyCode  String               @default("YER") // YER | SAR | USD
+  balanceYER    Float                @default(0)
+  updatedAt     DateTime             @updatedAt
+  installments  InstallmentVoucher[]
+}
+
+model CurrencyRate {
+  currencyCode String   @id // YER | SAR | USD
+  rateToYER    Float
+  updatedAt    DateTime @updatedAt
+}
+
+model OperatingExpense {
+  id             String        @id @default(cuid())
+  projectId      String
+  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  harvestCycleId String?
+  harvestCycle   HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
+  harvestName    String
+  category       String        // وقود/محروقات | وجبات غذائية | مواد غذائية | أجور نقل | أخرى
+  subType        String
+  quantity       Float         @default(1)
+  unitPrice      Float         @default(0)
+  totalAmount    Float         @default(0) // Computed: quantity * unitPrice
+  expenseDate    String
+  notes          String        @default("")
+  createdAt      DateTime      @default(now())
+}
+
+model Worker {
+  id               String            @id @default(cuid())
+  name             String            @unique
+  phone            String            @default("783118231")
+  defaultDailyWage Float             @default(0)
+  createdAt        DateTime          @default(now())
+  wageEntries      WorkerWageEntry[]
+}
+
+model WorkerWageEntry {
+  id             String               @id @default(cuid())
+  workerId       String
+  worker         Worker               @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  workerName     String
+  projectId      String
+  project        Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  harvestCycleId String?
+  harvestCycle   HarvestCycle?        @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
+  harvestName    String
+  dailyWage      Float
+  daysWorked     Float
+  totalWage      Float                // Computed: dailyWage * daysWorked (=F*G)
+  creditAmount   Float                @default(0) // Paid (دائن)
+  debitBalance   Float                // Computed: totalWage - creditAmount (=H-I)
+  workDate       String
+  notes          String               @default("")
+  createdAt      DateTime             @default(now())
+  installments   InstallmentVoucher[]
+}
+
+model Customer {
+  id        String            @id @default(cuid())
+  name      String            @unique
+  phone     String            @default("783118231")
+  createdAt DateTime          @default(now())
+  sales     SaleTransaction[]
+}
+
+model SaleTransaction {
+  id               String               @id @default(cuid())
+  projectId        String
+  project          Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  harvestCycleId   String?
+  harvestCycle     HarvestCycle?        @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
+  harvestName      String
+  saleBatchLabel   String
+  customerId       String
+  customer         Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  customerName     String
+  customerPhone    String
+  productGrade     String
+  bundlesCount     Int
+  unitPrice        Float
+  totalAmount      Float                // Computed: bundlesCount * unitPrice (=P*Q)
+  creditPaid       Float                @default(0) // Received (دائن)
+  debitReceivable  Float                // Computed: totalAmount - creditPaid (=R-S)
+  saleDate         String
+  receiptVoucherNo String
+  notes            String               @default("")
+  createdAt        DateTime             @default(now())
+  installments     InstallmentVoucher[]
+}
+
+model InstallmentVoucher {
+  id                 String           @id @default(cuid())
+  voucherNo          String           @unique
+  type               String           // CUSTOMER_RECEIPT | WORKER_PAYOUT
+  saleTransactionId  String?
+  saleTransaction    SaleTransaction? @relation(fields: [saleTransactionId], references: [id], onDelete: SetNull)
+  workerWageEntryId  String?
+  workerWageEntry    WorkerWageEntry? @relation(fields: [workerWageEntryId], references: [id], onDelete: SetNull)
+  targetName         String
+  phone              String           @default("783118231")
+  treasuryAccountId  String
+  treasuryAccount    TreasuryAccount  @relation(fields: [treasuryAccountId], references: [id], onDelete: Restrict)
+  amountYER          Float
+  qrVerificationHash String
+  paymentDate        String
+  notes              String           @default("")
+  createdAt          DateTime         @default(now())
+}
+
+model HarvestInventoryBatch {
+  id               String        @id @default(cuid())
+  projectId        String
+  project          Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  harvestCycleId   String?
+  harvestCycle     HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
+  harvestName      String
+  productGrade     String
+  harvestedBundles Int
+  shrinkageBundles Int           @default(0)
+  notes            String        @default("")
+  createdAt        DateTime      @default(now())
+}
+
+model ImmutableAuditLog {
+  id              String   @id @default(cuid())
+  timestamp       String
+  userId          String?
+  userDisplay     String
+  userRole        String
+  actionType      String
+  entityReference String
+  details         String
+  sha256Hash      String
+  createdAt       DateTime @default(now())
+}
+
+model AdjustmentEntry {
+  id             String        @id @default(cuid())
+  projectId      String?
+  project        Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  harvestCycleId String?
+  harvestCycle   HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
+  periodLabel    String
+  reason         String
+  amountYER      Float
+  createdByUser  String
+  createdAt      DateTime      @default(now())
+}
+

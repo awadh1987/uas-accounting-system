@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">UAS Accounting</string>
+    <string name="title_activity_main">UAS Accounting</string>
+    <string name="package_name">com.uas.accounting</string>
+    <string name="custom_url_scheme">com.uas.accounting</string>
+</resources>

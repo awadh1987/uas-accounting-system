@@ -1,0 +1,127 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary: #f8fafc;
+  --bg-card: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --accent: #059669;
+  --accent-hover: #047857;
+  --accent-soft: #ecfdf5;
+  --border-color: #e2e8f0;
+}
+
+body.theme-dark {
+  --bg-primary: #0f172a;
+  --bg-card: #1e293b;
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --accent: #10b981;
+  --accent-hover: #059669;
+  --accent-soft: #064e3b;
+  --border-color: #334155;
+}
+
+body.theme-royal {
+  --bg-primary: #f5f7ff;
+  --bg-card: #ffffff;
+  --text-primary: #1e1b4b;
+  --text-secondary: #4338ca;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: #eef2ff;
+  --border-color: #c7d2fe;
+}
+
+body {
+  font-family: var(--font-cairo), var(--font-inter), 'Cairo', 'Inter', sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 0.2s ease, color 0.2s ease;
+  padding-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+}
+
+.card-surface {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+}
+
+.accent-bg {
+  background-color: var(--accent);
+  color: #ffffff;
+}
+
+.accent-bg:hover {
+  background-color: var(--accent-hover);
+}
+
+.accent-text {
+  color: var(--accent);
+}
+
+.accent-badge {
+  background-color: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Mobile Responsive & Smartphone App Frame Mode */
+body.mobile-simulator-active {
+  background-color: #0f172a !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem 0 5.5rem 0;
+}
+
+body.mobile-simulator-active header,
+body.mobile-simulator-active main {
+  max-width: 412px !important;
+  width: 100% !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
+body.mobile-simulator-active header {
+  border-top-left-radius: 1.75rem;
+  border-top-right-radius: 1.75rem;
+  border-top: 6px solid #334155;
+}
+
+body.mobile-simulator-active main {
+  background-color: var(--bg-primary);
+  border-bottom-left-radius: 1.75rem;
+  border-bottom-right-radius: 1.75rem;
+  border-bottom: 6px solid #334155;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.65);
+}
+
+@media (max-width: 640px) {
+  table th,
+  table td {
+    padding: 0.45rem 0.4rem !important;
+    font-size: 0.7rem !important;
+  }
+  button,
+  select,
+  input {
+    min-height: 44px;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff !important;
+    color: #000 !important;
+    padding-bottom: 0 !important;
+  }
+  .card-surface {
+    border: 1px solid #ccc !important;
+    box-shadow: none !important;
+  }
+}
+

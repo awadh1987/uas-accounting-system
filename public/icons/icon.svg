@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#059669"/>
+  <rect x="28" y="28" width="456" height="456" rx="92" fill="none" stroke="#a7f3d0" stroke-width="10" opacity="0.5"/>
+  <text x="256" y="275" font-family="Arial, sans-serif" font-size="168" font-weight="800" fill="#ffffff" text-anchor="middle" dominant-baseline="middle">UAS</text>
+  <text x="256" y="388" font-family="Arial, sans-serif" font-size="40" font-weight="700" fill="#d1fae5" text-anchor="middle">النظام المحاسبي الموحد</text>
+</svg>
+

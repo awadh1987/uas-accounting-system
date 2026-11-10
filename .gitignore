@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+prisma/dev.db
+prisma/dev.db-journal
+.env
+.env.local
+android/app/build/
+ios/App/Pods/
+*.tsbuildinfo
+next-env.d.ts
+
