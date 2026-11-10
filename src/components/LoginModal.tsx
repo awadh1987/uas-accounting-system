@@ -47,7 +47,7 @@ export function LoginModal({
 
     setSubmitting(true);
     try {
-      const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+      const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
       const res = await fetch(`${apiBase}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

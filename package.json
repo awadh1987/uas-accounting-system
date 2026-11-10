@@ -13,8 +13,12 @@
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "db:generate": "prisma generate",
+    "db:postgres": "node scripts/switch-db.mjs postgresql && prisma generate",
+    "db:sqlite": "node scripts/switch-db.mjs sqlite && prisma generate",
     "build:mobile": "node scripts/build-capacitor.mjs",
-    "cap:sync": "npx cap sync"
+    "cap:sync": "npx cap sync",
+    "cap:android": "npx cap open android",
+    "cap:ios": "npx cap open ios"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

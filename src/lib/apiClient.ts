@@ -18,7 +18,7 @@ import {
 import { INITIAL_FALLBACK_STATE } from "@/lib/seedFallback";
 import type { UasBootstrapState, UasUser } from "@/types/uas";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+export const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
 
 export interface ApiMutationResult {
   state: UasBootstrapState;

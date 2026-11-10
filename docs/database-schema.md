@@ -38,14 +38,12 @@ Grounded directly in `UAS.xlsx`:
 
 ## Switching from Local SQLite to Supabase PostgreSQL
 
-1. Update `datasource db` in `prisma/schema.prisma`:
-   ```prisma
-   datasource db {
-     provider = "postgresql"
-     url      = env("DATABASE_URL")
-   }
+1. Run the provider switcher (or manually update `provider` in `prisma/schema.prisma`):
+   ```bash
+   npm run db:postgres
    ```
-2. Set `DATABASE_URL` in `.env` using your Supabase PostgreSQL URI.
-3. Run `npx prisma db push` and `npx tsx prisma/seed.ts`.
-4. Apply `infra/supabase/rls-policies.sql` in Supabase SQL Editor to enable RLS and revoke `UPDATE`/`DELETE` on `ImmutableAuditLog`.
+   *(To switch back to local SQLite for offline development, run `npm run db:sqlite`.)*
+2. Set `DATABASE_URL` in `.env` using your Supabase PostgreSQL connection string (`postgresql://...`).
+3. Run `npx prisma db push && npx tsx prisma/seed.ts`.
+4. Run [rls-policies.sql](../infra/supabase/rls-policies.sql) in the Supabase SQL Editor to enable RLS across all 15 tables, restrict `User.passwordHash`, protect locked harvest cycles, and lock `ImmutableAuditLog` via both `REVOKE` and a database trigger.
 

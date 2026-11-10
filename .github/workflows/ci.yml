@@ -24,9 +24,12 @@ jobs:
         run: npm ci
 
       - name: Generate Prisma client and validate schema
-        env:
-          DATABASE_URL: "file:./dev.db"
         run: |
+          if grep -q 'provider = "postgresql"' prisma/schema.prisma; then
+            export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres"
+          else
+            export DATABASE_URL="file:./dev.db"
+          fi
           npx prisma generate
           npx prisma validate
 
@@ -40,7 +43,11 @@ jobs:
         run: npm test
 
       - name: Production build
-        env:
-          DATABASE_URL: "file:./dev.db"
-        run: npm run build
+        run: |
+          if grep -q 'provider = "postgresql"' prisma/schema.prisma; then
+            export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres"
+          else
+            export DATABASE_URL="file:./dev.db"
+          fi
+          npm run build
 
