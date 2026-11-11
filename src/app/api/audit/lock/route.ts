@@ -7,17 +7,18 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const key = String(body.key || "").trim();
+    const cycleId = String(body.cycleId || "").trim();
     const [projectId, harvestName] = key.split("::");
     const actor = extractActor(body);
 
-    if (!projectId || !harvestName) {
+    if (!cycleId && (!projectId || !harvestName)) {
       return jsonError("معرف القطفة غير صالح", 400);
     }
 
     await prisma.$transaction(async (tx) => {
-      const cycle = await tx.harvestCycle.findFirst({
-        where: { projectId, name: harvestName },
-      });
+      const cycle = cycleId
+        ? await tx.harvestCycle.findUnique({ where: { id: cycleId } })
+        : await tx.harvestCycle.findFirst({ where: { projectId, name: harvestName } });
       if (!cycle) throw new Error("CYCLE_NOT_FOUND");
 
       const nextLocked = !cycle.isLocked;
@@ -26,15 +27,31 @@ export async function POST(req: NextRequest) {
         data: {
           isLocked: nextLocked,
           lockedByUserId: nextLocked ? actor.userId : null,
+          lockedById: nextLocked ? actor.userId : null,
           lockedAt: nextLocked ? new Date() : null,
         },
       });
+
+      if (actor.userId) {
+        const actorUser = await tx.user.findUnique({ where: { id: actor.userId }, select: { id: true } });
+        if (actorUser) {
+          await tx.auditLog.create({
+            data: {
+              userId: actorUser.id,
+              action: "LOCK",
+              entity: "HarvestCycle",
+              entityId: cycle.id,
+              details: { projectId: cycle.projectId, name: cycle.name, isLocked: nextLocked },
+            },
+          });
+        }
+      }
 
       await appendAuditLogTx(tx, {
         ...actor,
         actionType: nextLocked ? "إغلاق فترة قطفة 🔒" : "إعادة فتح فترة قطفة 🔓",
         entityReference: cycle.id,
-        details: `المعرف: ${key}`,
+        details: `المعرف: ${cycle.projectId}::${cycle.name}`,
       });
     });
 
@@ -48,4 +65,3 @@ export async function POST(req: NextRequest) {
     return jsonError("تعذر تغيير حالة إغلاق القطفة", 500);
   }
 }
-

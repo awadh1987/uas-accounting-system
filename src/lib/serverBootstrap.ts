@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type {
   CurrencyRate,
+  EnterpriseProfile,
   HarvestCycle,
   HarvestInventoryBatch,
   ImmutableAuditLog,
@@ -8,6 +9,7 @@ import type {
   OperatingExpense,
   Prisma,
   SaleTransaction,
+  SubProject,
   SystemSettings,
   TreasuryAccount,
   WorkerWageEntry,
@@ -17,6 +19,7 @@ import { prisma } from "@/lib/prisma";
 import type {
   UasAuditLog,
   UasBootstrapState,
+  UasEnterpriseProfile,
   UasInstallmentVoucher,
   UasInventoryBatch,
   UasOperatingExpense,
@@ -27,8 +30,8 @@ import type {
   UasWorkerWage,
 } from "@/types/uas";
 
-type ProjectWithCycles = Prisma.ProjectGetPayload<{
-  include: { harvestCycles: true };
+type ProjectWithRelations = Prisma.ProjectGetPayload<{
+  include: { harvestCycles: true; subProjects: true };
 }>;
 
 export function hashPassword(password: string): string {
@@ -45,6 +48,16 @@ export function generateAuditHash(payload: string): string {
       .slice(0, 6)
       .toUpperCase()
   );
+}
+
+export function parseAssignedProjects(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
 }
 
 export async function findHarvestCycle(
@@ -98,10 +111,26 @@ export async function appendAuditLogTx(
   });
 }
 
+function mapEnterpriseProfile(row: EnterpriseProfile | null): UasEnterpriseProfile {
+  return {
+    id: row?.id || "default",
+    legalNameAr: row?.legalNameAr || "شركة الجبري الزراعية للتنمية والاستثمار",
+    legalNameEn: row?.legalNameEn || "Al-Jabri Agricultural Development & Investment Co.",
+    taxNumber: row?.taxNumber ?? "30049811200003",
+    commercialReg: row?.commercialReg ?? "CR-YE-2026-8841",
+    currencyCode: row?.currencyCode || "YER",
+    address: row?.address ?? "الجمهورية اليمنية - مزارع الجبري الإنتاجية",
+    phone: row?.phone ?? "783118231",
+    email: row?.email ?? "finance@aljabri-agri.com",
+    logoUrl: row?.logoUrl ?? "/icons/icon.svg",
+    brandColor: row?.brandColor || "#059669",
+  };
+}
+
 function mapSettings(settingsRow: SystemSettings | null): UasSystemSettings {
   return {
     orgName:
-      settingsRow?.orgName || "النظام المحاسبي الموحد Unified Accounting System (UAS)",
+      settingsRow?.orgName || "شركة الجبري الزراعية للتنمية والاستثمار | UAS",
     logoText: settingsRow?.logoText || "UAS",
     defaultLang: settingsRow?.defaultLang === "en" ? "en" : "ar",
     defaultTheme:
@@ -129,30 +158,44 @@ function mapExchangeRates(rates: CurrencyRate[]): Record<CurrencyCode, number> {
   return exchangeRates;
 }
 
-function mapProjects(projects: ProjectWithCycles[]): {
+function mapProjects(projects: ProjectWithRelations[]): {
   mappedProjects: UasProject[];
   lockedPeriods: Record<string, boolean>;
 } {
   const lockedPeriods: Record<string, boolean> = {};
-  const mappedProjects: UasProject[] = projects.map((p: ProjectWithCycles) => {
+  const mappedProjects: UasProject[] = projects.map((p: ProjectWithRelations) => {
     for (const hc of p.harvestCycles) {
       lockedPeriods[`${p.id}::${hc.name}`] = hc.isLocked;
     }
     return {
       id: p.id,
+      code: p.code,
       name: p.name,
+      nameAr: p.nameAr,
+      nameEn: p.nameEn,
       type: p.type,
       parentProjectId: p.parentProjectId || "",
+      budgetTotal: Number(p.budgetTotal) || p.estimatedValue,
       estimatedValue: p.estimatedValue,
       plannedHarvests: p.plannedHarvestCount,
+      status: p.status,
       notes: p.notes,
       harvests: p.harvestCycles.map((hc: HarvestCycle) => hc.name),
       harvestCycles: p.harvestCycles.map((hc: HarvestCycle) => ({
         id: hc.id,
         projectId: hc.projectId,
+        cycleNumber: hc.cycleNumber,
         name: hc.name,
         sortOrder: hc.sortOrder,
         isLocked: hc.isLocked,
+      })),
+      subProjects: p.subProjects.map((sp: SubProject) => ({
+        id: sp.id,
+        projectId: sp.projectId,
+        code: sp.code,
+        nameAr: sp.nameAr,
+        nameEn: sp.nameEn,
+        budget: Number(sp.budget) || 0,
       })),
     };
   });
@@ -162,10 +205,15 @@ function mapProjects(projects: ProjectWithCycles[]): {
 function mapTreasury(accounts: TreasuryAccount[]): UasTreasuryAccount[] {
   return accounts.map((t: TreasuryAccount) => ({
     id: t.id,
+    code: t.code,
     name: t.name,
+    nameAr: t.nameAr,
+    nameEn: t.nameEn,
     type: t.type,
     accountNo: t.accountNumber,
-    currencyCode: t.currencyCode,
+    accountId: t.accountId,
+    currencyCode: t.currencyCode || t.currency,
+    balance: Number(t.balance) || t.balanceYER,
     balanceYER: t.balanceYER,
   }));
 }
@@ -264,6 +312,7 @@ function mapSales(sales: SaleTransaction[]): UasSaleTransaction[] {
 
 export async function getBootstrapState(): Promise<UasBootstrapState> {
   const [
+    enterpriseProfile,
     settingsRow,
     rates,
     treasuryAccounts,
@@ -271,6 +320,7 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
     inventoryBatches,
     auditLogs,
   ] = await Promise.all([
+    prisma.enterpriseProfile.findUnique({ where: { id: "default" } }),
     prisma.systemSettings.findUnique({ where: { id: "default" } }),
     prisma.currencyRate.findMany(),
     prisma.treasuryAccount.findMany({ orderBy: { id: "asc" } }),
@@ -284,11 +334,14 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
       orderBy: { createdAt: "asc" },
       select: {
         id: true,
+        username: true,
         name: true,
+        fullName: true,
         email: true,
         role: true,
         active: true,
         avatarChar: true,
+        assignedProjects: true,
       },
     }),
     prisma.project.findMany({
@@ -296,6 +349,9 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
       include: {
         harvestCycles: {
           orderBy: { sortOrder: "asc" },
+        },
+        subProjects: {
+          orderBy: { code: "asc" },
         },
       },
     }),
@@ -307,6 +363,7 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
   const { mappedProjects, lockedPeriods } = mapProjects(projects);
 
   return {
+    enterpriseProfile: mapEnterpriseProfile(enterpriseProfile),
     settings: mapSettings(settingsRow),
     exchangeRates: mapExchangeRates(rates),
     treasuryAccounts: mapTreasury(treasuryAccounts),
@@ -314,7 +371,17 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
     inventoryBatches: mapInventory(inventoryBatches),
     lockedPeriods,
     auditLogs: mapAuditLogs(auditLogs),
-    users,
+    users: users.map((u) => ({
+      id: u.id,
+      username: u.username,
+      name: u.name,
+      fullName: u.fullName,
+      email: u.email,
+      role: u.role,
+      active: u.active,
+      avatarChar: u.avatarChar,
+      assignedProjects: parseAssignedProjects(u.assignedProjects),
+    })),
     projects: mappedProjects,
     expenses: mapExpenses(expenses),
     workers: mapWorkers(workers),

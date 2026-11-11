@@ -1,9 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { CoaTreeTab } from "@/components/CoaTreeTab";
+import { FinancialReportsTab } from "@/components/FinancialReportsTab";
+import { GeneralLedgerTab } from "@/components/GeneralLedgerTab";
 import { HeaderNav } from "@/components/HeaderNav";
+import { LandingPage } from "@/components/LandingPage";
 import { LoginModal } from "@/components/LoginModal";
 import { MobileBottomNav } from "@/components/MobileBottomNav";
+import { ProcurementTab } from "@/components/ProcurementTab";
+import { ProjectsManagerTab } from "@/components/ProjectsManagerTab";
 import { VoucherModal } from "@/components/VoucherModal";
 import { AuditTab } from "@/components/tabs/AuditTab";
 import { CustomersTab } from "@/components/tabs/CustomersTab";
@@ -11,7 +17,6 @@ import { DashboardTab } from "@/components/tabs/DashboardTab";
 import { ExpensesTab } from "@/components/tabs/ExpensesTab";
 import { InventoryTab } from "@/components/tabs/InventoryTab";
 import { MobileTab } from "@/components/tabs/MobileTab";
-import { ProjectsTab } from "@/components/tabs/ProjectsTab";
 import { PromptTab } from "@/components/tabs/PromptTab";
 import { SalesTab } from "@/components/tabs/SalesTab";
 import { SystemTab } from "@/components/tabs/SystemTab";
@@ -45,6 +50,7 @@ interface BeforeInstallPromptEvent extends Event {
 export function UasAppShell() {
   const [state, setState] = useState<UasBootstrapState>(INITIAL_FALLBACK_STATE);
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<"landing" | "erp">("landing");
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
   const [lang, setLang] = useState<LanguageCode>("ar");
   const [theme, setTheme] = useState<ThemeName>("emerald");
@@ -210,6 +216,12 @@ export function UasAppShell() {
     return true;
   }
 
+  const refreshFromServer = useCallback(async () => {
+    const res = await fetchBootstrapState();
+    setState(res.state);
+    setOfflineQueueCount(res.queueCount);
+  }, []);
+
   async function handleSyncQueue() {
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       showToast("لا يوجد اتصال بالإنترنت حالياً لتنفيذ المزامنة");
@@ -361,6 +373,7 @@ export function UasAppShell() {
         onClose={() => setLoginModalOpen(false)}
         onLoginSuccess={(u) => {
           setCurrentUser(u);
+          setViewMode("erp");
           showToast(`تم تسجيل الدخول بحساب: ${u.name}`);
         }}
         onToast={showToast}
@@ -376,121 +389,183 @@ export function UasAppShell() {
         onSendWhatsApp={handleSendWhatsApp}
       />
 
-      <HeaderNav
-        orgName={state.settings.orgName}
-        logoText={state.settings.logoText}
-        lang={lang}
-        theme={theme}
-        currency={currency}
-        offlineMode={offlineMode}
-        offlineQueueCount={offlineQueueCount}
-        mobileSimulatorActive={mobileSimulatorActive}
-        activeTab={activeTab}
-        projects={state.projects}
-        selectedProjectId={selectedProjectId}
-        selectedHarvest={selectedHarvest}
-        availableHarvests={availableHarvests}
-        currentUser={currentUser}
-        onProjectChange={handleProjectFilterChange}
-        onHarvestChange={setSelectedHarvest}
-        onCurrencyChange={(c) => {
-          setCurrency(c);
-          showToast(`تم تغيير عملة العرض إلى: ${c}`);
-        }}
-        onToggleOffline={() => {
-          const next = !offlineMode;
-          setOfflineMode(next);
-          showToast(
-            next
-              ? "تم تفعيل وضع العمل الميداني بدون إنترنت (تخزين محلي IndexedDB)"
-              : "تم الاتصال بالشبكة"
-          );
-        }}
-        onSyncQueue={handleSyncQueue}
-        onToggleMobileSim={() => {
-          const next = !mobileSimulatorActive;
-          setMobileSimulatorActive(next);
-          showToast(
-            next
-              ? "📱 تم تفعيل محاكي تطبيق الجوال (عرض الهاتف 412px)"
-              : "🖥️ تم العودة لعرض الشاشة الكاملة"
-          );
-        }}
-        onThemeChange={(t) => {
-          setTheme(t);
-          runMutation(
-            "/api/system/settings",
-            "PATCH",
-            { defaultTheme: t },
-            "Theme change",
-            `تم تغيير المظهر إلى: ${t}`
-          );
-        }}
-        onToggleLanguage={() => {
-          const next = lang === "ar" ? "en" : "ar";
-          setLang(next);
-          runMutation(
-            "/api/system/settings",
-            "PATCH",
-            { defaultLang: next },
-            "Language change",
-            next === "ar" ? "تم التبديل إلى اللغة العربية" : "Switched to English"
-          );
-        }}
-        onOpenLogin={() => setLoginModalOpen(true)}
-        onSwitchTab={setActiveTab}
-      />
-
-      <main className="max-w-7xl w-full mx-auto flex-1 p-4 space-y-6">
-        {loading && (
-          <div className="card-surface rounded-2xl p-3 text-xs text-center text-slate-500">
-            جاري تحميل البيانات المحاسبية...
-          </div>
-        )}
-
-        {activeTab === "dashboard" && (
-          <DashboardTab
-            state={state}
+      {viewMode === "landing" ? (
+        <LandingPage
+          state={state}
+          lang={lang}
+          currentUser={currentUser}
+          onEnterErp={(tab) => {
+            if (tab) setActiveTab(tab);
+            setViewMode("erp");
+          }}
+          onOpenLogin={() => setLoginModalOpen(true)}
+          onToggleLang={() => setLang((prev) => (prev === "ar" ? "en" : "ar"))}
+        />
+      ) : (
+        <>
+          <HeaderNav
+            orgName={state.settings.orgName}
+            logoText={state.settings.logoText}
             lang={lang}
+            theme={theme}
             currency={currency}
-            selectedProjectId={selectedProjectId}
-            filteredSales={filteredSales}
-            filteredExpenses={filteredExpenses}
-            filteredWorkers={filteredWorkers}
-            onExportExcel={() => {
-              exportFullWorkbookToExcel(state);
-              showToast("تم تصدير ملف Excel بنجاح");
-            }}
-            onSwitchTab={setActiveTab}
-            onToast={showToast}
-          />
-        )}
-
-        {activeTab === "projects" && (
-          <ProjectsTab
+            offlineMode={offlineMode}
+            offlineQueueCount={offlineQueueCount}
+            mobileSimulatorActive={mobileSimulatorActive}
+            activeTab={activeTab}
             projects={state.projects}
-            lang={lang}
-            onAddProject={(payload) =>
+            selectedProjectId={selectedProjectId}
+            selectedHarvest={selectedHarvest}
+            availableHarvests={availableHarvests}
+            currentUser={currentUser}
+            onProjectChange={handleProjectFilterChange}
+            onHarvestChange={setSelectedHarvest}
+            onCurrencyChange={(c) => {
+              setCurrency(c);
+              showToast(`تم تغيير عملة العرض إلى: ${c}`);
+            }}
+            onToggleOffline={() => {
+              const next = !offlineMode;
+              setOfflineMode(next);
+              showToast(
+                next
+                  ? "تم تفعيل وضع العمل الميداني بدون إنترنت (تخزين محلي IndexedDB)"
+                  : "تم الاتصال بالشبكة"
+              );
+            }}
+            onSyncQueue={handleSyncQueue}
+            onToggleMobileSim={() => {
+              const next = !mobileSimulatorActive;
+              setMobileSimulatorActive(next);
+              showToast(
+                next
+                  ? "📱 تم تفعيل محاكي تطبيق الجوال (عرض الهاتف 412px)"
+                  : "🖥️ تم العودة لعرض الشاشة الكاملة"
+              );
+            }}
+            onThemeChange={(t) => {
+              setTheme(t);
               runMutation(
-                "/api/projects",
-                "POST",
-                payload,
-                `مشروع: ${payload.name}`,
-                `تمت إضافة المشروع بنجاح: ${payload.name}`
-              )
-            }
-            onAddHarvest={(payload) =>
+                "/api/system/settings",
+                "PATCH",
+                { defaultTheme: t },
+                "Theme change",
+                `تم تغيير المظهر إلى: ${t}`
+              );
+            }}
+            onToggleLanguage={() => {
+              const next = lang === "ar" ? "en" : "ar";
+              setLang(next);
               runMutation(
-                "/api/projects/harvests",
-                "POST",
-                payload,
-                `قطفة: ${payload.name}`,
-                "تمت إضافة القطفة/المرشة بنجاح"
-              )
-            }
-            onToast={showToast}
+                "/api/system/settings",
+                "PATCH",
+                { defaultLang: next },
+                "Language change",
+                next === "ar" ? "تم التبديل إلى اللغة العربية" : "Switched to English"
+              );
+            }}
+            onOpenLogin={() => setLoginModalOpen(true)}
+            onOpenLanding={() => setViewMode("landing")}
+            onSwitchTab={setActiveTab}
           />
-        )}
+
+          <main className="max-w-7xl w-full mx-auto flex-1 p-4 space-y-6">
+            {loading && (
+              <div className="card-surface rounded-2xl p-3 text-xs text-center text-slate-500">
+                جاري تحميل البيانات المحاسبية...
+              </div>
+            )}
+
+            {activeTab === "dashboard" && (
+              <DashboardTab
+                state={state}
+                lang={lang}
+                currency={currency}
+                selectedProjectId={selectedProjectId}
+                filteredSales={filteredSales}
+                filteredExpenses={filteredExpenses}
+                filteredWorkers={filteredWorkers}
+                onExportExcel={() => {
+                  exportFullWorkbookToExcel(state);
+                  showToast("تم تصدير ملف Excel بنجاح");
+                }}
+                onSwitchTab={setActiveTab}
+                onToast={showToast}
+              />
+            )}
+
+            {activeTab === "coa" && (
+              <CoaTreeTab selectedProjectId={selectedProjectId} onToast={showToast} />
+            )}
+
+            {activeTab === "ledger" && (
+              <GeneralLedgerTab
+                projects={state.projects}
+                currentUser={currentUser}
+                exchangeRates={state.exchangeRates}
+                selectedProjectId={selectedProjectId}
+                onToast={showToast}
+              />
+            )}
+
+            {activeTab === "procurement" && (
+              <ProcurementTab
+                projects={state.projects}
+                treasuryAccounts={state.treasuryAccounts}
+                currentUser={currentUser}
+                selectedProjectId={selectedProjectId}
+                onOpenVoucher={setVoucherModal}
+                onRefreshState={refreshFromServer}
+                onToast={showToast}
+              />
+            )}
+
+            {activeTab === "reports" && (
+              <FinancialReportsTab
+                projects={state.projects}
+                selectedProjectId={selectedProjectId}
+                onToast={showToast}
+              />
+            )}
+
+            {activeTab === "projects" && (
+              <ProjectsManagerTab
+                projects={state.projects}
+                lang={lang}
+                onAddProject={(payload) =>
+                  runMutation(
+                    "/api/projects",
+                    "POST",
+                    payload,
+                    `مشروع: ${payload.name}`,
+                    `تمت إضافة المشروع بنجاح: ${payload.name}`
+                  )
+                }
+                onAddHarvest={(payload) =>
+                  runMutation(
+                    "/api/projects/harvests",
+                    "POST",
+                    payload,
+                    `قطفة: ${payload.name}`,
+                    "تمت إضافة القطفة/المرشة بنجاح"
+                  )
+                }
+                onTogglePeriodLock={async (key) => {
+                  const nextLocked = !state.lockedPeriods[key];
+                  await runMutation(
+                    "/api/audit/lock",
+                    "POST",
+                    { key },
+                    `قفل فترة ${key}`,
+                    nextLocked
+                      ? "🔒 تم إغلاق القطفة محاسبياً ومنع التعديل المباشر"
+                      : "🔓 تم فتح القطفة للتعديل"
+                  );
+                }}
+                onRefreshState={refreshFromServer}
+                onToast={showToast}
+              />
+            )}
 
         {activeTab === "expenses" && (
           <ExpensesTab
@@ -770,15 +845,17 @@ export function UasAppShell() {
         {activeTab === "prompt" && <PromptTab onToast={showToast} />}
       </main>
 
-      <MobileBottomNav
-        activeTab={activeTab}
-        lang={lang}
-        quickSheetOpen={quickSheetOpen}
-        onSwitchTab={setActiveTab}
-        onOpenQuickSheet={() => setQuickSheetOpen(true)}
-        onCloseQuickSheet={() => setQuickSheetOpen(false)}
-        onQuickJump={handleQuickJump}
-      />
+          <MobileBottomNav
+            activeTab={activeTab}
+            lang={lang}
+            quickSheetOpen={quickSheetOpen}
+            onSwitchTab={setActiveTab}
+            onOpenQuickSheet={() => setQuickSheetOpen(true)}
+            onCloseQuickSheet={() => setQuickSheetOpen(false)}
+            onQuickJump={handleQuickJump}
+          />
+        </>
+      )}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { computeQrVerificationCode } from "@/lib/formulas";
+import { ensureWorkerWithAccountTx, postJournalEntry } from "@/lib/accounting/ledgerService";
 import { appendAuditLogTx, getBootstrapState, isHarvestLockedTx } from "@/lib/serverBootstrap";
 import { extractActor, jsonError, lockedError } from "@/lib/apiHelpers";
 
@@ -30,9 +31,20 @@ export async function POST(req: NextRequest) {
       let phone = "783118231";
       let saleTransactionId: string | null = null;
       let workerWageEntryId: string | null = null;
+      let journalEntryId: string | null = null;
+
+      const existingVoucher = await tx.installmentVoucher.findUnique({
+        where: { voucherNo: baseVoucherNo },
+      });
+      const voucherNo = existingVoucher
+        ? `${baseVoucherNo}-${Date.now().toString().slice(-4)}`
+        : baseVoucherNo;
 
       if (type === "CUSTOMER_RECEIPT") {
-        const sale = await tx.saleTransaction.findUnique({ where: { id: targetId } });
+        const sale = await tx.saleTransaction.findUnique({
+          where: { id: targetId },
+          include: { customer: true },
+        });
         if (!sale) return { status: "TARGET_NOT_FOUND" as const };
         if (await isHarvestLockedTx(tx, sale.projectId, sale.harvestName)) {
           return { status: "LOCKED" as const };
@@ -45,38 +57,99 @@ export async function POST(req: NextRequest) {
         });
         await tx.treasuryAccount.update({
           where: { id: treasury.id },
-          data: { balanceYER: treasury.balanceYER + amount },
+          data: {
+            balance: Number(treasury.balance) + amount,
+            balanceYER: treasury.balanceYER + amount,
+          },
         });
+        const je = await postJournalEntry({
+          tx,
+          date: new Date(`${paymentDate}T12:00:00Z`),
+          reference: voucherNo,
+          narrationAr: `سند قبض دفعة ${voucherNo} من ${sale.customerName}`,
+          narrationEn: `Customer Receipt ${voucherNo} - ${sale.customerName}`,
+          sourceType: "CUSTOMER_RECEIPT",
+          projectId: sale.projectId,
+          createdById: actor.userId ?? undefined,
+          lines: [
+            {
+              accountId: treasury.accountId,
+              debit: amount,
+              projectId: sale.projectId,
+              harvestCycleId: sale.harvestCycleId,
+              memo: `تحصيل إلى ${treasury.nameAr}`,
+            },
+            {
+              accountId: sale.customer.accountId,
+              credit: amount,
+              projectId: sale.projectId,
+              harvestCycleId: sale.harvestCycleId,
+              memo: `تخفيض مديونية ${sale.customerName}`,
+            },
+          ],
+        });
+        journalEntryId = je.id;
         targetName = `${sale.customerName} (${sale.saleBatchLabel})`;
         phone = sale.customerPhone || "783118231";
         saleTransactionId = sale.id;
       } else {
-        const worker = await tx.workerWageEntry.findUnique({ where: { id: targetId } });
-        if (!worker) return { status: "TARGET_NOT_FOUND" as const };
-        if (await isHarvestLockedTx(tx, worker.projectId, worker.harvestName)) {
+        const workerEntry = await tx.workerWageEntry.findUnique({
+          where: { id: targetId },
+          include: { worker: true },
+        });
+        if (!workerEntry) return { status: "TARGET_NOT_FOUND" as const };
+        if (await isHarvestLockedTx(tx, workerEntry.projectId, workerEntry.harvestName)) {
           return { status: "LOCKED" as const };
         }
-        const nextCredit = worker.creditAmount + amount;
-        const nextDebit = worker.totalWage - nextCredit;
+        const nextCredit = workerEntry.creditAmount + amount;
+        const nextDebit = workerEntry.totalWage - nextCredit;
         await tx.workerWageEntry.update({
-          where: { id: worker.id },
+          where: { id: workerEntry.id },
           data: { creditAmount: nextCredit, debitBalance: nextDebit },
         });
         await tx.treasuryAccount.update({
           where: { id: treasury.id },
-          data: { balanceYER: treasury.balanceYER - amount },
+          data: {
+            balance: Number(treasury.balance) - amount,
+            balanceYER: treasury.balanceYER - amount,
+          },
         });
-        targetName = `${worker.workerName} (${worker.harvestName})`;
-        workerWageEntryId = worker.id;
-      }
+        const workerRec = workerEntry.worker.accountId
+          ? workerEntry.worker
+          : await ensureWorkerWithAccountTx(tx, { name: workerEntry.workerName });
 
-      // Ensure unique voucher number if user reused an existing voucher number
-      const existingVoucher = await tx.installmentVoucher.findUnique({
-        where: { voucherNo: baseVoucherNo },
-      });
-      const voucherNo = existingVoucher
-        ? `${baseVoucherNo}-${Date.now().toString().slice(-4)}`
-        : baseVoucherNo;
+        if (workerRec.accountId) {
+          const je = await postJournalEntry({
+            tx,
+            date: new Date(`${paymentDate}T12:00:00Z`),
+            reference: voucherNo,
+            narrationAr: `سند صرف دفعة أجر ${voucherNo} للعامل ${workerEntry.workerName}`,
+            narrationEn: `Worker Payout ${voucherNo} - ${workerEntry.workerName}`,
+            sourceType: "WORKER_PAYOUT",
+            projectId: workerEntry.projectId,
+            createdById: actor.userId ?? undefined,
+            lines: [
+              {
+                accountId: workerRec.accountId,
+                debit: amount,
+                projectId: workerEntry.projectId,
+                harvestCycleId: workerEntry.harvestCycleId,
+                memo: `صرف مستحقات العامل ${workerEntry.workerName}`,
+              },
+              {
+                accountId: treasury.accountId,
+                credit: amount,
+                projectId: workerEntry.projectId,
+                harvestCycleId: workerEntry.harvestCycleId,
+                memo: `صرف من ${treasury.nameAr}`,
+              },
+            ],
+          });
+          journalEntryId = je.id;
+        }
+        targetName = `${workerEntry.workerName} (${workerEntry.harvestName})`;
+        workerWageEntryId = workerEntry.id;
+      }
 
       const qrVerificationHash = computeQrVerificationCode(
         `INST:${voucherNo}|PARTY:${targetName}|AMT:${amount}|DATE:${paymentDate}`
@@ -95,6 +168,7 @@ export async function POST(req: NextRequest) {
           qrVerificationHash,
           paymentDate,
           notes,
+          journalEntryId,
         },
       });
 
@@ -113,10 +187,12 @@ export async function POST(req: NextRequest) {
     if (result.status === "LOCKED") return lockedError();
 
     const state = await getBootstrapState();
-    return NextResponse.json({ createdId: result.voucher.id, voucherNo: result.voucher.voucherNo, state }, { status: 201 });
+    return NextResponse.json(
+      { createdId: result.voucher.id, voucherNo: result.voucher.voucherNo, state },
+      { status: 201 }
+    );
   } catch (error) {
     console.error("POST /api/installments error:", error);
     return jsonError("تعذر حفظ سند الدفعة", 500);
   }
 }
-

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { computeWorkerWageTotals } from "@/lib/formulas";
+import { ensureWorkerWithAccountTx, postWorkerWageJournalTx } from "@/lib/accounting/ledgerService";
 import {
   appendAuditLogTx,
   findHarvestCycle,
@@ -34,10 +35,10 @@ export async function POST(req: NextRequest) {
       }
 
       const cycle = await findHarvestCycle(tx, projectId, harvestName);
-      const worker = await tx.worker.upsert({
-        where: { name },
-        update: { defaultDailyWage: dailyWage },
-        create: { name, defaultDailyWage: dailyWage, phone: "783118231" },
+      const worker = await ensureWorkerWithAccountTx(tx, {
+        name,
+        defaultDailyWage: dailyWage,
+        phone: "783118231",
       });
 
       const entry = await tx.workerWageEntry.create({
@@ -56,6 +57,26 @@ export async function POST(req: NextRequest) {
           notes,
         },
       });
+
+      if (worker.accountId) {
+        const je = await postWorkerWageJournalTx(tx, {
+          wageEntryId: entry.id,
+          workerName: worker.name,
+          workerAccountId: worker.accountId,
+          projectId,
+          harvestCycleId: cycle?.id ?? null,
+          totalWage,
+          creditAmount,
+          date: workDate,
+          createdById: actor.userId ?? undefined,
+        });
+        if (je) {
+          await tx.workerWageEntry.update({
+            where: { id: entry.id },
+            data: { journalEntryId: je.id },
+          });
+        }
+      }
 
       await appendAuditLogTx(tx, {
         ...actor,
@@ -76,4 +97,3 @@ export async function POST(req: NextRequest) {
     return jsonError("تعذر حفظ سجل العامل", 500);
   }
 }
-

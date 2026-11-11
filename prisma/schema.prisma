@@ -7,12 +7,114 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Note: For Supabase PostgreSQL deployment, set provider = "postgresql"
-// and apply Row-Level Security (RLS) policies + REVOKE UPDATE, DELETE on ImmutableAuditLog.
+// Note: For production Supabase / Cloud PostgreSQL deployment, run `npm run db:postgres`
+// (or set provider = "postgresql") and apply Row-Level Security (RLS) policies.
+
+// ---------------------------------------------------------
+// 1. CHART OF ACCOUNTS & DOUBLE-ENTRY GENERAL LEDGER
+// ---------------------------------------------------------
+
+model Account {
+  id           String             @id @default(cuid())
+  code         String             @unique // e.g. "111101"
+  nameAr       String
+  nameEn       String
+  level        Int                // 1 (Class) to 5 (Posting Detail)
+  type         String             // ASSET | LIABILITY | EQUITY | REVENUE | EXPENSE
+  isPosting    Boolean            @default(false) // Only true for Tier 5
+  parentId     String?
+  parent       Account?           @relation("AccountHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children     Account[]          @relation("AccountHierarchy")
+
+  journalLines JournalEntryLine[]
+  vendors      Vendor[]
+  customers    Customer[]
+  workers      Worker[]
+  treasury     TreasuryAccount?
+
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+}
+
+model JournalEntry {
+  id          String             @id @default(cuid())
+  entryNumber String             @unique // e.g. "JV-2026-0001"
+  date        DateTime
+  reference   String?            // External ref, PO#, Bill#, Invoice#, Voucher#
+  narrationAr String
+  narrationEn String?
+  status      String             @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | VOIDED
+  sourceType  String?            // OPENING | VENDOR_BILL | VENDOR_PAYMENT | SALES_INVOICE | CUSTOMER_RECEIPT | EXPENSE | WORKER_ACCRUAL | WORKER_PAYOUT | ADJUSTMENT | MANUAL
+  sourceId    String?
+  projectId   String?
+  project     Project?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  lines       JournalEntryLine[]
+  attachments Attachment[]
+  createdById String
+  createdBy   User               @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+}
+
+model JournalEntryLine {
+  id             String        @id @default(cuid())
+  journalEntryId String
+  journalEntry   JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  accountId      String
+  account        Account       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  debit          Decimal       @default(0)
+  credit         Decimal       @default(0)
+  currency       String        @default("YER")
+  exchangeRate   Decimal       @default(1.0)
+
+  // Multi-Currency Normalized amounts (Base YER)
+  debitBase      Decimal       @default(0)
+  creditBase     Decimal       @default(0)
+
+  memo           String?
+  projectId      String?
+  project        Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  subProjectId   String?
+  subProject     SubProject?   @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
+  harvestCycleId String?
+  harvestCycle   HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
+}
+
+model Attachment {
+  id             String        @id @default(cuid())
+  journalEntryId String?
+  journalEntry   JournalEntry? @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  fileName       String
+  fileUrl        String
+  fileType       String
+  createdAt      DateTime      @default(now())
+}
+
+// ---------------------------------------------------------
+// 2. ENTERPRISE PROFILE, SETTINGS & PROJECTS
+// ---------------------------------------------------------
+
+model EnterpriseProfile {
+  id            String   @id @default("default")
+  legalNameAr   String
+  legalNameEn   String
+  taxNumber     String?
+  commercialReg String?
+  currencyCode  String   @default("YER")
+  address       String?
+  phone         String?
+  email         String?
+  logoUrl       String?
+  brandColor    String   @default("#059669")
+  updatedAt     DateTime @updatedAt
+}
 
 model SystemSettings {
   id              String   @id @default("default")
-  orgName         String   @default("النظام المحاسبي الموحد Unified Accounting System (UAS)")
+  orgName         String   @default("شركة الجبري الزراعية للتنمية والاستثمار | UAS")
   logoText        String   @default("UAS")
   defaultLang     String   @default("ar")
   defaultTheme    String   @default("emerald")
@@ -20,48 +122,82 @@ model SystemSettings {
   updatedAt       DateTime @updatedAt
 }
 
-model User {
-  id           String   @id @default(cuid())
-  name         String
-  email        String   @unique
-  passwordHash String
-  role         String   @default("محاسب رئيسي (Accountant)")
-  active       Boolean  @default(true)
-  avatarChar   String   @default("م")
-  createdAt    DateTime @default(now())
+model CurrencyRate {
+  currencyCode String   @id // YER | SAR | USD
+  rateToYER    Float
   updatedAt    DateTime @updatedAt
 }
 
 model Project {
   id                  String                  @id @default(cuid())
-  name                String
-  type                String                  @default("مشروع رئيسي") // MAIN | SUB
+  code                String                  @unique
+  name                String                  // Kept for compatibility with operational tabs
+  nameAr              String
+  nameEn              String
+  type                String                  @default("مشروع رئيسي") // مشروع رئيسي | مشروع فرعي
   parentProjectId     String?
   parentProject       Project?                @relation("ProjectHierarchy", fields: [parentProjectId], references: [id], onDelete: SetNull)
-  subProjects         Project[]               @relation("ProjectHierarchy")
+  childProjects       Project[]               @relation("ProjectHierarchy")
+  budgetTotal         Decimal                 @default(0)
   estimatedValue      Float                   @default(0)
   plannedHarvestCount Int                     @default(1)
+  status              String                  @default("ACTIVE")
+  startDate           DateTime?
+  endDate             DateTime?
   notes               String                  @default("")
-  createdAt           DateTime                @default(now())
-  updatedAt           DateTime                @updatedAt
+
+  subProjects         SubProject[]
   harvestCycles       HarvestCycle[]
+  journalEntries      JournalEntry[]
+  journalLines        JournalEntryLine[]
+  purchaseOrders      PurchaseOrder[]
+  vendorBills         VendorBill[]
+  salesInvoices       SalesInvoice[]
+  inventoryLots       InventoryLot[]
   expenses            OperatingExpense[]
   workerWages         WorkerWageEntry[]
   sales               SaleTransaction[]
   inventoryBatches    HarvestInventoryBatch[]
   adjustments         AdjustmentEntry[]
+
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+}
+
+model SubProject {
+  id             String             @id @default(cuid())
+  projectId      String
+  project        Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  code           String
+  nameAr         String
+  nameEn         String
+  budget         Decimal            @default(0)
+
+  journalLines   JournalEntryLine[]
+  purchaseOrders PurchaseOrder[]
+  vendorBills    VendorBill[]
+
+  createdAt      DateTime           @default(now())
+
+  @@unique([projectId, code])
 }
 
 model HarvestCycle {
   id               String                  @id @default(cuid())
   projectId        String
   project          Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  cycleNumber      Int                     @default(1)
   name             String
   sortOrder        Int                     @default(0)
   isLocked         Boolean                 @default(false)
   lockedByUserId   String?
+  lockedById       String?
   lockedAt         DateTime?
   createdAt        DateTime                @default(now())
+
+  inventoryLots    InventoryLot[]
+  journalLines     JournalEntryLine[]
+  salesInvoices    SalesInvoice[]
   expenses         OperatingExpense[]
   workerWages      WorkerWageEntry[]
   sales            SaleTransaction[]
@@ -71,21 +207,253 @@ model HarvestCycle {
   @@unique([projectId, name])
 }
 
-model TreasuryAccount {
-  id            String               @id @default(cuid())
-  name          String
-  type          String               @default("CASH") // CASH | BANK | WALLET
-  accountNumber String
-  currencyCode  String               @default("YER") // YER | SAR | USD
-  balanceYER    Float                @default(0)
-  updatedAt     DateTime             @updatedAt
-  installments  InstallmentVoucher[]
+// ---------------------------------------------------------
+// 3. PROCUREMENT & VENDORS
+// ---------------------------------------------------------
+
+model Vendor {
+  id              String           @id @default(cuid())
+  code            String           @unique
+  nameAr          String
+  nameEn          String?
+  phone           String
+  email           String?
+  taxRegistration String?
+  address         String?
+
+  accountId       String           @unique // Linked Tier 5 Payables Account (2111xx)
+  account         Account          @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  purchaseOrders  PurchaseOrder[]
+  bills           VendorBill[]
+  payments        PaymentVoucher[]
+
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 }
 
-model CurrencyRate {
-  currencyCode String   @id // YER | SAR | USD
-  rateToYER    Float
-  updatedAt    DateTime @updatedAt
+model PurchaseOrder {
+  id            String              @id @default(cuid())
+  poNumber      String              @unique // e.g. "PO-2026-0042"
+  vendorId      String
+  vendor        Vendor              @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  projectId     String
+  project       Project             @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  subProjectId  String?
+  subProject    SubProject?         @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
+
+  date          DateTime            @default(now())
+  status        String              @default("DRAFT") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | PAID | VOIDED
+  subTotal      Decimal             @default(0)
+  taxTotal      Decimal             @default(0)
+  grandTotal    Decimal             @default(0)
+  currency      String              @default("YER")
+  notes         String?
+
+  items         PurchaseOrderItem[]
+  bills         VendorBill[]
+  goodsReceipts GoodsReceipt[]
+
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+}
+
+model PurchaseOrderItem {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  description     String
+  unit            String
+  quantity        Decimal
+  unitPrice       Decimal
+  totalPrice      Decimal
+}
+
+model GoodsReceipt {
+  id              String        @id @default(cuid())
+  grnNumber       String        @unique // e.g. "GRN-2026-0012"
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  receivedDate    DateTime      @default(now())
+  receivedTotal   Decimal       @default(0)
+  hasVariance     Boolean       @default(false)
+  itemsSummary    String?       // JSON summary of received quantities vs ordered
+  warehouseNotes  String?
+  createdAt       DateTime      @default(now())
+}
+
+model VendorBill {
+  id              String           @id @default(cuid())
+  billNumber      String           @unique // e.g. "BILL-2026-0089"
+  vendorId        String
+  vendor          Vendor           @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  projectId       String
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  subProjectId    String?
+  subProject      SubProject?      @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
+  purchaseOrderId String?
+  purchaseOrder   PurchaseOrder?   @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+
+  date            DateTime
+  dueDate         DateTime?
+  status          String           @default("APPROVED") // DRAFT | APPROVED | POSTED | PARTIALLY_PAID | PAID | VOIDED
+  totalAmount     Decimal
+  paidAmount      Decimal          @default(0)
+  balanceDue      Decimal
+  currency        String           @default("YER")
+  isInventory     Boolean          @default(false)
+  debitAccountId  String?
+  journalEntryId  String?
+  notes           String?
+
+  paymentVouchers PaymentVoucher[]
+  createdAt       DateTime         @default(now())
+}
+
+model PaymentVoucher {
+  id                 String          @id @default(cuid())
+  voucherNumber      String          @unique // e.g. "PV-2026-0034"
+  date               DateTime        @default(now())
+  vendorId           String
+  vendor             Vendor          @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  billId             String?
+  bill               VendorBill?     @relation(fields: [billId], references: [id], onDelete: SetNull)
+  treasuryId         String
+  treasury           TreasuryAccount @relation(fields: [treasuryId], references: [id], onDelete: Restrict)
+
+  amount             Decimal
+  currency           String          @default("YER")
+  referenceNumber    String?
+  notes              String?
+  projectId          String?
+  journalEntryId     String?
+  qrVerificationHash String?
+
+  createdAt          DateTime        @default(now())
+}
+
+// ---------------------------------------------------------
+// 4. CLIENTS, SALES & RECEIVABLES
+// ---------------------------------------------------------
+
+model Customer {
+  id          String            @id @default(cuid())
+  code        String            @unique
+  name        String            @unique
+  nameAr      String
+  nameEn      String?
+  phone       String            @default("783118231")
+  address     String?
+  creditLimit Decimal           @default(0)
+
+  accountId   String            @unique // Linked Tier 5 Receivables Account (1121xx)
+  account     Account           @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  invoices    SalesInvoice[]
+  receipts    ReceiptVoucher[]
+  sales       SaleTransaction[]
+  createdAt   DateTime          @default(now())
+}
+
+model SalesInvoice {
+  id                 String           @id @default(cuid())
+  invoiceNumber      String           @unique
+  customerId         String
+  customer           Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  projectId          String
+  project            Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  harvestCycleId     String?
+  harvestCycle       HarvestCycle?    @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
+
+  date               DateTime         @default(now())
+  totalAmount        Decimal
+  paidAmount         Decimal          @default(0)
+  balanceDue         Decimal
+  status             String           @default("POSTED") // DRAFT | POSTED | PARTIALLY_PAID | PAID | VOIDED
+  currency           String           @default("YER")
+  notes              String?
+  journalEntryId     String?
+  qrVerificationHash String?
+
+  receipts           ReceiptVoucher[]
+  createdAt          DateTime         @default(now())
+}
+
+model ReceiptVoucher {
+  id                 String          @id @default(cuid())
+  voucherNumber      String          @unique
+  date               DateTime        @default(now())
+  customerId         String
+  customer           Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  invoiceId          String?
+  invoice            SalesInvoice?   @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  treasuryId         String
+  treasury           TreasuryAccount @relation(fields: [treasuryId], references: [id], onDelete: Restrict)
+
+  amount             Decimal
+  currency           String          @default("YER")
+  notes              String?
+  journalEntryId     String?
+  qrVerificationHash String?
+  createdAt          DateTime        @default(now())
+}
+
+// ---------------------------------------------------------
+// 5. INVENTORY & AGRICULTURAL LOT TRACKING
+// ---------------------------------------------------------
+
+model InventoryLot {
+  id              String        @id @default(cuid())
+  lotNumber       String        @unique
+  projectId       String
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  harvestCycleId  String?
+  harvestCycle    HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
+  grade           String        // "صنف 1", "صنف 2", "روس", "بزغة"
+  initialQuantity Decimal
+  currentQuantity Decimal
+  shrinkageCount  Decimal       @default(0)
+  unitCost        Decimal       @default(0)
+  createdAt       DateTime      @default(now())
+}
+
+model HarvestInventoryBatch {
+  id               String        @id @default(cuid())
+  projectId        String
+  project          Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  harvestCycleId   String?
+  harvestCycle     HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
+  harvestName      String
+  productGrade     String
+  harvestedBundles Int
+  shrinkageBundles Int           @default(0)
+  notes            String        @default("")
+  createdAt        DateTime      @default(now())
+}
+
+// ---------------------------------------------------------
+// 6. TREASURY, FIELD OPERATIONS & USERS
+// ---------------------------------------------------------
+
+model TreasuryAccount {
+  id              String               @id @default(cuid())
+  code            String               @unique
+  name            String
+  nameAr          String
+  nameEn          String
+  accountNumber   String
+  accountId       String               @unique
+  account         Account              @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  type            String               @default("VAULT") // VAULT | BANK | WALLET
+  balance         Decimal              @default(0)
+  balanceYER      Float                @default(0)
+  currency        String               @default("YER")
+  currencyCode    String               @default("YER")
+  updatedAt       DateTime             @updatedAt
+
+  paymentVouchers PaymentVoucher[]
+  receiptVouchers ReceiptVoucher[]
+  installments    InstallmentVoucher[]
 }
 
 model OperatingExpense {
@@ -99,9 +467,10 @@ model OperatingExpense {
   subType        String
   quantity       Float         @default(1)
   unitPrice      Float         @default(0)
-  totalAmount    Float         @default(0) // Computed: quantity * unitPrice
+  totalAmount    Float         @default(0)
   expenseDate    String
   notes          String        @default("")
+  journalEntryId String?
   createdAt      DateTime      @default(now())
 }
 
@@ -110,6 +479,8 @@ model Worker {
   name             String            @unique
   phone            String            @default("783118231")
   defaultDailyWage Float             @default(0)
+  accountId        String?
+  account          Account?          @relation(fields: [accountId], references: [id], onDelete: SetNull)
   createdAt        DateTime          @default(now())
   wageEntries      WorkerWageEntry[]
 }
@@ -126,21 +497,14 @@ model WorkerWageEntry {
   harvestName    String
   dailyWage      Float
   daysWorked     Float
-  totalWage      Float                // Computed: dailyWage * daysWorked (=F*G)
-  creditAmount   Float                @default(0) // Paid (دائن)
-  debitBalance   Float                // Computed: totalWage - creditAmount (=H-I)
+  totalWage      Float
+  creditAmount   Float                @default(0)
+  debitBalance   Float
   workDate       String
   notes          String               @default("")
+  journalEntryId String?
   createdAt      DateTime             @default(now())
   installments   InstallmentVoucher[]
-}
-
-model Customer {
-  id        String            @id @default(cuid())
-  name      String            @unique
-  phone     String            @default("783118231")
-  createdAt DateTime          @default(now())
-  sales     SaleTransaction[]
 }
 
 model SaleTransaction {
@@ -158,12 +522,13 @@ model SaleTransaction {
   productGrade     String
   bundlesCount     Int
   unitPrice        Float
-  totalAmount      Float                // Computed: bundlesCount * unitPrice (=P*Q)
-  creditPaid       Float                @default(0) // Received (دائن)
-  debitReceivable  Float                // Computed: totalAmount - creditPaid (=R-S)
+  totalAmount      Float
+  creditPaid       Float                @default(0)
+  debitReceivable  Float
   saleDate         String
   receiptVoucherNo String
   notes            String               @default("")
+  journalEntryId   String?
   createdAt        DateTime             @default(now())
   installments     InstallmentVoucher[]
 }
@@ -184,21 +549,38 @@ model InstallmentVoucher {
   qrVerificationHash String
   paymentDate        String
   notes              String           @default("")
+  journalEntryId     String?
   createdAt          DateTime         @default(now())
 }
 
-model HarvestInventoryBatch {
-  id               String        @id @default(cuid())
-  projectId        String
-  project          Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  harvestCycleId   String?
-  harvestCycle     HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
-  harvestName      String
-  productGrade     String
-  harvestedBundles Int
-  shrinkageBundles Int           @default(0)
-  notes            String        @default("")
-  createdAt        DateTime      @default(now())
+model User {
+  id               String         @id @default(cuid())
+  username         String         @unique
+  name             String
+  fullName         String
+  email            String         @unique
+  passwordHash     String
+  role             String         @default("FIELD_ACCOUNTANT") // SUPER_ADMIN | PROJECT_MANAGER | CHIEF_ACCOUNTANT | FIELD_ACCOUNTANT | PROCUREMENT_OFFICER | AUDITOR
+  active           Boolean        @default(true)
+  avatarChar       String         @default("م")
+  assignedProjects String         @default("[]") // JSON array of project IDs for row-level access
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  journalEntries   JournalEntry[]
+  auditLogs        AuditLog[]
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  action    String   // CREATE, UPDATE, POST, VOID, LOCK
+  entity    String   // "JournalEntry", "VendorBill", "HarvestCycle"
+  entityId  String
+  details   Json
+  ipAddress String?
+  timestamp DateTime @default(now())
 }
 
 model ImmutableAuditLog {
@@ -224,6 +606,6 @@ model AdjustmentEntry {
   reason         String
   amountYER      Float
   createdByUser  String
+  journalEntryId String?
   createdAt      DateTime      @default(now())
 }
-

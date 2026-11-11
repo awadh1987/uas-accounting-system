@@ -41,10 +41,10 @@ export function MobileBottomNav({
             <div className="flex items-center justify-between border-b pb-2.5">
               <div>
                 <h3 className="font-extrabold text-sm">
-                  ⚡ إدخال ميداني سريع (تطبيق الجوال)
+                  ⚡ إدخال ميداني ومحاسبي سريع (Quick Action Sheet)
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  اختر العملية للانتقال المباشر وتعبئة النموذج
+                  اختر العملية للانتقال المباشر وتسجيل السند أو القيد المزدوج
                 </p>
               </div>
               <button
@@ -57,7 +57,7 @@ export function MobileBottomNav({
             <div className="grid grid-cols-2 gap-2.5 text-xs">
               <button
                 onClick={() => onQuickJump("sales", "saleCustomerInput")}
-                className="p-3.5 rounded-2xl border border-emerald-200 bg-emerald-50/60 dark:bg-slate-800 text-right space-y-1 hover:border-emerald-500"
+                className="p-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 dark:bg-slate-800 text-right space-y-1 hover:border-emerald-500"
               >
                 <div className="text-lg">💰</div>
                 <div className="font-extrabold">عملية بيع جديدة</div>
@@ -65,7 +65,7 @@ export function MobileBottomNav({
               </button>
               <button
                 onClick={() => onQuickJump("treasury", "instAmountInput")}
-                className="p-3.5 rounded-2xl border border-indigo-200 bg-indigo-50/60 dark:bg-slate-800 text-right space-y-1 hover:border-indigo-500"
+                className="p-3 rounded-2xl border border-indigo-200 bg-indigo-50/60 dark:bg-slate-800 text-right space-y-1 hover:border-indigo-500"
               >
                 <div className="text-lg">🏦</div>
                 <div className="font-extrabold">تحصيل دفعة / سند</div>
@@ -73,7 +73,7 @@ export function MobileBottomNav({
               </button>
               <button
                 onClick={() => onQuickJump("expenses", "expSubTypeInput")}
-                className="p-3.5 rounded-2xl border border-amber-200 bg-amber-50/60 dark:bg-slate-800 text-right space-y-1 hover:border-amber-500"
+                className="p-3 rounded-2xl border border-amber-200 bg-amber-50/60 dark:bg-slate-800 text-right space-y-1 hover:border-amber-500"
               >
                 <div className="text-lg">⛽</div>
                 <div className="font-extrabold">مصروف تشغيلي</div>
@@ -81,11 +81,33 @@ export function MobileBottomNav({
               </button>
               <button
                 onClick={() => onQuickJump("workers", "wrkNameInput")}
-                className="p-3.5 rounded-2xl border border-purple-200 bg-purple-50/60 dark:bg-slate-800 text-right space-y-1 hover:border-purple-500"
+                className="p-3 rounded-2xl border border-purple-200 bg-purple-50/60 dark:bg-slate-800 text-right space-y-1 hover:border-purple-500"
               >
                 <div className="text-lg">👷</div>
                 <div className="font-extrabold">تسجيل أجر عامل</div>
-                <div className="text-[10px] text-slate-500">أيام عمل + صرف</div>
+                <div className="text-[10px] text-slate-500">أيام عمل + قيد استحقاق</div>
+              </button>
+              <button
+                onClick={() => {
+                  onCloseQuickSheet();
+                  onSwitchTab("procurement");
+                }}
+                className="p-3 rounded-2xl border border-cyan-200 bg-cyan-50/60 dark:bg-slate-800 text-right space-y-1 hover:border-cyan-500"
+              >
+                <div className="text-lg">🛒</div>
+                <div className="font-extrabold">أمر شراء / فاتورة مورد</div>
+                <div className="text-[10px] text-slate-500">PO → GRN → Vendor Bill</div>
+              </button>
+              <button
+                onClick={() => {
+                  onCloseQuickSheet();
+                  onSwitchTab("ledger");
+                }}
+                className="p-3 rounded-2xl border border-rose-200 bg-rose-50/60 dark:bg-slate-800 text-right space-y-1 hover:border-rose-500"
+              >
+                <div className="text-lg">📒</div>
+                <div className="font-extrabold">قيد يومية مزدوج</div>
+                <div className="text-[10px] text-slate-500">الأستاذ العام (T5 COA)</div>
               </button>
             </div>
           </div>
@@ -103,9 +125,9 @@ export function MobileBottomNav({
             <span className="text-base leading-none">📊</span>
             <span className="mt-0.5">{dict.mNavHome}</span>
           </button>
-          <button onClick={() => onSwitchTab("sales")} className={navClass("sales")}>
-            <span className="text-base leading-none">💰</span>
-            <span className="mt-0.5">{dict.mNavSales}</span>
+          <button onClick={() => onSwitchTab("procurement")} className={navClass("procurement")}>
+            <span className="text-base leading-none">🛒</span>
+            <span className="mt-0.5">{lang === "ar" ? "المشتريات" : "Procure"}</span>
           </button>
           <div className="flex justify-center -mt-5">
             <button
@@ -117,17 +139,16 @@ export function MobileBottomNav({
               +
             </button>
           </div>
+          <button onClick={() => onSwitchTab("reports")} className={navClass("reports")}>
+            <span className="text-base leading-none">📈</span>
+            <span className="mt-0.5">{lang === "ar" ? "التقارير" : "Reports"}</span>
+          </button>
           <button onClick={() => onSwitchTab("treasury")} className={navClass("treasury")}>
             <span className="text-base leading-none">🏦</span>
             <span className="mt-0.5">{dict.mNavTreasury}</span>
-          </button>
-          <button onClick={() => onSwitchTab("mobile")} className={navClass("mobile")}>
-            <span className="text-base leading-none">📱</span>
-            <span className="mt-0.5">{dict.mNavMobile}</span>
           </button>
         </div>
       </div>
     </>
   );
 }
-

@@ -77,7 +77,8 @@ export function VoucherModal({
             )}
           </div>
 
-          {voucher.kind === "installment" && voucher.singleAmountYER !== undefined ? (
+          {(voucher.kind === "installment" || voucher.kind === "vendor_payment") &&
+          voucher.singleAmountYER !== undefined ? (
             <div className="p-3 rounded-xl border border-emerald-200 bg-emerald-50/50 text-center">
               <div className="text-xs text-emerald-700">قيمة السند ({voucher.voucherNo})</div>
               <div className="text-lg font-extrabold text-emerald-700">

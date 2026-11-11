@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { reverseJournalEntry } from "@/lib/accounting/ledgerService";
 import { appendAuditLogTx, getBootstrapState, isHarvestLockedTx } from "@/lib/serverBootstrap";
 import { extractActor, jsonError, lockedError } from "@/lib/apiHelpers";
 
@@ -23,6 +24,14 @@ export async function DELETE(
       if (await isHarvestLockedTx(tx, rec.projectId, rec.harvestName)) {
         return { status: "LOCKED" as const };
       }
+      if (rec.journalEntryId) {
+        await reverseJournalEntry({
+          journalEntryId: rec.journalEntryId,
+          createdById: actor.userId ?? undefined,
+          reason: `حذف مصروف تشغيلي (${rec.subType})`,
+          tx,
+        }).catch(() => null);
+      }
       await tx.operatingExpense.delete({ where: { id } });
       await appendAuditLogTx(tx, {
         ...actor,
@@ -43,4 +52,3 @@ export async function DELETE(
     return jsonError("تعذر حذف المصروف", 500);
   }
 }
-

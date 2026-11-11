@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { computeOperatingExpenseTotal } from "@/lib/formulas";
+import { postOperatingExpenseJournalTx } from "@/lib/accounting/ledgerService";
 import {
   appendAuditLogTx,
   findHarvestCycle,
@@ -49,6 +50,24 @@ export async function POST(req: NextRequest) {
         },
       });
 
+      const je = await postOperatingExpenseJournalTx(tx, {
+        expenseId: expense.id,
+        projectId,
+        harvestCycleId: cycle?.id ?? null,
+        category,
+        subType,
+        totalAmount,
+        date: expenseDate,
+        createdById: actor.userId ?? undefined,
+      });
+
+      if (je) {
+        await tx.operatingExpense.update({
+          where: { id: expense.id },
+          data: { journalEntryId: je.id },
+        });
+      }
+
       await appendAuditLogTx(tx, {
         ...actor,
         actionType: "إضافة مصروف تشغيلي",
@@ -70,4 +89,3 @@ export async function POST(req: NextRequest) {
     return jsonError("تعذر حفظ المصروف التشغيلي", 500);
   }
 }
-

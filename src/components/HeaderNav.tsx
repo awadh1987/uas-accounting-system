@@ -29,6 +29,7 @@ interface HeaderNavProps {
   onThemeChange: (theme: ThemeName) => void;
   onToggleLanguage: () => void;
   onOpenLogin: () => void;
+  onOpenLanding?: () => void;
   onSwitchTab: (tab: TabId) => void;
 }
 
@@ -56,22 +57,27 @@ export function HeaderNav({
   onThemeChange,
   onToggleLanguage,
   onOpenLogin,
+  onOpenLanding,
   onSwitchTab,
 }: HeaderNavProps) {
   const dict = getDict(lang);
 
   const navItems: Array<{ id: TabId; icon: string; label: string }> = [
     { id: "dashboard", icon: "📊", label: dict.navDashboard },
+    { id: "coa", icon: "🌳", label: dict.navCoa },
+    { id: "ledger", icon: "📒", label: dict.navLedger },
+    { id: "procurement", icon: "🛒", label: dict.navProcurement },
+    { id: "reports", icon: "📈", label: dict.navReports },
     { id: "projects", icon: "🌱", label: dict.navProjects },
     { id: "expenses", icon: "⛽", label: dict.navExpenses },
     { id: "workers", icon: "👷", label: dict.navWorkers },
     { id: "sales", icon: "💰", label: dict.navSales },
     { id: "customers", icon: "🧾", label: dict.navCustomers },
-    { id: "system", icon: "⚙️", label: dict.navSystem },
     { id: "treasury", icon: "🏦", label: dict.navTreasury },
     { id: "inventory", icon: "📦", label: dict.navInventory },
     { id: "audit", icon: "🛡️", label: dict.navAudit },
     { id: "mobile", icon: "📱", label: dict.navMobile },
+    { id: "system", icon: "⚙️", label: dict.navSystem },
     { id: "prompt", icon: "🤖", label: dict.navPrompt },
   ];
 
@@ -198,6 +204,15 @@ export function HeaderNav({
             >
               {dict.switchUserBtn}
             </button>
+            {onOpenLanding && (
+              <button
+                onClick={onOpenLanding}
+                className="text-xs px-2 py-1 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 font-semibold"
+                title="العودة للواجهة التعريفية والتحقق العام"
+              >
+                🏛️
+              </button>
+            )}
           </div>
         </div>
       </div>

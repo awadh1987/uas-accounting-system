@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { PrismaClient } from "@prisma/client";
+import { STANDARD_COA_NODES, mapExpenseCategoryToCoaCode } from "../src/lib/accounting/coaCatalog";
 import {
   computeOperatingExpenseTotal,
   computeQrVerificationCode,
@@ -18,32 +19,64 @@ function sha256Audit(payload: string): string {
 }
 
 async function main() {
-  console.log("Seeding Unified Accounting System (UAS) database...");
+  console.log("Seeding Unified Accounting System (UAS) Enterprise Database...");
 
-  // Clear in dependency-safe order for deterministic idempotent seeding
+  // 1. Clear in strict dependency-safe order for idempotent seeding
   await prisma.$transaction([
+    prisma.attachment.deleteMany(),
+    prisma.journalEntryLine.deleteMany(),
+    prisma.journalEntry.deleteMany(),
+    prisma.auditLog.deleteMany(),
     prisma.adjustmentEntry.deleteMany(),
     prisma.immutableAuditLog.deleteMany(),
     prisma.installmentVoucher.deleteMany(),
+    prisma.paymentVoucher.deleteMany(),
+    prisma.vendorBill.deleteMany(),
+    prisma.goodsReceipt.deleteMany(),
+    prisma.purchaseOrderItem.deleteMany(),
+    prisma.purchaseOrder.deleteMany(),
+    prisma.vendor.deleteMany(),
+    prisma.receiptVoucher.deleteMany(),
+    prisma.salesInvoice.deleteMany(),
+    prisma.inventoryLot.deleteMany(),
     prisma.harvestInventoryBatch.deleteMany(),
     prisma.saleTransaction.deleteMany(),
     prisma.customer.deleteMany(),
     prisma.workerWageEntry.deleteMany(),
     prisma.worker.deleteMany(),
     prisma.operatingExpense.deleteMany(),
+    prisma.subProject.deleteMany(),
     prisma.harvestCycle.deleteMany(),
     prisma.project.deleteMany(),
     prisma.treasuryAccount.deleteMany(),
+    prisma.account.deleteMany(),
     prisma.currencyRate.deleteMany(),
     prisma.user.deleteMany(),
     prisma.systemSettings.deleteMany(),
+    prisma.enterpriseProfile.deleteMany(),
   ]);
 
-  // 1. System Settings
+  // 2. Enterprise Profile & System Settings
+  await prisma.enterpriseProfile.create({
+    data: {
+      id: "default",
+      legalNameAr: "شركة الجبري الزراعية للتنمية والاستثمار",
+      legalNameEn: "Al-Jabri Agricultural Development & Investment Co.",
+      taxNumber: "30049811200003",
+      commercialReg: "CR-YE-2026-8841",
+      currencyCode: "YER",
+      address: "الجمهورية اليمنية - صنعاء / مزارع الجبري الإنتاجية",
+      phone: "783118231",
+      email: "finance@aljabri-agri.com",
+      logoUrl: "/icons/icon.svg",
+      brandColor: "#059669",
+    },
+  });
+
   await prisma.systemSettings.create({
     data: {
       id: "default",
-      orgName: "النظام المحاسبي الموحد Unified Accounting System (UAS)",
+      orgName: "شركة الجبري الزراعية للتنمية والاستثمار | UAS",
       logoText: "UAS",
       defaultLang: "ar",
       defaultTheme: "emerald",
@@ -51,7 +84,7 @@ async function main() {
     },
   });
 
-  // 2. Currency Rates
+  // 3. Currency Rates (Base = YER)
   await prisma.currencyRate.createMany({
     data: [
       { currencyCode: "YER", rateToYER: 1 },
@@ -60,128 +93,632 @@ async function main() {
     ],
   });
 
-  // 3. Users (default password: "123456")
+  // 4. Users (Default password: "123456")
   const defaultPassHash = hashPassword("123456");
   await prisma.user.createMany({
     data: [
       {
         id: "u1",
+        username: "admin",
         name: "أحمد الجابري",
+        fullName: "أحمد الجابري - المدير العام",
         email: "admin@uas-ye.com",
         passwordHash: defaultPassHash,
-        role: "مدير النظام (Admin)",
+        role: "SUPER_ADMIN",
         active: true,
         avatarChar: "أ",
+        assignedProjects: JSON.stringify(["p1", "p2", "p3"]),
       },
       {
         id: "u2",
+        username: "fawaz_pm",
         name: "فواز الجابري",
+        fullName: "فواز الجابري - مدير المشاريع",
         email: "fawaz@uas-ye.com",
         passwordHash: defaultPassHash,
-        role: "مدير مشاريع (Project Manager)",
+        role: "PROJECT_MANAGER",
         active: true,
         avatarChar: "ف",
+        assignedProjects: JSON.stringify(["p1", "p2", "p3"]),
       },
       {
         id: "u3",
+        username: "bilal_acc",
         name: "بلال المحاسب",
+        fullName: "بلال المحاسب - رئيس الحسابات",
         email: "bilal@uas-ye.com",
         passwordHash: defaultPassHash,
-        role: "محاسب رئيسي (Accountant)",
+        role: "CHIEF_ACCOUNTANT",
         active: true,
         avatarChar: "ب",
+        assignedProjects: JSON.stringify(["p1", "p2", "p3"]),
+      },
+      {
+        id: "u4",
+        username: "salem_proc",
+        name: "سالم المشتريات",
+        fullName: "سالم المشتريات - مسؤول المشتريات",
+        email: "procurement@uas-ye.com",
+        passwordHash: defaultPassHash,
+        role: "PROCUREMENT_OFFICER",
+        active: true,
+        avatarChar: "س",
+        assignedProjects: JSON.stringify(["p1", "p2"]),
+      },
+      {
+        id: "u5",
+        username: "abdullah_aud",
+        name: "عبدالله المراجع",
+        fullName: "عبدالله المراجع - المدقق الداخلي",
+        email: "auditor@uas-ye.com",
+        passwordHash: defaultPassHash,
+        role: "AUDITOR",
+        active: true,
+        avatarChar: "ع",
+        assignedProjects: JSON.stringify(["p1", "p2", "p3"]),
       },
     ],
   });
 
-  // 4. Treasury Accounts
+  // 5. Complete 5-Tier Chart of Accounts (Assets 100000 -> Expenses 500000)
+  const accountIdByCode = new Map<string, string>();
+  for (const level of [1, 2, 3, 4, 5] as const) {
+    const nodes = STANDARD_COA_NODES.filter((n) => n.level === level);
+    for (const node of nodes) {
+      const parentId = node.parentCode ? accountIdByCode.get(node.parentCode) ?? null : null;
+      const created = await prisma.account.create({
+        data: {
+          code: node.code,
+          nameAr: node.nameAr,
+          nameEn: node.nameEn,
+          level: node.level,
+          type: node.type,
+          isPosting: node.isPosting,
+          parentId,
+        },
+      });
+      accountIdByCode.set(node.code, created.id);
+    }
+  }
+  const accId = (code: string) => {
+    const id = accountIdByCode.get(code);
+    if (!id) throw new Error(`Missing seeded COA code: ${code}`);
+    return id;
+  };
+
+  // 6. Treasuries linked to Tier-5 1111xx / 1112xx COA Accounts
   await prisma.treasuryAccount.createMany({
     data: [
       {
         id: "t1",
-        name: "الصندوق الرئيسي (Main Cash Box)",
-        type: "CASH",
+        code: "TR-VAULT-YER",
+        name: "الصندوق الرئيسي - يمني (Central Safe - YER)",
+        nameAr: "الصندوق الرئيسي - يمني",
+        nameEn: "Central Safe - YER",
+        type: "VAULT",
         accountNumber: "CASH-01",
+        accountId: accId("111101"),
+        currency: "YER",
         currencyCode: "YER",
+        balance: 120000,
         balanceYER: 120000,
       },
       {
         id: "t2",
-        name: "بنك الكريمي (Kuraimi Bank)",
+        code: "TR-BANK-KUR",
+        name: "بنك الكريمي الإسلامي (Kuraimi Bank)",
+        nameAr: "بنك الكريمي الإسلامي",
+        nameEn: "Kuraimi Islamic Bank",
         type: "BANK",
         accountNumber: "KUR-88412",
+        accountId: accId("111201"),
+        currency: "YER",
         currencyCode: "YER",
+        balance: 350000,
         balanceYER: 350000,
       },
       {
         id: "t3",
-        name: "محفظة جوالي (Jawali Wallet)",
+        code: "TR-WAL-JWL",
+        name: "محفظة فلوسك / جوالي (Jawali Wallet)",
+        nameAr: "محفظة فلوسك / جوالي",
+        nameEn: "Floosak / Jawali Wallet",
         type: "WALLET",
         accountNumber: "JWL-78311",
+        accountId: accId("111203"),
+        currency: "YER",
         currencyCode: "YER",
+        balance: 95000,
         balanceYER: 95000,
       },
       {
         id: "t4",
+        code: "TR-WAL-JEB",
         name: "محفظة جيب (Jeeb Wallet)",
+        nameAr: "محفظة جيب",
+        nameEn: "Jeeb Wallet",
         type: "WALLET",
         accountNumber: "JEB-78311",
+        accountId: accId("111204"),
+        currency: "YER",
         currencyCode: "YER",
+        balance: 60000,
         balanceYER: 60000,
+      },
+      {
+        id: "t5",
+        code: "TR-VAULT-SAR",
+        name: "صندوق الريال السعودي (Central Safe - SAR)",
+        nameAr: "صندوق الريال السعودي",
+        nameEn: "Central Safe - SAR",
+        type: "VAULT",
+        accountNumber: "CASH-SAR-01",
+        accountId: accId("111102"),
+        currency: "SAR",
+        currencyCode: "SAR",
+        balance: 500,
+        balanceYER: 212500,
+      },
+      {
+        id: "t6",
+        code: "TR-VAULT-USD",
+        name: "صندوق الدولار (Central Safe - USD)",
+        nameAr: "صندوق الدولار",
+        nameEn: "Central Safe - USD",
+        type: "VAULT",
+        accountNumber: "CASH-USD-01",
+        accountId: accId("111103"),
+        currency: "USD",
+        currencyCode: "USD",
+        balance: 250,
+        balanceYER: 405000,
+      },
+      {
+        id: "t7",
+        code: "TR-BANK-QTB",
+        name: "بنك القطيبي الإسلامي (Al-Qutaibi Bank)",
+        nameAr: "بنك القطيبي الإسلامي",
+        nameEn: "Al-Qutaibi Bank",
+        type: "BANK",
+        accountNumber: "QTB-55109",
+        accountId: accId("111202"),
+        currency: "YER",
+        currencyCode: "YER",
+        balance: 180000,
+        balanceYER: 180000,
       },
     ],
   });
 
-  // 5. Projects (Main projects first, then Sub-projects)
+  // 7. Projects, Sub-Projects & Harvest Cycles
   await prisma.project.create({
     data: {
       id: "p1",
+      code: "PRJ-001",
       name: "الجبري العليا",
+      nameAr: "الجبري العليا",
+      nameEn: "Upper Al-Jabri",
       type: "مشروع رئيسي",
       parentProjectId: null,
+      budgetTotal: 1000000,
       estimatedValue: 1000000,
       plannedHarvestCount: 3,
-      notes: "بقعة قات الجبري",
+      status: "ACTIVE",
+      startDate: new Date("2026-10-01T00:00:00Z"),
+      notes: "مشروع مزارع الجبري العليا الرئيسي",
     },
   });
 
   await prisma.project.create({
     data: {
       id: "p2",
+      code: "PRJ-002",
       name: "الجبري الوسطى",
+      nameAr: "الجبري الوسطى",
+      nameEn: "Middle Al-Jabri",
       type: "مشروع رئيسي",
       parentProjectId: null,
+      budgetTotal: 750000,
       estimatedValue: 750000,
       plannedHarvestCount: 2,
-      notes: "مشروع الجبري الوسطى",
+      status: "ACTIVE",
+      startDate: new Date("2026-10-01T00:00:00Z"),
+      notes: "مشروع مزارع الجبري الوسطى الرئيسي",
     },
   });
 
   await prisma.project.create({
     data: {
       id: "p3",
+      code: "PRJ-003",
       name: "الجبري السفلى",
-      type: "مشروع فرعي",
-      parentProjectId: "p1",
+      nameAr: "الجبري السفلى",
+      nameEn: "Lower Al-Jabri",
+      type: "مشروع رئيسي",
+      parentProjectId: null,
+      budgetTotal: 500000,
       estimatedValue: 500000,
       plannedHarvestCount: 2,
-      notes: "فرع الجبري السفلى",
+      status: "ACTIVE",
+      startDate: new Date("2026-10-15T00:00:00Z"),
+      notes: "مشروع مزارع الجبري السفلى الرئيسي",
     },
   });
 
-  // 6. Harvest Cycles
-  const harvestSeed = [
-    { id: "hc_p1_1", projectId: "p1", name: "القطفة الأولى", sortOrder: 1, isLocked: false },
-    { id: "hc_p1_2", projectId: "p1", name: "القطفة الثانية", sortOrder: 2, isLocked: false },
-    { id: "hc_p1_3", projectId: "p1", name: "القطفة الثالثة", sortOrder: 3, isLocked: false },
-    { id: "hc_p2_1", projectId: "p2", name: "القطفة الأولى", sortOrder: 1, isLocked: false },
-    { id: "hc_p2_2", projectId: "p2", name: "القطفة الثانية", sortOrder: 2, isLocked: false },
-    { id: "hc_p3_1", projectId: "p3", name: "القطفة الأولى", sortOrder: 1, isLocked: false },
-    { id: "hc_p3_2", projectId: "p3", name: "القطفة الثانية", sortOrder: 2, isLocked: false },
-  ];
-  await prisma.harvestCycle.createMany({ data: harvestSeed });
+  await prisma.subProject.createMany({
+    data: [
+      { id: "sp1", projectId: "p1", code: "SUB-01", nameAr: "قطاع A - المدرجات", nameEn: "Sector A - Terraces", budget: 450000 },
+      { id: "sp2", projectId: "p1", code: "SUB-02", nameAr: "قطاع B - الوادي", nameEn: "Sector B - Valley", budget: 350000 },
+      { id: "sp3", projectId: "p1", code: "SUB-03", nameAr: "الآبار ومنظومات الضخ", nameEn: "Wells & Solar Pumping", budget: 200000 },
+      { id: "sp4", projectId: "p2", code: "SUB-01", nameAr: "قطاع الوسطى الشرقي", nameEn: "Middle East Sector", budget: 450000 },
+      { id: "sp5", projectId: "p2", code: "SUB-02", nameAr: "شبكة الري والتخزين", nameEn: "Irrigation & Storage", budget: 300000 },
+      { id: "sp6", projectId: "p3", code: "SUB-01", nameAr: "قطاع السفلى الرئيسي", nameEn: "Lower Main Sector", budget: 500000 },
+    ],
+  });
 
-  // 7. Operating Expenses
+  await prisma.harvestCycle.createMany({
+    data: [
+      { id: "hc_p1_1", projectId: "p1", cycleNumber: 1, name: "القطفة الأولى", sortOrder: 1, isLocked: false },
+      { id: "hc_p1_2", projectId: "p1", cycleNumber: 2, name: "القطفة الثانية", sortOrder: 2, isLocked: false },
+      { id: "hc_p1_3", projectId: "p1", cycleNumber: 3, name: "القطفة الثالثة", sortOrder: 3, isLocked: false },
+      { id: "hc_p2_1", projectId: "p2", cycleNumber: 1, name: "القطفة الأولى", sortOrder: 1, isLocked: false },
+      { id: "hc_p2_2", projectId: "p2", cycleNumber: 2, name: "القطفة الثانية", sortOrder: 2, isLocked: false },
+      { id: "hc_p3_1", projectId: "p3", cycleNumber: 1, name: "القطفة الأولى", sortOrder: 1, isLocked: false },
+      { id: "hc_p3_2", projectId: "p3", cycleNumber: 2, name: "القطفة الثانية", sortOrder: 2, isLocked: false },
+    ],
+  });
+
+  // 8. Vendors linked to Tier-5 2111xx Accounts
+  await prisma.vendor.createMany({
+    data: [
+      {
+        id: "v1",
+        code: "VND-001",
+        nameAr: "شركة التوريدات الزراعية",
+        nameEn: "General Agricultural Supplies Co.",
+        phone: "777100200",
+        email: "sales@agrisupplies-ye.com",
+        taxRegistration: "TAX-VND-101",
+        address: "صنعاء - شارع تعز",
+        accountId: accId("211101"),
+      },
+      {
+        id: "v2",
+        code: "VND-002",
+        nameAr: "محطة الوقود المركزية",
+        nameEn: "Central Fuel & Energy Station",
+        phone: "777300400",
+        email: "billing@centralfuel-ye.com",
+        taxRegistration: "TAX-VND-102",
+        address: "خط مأرب - المحطة المركزية",
+        accountId: accId("211102"),
+      },
+      {
+        id: "v3",
+        code: "VND-003",
+        nameAr: "مورد قطع الغيار والصيانة",
+        nameEn: "Equipment Spare Parts Vendor",
+        phone: "777500600",
+        email: "parts@spares-ye.com",
+        taxRegistration: "TAX-VND-103",
+        address: "صنعاء - المنطقة الصناعية",
+        accountId: accId("211103"),
+      },
+    ],
+  });
+
+  // 9. Customers linked to Tier-5 1121xx Accounts
+  await prisma.customer.createMany({
+    data: [
+      {
+        id: "cust1",
+        code: "CUST-001",
+        name: "فواز الجابري",
+        nameAr: "فواز الجابري",
+        nameEn: "Fawaz Al-Jabri",
+        phone: "783118231",
+        address: "صنعاء - سوق الجملة",
+        creditLimit: 500000,
+        accountId: accId("112101"),
+      },
+      {
+        id: "cust2",
+        code: "CUST-002",
+        name: "يوسف الجابري",
+        nameAr: "يوسف الجابري",
+        nameEn: "Youssef Al-Jabri",
+        phone: "783118231",
+        address: "ذمار - المركز التجاري",
+        creditLimit: 300000,
+        accountId: accId("112102"),
+      },
+    ],
+  });
+
+  // 10. Workers linked to Tier-5 2121xx Accounts
+  await prisma.worker.createMany({
+    data: [
+      { id: "wrk1", name: "بلال", phone: "783118231", defaultDailyWage: 5000, accountId: accId("212101") },
+      { id: "wrk2", name: "معاذ", phone: "783118231", defaultDailyWage: 4000, accountId: accId("212102") },
+      { id: "wrk3", name: "فواز", phone: "783118231", defaultDailyWage: 3000, accountId: accId("212103") },
+    ],
+  });
+
+  // Helper for atomic Journal Entry creation in seed
+  let jvSeq = 1;
+  async function seedJournal(params: {
+    date: string;
+    reference: string;
+    narrationAr: string;
+    narrationEn: string;
+    sourceType: string;
+    sourceId?: string;
+    projectId?: string | null;
+    createdById?: string;
+    lines: Array<{
+      accountCode: string;
+      debit?: number;
+      credit?: number;
+      currency?: string;
+      exchangeRate?: number;
+      memo?: string;
+      projectId?: string | null;
+      subProjectId?: string | null;
+      harvestCycleId?: string | null;
+    }>;
+  }) {
+    const entryNumber = `JV-2026-${String(jvSeq++).padStart(4, "0")}`;
+    let totalDrBase = 0;
+    let totalCrBase = 0;
+    const preparedLines = params.lines.map((l) => {
+      const rate = l.exchangeRate ?? 1;
+      const dr = l.debit ?? 0;
+      const cr = l.credit ?? 0;
+      const debitBase = Number((dr * rate).toFixed(4));
+      const creditBase = Number((cr * rate).toFixed(4));
+      totalDrBase += debitBase;
+      totalCrBase += creditBase;
+      return {
+        accountId: accId(l.accountCode),
+        debit: dr,
+        credit: cr,
+        currency: l.currency ?? "YER",
+        exchangeRate: rate,
+        debitBase,
+        creditBase,
+        memo: l.memo ?? params.narrationAr,
+        projectId: l.projectId !== undefined ? l.projectId : params.projectId ?? null,
+        subProjectId: l.subProjectId ?? null,
+        harvestCycleId: l.harvestCycleId ?? null,
+      };
+    });
+
+    if (Math.abs(totalDrBase - totalCrBase) > 0.0001) {
+      throw new Error(`Seed JournalEntry ${entryNumber} is unbalanced: DR=${totalDrBase}, CR=${totalCrBase}`);
+    }
+
+    return prisma.journalEntry.create({
+      data: {
+        entryNumber,
+        date: new Date(`${params.date}T10:00:00Z`),
+        reference: params.reference,
+        narrationAr: params.narrationAr,
+        narrationEn: params.narrationEn,
+        status: "POSTED",
+        sourceType: params.sourceType,
+        sourceId: params.sourceId ?? null,
+        projectId: params.projectId ?? null,
+        createdById: params.createdById ?? "u1",
+        lines: { create: preparedLines },
+      },
+    });
+  }
+
+  // 11. Opening Balances Journal Entry (JV-2026-0001)
+  // Opening cash/bank balances reconcile precisely with final treasury balances after seed transactions
+  await seedJournal({
+    date: "2026-10-31",
+    reference: "OPENING-2026",
+    narrationAr: "قيد الأرصدة الافتتاحية للأصول والبنوك ورأس المال",
+    narrationEn: "Opening Balances for Cash, Banks, Agricultural Estates & Paid-In Capital",
+    sourceType: "OPENING",
+    sourceId: "OPEN-2026",
+    lines: [
+      { accountCode: "111101", debit: 135000, memo: "رصيد افتتاحي - الصندوق الرئيسي يمني" },
+      { accountCode: "111201", debit: 400000, memo: "رصيد افتتاحي - بنك الكريمي" },
+      { accountCode: "111203", debit: 75000, memo: "رصيد افتتاحي - محفظة جوالي" },
+      { accountCode: "111204", debit: 60000, memo: "رصيد افتتاحي - محفظة جيب" },
+      { accountCode: "111102", debit: 500, currency: "SAR", exchangeRate: 425, memo: "رصيد افتتاحي - 500 ريال سعودي" },
+      { accountCode: "111103", debit: 250, currency: "USD", exchangeRate: 1620, memo: "رصيد افتتاحي - 250 دولار أمريكي" },
+      { accountCode: "111202", debit: 180000, memo: "رصيد افتتاحي - بنك القطيبي" },
+      { accountCode: "121101", debit: 1000000, projectId: "p1", memo: "أراضي ومزارع مشاريع الجبري" },
+      { accountCode: "121201", debit: 500000, projectId: "p1", memo: "آبار ومنظومات الضخ بالطاقة الشمسية" },
+      { accountCode: "311101", credit: 2967500, memo: "رأس المال المدفوع الافتتاحي" },
+    ],
+  });
+
+  // 12. End-to-End Procurement Workflow Seed (PO -> GRN -> Vendor Bill -> Payment Voucher)
+  await prisma.purchaseOrder.create({
+    data: {
+      id: "po1",
+      poNumber: "PO-2026-0001",
+      vendorId: "v1",
+      projectId: "p1",
+      subProjectId: "sp1",
+      date: new Date("2026-11-01T08:00:00Z"),
+      status: "APPROVED",
+      subTotal: 120000,
+      taxTotal: 0,
+      grandTotal: 120000,
+      currency: "YER",
+      notes: "توريد أسمدة ومبيدات وأكياس تعبئة لمشروع الجبري العليا",
+      items: {
+        create: [
+          { description: "أسمدة عضوية ومغذيات (كيس 50 كجم)", unit: "كيس", quantity: 10, unitPrice: 9000, totalPrice: 90000 },
+          { description: "أدوات تعبئة وصناديق حفظ المحصول", unit: "ربطة", quantity: 10, unitPrice: 3000, totalPrice: 30000 },
+        ],
+      },
+    },
+  });
+
+  await prisma.goodsReceipt.create({
+    data: {
+      id: "grn1",
+      grnNumber: "GRN-2026-0001",
+      purchaseOrderId: "po1",
+      receivedDate: new Date("2026-11-01T14:00:00Z"),
+      receivedTotal: 120000,
+      hasVariance: false,
+      itemsSummary: JSON.stringify([
+        { description: "أسمدة عضوية ومغذيات (كيس 50 كجم)", ordered: 10, received: 10 },
+        { description: "أدوات تعبئة وصناديق حفظ المحصول", ordered: 10, received: 10 },
+      ]),
+      warehouseNotes: "مطابق 100% لأمر الشراء PO-2026-0001 بدون عجز",
+    },
+  });
+
+  const bill1Je = await seedJournal({
+    date: "2026-11-01",
+    reference: "BILL-2026-0001",
+    narrationAr: "إثبات فاتورة مشتريات مخزنية رقم BILL-2026-0001 - شركة التوريدات الزراعية",
+    narrationEn: "Vendor Bill BILL-2026-0001 Inventory Intake - General Agricultural Supplies Co.",
+    sourceType: "VENDOR_BILL",
+    sourceId: "bill1",
+    projectId: "p1",
+    createdById: "u4",
+    lines: [
+      { accountCode: "113201", debit: 120000, projectId: "p1", subProjectId: "sp1", memo: "مخزون أسمدة ومستلزمات زراعية" },
+      { accountCode: "211101", credit: 120000, projectId: "p1", subProjectId: "sp1", memo: "استحقاق شركة التوريدات الزراعية" },
+    ],
+  });
+
+  await prisma.vendorBill.create({
+    data: {
+      id: "bill1",
+      billNumber: "BILL-2026-0001",
+      vendorId: "v1",
+      projectId: "p1",
+      subProjectId: "sp1",
+      purchaseOrderId: "po1",
+      date: new Date("2026-11-01T15:00:00Z"),
+      dueDate: new Date("2026-11-30T15:00:00Z"),
+      status: "PARTIALLY_PAID",
+      totalAmount: 120000,
+      paidAmount: 50000,
+      balanceDue: 70000,
+      currency: "YER",
+      isInventory: true,
+      debitAccountId: accId("113201"),
+      journalEntryId: bill1Je.id,
+      notes: "فاتورة مخزون أسمدة - مطابقة ثلاثية مكتملة",
+    },
+  });
+
+  const pv1Je = await seedJournal({
+    date: "2026-11-02",
+    reference: "PV-2026-0001",
+    narrationAr: "سند صرف دفعة للمورد شركة التوريدات الزراعية من بنك الكريمي",
+    narrationEn: "Vendor Payment PV-2026-0001 via Kuraimi Bank",
+    sourceType: "VENDOR_PAYMENT",
+    sourceId: "pv1",
+    projectId: "p1",
+    createdById: "u3",
+    lines: [
+      { accountCode: "211101", debit: 50000, projectId: "p1", subProjectId: "sp1", memo: "سداد جزئي لفاتورة BILL-2026-0001" },
+      { accountCode: "111201", credit: 50000, projectId: "p1", memo: "تحويل من بنك الكريمي الإسلامي" },
+    ],
+  });
+
+  await prisma.paymentVoucher.create({
+    data: {
+      id: "pv1",
+      voucherNumber: "PV-2026-0001",
+      date: new Date("2026-11-02T11:00:00Z"),
+      vendorId: "v1",
+      billId: "bill1",
+      treasuryId: "t2",
+      amount: 50000,
+      currency: "YER",
+      referenceNumber: "KUR-TX-99012",
+      notes: "دفعة أولى من مستحقات فاتورة الأسمدة",
+      projectId: "p1",
+      journalEntryId: pv1Je.id,
+      qrVerificationHash: computeQrVerificationCode("PV:PV-2026-0001|VND:v1|AMT:50000"),
+    },
+  });
+
+  await prisma.purchaseOrder.create({
+    data: {
+      id: "po2",
+      poNumber: "PO-2026-0002",
+      vendorId: "v2",
+      projectId: "p2",
+      subProjectId: "sp4",
+      date: new Date("2026-11-03T09:00:00Z"),
+      status: "APPROVED",
+      subTotal: 60000,
+      taxTotal: 0,
+      grandTotal: 60000,
+      currency: "YER",
+      notes: "احتياطي ديزل لمشروع الجبري الوسطى",
+      items: {
+        create: [
+          { description: "ديزل تشغيل مضخات الري (لتر)", unit: "لتر", quantity: 60, unitPrice: 1000, totalPrice: 60000 },
+        ],
+      },
+    },
+  });
+
+  await prisma.goodsReceipt.create({
+    data: {
+      id: "grn2",
+      grnNumber: "GRN-2026-0002",
+      purchaseOrderId: "po2",
+      receivedDate: new Date("2026-11-03T12:00:00Z"),
+      receivedTotal: 60000,
+      hasVariance: false,
+      warehouseNotes: "تم استلام 60 لتر ديزل في خزانات الجبري الوسطى",
+    },
+  });
+
+  const bill2Je = await seedJournal({
+    date: "2026-11-03",
+    reference: "BILL-2026-0002",
+    narrationAr: "فاتورة مخزون وقود لمشروع الجبري الوسطى - محطة الوقود المركزية",
+    narrationEn: "Vendor Bill BILL-2026-0002 Fuel Reserve - Central Fuel Station",
+    sourceType: "VENDOR_BILL",
+    sourceId: "bill2",
+    projectId: "p2",
+    createdById: "u4",
+    lines: [
+      { accountCode: "113202", debit: 60000, projectId: "p2", subProjectId: "sp4", memo: "مخزون وقود لمضخات الجبري الوسطى" },
+      { accountCode: "211102", credit: 60000, projectId: "p2", subProjectId: "sp4", memo: "استحقاق محطة الوقود المركزية" },
+    ],
+  });
+
+  await prisma.vendorBill.create({
+    data: {
+      id: "bill2",
+      billNumber: "BILL-2026-0002",
+      vendorId: "v2",
+      projectId: "p2",
+      subProjectId: "sp4",
+      purchaseOrderId: "po2",
+      date: new Date("2026-11-03T13:00:00Z"),
+      dueDate: new Date("2026-12-03T13:00:00Z"),
+      status: "APPROVED",
+      totalAmount: 60000,
+      paidAmount: 0,
+      balanceDue: 60000,
+      currency: "YER",
+      isInventory: true,
+      debitAccountId: accId("113202"),
+      journalEntryId: bill2Je.id,
+      notes: "آجل لمدة 30 يوماً",
+    },
+  });
+
+  // 13. Operating Expenses (UAS.xlsx grounded: total 85,000 YER on p1)
   const rawExpenses = [
     {
       id: "e1",
@@ -232,27 +769,52 @@ async function main() {
       notes: "مواصلات العمال",
     },
   ];
-  await prisma.operatingExpense.createMany({
-    data: rawExpenses.map((e) => ({
-      ...e,
-      totalAmount: computeOperatingExpenseTotal(e.quantity, e.unitPrice),
-    })),
-  });
 
-  // 8. Workers & Worker Wage Entries
-  await prisma.worker.createMany({
-    data: [
-      { id: "wrk1", name: "بلال", phone: "783118231", defaultDailyWage: 5000 },
-      { id: "wrk2", name: "معاذ", phone: "783118231", defaultDailyWage: 4000 },
-      { id: "wrk3", name: "فواز", phone: "783118231", defaultDailyWage: 3000 },
-    ],
-  });
+  for (const exp of rawExpenses) {
+    const totalAmount = computeOperatingExpenseTotal(exp.quantity, exp.unitPrice);
+    const je = await seedJournal({
+      date: exp.expenseDate,
+      reference: `EXP-${exp.id.toUpperCase()}`,
+      narrationAr: `مصروف تشغيلي (${exp.category}): ${exp.subType}`,
+      narrationEn: `Operating Expense: ${exp.subType}`,
+      sourceType: "EXPENSE",
+      sourceId: exp.id,
+      projectId: exp.projectId,
+      createdById: "u3",
+      lines: [
+        {
+          accountCode: mapExpenseCategoryToCoaCode(exp.category),
+          debit: totalAmount,
+          projectId: exp.projectId,
+          harvestCycleId: exp.harvestCycleId,
+          memo: exp.subType,
+        },
+        {
+          accountCode: "111101",
+          credit: totalAmount,
+          projectId: exp.projectId,
+          harvestCycleId: exp.harvestCycleId,
+          memo: `صرف نقدي - ${exp.subType}`,
+        },
+      ],
+    });
 
+    await prisma.operatingExpense.create({
+      data: {
+        ...exp,
+        totalAmount,
+        journalEntryId: je.id,
+      },
+    });
+  }
+
+  // 14. Worker Wage Entries & Labor Accrual/Payout Journals (Total wages = 130,000, Paid = 30,000)
   const rawWageEntries = [
     {
       id: "w1",
       workerId: "wrk1",
       workerName: "بلال",
+      payableCode: "212101",
       projectId: "p1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
@@ -266,6 +828,7 @@ async function main() {
       id: "w2",
       workerId: "wrk2",
       workerName: "معاذ",
+      payableCode: "212102",
       projectId: "p1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
@@ -279,6 +842,7 @@ async function main() {
       id: "w3",
       workerId: "wrk3",
       workerName: "فواز",
+      payableCode: "212103",
       projectId: "p1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
@@ -289,24 +853,95 @@ async function main() {
       notes: "القطفة الأولى",
     },
   ];
-  await prisma.workerWageEntry.createMany({
-    data: rawWageEntries.map((w) => ({
-      ...w,
-      ...computeWorkerWageTotals(w.dailyWage, w.daysWorked, w.creditAmount),
-    })),
-  });
 
-  // 9. Customers & Sale Transactions
-  await prisma.customer.createMany({
-    data: [
-      { id: "cust1", name: "فواز الجابري", phone: "783118231" },
-      { id: "cust2", name: "يوسف الجابري", phone: "783118231" },
-    ],
-  });
+  for (const w of rawWageEntries) {
+    const totals = computeWorkerWageTotals(w.dailyWage, w.daysWorked, w.creditAmount);
+    const accrualJe = await seedJournal({
+      date: w.workDate,
+      reference: `WRK-ACC-${w.id.toUpperCase()}`,
+      narrationAr: `إثبات استحقاق أجر العامل ${w.workerName} (${w.daysWorked} أيام × ${w.dailyWage})`,
+      narrationEn: `Worker Wage Accrual: ${w.workerName}`,
+      sourceType: "WORKER_ACCRUAL",
+      sourceId: w.id,
+      projectId: w.projectId,
+      createdById: "u3",
+      lines: [
+        {
+          accountCode: "511101",
+          debit: totals.totalWage,
+          projectId: w.projectId,
+          harvestCycleId: w.harvestCycleId,
+          memo: `أجور عمالة مباشرة - ${w.workerName}`,
+        },
+        {
+          accountCode: w.payableCode,
+          credit: totals.totalWage,
+          projectId: w.projectId,
+          harvestCycleId: w.harvestCycleId,
+          memo: `مستحق للعامل ${w.workerName}`,
+        },
+      ],
+    });
 
+    if (w.creditAmount > 0) {
+      await seedJournal({
+        date: w.workDate,
+        reference: `WRK-PAY-${w.id.toUpperCase()}`,
+        narrationAr: `صرف دفعة من أجر العامل ${w.workerName} نقداً`,
+        narrationEn: `Worker Wage Payout: ${w.workerName}`,
+        sourceType: "WORKER_PAYOUT",
+        sourceId: w.id,
+        projectId: w.projectId,
+        createdById: "u3",
+        lines: [
+          {
+            accountCode: w.payableCode,
+            debit: w.creditAmount,
+            projectId: w.projectId,
+            harvestCycleId: w.harvestCycleId,
+            memo: `تسوية مستحقات ${w.workerName}`,
+          },
+          {
+            accountCode: "111101",
+            credit: w.creditAmount,
+            projectId: w.projectId,
+            harvestCycleId: w.harvestCycleId,
+            memo: `صرف نقدي للعامل ${w.workerName}`,
+          },
+        ],
+      });
+    }
+
+    await prisma.workerWageEntry.create({
+      data: {
+        id: w.id,
+        workerId: w.workerId,
+        workerName: w.workerName,
+        projectId: w.projectId,
+        harvestCycleId: w.harvestCycleId,
+        harvestName: w.harvestName,
+        dailyWage: w.dailyWage,
+        daysWorked: w.daysWorked,
+        totalWage: totals.totalWage,
+        creditAmount: w.creditAmount,
+        debitBalance: totals.debitBalance,
+        workDate: w.workDate,
+        notes: w.notes,
+        journalEntryId: accrualJe.id,
+      },
+    });
+  }
+
+  // 15. Sales Transactions, Enterprise SalesInvoices & ReceiptVouchers (Total Sales = 430,000 YER)
   const rawSales = [
     {
       id: "s1",
+      invoiceId: "sinv1",
+      invoiceNumber: "INV-2026-0001",
+      rvId: "rcp1",
+      customerAccountCode: "112101",
+      treasuryId: "t1",
+      treasuryAccountCode: "111101",
       projectId: "p1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
@@ -324,6 +959,12 @@ async function main() {
     },
     {
       id: "s2",
+      invoiceId: "sinv2",
+      invoiceNumber: "INV-2026-0002",
+      rvId: "rcp2",
+      customerAccountCode: "112102",
+      treasuryId: "t3",
+      treasuryAccountCode: "111203",
       projectId: "p1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
@@ -341,6 +982,12 @@ async function main() {
     },
     {
       id: "s3",
+      invoiceId: "sinv3",
+      invoiceNumber: "INV-2026-0003",
+      rvId: "rcp3",
+      customerAccountCode: "112101",
+      treasuryId: "t1",
+      treasuryAccountCode: "111101",
       projectId: "p1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
@@ -358,6 +1005,12 @@ async function main() {
     },
     {
       id: "s4",
+      invoiceId: "sinv4",
+      invoiceNumber: "INV-2026-0004",
+      rvId: "rcp4",
+      customerAccountCode: "112102",
+      treasuryId: "t3",
+      treasuryAccountCode: "111203",
       projectId: "p1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
@@ -374,14 +1027,123 @@ async function main() {
       notes: "عملية بيع 2 - الجبري العليا",
     },
   ];
-  await prisma.saleTransaction.createMany({
-    data: rawSales.map((s) => ({
-      ...s,
-      ...computeSaleTotals(s.bundlesCount, s.unitPrice, s.creditPaid),
-    })),
-  });
 
-  // 10. Installment Vouchers
+  for (const s of rawSales) {
+    const totals = computeSaleTotals(s.bundlesCount, s.unitPrice, s.creditPaid);
+    const invJe = await seedJournal({
+      date: s.saleDate,
+      reference: s.invoiceNumber,
+      narrationAr: `إثبات فاتورة مبيعات ${s.invoiceNumber} - ${s.customerName} (${s.saleBatchLabel})`,
+      narrationEn: `Sales Invoice ${s.invoiceNumber} - ${s.customerName}`,
+      sourceType: "SALES_INVOICE",
+      sourceId: s.invoiceId,
+      projectId: s.projectId,
+      createdById: "u3",
+      lines: [
+        {
+          accountCode: s.customerAccountCode,
+          debit: totals.totalAmount,
+          projectId: s.projectId,
+          harvestCycleId: s.harvestCycleId,
+          memo: `استحقاق على العميل ${s.customerName}`,
+        },
+        {
+          accountCode: "411101",
+          credit: totals.totalAmount,
+          projectId: s.projectId,
+          harvestCycleId: s.harvestCycleId,
+          memo: `إيراد مبيعات ${s.harvestName} (${s.bundlesCount} علاقية)`,
+        },
+      ],
+    });
+
+    const rcpJe = await seedJournal({
+      date: s.saleDate,
+      reference: s.receiptVoucherNo,
+      narrationAr: `سند قبض ${s.receiptVoucherNo} من العميل ${s.customerName}`,
+      narrationEn: `Customer Receipt ${s.receiptVoucherNo}`,
+      sourceType: "CUSTOMER_RECEIPT",
+      sourceId: s.rvId,
+      projectId: s.projectId,
+      createdById: "u3",
+      lines: [
+        {
+          accountCode: s.treasuryAccountCode,
+          debit: s.creditPaid,
+          projectId: s.projectId,
+          harvestCycleId: s.harvestCycleId,
+          memo: `توريد نقدي/محفظة من ${s.customerName}`,
+        },
+        {
+          accountCode: s.customerAccountCode,
+          credit: s.creditPaid,
+          projectId: s.projectId,
+          harvestCycleId: s.harvestCycleId,
+          memo: `تحصيل دفعة فاتورة ${s.invoiceNumber}`,
+        },
+      ],
+    });
+
+    await prisma.saleTransaction.create({
+      data: {
+        id: s.id,
+        projectId: s.projectId,
+        harvestCycleId: s.harvestCycleId,
+        harvestName: s.harvestName,
+        saleBatchLabel: s.saleBatchLabel,
+        customerId: s.customerId,
+        customerName: s.customerName,
+        customerPhone: s.customerPhone,
+        productGrade: s.productGrade,
+        bundlesCount: s.bundlesCount,
+        unitPrice: s.unitPrice,
+        totalAmount: totals.totalAmount,
+        creditPaid: s.creditPaid,
+        debitReceivable: totals.debitReceivable,
+        saleDate: s.saleDate,
+        receiptVoucherNo: s.receiptVoucherNo,
+        notes: s.notes,
+        journalEntryId: invJe.id,
+      },
+    });
+
+    await prisma.salesInvoice.create({
+      data: {
+        id: s.invoiceId,
+        invoiceNumber: s.invoiceNumber,
+        customerId: s.customerId,
+        projectId: s.projectId,
+        harvestCycleId: s.harvestCycleId,
+        date: new Date(`${s.saleDate}T12:00:00Z`),
+        totalAmount: totals.totalAmount,
+        paidAmount: s.creditPaid,
+        balanceDue: totals.debitReceivable,
+        status: totals.debitReceivable <= 0 ? "PAID" : s.creditPaid > 0 ? "PARTIALLY_PAID" : "POSTED",
+        currency: "YER",
+        notes: s.notes,
+        journalEntryId: invJe.id,
+        qrVerificationHash: computeQrVerificationCode(`INV:${s.invoiceNumber}|CUST:${s.customerName}|AMT:${totals.totalAmount}`),
+      },
+    });
+
+    await prisma.receiptVoucher.create({
+      data: {
+        id: s.rvId,
+        voucherNumber: s.receiptVoucherNo,
+        date: new Date(`${s.saleDate}T13:00:00Z`),
+        customerId: s.customerId,
+        invoiceId: s.invoiceId,
+        treasuryId: s.treasuryId,
+        amount: s.creditPaid,
+        currency: "YER",
+        notes: `دفعة مسددة على ${s.invoiceNumber}`,
+        journalEntryId: rcpJe.id,
+        qrVerificationHash: computeQrVerificationCode(`INST:${s.receiptVoucherNo}|PARTY:${s.customerName}|AMT:${s.creditPaid}|DATE:${s.saleDate}`),
+      },
+    });
+  }
+
+  // 16. Installment Vouchers (Compatible with TreasuryTab & Public QR Verification)
   const rawInstallments = [
     {
       id: "inst1",
@@ -432,7 +1194,34 @@ async function main() {
     })),
   });
 
-  // 11. Harvest Inventory Batches
+  // 17. Inventory Lots & Harvest Inventory Batches
+  await prisma.inventoryLot.createMany({
+    data: [
+      {
+        id: "lot1",
+        lotNumber: "LOT-2026-P1-G1",
+        projectId: "p1",
+        harvestCycleId: "hc_p1_1",
+        grade: "صنف 1 ممتاز",
+        initialQuantity: 250,
+        currentQuantity: 10,
+        shrinkageCount: 3,
+        unitCost: 850,
+      },
+      {
+        id: "lot2",
+        lotNumber: "LOT-2026-P1-G2",
+        projectId: "p1",
+        harvestCycleId: "hc_p1_1",
+        grade: "صنف 2 وسط",
+        initialQuantity: 170,
+        currentQuantity: 5,
+        shrinkageCount: 2,
+        unitCost: 110,
+      },
+    ],
+  });
+
   await prisma.harvestInventoryBatch.create({
     data: {
       id: "inv1",
@@ -446,46 +1235,69 @@ async function main() {
     },
   });
 
-  // 12. Immutable Audit Logs
+  // 18. Enterprise Audit Logs & Immutable Audit Logs
+  await prisma.auditLog.createMany({
+    data: [
+      {
+        id: "eaud1",
+        userId: "u1",
+        action: "POST",
+        entity: "JournalEntry",
+        entityId: "JV-2026-0001",
+        details: { summary: "ترحيل قيد الأرصدة الافتتاحية المزدوج", balanced: true },
+        ipAddress: "127.0.0.1",
+      },
+      {
+        id: "eaud2",
+        userId: "u4",
+        action: "CREATE",
+        entity: "VendorBill",
+        entityId: "BILL-2026-0001",
+        details: { vendor: "شركة التوريدات الزراعية", amount: 120000, threeWayMatched: true },
+        ipAddress: "127.0.0.1",
+      },
+    ],
+  });
+
   await prisma.immutableAuditLog.createMany({
     data: [
       {
         id: "aud1",
         timestamp: "2026-11-05 09:15",
         userId: "u1",
-        userDisplay: "أحمد الجابري (Admin)",
-        userRole: "مدير النظام (Admin)",
-        actionType: "إنشاء مشروع",
-        entityReference: "p1",
-        details: "تأسيس مشروع الجبري العليا بقيمة 1,000,000 ريال",
+        userDisplay: "أحمد الجابري (SUPER_ADMIN)",
+        userRole: "SUPER_ADMIN",
+        actionType: "تهيئة شجرة الحسابات 5-Tier",
+        entityReference: "COA",
+        details: "تأسيس دليل الحسابات الموحد ذي 5 مستويات وتفعيل محرك القيد المزدوج",
         sha256Hash: "UAS-9F4A2C",
       },
       {
         id: "aud2",
         timestamp: "2026-11-05 14:30",
         userId: "u3",
-        userDisplay: "بلال المحاسب (Accountant)",
-        userRole: "محاسب رئيسي (Accountant)",
+        userDisplay: "بلال المحاسب (CHIEF_ACCOUNTANT)",
+        userRole: "CHIEF_ACCOUNTANT",
         actionType: "سند قبض مبيعات",
         entityReference: "inst1",
-        details: "تحصيل 50,000 ريال من فواز الجابري إلى الصندوق الرئيسي",
+        details: "تحصيل 50,000 ريال من فواز الجابري إلى الصندوق الرئيسي وترحيل القيد الآلي",
         sha256Hash: "UAS-3B8E11",
       },
       {
         id: "aud3",
         timestamp: "2026-11-08 11:00",
         userId: "u1",
-        userDisplay: "أحمد الجابري (Admin)",
-        userRole: "مدير النظام (Admin)",
+        userDisplay: "أحمد الجابري (SUPER_ADMIN)",
+        userRole: "SUPER_ADMIN",
         actionType: "تهيئة قاعدة البيانات",
         entityReference: "seed",
-        details: "تم ترحيل بيانات UAS.xlsx الأساسية والتحقق من جميع المعادلات",
+        details: "تم ترحيل بيانات UAS.xlsx وسجلات المشتريات والقيود المتزنة بنجاح",
         sha256Hash: sha256Audit("UAS-SEED-2026"),
       },
     ],
   });
 
-  console.log("Database seeded successfully!");
+  console.log("Database seeded successfully with 5-tier COA & balanced Double-Entry Ledger!");
 }
 
 main()
@@ -496,4 +1308,3 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
-

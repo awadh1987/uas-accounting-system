@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { appendAuditLogTx, hashPassword } from "@/lib/serverBootstrap";
+import { appendAuditLogTx, hashPassword, parseAssignedProjects } from "@/lib/serverBootstrap";
 import { jsonError } from "@/lib/apiHelpers";
 
 export async function POST(req: NextRequest) {
@@ -36,11 +36,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       user: {
         id: user.id,
+        username: user.username,
         name: user.name,
+        fullName: user.fullName,
         email: user.email,
         role: user.role,
         active: user.active,
         avatarChar: user.avatarChar,
+        assignedProjects: parseAssignedProjects(user.assignedProjects),
       },
     });
   } catch (error) {
@@ -48,4 +51,3 @@ export async function POST(req: NextRequest) {
     return jsonError("تعذر تسجيل الدخول", 500);
   }
 }
-

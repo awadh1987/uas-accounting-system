@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { computeSaleTotals } from "@/lib/formulas";
+import { computeQrVerificationCode, computeSaleTotals } from "@/lib/formulas";
+import {
+  ensureCustomerWithAccountTx,
+  postCustomerReceipt,
+  postSalesInvoice,
+} from "@/lib/accounting/ledgerService";
 import {
   appendAuditLogTx,
   findHarvestCycle,
@@ -39,11 +44,40 @@ export async function POST(req: NextRequest) {
       }
 
       const cycle = await findHarvestCycle(tx, projectId, harvestName);
-      const customer = await tx.customer.upsert({
-        where: { name: customerName },
-        update: { phone: customerPhone },
-        create: { name: customerName, phone: customerPhone },
+      const customer = await ensureCustomerWithAccountTx(tx, {
+        name: customerName,
+        phone: customerPhone,
       });
+
+      let journalEntryId: string | null = null;
+      if (totalAmount > 0) {
+        const invRes = await postSalesInvoice({
+          tx,
+          customerId: customer.id,
+          projectId,
+          harvestCycleId: cycle?.id ?? null,
+          amount: totalAmount,
+          currency: "YER",
+          date: new Date(`${saleDate}T10:00:00Z`),
+          notes: notes || `${saleBatchLabel} (${bundlesCount} × ${unitPrice})`,
+          createdById: actor.userId ?? undefined,
+        });
+        journalEntryId = invRes.journalEntry.id;
+
+        if (creditPaid > 0) {
+          await postCustomerReceipt({
+            tx,
+            customerId: customer.id,
+            invoiceId: invRes.invoice.id,
+            treasuryId: "t1",
+            amount: creditPaid,
+            currency: "YER",
+            date: new Date(`${saleDate}T10:05:00Z`),
+            notes: `تحصيل عند البيع (${receiptVoucherNo})`,
+            createdById: actor.userId ?? undefined,
+          });
+        }
+      }
 
       const sale = await tx.saleTransaction.create({
         data: {
@@ -63,8 +97,33 @@ export async function POST(req: NextRequest) {
           saleDate,
           receiptVoucherNo,
           notes,
+          journalEntryId,
         },
       });
+
+      if (creditPaid > 0) {
+        const existingV = await tx.installmentVoucher.findUnique({
+          where: { voucherNo: receiptVoucherNo },
+        });
+        const finalVNo = existingV ? `${receiptVoucherNo}-${Date.now().toString().slice(-4)}` : receiptVoucherNo;
+        await tx.installmentVoucher.create({
+          data: {
+            voucherNo: finalVNo,
+            type: "CUSTOMER_RECEIPT",
+            saleTransactionId: sale.id,
+            targetName: `${customer.name} (${saleBatchLabel})`,
+            phone: customer.phone,
+            treasuryAccountId: "t1",
+            amountYER: creditPaid,
+            qrVerificationHash: computeQrVerificationCode(
+              `INST:${finalVNo}|PARTY:${customer.name}|AMT:${creditPaid}|DATE:${saleDate}`
+            ),
+            paymentDate: saleDate,
+            notes: `دفعة مسددة عند البيع (${saleBatchLabel})`,
+            journalEntryId,
+          },
+        });
+      }
 
       await appendAuditLogTx(tx, {
         ...actor,
@@ -85,4 +144,3 @@ export async function POST(req: NextRequest) {
     return jsonError("تعذر حفظ عملية البيع", 500);
   }
 }
-

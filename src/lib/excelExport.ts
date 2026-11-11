@@ -198,3 +198,146 @@ export function exportFullWorkbookToExcel(
   XLSX.writeFile(wb, options?.filename || "UAS_Unified_Accounting_System_Report.xlsx");
 }
 
+export interface FinancialExportPayload {
+  trialBalance: {
+    rows: Array<{
+      code: string;
+      nameAr: string;
+      nameEn: string;
+      level: number;
+      type: string;
+      totalDebit: number;
+      totalCredit: number;
+      netDebit: number;
+      netCredit: number;
+    }>;
+    totalDebits: number;
+    totalCredits: number;
+  };
+  incomeStatement: {
+    totalRevenue: number;
+    totalCogs: number;
+    grossProfit: number;
+    totalOperatingExpenses: number;
+    totalAdminExpenses: number;
+    netProfit: number;
+    projectBreakdown: Array<{
+      code: string;
+      nameAr: string;
+      budgetTotal: number;
+      revenue: number;
+      actualCost: number;
+      netProfit: number;
+      variance: number;
+    }>;
+  };
+  balanceSheet: {
+    assetLines: Array<{ code: string; nameAr: string; balance: number }>;
+    liabilityLines: Array<{ code: string; nameAr: string; balance: number }>;
+    equityLines: Array<{ code: string; nameAr: string; balance: number }>;
+    currentYearNetProfit: number;
+    totalAssets: number;
+    totalLiabilities: number;
+    totalEquity: number;
+  };
+}
+
+export function exportFinancialStatementsToExcel(data: FinancialExportPayload): void {
+  const wb = XLSX.utils.book_new();
+  wb.Workbook = { Views: [{ RTL: true }] };
+
+  // 1. Trial Balance with Freeze Panes & Active SUM Formulas
+  const tbRows = data.trialBalance.rows.map((r) => ({
+    "رقم الحساب": r.code,
+    "اسم الحساب": r.nameAr,
+    "Account Name": r.nameEn,
+    "المستوى": r.level,
+    "التصنيف": r.type,
+    "إجمالي المدين": Number(r.totalDebit),
+    "إجمالي الدائن": Number(r.totalCredit),
+    "رصيد مدين": Number(r.netDebit),
+    "رصيد دائن": Number(r.netCredit),
+  }));
+  const tbSheet = createRtlSheet(tbRows, [
+    "إجمالي المدين",
+    "إجمالي الدائن",
+    "رصيد مدين",
+    "رصيد دائن",
+  ]);
+  const lastRow = tbRows.length + 1;
+  if (tbRows.length > 0) {
+    XLSX.utils.sheet_add_aoa(
+      tbSheet,
+      [
+        [
+          "الإجمالي العام (للمستوى 5)",
+          "",
+          "",
+          "",
+          "",
+          { t: "n", v: data.trialBalance.totalDebits, z: "#,##0" },
+          { t: "n", v: data.trialBalance.totalCredits, z: "#,##0" },
+          { t: "n", f: `SUM(H2:H${lastRow})`, z: "#,##0" },
+          { t: "n", f: `SUM(I2:I${lastRow})`, z: "#,##0" },
+        ],
+      ],
+      { origin: -1 }
+    );
+  }
+  tbSheet["!views"] = [{ rightToLeft: true, state: "frozen", ySplit: 1 }];
+  XLSX.utils.book_append_sheet(wb, tbSheet, "Trial Balance");
+
+  // 2. Profit & Loss & Budget Variance
+  const plRows = data.incomeStatement.projectBreakdown.map((p) => ({
+    "الرمز": p.code,
+    "المشروع": p.nameAr,
+    "الموازنة التقديرية": Number(p.budgetTotal),
+    "الإيرادات": Number(p.revenue),
+    "التكاليف الفعلية": Number(p.actualCost),
+    "صافي الربح": Number(p.netProfit),
+    "انحراف الموازنة": Number(p.variance),
+  }));
+  const plSheet = createRtlSheet(plRows, [
+    "الموازنة التقديرية",
+    "الإيرادات",
+    "التكاليف الفعلية",
+    "صافي الربح",
+    "انحراف الموازنة",
+  ]);
+  plSheet["!views"] = [{ rightToLeft: true, state: "frozen", ySplit: 1 }];
+  XLSX.utils.book_append_sheet(wb, plSheet, "Profit & Loss");
+
+  // 3. Balance Sheet
+  const bsRows = [
+    ...data.balanceSheet.assetLines.map((a) => ({
+      "القسم": "الأصول (Assets)",
+      "رقم الحساب": a.code,
+      "الحساب": a.nameAr,
+      "الرصيد (YER)": Number(a.balance),
+    })),
+    ...data.balanceSheet.liabilityLines.map((l) => ({
+      "القسم": "الالتزامات (Liabilities)",
+      "رقم الحساب": l.code,
+      "الحساب": l.nameAr,
+      "الرصيد (YER)": Number(l.balance),
+    })),
+    ...data.balanceSheet.equityLines.map((eq) => ({
+      "القسم": "حقوق الملكية (Equity)",
+      "رقم الحساب": eq.code,
+      "الحساب": eq.nameAr,
+      "الرصيد (YER)": Number(eq.balance),
+    })),
+    {
+      "القسم": "حقوق الملكية (Equity)",
+      "رقم الحساب": "313101",
+      "الحساب": "صافي ربح العام المالي الجاري",
+      "الرصيد (YER)": Number(data.balanceSheet.currentYearNetProfit),
+    },
+  ];
+  const bsSheet = createRtlSheet(bsRows, ["الرصيد (YER)"]);
+  bsSheet["!views"] = [{ rightToLeft: true, state: "frozen", ySplit: 1 }];
+  XLSX.utils.book_append_sheet(wb, bsSheet, "Balance Sheet");
+
+  XLSX.writeFile(wb, "UAS_Enterprise_Financial_Statements.xlsx");
+}
+

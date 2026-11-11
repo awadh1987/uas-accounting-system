@@ -5,6 +5,10 @@ export type LanguageCode = "ar" | "en";
 
 export type TabId =
   | "dashboard"
+  | "coa"
+  | "ledger"
+  | "procurement"
+  | "reports"
   | "projects"
   | "expenses"
   | "workers"
@@ -19,16 +23,43 @@ export type TabId =
 
 export interface UasUser {
   id: string;
+  username?: string;
   name: string;
+  fullName?: string;
   email: string;
   role: string;
   active: boolean;
   avatarChar: string;
+  assignedProjects?: string[];
+}
+
+export interface UasEnterpriseProfile {
+  id: string;
+  legalNameAr: string;
+  legalNameEn: string;
+  taxNumber?: string | null;
+  commercialReg?: string | null;
+  currencyCode: string;
+  address?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  logoUrl?: string | null;
+  brandColor: string;
+}
+
+export interface UasSubProject {
+  id: string;
+  projectId: string;
+  code: string;
+  nameAr: string;
+  nameEn: string;
+  budget: number;
 }
 
 export interface UasHarvestCycle {
   id: string;
   projectId: string;
+  cycleNumber?: number;
   name: string;
   sortOrder: number;
   isLocked: boolean;
@@ -36,14 +67,20 @@ export interface UasHarvestCycle {
 
 export interface UasProject {
   id: string;
+  code?: string;
   name: string;
+  nameAr?: string;
+  nameEn?: string;
   type: string;
   parentProjectId: string;
+  budgetTotal?: number;
   estimatedValue: number;
   plannedHarvests: number;
+  status?: string;
   notes: string;
   harvests: string[];
   harvestCycles?: UasHarvestCycle[];
+  subProjects?: UasSubProject[];
 }
 
 export interface UasOperatingExpense {
@@ -95,10 +132,15 @@ export interface UasSaleTransaction {
 
 export interface UasTreasuryAccount {
   id: string;
+  code?: string;
   name: string;
-  type: "CASH" | "BANK" | "WALLET" | string;
+  nameAr?: string;
+  nameEn?: string;
+  type: "VAULT" | "CASH" | "BANK" | "WALLET" | string;
   accountNo: string;
+  accountId?: string;
   currencyCode: CurrencyCode | string;
+  balance?: number;
   balanceYER: number;
 }
 
@@ -144,6 +186,7 @@ export interface UasSystemSettings {
 }
 
 export interface UasBootstrapState {
+  enterpriseProfile?: UasEnterpriseProfile;
   settings: UasSystemSettings;
   exchangeRates: Record<CurrencyCode, number>;
   treasuryAccounts: UasTreasuryAccount[];
@@ -161,7 +204,7 @@ export interface UasBootstrapState {
 export interface VoucherModalPayload {
   title: string;
   subtitle?: string;
-  kind: "sale" | "worker" | "installment";
+  kind: "sale" | "worker" | "installment" | "vendor_payment" | "vendor_bill";
   voucherNo: string;
   date: string;
   partyLabel: string;
@@ -179,4 +222,3 @@ export interface VoucherModalPayload {
   qrPayload: string;
   whatsappText: string;
 }
-

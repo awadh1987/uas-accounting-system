@@ -9,6 +9,8 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: "file:./dev.db"
 
     steps:
       - name: Checkout repository
@@ -17,37 +19,29 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "20"
           cache: "npm"
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Generate Prisma client and validate schema
-        run: |
-          if grep -q 'provider = "postgresql"' prisma/schema.prisma; then
-            export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres"
-          else
-            export DATABASE_URL="file:./dev.db"
-          fi
-          npx prisma generate
-          npx prisma validate
+      - name: Generate Prisma client
+        run: npx prisma generate
 
-      - name: Lint
-        run: npx eslint . --max-warnings=0
+      - name: Push Prisma schema to SQLite
+        run: npx prisma db push --skip-generate
+
+      - name: Seed database
+        run: npx tsx prisma/seed.ts
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Lint
+        run: npx eslint . --max-warnings=0
 
       - name: Run unit tests
         run: npm test
 
       - name: Production build
-        run: |
-          if grep -q 'provider = "postgresql"' prisma/schema.prisma; then
-            export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres"
-          else
-            export DATABASE_URL="file:./dev.db"
-          fi
-          npm run build
-
+        run: npm run build
