@@ -156,7 +156,11 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ verified: false, message: "لم يتم العثور على مستند بهذا الرقم أو رمز التحقق" }, { status: 404 });
+    return NextResponse.json({
+      verified: false,
+      query: q,
+      message: "لم يتم العثور على مستند بهذا الرقم أو رمز التحقق",
+    });
   } catch (error) {
     console.error("GET /api/public/verify error:", error);
     return jsonError("تعذر التحقق من المستند", 500);

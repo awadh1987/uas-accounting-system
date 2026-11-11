@@ -207,10 +207,10 @@ export function HeaderNav({
             {onOpenLanding && (
               <button
                 onClick={onOpenLanding}
-                className="text-xs px-2 py-1 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 font-semibold"
+                className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 font-bold"
                 title="العودة للواجهة التعريفية والتحقق العام"
               >
-                🏛️
+                {lang === "ar" ? "🏛️ خروج / الصفحة الرئيسية" : "🏛️ Logout / Landing Page"}
               </button>
             )}
           </div>

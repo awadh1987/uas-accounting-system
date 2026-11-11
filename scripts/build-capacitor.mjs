@@ -53,6 +53,10 @@ try {
   if (fs.existsSync(backupDir)) {
     fs.rmSync(backupDir, { recursive: true, force: true });
   }
+  // Remove static-export .next artifacts so `next start` does not boot without API routes
+  if (fs.existsSync(nextCacheDir)) {
+    fs.rmSync(nextCacheDir, { recursive: true, force: true });
+  }
 }
 
 if (fs.existsSync(path.join(rootDir, "android")) || fs.existsSync(path.join(rootDir, "ios"))) {

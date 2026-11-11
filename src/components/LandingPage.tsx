@@ -79,12 +79,15 @@ export function LandingPage({
     };
   }, []);
 
-  async function handleVerify(e: React.FormEvent) {
-    e.preventDefault();
-    if (!query.trim()) return;
+  async function runVerifyLookup(lookupTerm: string) {
+    const trimmed = lookupTerm.trim();
+    if (!trimmed) return;
     setVerifying(true);
     try {
-      const res = await fetch(`/api/public/verify?q=${encodeURIComponent(query.trim())}`);
+      const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
+      const res = await fetch(`${apiBase}/api/public/verify?q=${encodeURIComponent(trimmed)}`, {
+        cache: "no-store",
+      });
       const data = (await res.json()) as VerifyResult;
       setVerifyResult(data);
     } catch {
@@ -95,6 +98,11 @@ export function LandingPage({
     } finally {
       setVerifying(false);
     }
+  }
+
+  async function handleVerify(e: React.FormEvent) {
+    e.preventDefault();
+    await runVerifyLookup(query);
   }
 
   const isAr = lang === "ar";
@@ -143,7 +151,11 @@ export function LandingPage({
               className="px-4 py-2 rounded-xl accent-bg text-xs font-extrabold shadow-sm flex items-center gap-1.5"
             >
               <Building2 className="w-4 h-4" />
-              <span>{isAr ? `دخول نظام ERP (${currentUser.name})` : `Open ERP (${currentUser.name})`}</span>
+              <span>
+                {isAr
+                  ? `دخول النظام المحاسبي (${currentUser.name})`
+                  : `Enter Accounting ERP (${currentUser.name})`}
+              </span>
             </button>
           </div>
         </div>
@@ -235,6 +247,23 @@ export function LandingPage({
                   <span>{verifying ? "..." : isAr ? "تحقق" : "Verify"}</span>
                 </button>
               </form>
+
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                <span className="text-slate-400">{isAr ? "أمثلة سريعة:" : "Try:"}</span>
+                {["RV-001", "PV-2026-0001", "BILL-2026-0001", "JV-2026-0001"].map((sample) => (
+                  <button
+                    key={sample}
+                    type="button"
+                    onClick={() => {
+                      setQuery(sample);
+                      void runVerifyLookup(sample);
+                    }}
+                    className="px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700 font-mono hover:border-emerald-500"
+                  >
+                    {sample}
+                  </button>
+                ))}
+              </div>
 
               {verifyResult && (
                 <div

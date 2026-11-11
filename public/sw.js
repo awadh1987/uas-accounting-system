@@ -1,4 +1,4 @@
-const CACHE_NAME = "uas-pwa-cache-v1";
+const CACHE_NAME = "uas-pwa-cache-v2";
 const PRECACHE_URLS = [
   "/",
   "/manifest.webmanifest",
