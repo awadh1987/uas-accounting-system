@@ -1,28 +1,39 @@
 "use client";
 
 import React, { useState } from "react";
+import { Pencil, Plus } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
+import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { computeRemainingStock, fmtNum } from "@/lib/formulas";
 import type { UasInventoryBatch, UasProject, UasSaleTransaction } from "@/types/uas";
+
+type InventoryPayload = {
+  projectId: string;
+  harvest: string;
+  grade: string;
+  harvestedBundles: number;
+  shrinkageBundles: number;
+  notes: string;
+};
 
 interface InventoryTabProps {
   projects: UasProject[];
   inventoryBatches: UasInventoryBatch[];
   sales: UasSaleTransaction[];
-  onAddInventoryBatch: (payload: {
-    projectId: string;
-    harvest: string;
-    grade: string;
-    harvestedBundles: number;
-    shrinkageBundles: number;
-    notes: string;
-  }) => Promise<boolean>;
+  readOnly?: boolean;
+  canEditRecords?: boolean;
+  onAddInventoryBatch: (payload: InventoryPayload) => Promise<boolean>;
+  onEditInventoryBatch?: (payload: InventoryPayload & { id: string }) => Promise<boolean>;
 }
 
 export function InventoryTab({
   projects,
   inventoryBatches,
   sales,
+  readOnly = false,
+  canEditRecords = false,
   onAddInventoryBatch,
+  onEditInventoryBatch,
 }: InventoryTabProps) {
   const [projectId, setProjectId] = useState(projects[0]?.id || "");
   const activeProj = projects.find((p) => p.id === projectId) || projects[0];
@@ -31,6 +42,8 @@ export function InventoryTab({
   const [harvestedBundles, setHarvestedBundles] = useState("250");
   const [shrinkageBundles, setShrinkageBundles] = useState("5");
   const [notes, setNotes] = useState("");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   function handleProjChange(nextPid: string) {
     setProjectId(nextPid);
@@ -38,31 +51,65 @@ export function InventoryTab({
     if (p && p.harvests.length > 0) setHarvest(p.harvests[0]);
   }
 
+  function openCreateDrawer() {
+    setEditingId(null);
+    const defProj = projects[0];
+    setProjectId(defProj?.id || "");
+    setHarvest(defProj?.harvests[0] || "القطفة الأولى");
+    setGrade("رقم 1/رقم 2/رقم 3/ روس/بزغة");
+    setHarvestedBundles("250");
+    setShrinkageBundles("5");
+    setNotes("");
+    setDrawerOpen(true);
+  }
+
+  function openEditDrawer(b: UasInventoryBatch) {
+    setEditingId(b.id);
+    setProjectId(b.projectId);
+    setHarvest(b.harvest);
+    setGrade(b.grade);
+    setHarvestedBundles(String(b.harvestedBundles));
+    setShrinkageBundles(String(b.shrinkageBundles));
+    setNotes(b.notes || "");
+    setDrawerOpen(true);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const pid = activeProj?.id || projectId;
     const harv =
       activeProj?.harvests.includes(harvest) ? harvest : activeProj?.harvests[0] || "القطفة الأولى";
-    const ok = await onAddInventoryBatch({
+    const payload: InventoryPayload = {
       projectId: pid,
       harvest: harv,
       grade,
       harvestedBundles: Number(harvestedBundles) || 0,
       shrinkageBundles: Number(shrinkageBundles) || 0,
       notes: notes.trim(),
-    });
+    };
+    const ok =
+      editingId && onEditInventoryBatch
+        ? await onEditInventoryBatch({ id: editingId, ...payload })
+        : await onAddInventoryBatch(payload);
     if (ok) {
+      setEditingId(null);
       setNotes("");
+      setDrawerOpen(false);
     }
   }
 
   return (
     <section className="space-y-6">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <form onSubmit={handleSubmit} className="card-surface rounded-2xl p-5 space-y-3 text-xs">
-          <h3 className="text-sm font-extrabold border-b pb-2">
-            تسجيل حصاد / مخزون علاقيات القطفة
-          </h3>
+      <SlideOverDrawer
+        open={drawerOpen && !readOnly}
+        onClose={() => {
+          setEditingId(null);
+          setDrawerOpen(false);
+        }}
+        title={editingId ? "تعديل دفعة حصاد / مخزون القطفة" : "تسجيل حصاد / مخزون علاقيات القطفة"}
+        subtitle="تسجيل كميات الحصاد والفرز والفاقد لكل درجة"
+      >
+        <form onSubmit={handleSubmit} className="space-y-3 text-xs">
           <div>
             <label className="block font-semibold mb-1">المشروع</label>
             <select
@@ -147,11 +194,13 @@ export function InventoryTab({
             />
           </div>
           <button type="submit" className="w-full py-2.5 rounded-xl accent-bg font-bold shadow-sm">
-            + تسجيل دفعة الحصاد في المخزون
+            {editingId ? "حفظ تعديلات دفعة الحصاد" : "+ تسجيل دفعة الحصاد في المخزون"}
           </button>
         </form>
+      </SlideOverDrawer>
 
-        <div className="lg:col-span-2 card-surface rounded-2xl p-5 space-y-4 overflow-x-auto">
+      <div className="card-surface rounded-2xl p-5 space-y-4 overflow-x-auto">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="text-sm font-extrabold">
               مطابقة مخزون العلاقيات (المقطوف مقابل المباع والفاقد والمتبقي)
@@ -160,9 +209,27 @@ export function InventoryTab({
               رقابة دقيقة على كميات العلاقيات لكل قطفة ولكل درجة لمنع العجز أو الفاقد غير المبرر
             </p>
           </div>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={openCreateDrawer}
+              className="px-3.5 py-1.5 rounded-xl accent-bg text-xs font-extrabold inline-flex items-center gap-1.5 shadow-sm no-print"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>تسجيل دفعة حصاد</span>
+            </button>
+          )}
+        </div>
+
+        {inventoryBatches.length === 0 ? (
+          <EmptyState
+            title="لا توجد دفعات حصاد مسجلة في المخزون"
+            description="أضف دفعة حصاد جديدة لبدء مطابقة الإنتاج مع المبيعات والفاقد."
+          />
+        ) : (
           <table className="w-full text-xs text-right border-collapse">
             <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-800/60">
+              <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/90 dark:bg-slate-800/90">
                 <th className="p-2.5">المشروع / القطفة</th>
                 <th className="p-2.5">الدرجة (النوع)</th>
                 <th className="p-2.5">المقطوف (إنتاج)</th>
@@ -170,6 +237,9 @@ export function InventoryTab({
                 <th className="p-2.5">الفاقد / التالف</th>
                 <th className="p-2.5">المتبقي بالمخزون</th>
                 <th className="p-2.5">حالة المطابقة</th>
+                {!readOnly && canEditRecords && onEditInventoryBatch && (
+                  <th className="p-2.5 no-print">إجراء</th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
@@ -199,14 +269,14 @@ export function InventoryTab({
                         {b.grade}
                       </span>
                     </td>
-                    <td className="p-2.5 font-extrabold">{fmtNum(b.harvestedBundles)} علاقية</td>
-                    <td className="p-2.5 text-emerald-600 font-bold">
+                    <td className="p-2.5 font-extrabold tabular-nums">{fmtNum(b.harvestedBundles)} علاقية</td>
+                    <td className="p-2.5 text-emerald-600 font-bold tabular-nums">
                       {fmtNum(soldBundles)} علاقية
                     </td>
-                    <td className="p-2.5 text-amber-600 font-semibold">
+                    <td className="p-2.5 text-amber-600 font-semibold tabular-nums">
                       {fmtNum(b.shrinkageBundles)} علاقية
                     </td>
-                    <td className="p-2.5 font-extrabold">{fmtNum(remaining)} علاقية</td>
+                    <td className="p-2.5 font-extrabold tabular-nums">{fmtNum(remaining)} علاقية</td>
                     <td className="p-2.5">
                       {remaining >= 0 ? (
                         <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold text-[11px]">
@@ -218,12 +288,24 @@ export function InventoryTab({
                         </span>
                       )}
                     </td>
+                    {!readOnly && canEditRecords && onEditInventoryBatch && (
+                      <td className="p-2.5 no-print">
+                        <button
+                          type="button"
+                          onClick={() => openEditDrawer(b)}
+                          className="inline-flex items-center gap-1 text-indigo-600 hover:underline font-bold"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>تعديل</span>
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
             </tbody>
           </table>
-        </div>
+        )}
       </div>
     </section>
   );

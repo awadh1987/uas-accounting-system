@@ -166,6 +166,8 @@ export const STANDARD_COA_NODES: CoaSeedNode[] = [
   { code: "531000", nameAr: "مصروفات إدارية ومراجعة", nameEn: "Office, Audit & Governance Expenses", level: 3, type: "EXPENSE", isPosting: false, parentCode: "530000" },
   { code: "531100", nameAr: "مصروفات إدارية عامة", nameEn: "General Admin Expenses", level: 4, type: "EXPENSE", isPosting: false, parentCode: "531000" },
   { code: "531101", nameAr: "مصروفات إدارية وعمومية", nameEn: "General & Administrative Expense", level: 5, type: "EXPENSE", isPosting: true, parentCode: "531100" },
+  { code: "531200", nameAr: "عمولات ورسوم البنوك والمحافظ", nameEn: "Bank & Wallet Transfer Fees", level: 4, type: "EXPENSE", isPosting: false, parentCode: "531000" },
+  { code: "531201", nameAr: "رسوم التحويلات البنكية والإلكترونية", nameEn: "Remittance & Wallet Transfer Fees", level: 5, type: "EXPENSE", isPosting: true, parentCode: "531200" },
 ];
 
 export function mapExpenseCategoryToCoaCode(category: string): string {

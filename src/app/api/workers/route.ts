@@ -1,18 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { computeWorkerWageTotals } from "@/lib/formulas";
-import { ensureWorkerWithAccountTx, postWorkerWageJournalTx } from "@/lib/accounting/ledgerService";
+import {
+  ensureWorkerWithAccountTx,
+  postWorkerWageJournalTx,
+  updateWorkerWageAtomic,
+} from "@/lib/accounting/ledgerService";
 import {
   appendAuditLogTx,
   findHarvestCycle,
   getBootstrapState,
   isHarvestLockedTx,
 } from "@/lib/serverBootstrap";
-import { extractActor, jsonError, lockedError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
 
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "workers",
+      action: "create",
+      dateChanged: Boolean(body.date),
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
+
     const projectId = String(body.projectId || "").trim();
     const harvestName = String(body.harvest || "").trim();
     const name = String(body.name || "").trim();
@@ -21,7 +33,6 @@ export async function POST(req: NextRequest) {
     const creditAmount = Number(body.credit) || 0;
     const workDate = String(body.date || new Date().toISOString().slice(0, 10));
     const notes = String(body.notes || "").trim();
-    const actor = extractActor(body);
 
     if (!name || !projectId || !harvestName) {
       return jsonError("يرجى إدخال اسم العامل والمشروع والقطفة", 400);
@@ -96,4 +107,52 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/workers error:", error);
     return jsonError("تعذر حفظ سجل العامل", 500);
   }
+}
+
+async function handleWorkerPatch(req: NextRequest) {
+  try {
+    const body = (await req.json()) as Record<string, unknown>;
+    const id = String(body.id || "").trim();
+    if (!id) return jsonError("معرف سجل العامل مطلوب للتعديل", 400);
+
+    const existing = await prisma.workerWageEntry.findUnique({ where: { id } });
+    if (!existing) return jsonError("سجل العامل غير موجود", 404);
+
+    const dateChanged =
+      body.date !== undefined && String(body.date).trim() !== existing.workDate;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "workers",
+      action: "edit",
+      dateChanged,
+    });
+    if (!auth.ok) return auth.response;
+
+    const updated = await updateWorkerWageAtomic({
+      id,
+      projectId: body.projectId ? String(body.projectId) : undefined,
+      harvestName: body.harvest ? String(body.harvest) : undefined,
+      name: body.name ? String(body.name) : undefined,
+      dailyWage: body.dailyWage !== undefined ? Number(body.dailyWage) : undefined,
+      daysWorked: body.days !== undefined ? Number(body.days) : undefined,
+      creditAmount: body.credit !== undefined ? Number(body.credit) : undefined,
+      date: body.date ? String(body.date) : undefined,
+      notes: body.notes !== undefined ? String(body.notes) : undefined,
+      createdById: auth.actor.userId ?? undefined,
+    });
+
+    const state = await getBootstrapState();
+    return NextResponse.json({ workerEntry: updated, state });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "تعذر تعديل سجل العامل";
+    if (msg.includes("HARVEST_LOCKED")) return lockedError();
+    return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  return handleWorkerPatch(req);
+}
+
+export async function PUT(req: NextRequest) {
+  return handleWorkerPatch(req);
 }

@@ -1,26 +1,44 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { Pencil, Plus, Printer } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
+import { SlideOverDrawer } from "@/components/SlideOverDrawer";
+import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
-import type { UasProject, UasSaleTransaction } from "@/types/uas";
+import type { UasProject, UasSaleTransaction, UasUser } from "@/types/uas";
+
+interface QuickCustomerOption {
+  id: string;
+  code: string;
+  nameAr: string;
+  phone: string;
+}
+
+type SalePayload = {
+  projectId: string;
+  harvest: string;
+  batch: string;
+  grade: string;
+  customer: string;
+  phone: string;
+  bundles: number;
+  price: number;
+  credit: number;
+  date: string;
+  voucherNo: string;
+  notes: string;
+};
 
 interface SalesTabProps {
   projects: UasProject[];
   sales: UasSaleTransaction[];
-  onAddSale: (payload: {
-    projectId: string;
-    harvest: string;
-    batch: string;
-    grade: string;
-    customer: string;
-    phone: string;
-    bundles: number;
-    price: number;
-    credit: number;
-    date: string;
-    voucherNo: string;
-    notes: string;
-  }) => Promise<boolean>;
+  currentUser?: UasUser;
+  readOnly?: boolean;
+  canEditRecords?: boolean;
+  canEditDate?: boolean;
+  onAddSale: (payload: SalePayload) => Promise<boolean>;
+  onEditSale?: (id: string, payload: SalePayload) => Promise<boolean>;
   onDeleteSale: (id: string) => Promise<void>;
   onOpenSaleVoucher: (s: UasSaleTransaction) => void;
   onToast: (msg: string) => void;
@@ -29,7 +47,12 @@ interface SalesTabProps {
 export function SalesTab({
   projects,
   sales,
+  currentUser,
+  readOnly = false,
+  canEditRecords = false,
+  canEditDate = false,
   onAddSale,
+  onEditSale,
   onDeleteSale,
   onOpenSaleVoucher,
   onToast,
@@ -48,6 +71,23 @@ export function SalesTab({
   const [voucherNo, setVoucherNo] = useState("RV-101");
   const [notes, setNotes] = useState("");
   const [filterBatch, setFilterBatch] = useState("ALL");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [clientOptions, setClientOptions] = useState<QuickCustomerOption[]>([]);
+  const [quickClientOpen, setQuickClientOpen] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/sales/customers", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { customers?: QuickCustomerOption[] } | null) => {
+        if (active && data?.customers) setClientOptions(data.customers);
+      })
+      .catch(() => null);
+    return () => {
+      active = false;
+    };
+  }, [sales]);
 
   const preview = computeSaleTotals(Number(bundles), Number(price), Number(credit));
 
@@ -55,6 +95,41 @@ export function SalesTab({
     setProjectId(nextPid);
     const p = projects.find((x) => x.id === nextPid);
     if (p && p.harvests.length > 0) setHarvest(p.harvests[0]);
+  }
+
+  function openCreateDrawer() {
+    setEditingId(null);
+    const defProj = projects[0];
+    setProjectId(defProj?.id || "");
+    setHarvest(defProj?.harvests[0] || "القطفة الأولى");
+    setBatch("عملية بيع 1");
+    setGrade("رقم 1/رقم 2/رقم 3/ روس/بزغة");
+    setCustomer("");
+    setPhone("783118231");
+    setBundles("100");
+    setPrice("2000");
+    setCredit("50000");
+    setDate(new Date().toISOString().slice(0, 10));
+    setVoucherNo(`RV-${Math.floor(100 + Math.random() * 900)}`);
+    setNotes("");
+    setDrawerOpen(true);
+  }
+
+  function openEditDrawer(s: UasSaleTransaction) {
+    setEditingId(s.id);
+    setProjectId(s.projectId);
+    setHarvest(s.harvest);
+    setBatch(s.batch);
+    setGrade(s.grade);
+    setCustomer(s.customer);
+    setPhone(s.phone || "783118231");
+    setBundles(String(s.bundles));
+    setPrice(String(s.price));
+    setCredit(String(s.credit));
+    setDate(s.date.slice(0, 10));
+    setVoucherNo(s.voucherNo || "");
+    setNotes(s.notes || "");
+    setDrawerOpen(true);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -66,7 +141,7 @@ export function SalesTab({
     const pid = activeProj?.id || projectId;
     const harv =
       activeProj?.harvests.includes(harvest) ? harvest : activeProj?.harvests[0] || "القطفة الأولى";
-    const ok = await onAddSale({
+    const payload: SalePayload = {
       projectId: pid,
       harvest: harv,
       batch,
@@ -79,10 +154,16 @@ export function SalesTab({
       date: date || "2026-11-10",
       voucherNo: voucherNo.trim() || `RV-${Math.floor(100 + Math.random() * 900)}`,
       notes: notes.trim(),
-    });
+    };
+    const ok =
+      editingId && onEditSale
+        ? await onEditSale(editingId, payload)
+        : await onAddSale(payload);
     if (ok) {
+      setEditingId(null);
       setCustomer("");
       setNotes("");
+      setDrawerOpen(false);
     }
   }
 
@@ -96,9 +177,16 @@ export function SalesTab({
 
   return (
     <section className="space-y-6">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <form onSubmit={handleSubmit} className="card-surface rounded-2xl p-5 space-y-3 text-xs">
-          <h3 className="text-sm font-extrabold border-b pb-2">إضافة عملية بيع جديدة</h3>
+      <SlideOverDrawer
+        open={drawerOpen && !readOnly}
+        onClose={() => {
+          setEditingId(null);
+          setDrawerOpen(false);
+        }}
+        title={editingId ? "تعديل عملية البيع وسند القبض" : "إضافة عملية بيع جديدة وإصدار سند"}
+        subtitle="تسجيل بيع العلاقيات وحساب الإجمالي والدائن والمدين تلقائياً"
+      >
+        <form onSubmit={handleSubmit} className="space-y-3 text-xs">
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="block font-semibold mb-1">المشروع</label>
@@ -165,29 +253,89 @@ export function SalesTab({
               </select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="block font-semibold mb-1">اسم العميل</label>
-              <input
-                id="saleCustomerInput"
-                value={customer}
-                onChange={(e) => setCustomer(e.target.value)}
-                type="text"
-                placeholder="مثال: فواز الجابري"
-                className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-              />
-            </div>
-            <div>
-              <label className="block font-semibold mb-1">رقم هاتف العميل</label>
-              <input
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                type="text"
-                inputMode="tel"
-                className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-              />
+          <div className="space-y-2">
+            {clientOptions.length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold">اختيار من دليل العملاء (اختياري)</label>
+                  <button
+                    type="button"
+                    onClick={() => setQuickClientOpen(true)}
+                    className="text-[11px] font-extrabold text-emerald-600 hover:underline inline-flex items-center gap-0.5"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>عميل جديد</span>
+                  </button>
+                </div>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const selected = clientOptions.find((c) => c.id === e.target.value);
+                    if (selected) {
+                      setCustomer(selected.nameAr);
+                      setPhone(selected.phone || "777000000");
+                    }
+                  }}
+                  className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-1.5"
+                >
+                  <option value="">— اختر عميلاً مسجلاً لتعبئة بياناته آلياً —</option>
+                  {clientOptions.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.code} — {c.nameAr} ({c.phone})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold">اسم العميل</label>
+                  {clientOptions.length === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setQuickClientOpen(true)}
+                      className="text-[11px] font-extrabold text-emerald-600 hover:underline inline-flex items-center gap-0.5"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>عميل جديد</span>
+                    </button>
+                  )}
+                </div>
+                <input
+                  id="saleCustomerInput"
+                  value={customer}
+                  onChange={(e) => setCustomer(e.target.value)}
+                  type="text"
+                  placeholder="مثال: عميل جملة أو منفذ بيع"
+                  className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold mb-1">رقم هاتف العميل</label>
+                <input
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  type="text"
+                  inputMode="tel"
+                  className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+                />
+              </div>
             </div>
           </div>
+
+          <QuickMasterCreateModal
+            open={quickClientOpen}
+            mode="customer"
+            currentUser={currentUser}
+            onClose={() => setQuickClientOpen(false)}
+            onCreatedCustomer={(created) => {
+              setClientOptions((prev) => [...prev, created]);
+              setCustomer(created.nameAr);
+              setPhone(created.phone || "777000000");
+            }}
+            onToast={onToast}
+          />
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="block font-semibold mb-1">عدد العلاقيات</label>
@@ -219,7 +367,7 @@ export function SalesTab({
                 value={fmtNum(preview.totalAmount)}
                 type="text"
                 readOnly
-                className="w-full rounded-xl border border-slate-200 bg-slate-100 dark:bg-slate-800 px-2.5 py-2 font-bold"
+                className="w-full rounded-xl border border-slate-200 bg-slate-100 dark:bg-slate-800 px-2.5 py-2 font-bold tabular-nums"
               />
             </div>
             <div>
@@ -239,18 +387,24 @@ export function SalesTab({
                 value={fmtNum(preview.debitReceivable)}
                 type="text"
                 readOnly
-                className="w-full rounded-xl border border-slate-200 bg-slate-100 dark:bg-slate-800 px-2.5 py-2 font-bold text-rose-600"
+                className="w-full rounded-xl border border-slate-200 bg-slate-100 dark:bg-slate-800 px-2.5 py-2 font-bold text-rose-600 tabular-nums"
               />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="block font-semibold mb-1">تاريخ عملية البيع</label>
+              <label className="block font-semibold mb-1">
+                تاريخ عملية البيع{" "}
+                {editingId && !canEditDate && (
+                  <span className="text-[10px] text-amber-600">(مقفل حسب الصلاحية)</span>
+                )}
+              </label>
               <input
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
                 type="date"
-                className="w-full rounded-xl border border-slate-300 bg-transparent px-2.5 py-2"
+                disabled={Boolean(editingId) && !canEditDate}
+                className="w-full rounded-xl border border-slate-300 bg-transparent px-2.5 py-2 disabled:opacity-50"
               />
             </div>
             <div>
@@ -274,52 +428,72 @@ export function SalesTab({
             />
           </div>
           <button type="submit" className="w-full py-2.5 rounded-xl accent-bg font-bold shadow-sm">
-            + حفظ عملية البيع وإصدار سند
+            {editingId ? "حفظ تعديلات عملية البيع" : "+ حفظ عملية البيع وإصدار سند"}
           </button>
         </form>
+      </SlideOverDrawer>
 
-        {/* Sales Ledger Table */}
-        <div className="lg:col-span-2 card-surface rounded-2xl p-5 space-y-4 overflow-x-auto">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h3 className="text-sm font-extrabold">سجل المبيعات والإيرادات وسندات القبض</h3>
-              <p className="text-xs text-slate-500">
-                إصدار سند دائن/مدين وإصدار تقرير PDF لكل عملية بيع
-              </p>
-            </div>
-            <div className="flex items-center gap-2 no-print">
-              <select
-                value={filterBatch}
-                onChange={(e) => setFilterBatch(e.target.value)}
-                className="rounded-xl border border-slate-300 bg-transparent px-2.5 py-1.5 text-xs font-semibold"
-              >
-                <option value="ALL">جميع عمليات البيع</option>
-                <option value="عملية بيع 1">عملية بيع 1</option>
-                <option value="عملية بيع 2">عملية بيع 2</option>
-                <option value="عملية بيع 3">عملية بيع 3</option>
-                <option value="عملية بيع 4">عملية بيع 4</option>
-              </select>
-              <button
-                onClick={() => window.print()}
-                className="px-3 py-1.5 rounded-xl accent-bg text-xs font-bold"
-              >
-                إصدار تقرير PDF
-              </button>
-            </div>
+      {/* Full-Width Sales Ledger Table */}
+      <div className="card-surface rounded-2xl p-5 space-y-4 overflow-x-auto">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-extrabold">سجل المبيعات والإيرادات وسندات القبض</h3>
+            <p className="text-xs text-slate-500">
+              إصدار سند دائن/مدين وإصدار تقرير PDF لكل عملية بيع
+            </p>
           </div>
+          <div className="flex flex-wrap items-center gap-2 no-print">
+            <select
+              value={filterBatch}
+              onChange={(e) => setFilterBatch(e.target.value)}
+              className="rounded-xl border border-slate-300 bg-transparent px-2.5 py-1.5 text-xs font-semibold"
+            >
+              <option value="ALL">جميع عمليات البيع</option>
+              <option value="عملية بيع 1">عملية بيع 1</option>
+              <option value="عملية بيع 2">عملية بيع 2</option>
+              <option value="عملية بيع 3">عملية بيع 3</option>
+              <option value="عملية بيع 4">عملية بيع 4</option>
+            </select>
+            <button
+              onClick={() => window.print()}
+              className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold inline-flex items-center gap-1"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>تقرير PDF</span>
+            </button>
+            {!readOnly && (
+              <button
+                id="saleCustomerInput"
+                type="button"
+                onClick={openCreateDrawer}
+                className="px-3.5 py-1.5 rounded-xl accent-bg text-xs font-extrabold inline-flex items-center gap-1.5 shadow-sm"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>عملية بيع جديدة</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {visibleSales.length === 0 ? (
+          <EmptyState
+            title="لا توجد عمليات بيع مسجلة ضمن هذا النطاق"
+            description="أضف عملية بيع جديدة أو غيّر مرشح المشروع والقطفة."
+          />
+        ) : (
           <table className="w-full text-xs text-right border-collapse">
             <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-800/60">
-                <th className="p-2">العملية / المشروع</th>
-                <th className="p-2">اسم العميل والهاتف</th>
-                <th className="p-2">النوع</th>
-                <th className="p-2">العلاقيات</th>
-                <th className="p-2">السعر</th>
-                <th className="p-2">الإجمالي</th>
-                <th className="p-2">دائن (مقبوض)</th>
-                <th className="p-2">مدين (متبقي)</th>
-                <th className="p-2">التاريخ / السند</th>
-                <th className="p-2 no-print">سند دائن/مدين</th>
+              <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/90 dark:bg-slate-800/90">
+                <th className="p-2.5">العملية / المشروع</th>
+                <th className="p-2.5">اسم العميل والهاتف</th>
+                <th className="p-2.5">النوع</th>
+                <th className="p-2.5">العلاقيات</th>
+                <th className="p-2.5">السعر</th>
+                <th className="p-2.5">الإجمالي</th>
+                <th className="p-2.5">دائن (مقبوض)</th>
+                <th className="p-2.5">مدين (متبقي)</th>
+                <th className="p-2.5">التاريخ / السند</th>
+                <th className="p-2.5 no-print">سند دائن/مدين</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
@@ -327,49 +501,65 @@ export function SalesTab({
                 const proj = projects.find((p) => p.id === s.projectId);
                 return (
                   <tr key={s.id}>
-                    <td className="p-2">
+                    <td className="p-2.5">
                       <div className="font-bold">{s.batch}</div>
                       <div className="text-[11px] text-slate-500">
                         {proj ? proj.name : ""} ({s.harvest})
                       </div>
                     </td>
-                    <td className="p-2">
+                    <td className="p-2.5">
                       <div className="font-extrabold">{s.customer}</div>
                       <div className="text-[11px] text-slate-500">📞 {s.phone}</div>
                     </td>
-                    <td className="p-2">
+                    <td className="p-2.5">
                       <span className="accent-badge px-2 py-0.5 rounded text-[11px] font-semibold">
                         {s.grade}
                       </span>
                     </td>
-                    <td className="p-2 font-bold">{fmtNum(s.bundles)}</td>
-                    <td className="p-2">{fmtNum(s.price)}</td>
-                    <td className="p-2 font-extrabold">{fmtNum(s.total)}</td>
-                    <td className="p-2 text-emerald-600 font-bold">{fmtNum(s.credit)}</td>
-                    <td className="p-2 text-rose-600 font-bold">{fmtNum(s.debit)}</td>
-                    <td className="p-2">
-                      <div>{s.date}</div>
+                    <td className="p-2.5 font-bold tabular-nums">{fmtNum(s.bundles)}</td>
+                    <td className="p-2.5 tabular-nums">{fmtNum(s.price)}</td>
+                    <td className="p-2.5 font-extrabold tabular-nums">{fmtNum(s.total)}</td>
+                    <td className="p-2.5 text-emerald-600 font-bold tabular-nums">{fmtNum(s.credit)}</td>
+                    <td className="p-2.5 text-rose-600 font-bold tabular-nums">{fmtNum(s.debit)}</td>
+                    <td className="p-2.5">
+                      <div className="font-mono">{s.date}</div>
                       <div className="text-[11px] text-slate-500">سند: {s.voucherNo}</div>
                     </td>
-                    <td className="p-2 no-print space-x-1 space-x-reverse">
-                      <button
-                        onClick={() => onOpenSaleVoucher(s)}
-                        className="px-2.5 py-1 rounded-lg accent-bg text-[11px] font-bold"
-                      >
-                        إصدار سند دائن/مدين
-                      </button>
-                      <button
-                        onClick={() => onDeleteSale(s.id)}
-                        className="text-rose-600 hover:underline text-[11px] font-bold"
-                      >
-                        حذف
-                      </button>
+                    <td className="p-2.5 no-print">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => onOpenSaleVoucher(s)}
+                          className="px-2.5 py-1 rounded-lg accent-bg text-[11px] font-bold"
+                        >
+                          سند QR
+                        </button>
+                        {!readOnly && canEditRecords && onEditSale && (
+                          <button
+                            type="button"
+                            onClick={() => openEditDrawer(s)}
+                            className="inline-flex items-center gap-1 text-indigo-600 hover:underline text-[11px] font-bold"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            <span>تعديل</span>
+                          </button>
+                        )}
+                        {!readOnly && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteSale(s.id)}
+                            className="text-rose-600 hover:underline text-[11px] font-bold"
+                          >
+                            حذف
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
               })}
             </tbody>
-            <tfoot className="font-extrabold bg-slate-50 dark:bg-slate-800/40">
+            <tfoot className="font-extrabold bg-slate-50 dark:bg-slate-800/40 tabular-nums">
               <tr>
                 <td colSpan={3} className="p-2.5">
                   الإجمالي الكلي للمبيعات
@@ -383,7 +573,7 @@ export function SalesTab({
               </tr>
             </tfoot>
           </table>
-        </div>
+        )}
       </div>
     </section>
   );

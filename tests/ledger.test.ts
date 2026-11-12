@@ -2,14 +2,27 @@ import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
 import { prisma } from "../src/lib/prisma";
 import {
+  createTreasuryAccount,
+  generateAcquisitionBill,
   generateFinancialReports,
   getCoaTreeWithBalances,
   postCustomerReceipt,
   postJournalEntry,
+  postOwnerBatchPayment,
   postSalesInvoice,
   postVendorBill,
   postVendorPayment,
+  transferBetweenTreasuries,
+  updateJournalEntry,
+  updateTreasuryAccount,
 } from "../src/lib/accounting/ledgerService";
+import {
+  canEdit,
+  canEditDate,
+  canManageLandingCms,
+  canManageTreasury,
+  isReadOnly,
+} from "../src/lib/permissions";
 
 describe("Enterprise Double-Entry General Ledger & Accounting Assertions", () => {
   after(async () => {
@@ -145,6 +158,100 @@ describe("Enterprise Double-Entry General Ledger & Accounting Assertions", () =>
           });
           assert.equal(Number(rcpRes.receipt.amount), 30000);
 
+          const allPostedLines = await tx.journalEntryLine.findMany({
+            where: { journalEntry: { status: "POSTED" } },
+          });
+          const totalDr = allPostedLines.reduce((s, l) => s + Number(l.debitBase), 0);
+          const totalCr = allPostedLines.reduce((s, l) => s + Number(l.creditBase), 0);
+          assert.ok(Math.abs(totalDr - totalCr) < 0.005);
+
+          throw new Error(SENTINEL);
+        }),
+      new RegExp(SENTINEL)
+    );
+  });
+
+  it("verifies Phase 2 treasury setup, FX transfers with fees, project acquisitions, journal edits, and RBAC guards", async () => {
+    assert.equal(isReadOnly("EXTERNAL_AUDITOR"), true);
+    assert.equal(canEdit("EXTERNAL_AUDITOR", "sales"), false);
+    assert.equal(canEditDate("FIELD_ACCOUNTANT"), false);
+    assert.equal(canEditDate("CHIEF_ACCOUNTANT"), true);
+    assert.equal(canManageTreasury("CHIEF_ACCOUNTANT"), true);
+    assert.equal(canManageLandingCms("CHIEF_ACCOUNTANT"), false);
+    assert.equal(canManageLandingCms("SUPER_ADMIN"), true);
+
+    const SENTINEL = "ROLLBACK_PHASE2_TEST";
+    await assert.rejects(
+      () =>
+        prisma.$transaction(async (tx) => {
+          // 1. Create a new Bank Treasury with auto Tier-5 COA & opening balance
+          const newBank = await createTreasuryAccount({
+            type: "BANK",
+            nameAr: "بنك سبأ الإسلامي",
+            nameEn: "Saba Islamic Bank",
+            currency: "YER",
+            openingBalance: 100000,
+            transferFeePercent: 0.5,
+            isDefaultReceipts: false,
+            tx,
+          });
+          assert.ok(newBank.treasury.account.code.startsWith("1112"));
+          assert.equal(newBank.treasury.balanceYER, 100000);
+          assert.ok(newBank.journalEntry);
+
+          // 2. Update treasury setup metadata
+          const editedBank = await updateTreasuryAccount({
+            id: newBank.treasury.id,
+            branchOrAgent: "فرع التحرير",
+            transferFeePercent: 0.25,
+            tx,
+          });
+          assert.equal(editedBank.branchOrAgent, "فرع التحرير");
+
+          // 3. Cross-currency transfer (YER -> USD Vault t6) with fee posted to 531201
+          const fxTransfer = await transferBetweenTreasuries({
+            fromTreasuryId: newBank.treasury.id,
+            toTreasuryId: "t6",
+            amount: 81000,
+            feeAmount: 500,
+            notes: "تحويل تجريبي بالدولار مع رسوم",
+            tx,
+          });
+          assert.equal(fxTransfer.creditedToAmount, 50); // 81000 / 1620 = 50 USD
+          assert.equal(fxTransfer.feeYER, 500);
+
+          // 4. Project Acquisition Bill & Owner Batch Payment
+          const acqBill = await generateAcquisitionBill({
+            projectId: "p1",
+            acquisitionCycleId: "acq_p1_1",
+            amount: 200000,
+            capitalizeAsset: false,
+            tx,
+          });
+          assert.equal(Number(acqBill.bill.balanceDue), 200000);
+
+          const ownerPay = await postOwnerBatchPayment({
+            projectId: "p1",
+            acquisitionCycleId: "acq_p1_1",
+            billId: acqBill.bill.id,
+            treasuryId: newBank.treasury.id,
+            amount: 50000,
+            transferFee: 250,
+            tx,
+          });
+          assert.equal(Number(ownerPay.voucher.amount), 50000);
+          assert.equal(Number(ownerPay.voucher.transferFee), 250);
+
+          // 5. Journal Entry edit preserves strict balance & updates date/narration
+          const editedJe = await updateJournalEntry({
+            id: acqBill.journalEntry.id,
+            date: "2026-11-10T10:00:00Z",
+            narrationAr: "قيد استحواذ معدل",
+            tx,
+          });
+          assert.equal(editedJe.narrationAr, "قيد استحواذ معدل");
+
+          // Verify global double-entry equilibrium across ALL posted lines
           const allPostedLines = await tx.journalEntryLine.findMany({
             where: { journalEntry: { status: "POSTED" } },
           });

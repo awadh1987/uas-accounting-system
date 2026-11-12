@@ -7,13 +7,21 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const userId = String(body.userId || "").trim();
+    const identifier = String(body.identifier || body.email || body.username || "").trim();
     const password = String(body.password || "");
 
-    if (!userId || !password) {
-      return jsonError("يرجى اختيار المستخدم وإدخال كلمة المرور", 400);
+    if ((!userId && !identifier) || !password) {
+      return jsonError("يرجى إدخال اسم المستخدم أو البريد الإلكتروني وكلمة المرور", 400);
     }
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = userId
+      ? await prisma.user.findUnique({ where: { id: userId } })
+      : await prisma.user.findFirst({
+          where: {
+            OR: [{ email: identifier }, { username: identifier }],
+          },
+        });
+
     if (!user || !user.active) {
       return jsonError("الحساب غير موجود أو موقوف", 403);
     }
@@ -41,6 +49,7 @@ export async function POST(req: NextRequest) {
         fullName: user.fullName,
         email: user.email,
         role: user.role,
+        department: user.department,
         active: user.active,
         avatarChar: user.avatarChar,
         assignedProjects: parseAssignedProjects(user.assignedProjects),

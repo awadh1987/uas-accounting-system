@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { generateFinancialReports } from "@/lib/accounting/ledgerService";
+import { generateFinancialReports, recordAuditDiffTx } from "@/lib/accounting/ledgerService";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +22,8 @@ export async function GET() {
         include: {
           subProjects: { orderBy: { code: "asc" } },
           harvestCycles: { orderBy: { sortOrder: "asc" } },
+          ownerVendor: { select: { id: true, code: true, nameAr: true, nameEn: true } },
+          acquisitions: { orderBy: { startDate: "asc" } },
         },
       }),
       generateFinancialReports(),
@@ -42,6 +44,8 @@ export async function GET() {
           nameEn: p.nameEn,
           type: p.type,
           parentProjectId: p.parentProjectId,
+          vendorId: p.vendorId,
+          ownerVendor: p.ownerVendor,
           budgetTotal: Number(p.budgetTotal) || p.estimatedValue,
           estimatedValue: p.estimatedValue,
           status: p.status,
@@ -63,6 +67,17 @@ export async function GET() {
             isLocked: hc.isLocked,
             lockedAt: hc.lockedAt ? hc.lockedAt.toISOString() : null,
           })),
+          acquisitions: p.acquisitions.map((ac) => ({
+            id: ac.id,
+            projectId: ac.projectId,
+            cycleTitle: ac.cycleTitle,
+            startDate: ac.startDate.toISOString().slice(0, 10),
+            endDate: ac.endDate.toISOString().slice(0, 10),
+            contractAmount: Number(ac.contractAmount),
+            currency: ac.currency,
+            status: ac.status,
+            notes: ac.notes,
+          })),
           metrics: metrics || {
             revenue: 0,
             actualCost: 0,
@@ -83,15 +98,23 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "projects",
+      action: "create",
+      dateChanged: Boolean(body.startDate || body.endDate),
+    });
+    if (!auth.ok) return auth.response;
+
     const name = String(body.nameAr || body.name || "").trim();
     const nameEn = String(body.nameEn || name).trim();
     const type = String(body.type || "مشروع رئيسي").trim();
     const parentProjectId =
       type === "مشروع فرعي" && body.parentProjectId ? String(body.parentProjectId) : null;
+    const vendorId = body.vendorId ? String(body.vendorId).trim() : null;
     const budgetTotal = Number(body.budgetTotal ?? body.estimatedValue) || 0;
     const count = Math.max(1, Math.min(20, Number(body.plannedHarvests) || 1));
     const notes = String(body.notes || "").trim();
-    const actor = extractActor(body);
+    const actor = auth.actor;
 
     if (!name) {
       return jsonError("يرجى إدخال اسم المشروع", 400);
@@ -119,10 +142,13 @@ export async function POST(req: NextRequest) {
           nameEn,
           type,
           parentProjectId,
+          vendorId,
           budgetTotal,
           estimatedValue: budgetTotal,
           plannedHarvestCount: count,
           status: String(body.status || "ACTIVE"),
+          startDate: body.startDate ? new Date(`${String(body.startDate).slice(0, 10)}T00:00:00Z`) : null,
+          endDate: body.endDate ? new Date(`${String(body.endDate).slice(0, 10)}T23:59:59Z`) : null,
           notes,
           harvestCycles: {
             create: harvests.map((hName, idx) => ({
@@ -153,13 +179,16 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+async function handleProjectUpdate(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const action = String(body.action || "").trim();
-    const projectId = String(body.projectId || "").trim();
+    const projectId = String(body.projectId || body.id || "").trim();
 
     if (action === "ADD_SUBPROJECT") {
+      const auth = await authorizeApiAction(body, req, { moduleId: "projects", action: "create" });
+      if (!auth.ok) return auth.response;
+
       const nameAr = String(body.nameAr || "").trim();
       const nameEn = String(body.nameEn || nameAr).trim();
       const budget = Number(body.budget) || 0;
@@ -184,6 +213,9 @@ export async function PATCH(req: NextRequest) {
     }
 
     if (action === "UPDATE_BUDGET") {
+      const auth = await authorizeApiAction(body, req, { moduleId: "projects", action: "edit" });
+      if (!auth.ok) return auth.response;
+
       const budgetTotal = Number(body.budgetTotal);
       if (!projectId || !Number.isFinite(budgetTotal) || budgetTotal < 0) {
         return jsonError("قيمة الموازنة غير صالحة", 400);
@@ -200,9 +232,118 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ state });
     }
 
-    return jsonError("إجراء غير مدعوم", 400);
+    if (!projectId) {
+      return jsonError("معرف المشروع مطلوب للتحديث", 400);
+    }
+
+    const existing = await prisma.project.findUnique({ where: { id: projectId } });
+    if (!existing) return jsonError("المشروع غير موجود", 404);
+
+    const dateChanged =
+      (body.startDate !== undefined &&
+        String(body.startDate || "").slice(0, 10) !==
+          (existing.startDate ? existing.startDate.toISOString().slice(0, 10) : "")) ||
+      (body.endDate !== undefined &&
+        String(body.endDate || "").slice(0, 10) !==
+          (existing.endDate ? existing.endDate.toISOString().slice(0, 10) : ""));
+
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "projects",
+      action: "edit",
+      dateChanged,
+    });
+    if (!auth.ok) return auth.response;
+
+    const nextNameAr =
+      body.nameAr !== undefined
+        ? String(body.nameAr).trim()
+        : body.name !== undefined
+        ? String(body.name).trim()
+        : existing.nameAr;
+    const nextBudget =
+      body.budgetTotal !== undefined
+        ? Number(body.budgetTotal) || 0
+        : body.estimatedValue !== undefined
+        ? Number(body.estimatedValue) || 0
+        : Number(existing.budgetTotal) || existing.estimatedValue;
+
+    await prisma.$transaction(async (tx) => {
+      const updated = await tx.project.update({
+        where: { id: projectId },
+        data: {
+          name: nextNameAr,
+          nameAr: nextNameAr,
+          ...(body.nameEn !== undefined ? { nameEn: String(body.nameEn).trim() } : {}),
+          ...(body.code !== undefined ? { code: String(body.code).trim() } : {}),
+          ...(body.type !== undefined ? { type: String(body.type).trim() } : {}),
+          ...(body.parentProjectId !== undefined
+            ? { parentProjectId: body.parentProjectId ? String(body.parentProjectId) : null }
+            : {}),
+          ...(body.vendorId !== undefined
+            ? { vendorId: body.vendorId ? String(body.vendorId) : null }
+            : {}),
+          budgetTotal: nextBudget,
+          estimatedValue: nextBudget,
+          ...(body.status !== undefined ? { status: String(body.status).trim() } : {}),
+          ...(body.startDate !== undefined
+            ? {
+                startDate: body.startDate
+                  ? new Date(`${String(body.startDate).slice(0, 10)}T00:00:00Z`)
+                  : null,
+              }
+            : {}),
+          ...(body.endDate !== undefined
+            ? {
+                endDate: body.endDate
+                  ? new Date(`${String(body.endDate).slice(0, 10)}T23:59:59Z`)
+                  : null,
+              }
+            : {}),
+          ...(body.notes !== undefined ? { notes: String(body.notes).trim() } : {}),
+        },
+      });
+
+      await recordAuditDiffTx(tx, {
+        userId: auth.actor.userId,
+        action: "UPDATE",
+        entity: "Project",
+        entityId: projectId,
+        before: {
+          nameAr: existing.nameAr,
+          vendorId: existing.vendorId,
+          budgetTotal: Number(existing.budgetTotal),
+          status: existing.status,
+          startDate: existing.startDate ? existing.startDate.toISOString().slice(0, 10) : null,
+        },
+        after: {
+          nameAr: updated.nameAr,
+          vendorId: updated.vendorId,
+          budgetTotal: Number(updated.budgetTotal),
+          status: updated.status,
+          startDate: updated.startDate ? updated.startDate.toISOString().slice(0, 10) : null,
+        },
+      });
+
+      await appendAuditLogTx(tx, {
+        ...auth.actor,
+        actionType: "تعديل بيانات مشروع",
+        entityReference: projectId,
+        details: `تحديث مشروع ${updated.nameAr} (${updated.code}) — الموازنة: ${nextBudget.toLocaleString("en-US")}`,
+      });
+    });
+
+    const state = await getBootstrapState();
+    return NextResponse.json({ state });
   } catch (error) {
     console.error("PATCH /api/projects error:", error);
     return jsonError("تعذر تحديث بيانات المشروع", 500);
   }
+}
+
+export async function PATCH(req: NextRequest) {
+  return handleProjectUpdate(req);
+}
+
+export async function PUT(req: NextRequest) {
+  return handleProjectUpdate(req);
 }

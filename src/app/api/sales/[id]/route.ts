@@ -1,8 +1,70 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { reverseJournalEntry } from "@/lib/accounting/ledgerService";
+import {
+  reverseJournalEntry,
+  updateSaleTransactionAtomic,
+} from "@/lib/accounting/ledgerService";
 import { appendAuditLogTx, getBootstrapState, isHarvestLockedTx } from "@/lib/serverBootstrap";
-import { extractActor, jsonError, lockedError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
+
+async function handleSaleByIdUpdate(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await context.params;
+    const body = (await req.json()) as Record<string, unknown>;
+    const existing = await prisma.saleTransaction.findUnique({ where: { id } });
+    if (!existing) return jsonError("عملية البيع غير موجودة", 404);
+
+    const dateChanged =
+      body.date !== undefined && String(body.date).trim() !== existing.saleDate;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "sales",
+      action: "edit",
+      dateChanged,
+    });
+    if (!auth.ok) return auth.response;
+
+    const updated = await updateSaleTransactionAtomic({
+      id,
+      projectId: body.projectId ? String(body.projectId) : undefined,
+      harvestName: body.harvest ? String(body.harvest) : undefined,
+      batch: body.batch ? String(body.batch) : undefined,
+      customer: body.customer ? String(body.customer) : undefined,
+      phone: body.phone ? String(body.phone) : undefined,
+      grade: body.grade ? String(body.grade) : undefined,
+      bundles: body.bundles !== undefined ? Number(body.bundles) : undefined,
+      price: body.price !== undefined ? Number(body.price) : undefined,
+      credit: body.credit !== undefined ? Number(body.credit) : undefined,
+      date: body.date ? String(body.date) : undefined,
+      voucherNo: body.voucherNo ? String(body.voucherNo) : undefined,
+      notes: body.notes !== undefined ? String(body.notes) : undefined,
+      createdById: auth.actor.userId ?? undefined,
+    });
+
+    const state = await getBootstrapState();
+    return NextResponse.json({ sale: updated, state });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "تعذر تعديل عملية البيع";
+    if (msg.includes("HARVEST_LOCKED")) return lockedError();
+    return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
+  }
+}
+
+export async function PATCH(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  return handleSaleByIdUpdate(req, context);
+}
+
+export async function PUT(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  return handleSaleByIdUpdate(req, context);
+}
 
 export async function DELETE(
   req: NextRequest,
@@ -16,7 +78,12 @@ export async function DELETE(
     } catch {
       body = {};
     }
-    const actor = extractActor(body);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "sales",
+      action: "delete",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
     const result = await prisma.$transaction(async (tx) => {
       const rec = await tx.saleTransaction.findUnique({ where: { id } });

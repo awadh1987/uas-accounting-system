@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { normalizeRole, ROLE_DEFINITIONS } from "@/lib/permissions";
 import { appendAuditLogTx, getBootstrapState, hashPassword } from "@/lib/serverBootstrap";
 import { extractActor, jsonError } from "@/lib/apiHelpers";
 
@@ -8,7 +9,9 @@ export async function POST(req: NextRequest) {
     const body = (await req.json()) as Record<string, unknown>;
     const name = String(body.name || "").trim();
     const email = String(body.email || "").trim() || `user-${Date.now()}@uas-ye.com`;
-    const role = String(body.role || "FIELD_ACCOUNTANT").trim();
+    const role = normalizeRole(String(body.role || "FIELD_ACCOUNTANT").trim());
+    const department =
+      String(body.department || "").trim() || ROLE_DEFINITIONS[role].departmentAr;
     const password = String(body.password || "123456");
     const assignedProjects = Array.isArray(body.assignedProjects)
       ? JSON.stringify(body.assignedProjects.map(String))
@@ -36,10 +39,11 @@ export async function POST(req: NextRequest) {
         data: {
           username: uniqueUsername,
           name,
-          fullName: String(body.fullName || name),
+          fullName: String(body.fullName || `${name} - ${ROLE_DEFINITIONS[role].labelAr}`),
           email: uniqueEmail,
           passwordHash: hashPassword(password),
           role,
+          department,
           active: true,
           avatarChar,
           assignedProjects,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { appendAuditLogTx, getBootstrapState, hashPassword } from "@/lib/serverBootstrap";
+import { normalizeRole } from "@/lib/permissions";
+import { appendAuditLogTx, getBootstrapState, hashPassword, parseAssignedProjects } from "@/lib/serverBootstrap";
 import { extractActor, jsonError } from "@/lib/apiHelpers";
 
 export async function PATCH(
@@ -26,6 +27,13 @@ export async function PATCH(
       const nextAvatar = body.avatarChar
         ? String(body.avatarChar).trim().slice(0, 2)
         : existing.avatarChar;
+      const nextRole = body.role ? normalizeRole(String(body.role)) : existing.role;
+      const nextDepartment = body.department
+        ? String(body.department).trim()
+        : existing.department;
+      const nextAssigned = Array.isArray(body.assignedProjects)
+        ? JSON.stringify(body.assignedProjects.map(String))
+        : existing.assignedProjects;
       const newPassword = body.newPassword ? String(body.newPassword) : "";
 
       const updated = await tx.user.update({
@@ -34,15 +42,22 @@ export async function PATCH(
           active: nextActive,
           name: nextName,
           avatarChar: nextAvatar,
+          role: nextRole,
+          department: nextDepartment,
+          assignedProjects: nextAssigned,
           ...(newPassword ? { passwordHash: hashPassword(newPassword) } : {}),
         },
         select: {
           id: true,
+          username: true,
           name: true,
+          fullName: true,
           email: true,
           role: true,
+          department: true,
           active: true,
           avatarChar: true,
+          assignedProjects: true,
         },
       });
 
@@ -53,7 +68,13 @@ export async function PATCH(
         details: `${updated.name} — الحالة: ${updated.active ? "نشط" : "موقوف"}`,
       });
 
-      return { notFound: false as const, updated };
+      return {
+        notFound: false as const,
+        updated: {
+          ...updated,
+          assignedProjects: parseAssignedProjects(updated.assignedProjects),
+        },
+      };
     });
 
     if (result.notFound) return jsonError("المستخدم غير موجود", 404);

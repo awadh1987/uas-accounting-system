@@ -7,6 +7,9 @@ import {
   FileCheck2,
   Globe2,
   Lock,
+  MapPin,
+  MessageCircle,
+  Phone,
   QrCode,
   Search,
   ShieldCheck,
@@ -14,6 +17,7 @@ import {
   TrendingUp,
   Users,
 } from "lucide-react";
+import { DualLogoBadge } from "@/components/DualLogoBadge";
 import { fmtNum } from "@/lib/formulas";
 import type { LanguageCode, TabId, UasBootstrapState, UasUser } from "@/types/uas";
 
@@ -114,14 +118,16 @@ export function LandingPage({
       <header className="card-surface sticky top-0 z-30 border-b px-4 sm:px-8 py-3.5 shadow-sm">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl accent-bg flex items-center justify-center font-black text-base shadow-md">
-              {state.settings.logoText || "UAS"}
-            </div>
+            <DualLogoBadge
+              profile={profile}
+              logoText={state.settings.logoText}
+              size="md"
+            />
             <div>
               <h1 className="font-extrabold text-sm sm:text-base leading-tight">
                 {isAr
-                  ? profile?.legalNameAr || "شركة الجبري الزراعية للتنمية والاستثمار"
-                  : profile?.legalNameEn || "Al-Jabri Agricultural Development & Investment Co."}
+                  ? profile?.legalNameAr || "المؤسسة الزراعية الموحدة للاستثمار"
+                  : profile?.legalNameEn || "Unified Agricultural Investment Enterprise"}
               </h1>
               <p className="text-[11px] text-slate-500 flex items-center gap-2">
                 <span>{isAr ? "الرقم الضريبي:" : "Tax ID:"} {profile?.taxNumber || "30049811200003"}</span>
@@ -164,26 +170,28 @@ export function LandingPage({
       <main className="flex-1">
         {/* Hero Section */}
         <section className="max-w-7xl mx-auto px-4 sm:px-8 py-10 sm:py-14 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-          <div className="lg:col-span-7 space-y-5">
+          <div className={`${profile?.showPublicVerify !== false ? "lg:col-span-7" : "lg:col-span-12 max-w-4xl"} space-y-5`}>
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full accent-badge text-xs font-extrabold">
               <ShieldCheck className="w-4 h-4" />
               <span>
                 {isAr
-                  ? "منظومة محاسبة القيد المزدوج الموحدة (5-Tier COA)"
-                  : "Immutable Double-Entry ERP & 5-Tier Chart of Accounts"}
+                  ? profile?.heroBadgeAr || "منظومة محاسبة القيد المزدوج الموحدة (5-Tier COA)"
+                  : profile?.heroBadgeEn || "Immutable Double-Entry ERP & 5-Tier Chart of Accounts"}
               </span>
             </div>
 
             <h2 className="text-2xl sm:text-4xl font-black leading-snug">
               {isAr
-                ? "البنية الرقمية والمحاسبية المتكاملة لمشاريع الجبري الزراعية والاستثمارية"
-                : "Enterprise Agricultural Accounting, Procurement & Project Ledger Platform"}
+                ? profile?.heroTitleAr || "إدارة مالية ومحاسبية متكاملة للمشاريع وسلاسل الإمداد الزراعية"
+                : profile?.heroTitleEn || "Enterprise Agricultural Accounting, Procurement & Project Ledger Platform"}
             </h2>
 
             <p className="text-sm sm:text-base text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl">
               {isAr
-                ? "نظام محاسبي مؤسسي يربط المشاريع والقطفات والمشتريات والموردين والعملاء والمخزون بمحرك قيد مزدوج غير قابل للتعديل مع تقارير مالية فورية وتوثيق QR إلكتروني."
-                : "Every procurement bill, harvest sale, payroll accrual, and treasury settlement posts atomically to a balanced double-entry general ledger with live financial statements and QR voucher verification."}
+                ? profile?.heroSubtitleAr ||
+                  "نظام محاسبي مؤسسي يربط المشاريع والقطفات والمشتريات والموردين والعملاء والمخزون بمحرك قيد مزدوج غير قابل للتعديل مع تقارير مالية فورية وتوثيق QR إلكتروني."
+                : profile?.heroSubtitleEn ||
+                  "Every procurement bill, harvest sale, payroll accrual, and treasury settlement posts atomically to a balanced double-entry general ledger with live financial statements and QR voucher verification."}
             </p>
 
             <div className="flex flex-wrap gap-3 pt-2">
@@ -192,7 +200,11 @@ export function LandingPage({
                 className="px-5 py-3 rounded-2xl accent-bg text-sm font-extrabold shadow-lg flex items-center gap-2"
               >
                 <TrendingUp className="w-4 h-4" />
-                <span>{isAr ? "استعراض لوحة التحكم والتقارير" : "Launch Executive ERP"}</span>
+                <span>
+                  {isAr
+                    ? profile?.ctaPrimaryTextAr || "استعراض لوحة التحكم والتقارير"
+                    : profile?.ctaPrimaryTextEn || "Launch Executive ERP"}
+                </span>
               </button>
               <button
                 onClick={() => onEnterErp("procurement")}
@@ -212,6 +224,7 @@ export function LandingPage({
           </div>
 
           {/* Live Public Voucher QR Verification Card */}
+          {profile?.showPublicVerify !== false && (
           <div className="lg:col-span-5">
             <div className="card-surface rounded-3xl p-6 shadow-xl space-y-4 border-2 border-emerald-500/20">
               <div className="flex items-center gap-3">
@@ -307,9 +320,11 @@ export function LandingPage({
               )}
             </div>
           </div>
+          )}
         </section>
 
         {/* Live Enterprise Track Record Metrics */}
+        {profile?.showPublicMetrics !== false && (
         <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-10">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="card-surface rounded-2xl p-5 space-y-1">
@@ -320,7 +335,12 @@ export function LandingPage({
               <div className="text-2xl font-black text-emerald-600">
                 {publicMetrics?.projects ?? state.projects.length}
               </div>
-              <div className="text-[11px] text-slate-400">الجبري العليا • الوسطى • السفلى</div>
+              <div className="text-[11px] text-slate-400 truncate">
+                {state.projects
+                  .slice(0, 3)
+                  .map((p) => (isAr ? p.nameAr || p.name : p.nameEn || p.name))
+                  .join(" • ") || (isAr ? "مشاريع استثمارية نشطة" : "Active portfolio projects")}
+              </div>
             </div>
 
             <div className="card-surface rounded-2xl p-5 space-y-1">
@@ -363,6 +383,7 @@ export function LandingPage({
             </div>
           </div>
         </section>
+        )}
 
         {/* Projects & Supply Chain Showcase */}
         <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-12">
@@ -405,11 +426,66 @@ export function LandingPage({
             ))}
           </div>
         </section>
+        {/* About & Public Contact CMS Section */}
+        <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-12">
+          <div className="card-surface rounded-3xl p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+            <div className="lg:col-span-7 space-y-2.5">
+              <div className="text-xs font-extrabold text-emerald-600 uppercase tracking-wide">
+                {isAr ? "عن المؤسسة والمنهج المحاسبي" : "Enterprise Mission & Governance"}
+              </div>
+              <h3 className="text-lg sm:text-xl font-black">
+                {isAr
+                  ? profile?.legalNameAr || "المؤسسة الزراعية الموحدة للاستثمار"
+                  : profile?.legalNameEn || "Unified Agricultural Investment Enterprise"}
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                {isAr
+                  ? profile?.aboutMissionAr ||
+                    "منصة محاسبية مؤسسية مصممة لإدارة دورات الإنتاج الزراعي والمشاريع الاستثمارية بشفافية مالية ورقابة مزدوجة."
+                  : profile?.aboutMissionEn ||
+                    "Enterprise ERP built for agricultural production cycles and capital projects with strict double-entry auditability."}
+              </p>
+            </div>
+            <div className="lg:col-span-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2.5 text-xs">
+              {(profile?.contactPhone || profile?.phone) && (
+                <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                  <Phone className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span className="font-bold font-mono" dir="ltr">
+                    {profile?.contactPhone || profile?.phone}
+                  </span>
+                </div>
+              )}
+              {profile?.contactWhatsApp && (
+                <a
+                  href={`https://wa.me/${profile.contactWhatsApp.replace(/[^0-9]/g, "")}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/50 text-emerald-800 dark:text-emerald-300 font-bold hover:border-emerald-500 transition"
+                >
+                  <MessageCircle className="w-4 h-4 shrink-0" />
+                  <span>{isAr ? "تواصل عبر واتساب المؤسسة" : "Contact via WhatsApp"}</span>
+                </a>
+              )}
+              {(profile?.contactAddress || profile?.address) && (
+                <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                  <MapPin className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <span className="font-semibold">
+                    {profile?.contactAddress || profile?.address}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
       </main>
 
       <footer className="border-t border-slate-200 dark:border-slate-800 py-5 px-4 text-center text-xs text-slate-500">
-        {profile?.legalNameAr || "شركة الجبري الزراعية للتنمية والاستثمار"} — Unified Accounting System (UAS) •{" "}
-        {profile?.address || "صنعاء - الجمهورية اليمنية"} • {profile?.email || "finance@aljabri-agri.com"}
+        {(isAr
+          ? profile?.legalNameAr || "المؤسسة الزراعية الموحدة للاستثمار"
+          : profile?.legalNameEn || "Unified Agricultural Investment Enterprise")}{" "}
+        — Unified Accounting System (UAS) •{" "}
+        {profile?.contactAddress || profile?.address || "صنعاء - الجمهورية اليمنية"} •{" "}
+        {profile?.email || "finance@uas-ye.com"}
       </footer>
     </div>
   );

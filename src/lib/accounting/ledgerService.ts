@@ -1,6 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { computeQrVerificationCode } from "@/lib/formulas";
+import {
+  computeOperatingExpenseTotal,
+  computeQrVerificationCode,
+  computeSaleTotals,
+  computeWorkerWageTotals,
+} from "@/lib/formulas";
 import type { AccountType } from "./coaCatalog";
 import { mapExpenseCategoryToCoaCode, mapProjectIdToSalesRevenueCode } from "./coaCatalog";
 
@@ -46,6 +51,7 @@ export interface PostVendorBillInput {
   projectId: string;
   subProjectId?: string | null;
   purchaseOrderId?: string | null;
+  acquisitionCycleId?: string | null;
   items?: Array<{ description: string; quantity: number; unitPrice: number }>;
   totalAmount: number;
   currency?: string;
@@ -62,8 +68,11 @@ export interface PostVendorBillInput {
 export interface PostVendorPaymentInput {
   vendorId: string;
   billId?: string | null;
+  projectId?: string | null;
+  acquisitionCycleId?: string | null;
   treasuryId: string;
   amount: number;
+  transferFee?: number;
   currency?: string;
   date?: Date | string;
   referenceNumber?: string;
@@ -629,6 +638,7 @@ export async function postVendorBill(input: PostVendorBillInput) {
         projectId: project.id,
         subProjectId: input.subProjectId ?? null,
         purchaseOrderId: input.purchaseOrderId ?? null,
+        acquisitionCycleId: input.acquisitionCycleId ?? null,
         date: billDate,
         dueDate: input.dueDate ? new Date(input.dueDate) : null,
         status: "POSTED",
@@ -681,21 +691,27 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
 
     const amount = round4(input.amount);
     if (amount <= 0) throw new Error("INVALID_PAYMENT_AMOUNT");
+    const transferFee = Math.max(0, round4(Number(input.transferFee) || 0));
 
     const currency = (input.currency || treasury.currency || "YER").toUpperCase();
     const rate = await getExchangeRateToYER(tx, currency);
     const amountYER = round4(amount * rate);
+    const feeYER = round4(transferFee * rate);
+    const totalOut = round4(amount + transferFee);
+    const totalOutYER = round4(amountYER + feeYER);
     const voucherNumber = await nextSequenceCode(tx, "paymentVoucher", "PV");
     const payDate = input.date ? new Date(input.date) : new Date();
 
-    let projectId: string | null = null;
+    let projectId: string | null = input.projectId ?? null;
     let subProjectId: string | null = null;
+    let acquisitionCycleId: string | null = input.acquisitionCycleId ?? null;
 
     if (input.billId) {
       const bill = await tx.vendorBill.findUnique({ where: { id: input.billId } });
       if (!bill) throw new Error("BILL_NOT_FOUND");
-      projectId = bill.projectId;
+      projectId = projectId || bill.projectId;
       subProjectId = bill.subProjectId;
+      acquisitionCycleId = acquisitionCycleId || bill.acquisitionCycleId;
 
       const billRate = await getExchangeRateToYER(tx, bill.currency);
       const amountInBillCurr = round4(amountYER / billRate);
@@ -713,14 +729,47 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
     }
 
     const treasuryRate = await getExchangeRateToYER(tx, treasury.currency);
-    const amountInTreasuryCurr = round4(amountYER / treasuryRate);
+    const totalOutInTreasuryCurr = round4(totalOutYER / treasuryRate);
     await tx.treasuryAccount.update({
       where: { id: treasury.id },
       data: {
-        balance: round4(toNum(treasury.balance) - amountInTreasuryCurr),
-        balanceYER: round4(treasury.balanceYER - amountYER),
+        balance: round4(toNum(treasury.balance) - totalOutInTreasuryCurr),
+        balanceYER: round4(treasury.balanceYER - totalOutYER),
       },
     });
+
+    const lines: JournalLineInput[] = [
+      {
+        accountId: vendor.accountId,
+        debit: amount,
+        currency,
+        exchangeRate: rate,
+        memo: input.notes || `سداد للمورد ${vendor.nameAr}`,
+        projectId,
+        subProjectId,
+      },
+      ...(transferFee > 0
+        ? [
+            {
+              accountCode: "531201",
+              debit: transferFee,
+              currency,
+              exchangeRate: rate,
+              memo: `رسوم تحويل سند الصرف ${voucherNumber}`,
+              projectId,
+              subProjectId,
+            },
+          ]
+        : []),
+      {
+        accountId: treasury.accountId,
+        credit: totalOut,
+        currency,
+        exchangeRate: rate,
+        memo: `صرف من ${treasury.nameAr}`,
+        projectId,
+      },
+    ];
 
     const je = await postJournalEntry({
       tx,
@@ -732,25 +781,7 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
       projectId,
       createdById: input.createdById,
       status: "POSTED",
-      lines: [
-        {
-          accountId: vendor.accountId,
-          debit: amount,
-          currency,
-          exchangeRate: rate,
-          memo: input.notes || `سداد للمورد ${vendor.nameAr}`,
-          projectId,
-          subProjectId,
-        },
-        {
-          accountId: treasury.accountId,
-          credit: amount,
-          currency,
-          exchangeRate: rate,
-          memo: `صرف من ${treasury.nameAr}`,
-          projectId,
-        },
-      ],
+      lines,
     });
 
     const qrVerificationHash = computeQrVerificationCode(
@@ -765,10 +796,12 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
         billId: input.billId ?? null,
         treasuryId: treasury.id,
         amount,
+        transferFee,
         currency,
         referenceNumber: input.referenceNumber || null,
         notes: input.notes || null,
         projectId,
+        acquisitionCycleId,
         journalEntryId: je.id,
         qrVerificationHash,
       },
@@ -1395,5 +1428,1207 @@ export async function generateFinancialReports(filters: FinancialReportFilters =
       isBalanced: isBalanceSheetBalanced,
     },
   };
+}
+
+// =========================================================================
+// PHASE 2: AUDIT DIFF, TREASURY & BANKING ENGINE, ACQUISITIONS & EDITS
+// =========================================================================
+
+export async function recordAuditDiffTx(
+  tx: Prisma.TransactionClient,
+  input: {
+    userId?: string | null;
+    action: "CREATE" | "UPDATE" | "POST" | "VOID" | "LOCK" | "RECONCILE";
+    entity: string;
+    entityId: string;
+    before: Record<string, unknown> | null;
+    after: Record<string, unknown> | null;
+    note?: string;
+  }
+) {
+  const actorId = await resolveActorId(tx, input.userId ?? undefined);
+  return tx.auditLog.create({
+    data: {
+      userId: actorId,
+      action: input.action,
+      entity: input.entity,
+      entityId: input.entityId,
+      details: {
+        before: (input.before ?? {}) as Prisma.InputJsonValue,
+        after: (input.after ?? {}) as Prisma.InputJsonValue,
+        ...(input.note ? { note: input.note } : {}),
+      },
+    },
+  });
+}
+
+export interface CreateTreasuryAccountInput {
+  type: "VAULT" | "BANK" | "WALLET";
+  nameAr: string;
+  nameEn?: string;
+  currency?: string;
+  providerNameAr?: string;
+  providerNameEn?: string;
+  accountHolderName?: string;
+  accountNumber?: string;
+  ibanOrSwift?: string;
+  branchOrAgent?: string;
+  transferFeePercent?: number;
+  dailyLimit?: number;
+  openingBalance?: number;
+  openingDate?: Date | string;
+  isDefaultReceipts?: boolean;
+  isDefaultPayments?: boolean;
+  isActive?: boolean;
+  notes?: string;
+  createdById?: string;
+  tx?: Prisma.TransactionClient;
+}
+
+export async function createTreasuryAccount(input: CreateTreasuryAccountInput) {
+  return runAtomic(input.tx, async (tx) => {
+    const type = (input.type || "VAULT").toUpperCase() as "VAULT" | "BANK" | "WALLET";
+    if (type !== "VAULT" && type !== "BANK" && type !== "WALLET") {
+      throw new Error("INVALID_TREASURY_TYPE");
+    }
+    const nameAr = input.nameAr.trim();
+    if (!nameAr) throw new Error("TREASURY_NAME_REQUIRED");
+    const nameEn = (input.nameEn || nameAr).trim();
+    const currency = (input.currency || "YER").toUpperCase();
+    const rate = await getExchangeRateToYER(tx, currency);
+    const openingBalance = Math.max(0, round4(Number(input.openingBalance) || 0));
+    const openingYER = round4(openingBalance * rate);
+
+    const parentCode = type === "VAULT" ? "111100" : "111200";
+    const accountId = await ensureChildPostingAccount(tx, parentCode, nameAr, nameEn, "ASSET");
+
+    const count = await tx.treasuryAccount.count();
+    const prefix = type === "VAULT" ? "TR-VAULT" : type === "BANK" ? "TR-BANK" : "TR-WAL";
+    const code = `${prefix}-${String(count + 1).padStart(2, "0")}-${Date.now().toString().slice(-3)}`;
+
+    if (input.isDefaultReceipts) {
+      await tx.treasuryAccount.updateMany({ data: { isDefaultReceipts: false } });
+    }
+    if (input.isDefaultPayments) {
+      await tx.treasuryAccount.updateMany({ data: { isDefaultPayments: false } });
+    }
+
+    const created = await tx.treasuryAccount.create({
+      data: {
+        code,
+        name: `${nameAr} (${nameEn})`,
+        nameAr,
+        nameEn,
+        type,
+        providerNameAr: input.providerNameAr?.trim() || nameAr,
+        providerNameEn: input.providerNameEn?.trim() || nameEn,
+        accountHolderName: input.accountHolderName?.trim() || "",
+        accountNumber: input.accountNumber?.trim() || code,
+        ibanOrSwift: input.ibanOrSwift?.trim() || "",
+        branchOrAgent: input.branchOrAgent?.trim() || "",
+        transferFeePercent: Math.max(0, Number(input.transferFeePercent) || 0),
+        dailyLimit: Math.max(0, Number(input.dailyLimit) || 0),
+        isDefaultReceipts: Boolean(input.isDefaultReceipts),
+        isDefaultPayments: Boolean(input.isDefaultPayments),
+        isActive: input.isActive !== undefined ? Boolean(input.isActive) : true,
+        notes: input.notes?.trim() || "",
+        accountId,
+        currency,
+        currencyCode: currency,
+        balance: openingBalance,
+        balanceYER: openingYER,
+      },
+      include: { account: true },
+    });
+
+    let journalEntry = null;
+    if (openingBalance > 0) {
+      journalEntry = await postJournalEntry({
+        tx,
+        date: input.openingDate ? new Date(input.openingDate) : new Date(),
+        reference: `OB-${created.code}`,
+        narrationAr: `رصيد افتتاحي لحساب الخزينة: ${nameAr}`,
+        narrationEn: `Opening Balance for Treasury Account: ${nameEn}`,
+        sourceType: "TREASURY_OPENING",
+        sourceId: created.id,
+        createdById: input.createdById,
+        status: "POSTED",
+        lines: [
+          {
+            accountId: created.accountId,
+            debit: openingBalance,
+            currency,
+            exchangeRate: rate,
+            memo: `رصيد افتتاحي - ${nameAr}`,
+          },
+          {
+            accountCode: "311101",
+            credit: openingBalance,
+            currency,
+            exchangeRate: rate,
+            memo: `مقابل رصيد افتتاحي - ${nameAr}`,
+          },
+        ],
+      });
+    }
+
+    await recordAuditDiffTx(tx, {
+      userId: input.createdById,
+      action: "CREATE",
+      entity: "TreasuryAccount",
+      entityId: created.id,
+      before: null,
+      after: {
+        code: created.code,
+        type: created.type,
+        nameAr: created.nameAr,
+        currency: created.currency,
+        openingBalance,
+      },
+    });
+
+    return { treasury: created, journalEntry };
+  });
+}
+
+export interface UpdateTreasuryAccountInput {
+  id: string;
+  nameAr?: string;
+  nameEn?: string;
+  type?: "VAULT" | "BANK" | "WALLET";
+  providerNameAr?: string;
+  providerNameEn?: string;
+  accountHolderName?: string;
+  accountNumber?: string;
+  ibanOrSwift?: string;
+  branchOrAgent?: string;
+  transferFeePercent?: number;
+  dailyLimit?: number;
+  isDefaultReceipts?: boolean;
+  isDefaultPayments?: boolean;
+  isActive?: boolean;
+  notes?: string;
+  createdById?: string;
+  tx?: Prisma.TransactionClient;
+}
+
+export async function updateTreasuryAccount(input: UpdateTreasuryAccountInput) {
+  return runAtomic(input.tx, async (tx) => {
+    const existing = await tx.treasuryAccount.findUnique({
+      where: { id: input.id },
+      include: { account: true },
+    });
+    if (!existing) throw new Error("TREASURY_NOT_FOUND");
+
+    if (input.isDefaultReceipts === true) {
+      await tx.treasuryAccount.updateMany({
+        where: { id: { not: existing.id } },
+        data: { isDefaultReceipts: false },
+      });
+    }
+    if (input.isDefaultPayments === true) {
+      await tx.treasuryAccount.updateMany({
+        where: { id: { not: existing.id } },
+        data: { isDefaultPayments: false },
+      });
+    }
+
+    const nextNameAr = input.nameAr !== undefined ? input.nameAr.trim() : existing.nameAr;
+    const nextNameEn = input.nameEn !== undefined ? input.nameEn.trim() : existing.nameEn;
+
+    const updated = await tx.treasuryAccount.update({
+      where: { id: existing.id },
+      data: {
+        ...(input.type ? { type: input.type } : {}),
+        ...(input.nameAr !== undefined || input.nameEn !== undefined
+          ? {
+              name: `${nextNameAr} (${nextNameEn})`,
+              nameAr: nextNameAr,
+              nameEn: nextNameEn,
+            }
+          : {}),
+        ...(input.providerNameAr !== undefined ? { providerNameAr: input.providerNameAr.trim() } : {}),
+        ...(input.providerNameEn !== undefined ? { providerNameEn: input.providerNameEn.trim() } : {}),
+        ...(input.accountHolderName !== undefined ? { accountHolderName: input.accountHolderName.trim() } : {}),
+        ...(input.accountNumber !== undefined ? { accountNumber: input.accountNumber.trim() } : {}),
+        ...(input.ibanOrSwift !== undefined ? { ibanOrSwift: input.ibanOrSwift.trim() } : {}),
+        ...(input.branchOrAgent !== undefined ? { branchOrAgent: input.branchOrAgent.trim() } : {}),
+        ...(input.transferFeePercent !== undefined
+          ? { transferFeePercent: Math.max(0, Number(input.transferFeePercent) || 0) }
+          : {}),
+        ...(input.dailyLimit !== undefined ? { dailyLimit: Math.max(0, Number(input.dailyLimit) || 0) } : {}),
+        ...(input.isDefaultReceipts !== undefined ? { isDefaultReceipts: Boolean(input.isDefaultReceipts) } : {}),
+        ...(input.isDefaultPayments !== undefined ? { isDefaultPayments: Boolean(input.isDefaultPayments) } : {}),
+        ...(input.isActive !== undefined ? { isActive: Boolean(input.isActive) } : {}),
+        ...(input.notes !== undefined ? { notes: input.notes.trim() } : {}),
+      },
+      include: { account: true },
+    });
+
+    if (input.nameAr !== undefined || input.nameEn !== undefined) {
+      await tx.account.update({
+        where: { id: existing.accountId },
+        data: { nameAr: nextNameAr, nameEn: nextNameEn },
+      });
+    }
+
+    await recordAuditDiffTx(tx, {
+      userId: input.createdById,
+      action: "UPDATE",
+      entity: "TreasuryAccount",
+      entityId: existing.id,
+      before: {
+        nameAr: existing.nameAr,
+        type: existing.type,
+        accountNumber: existing.accountNumber,
+        transferFeePercent: existing.transferFeePercent,
+        isDefaultReceipts: existing.isDefaultReceipts,
+        isDefaultPayments: existing.isDefaultPayments,
+        isActive: existing.isActive,
+      },
+      after: {
+        nameAr: updated.nameAr,
+        type: updated.type,
+        accountNumber: updated.accountNumber,
+        transferFeePercent: updated.transferFeePercent,
+        isDefaultReceipts: updated.isDefaultReceipts,
+        isDefaultPayments: updated.isDefaultPayments,
+        isActive: updated.isActive,
+      },
+    });
+
+    return updated;
+  });
+}
+
+export interface TreasuryTransferInput {
+  fromTreasuryId: string;
+  toTreasuryId: string;
+  amount: number;
+  feeAmount?: number;
+  applyDefaultFee?: boolean;
+  exchangeRateOverride?: number;
+  date?: Date | string;
+  reference?: string;
+  notes?: string;
+  createdById?: string;
+  tx?: Prisma.TransactionClient;
+}
+
+export async function transferBetweenTreasuries(input: TreasuryTransferInput) {
+  return runAtomic(input.tx, async (tx) => {
+    if (input.fromTreasuryId === input.toTreasuryId) {
+      throw new Error("SAME_TREASURY_TRANSFER");
+    }
+    const from = await tx.treasuryAccount.findUnique({ where: { id: input.fromTreasuryId } });
+    const to = await tx.treasuryAccount.findUnique({ where: { id: input.toTreasuryId } });
+    if (!from || !to) throw new Error("TREASURY_NOT_FOUND");
+
+    const amount = round4(Number(input.amount) || 0);
+    if (amount <= 0) throw new Error("INVALID_TRANSFER_AMOUNT");
+
+    const fromRate =
+      input.exchangeRateOverride && input.exchangeRateOverride > 0
+        ? input.exchangeRateOverride
+        : await getExchangeRateToYER(tx, from.currency);
+    const toRate = await getExchangeRateToYER(tx, to.currency);
+
+    const feeInFromCurr =
+      input.feeAmount !== undefined
+        ? Math.max(0, round4(Number(input.feeAmount) || 0))
+        : input.applyDefaultFee && from.transferFeePercent > 0
+        ? round4((amount * from.transferFeePercent) / 100)
+        : 0;
+
+    const transferYER = round4(amount * fromRate);
+    const feeYER = round4(feeInFromCurr * fromRate);
+    const totalOutFrom = round4(amount + feeInFromCurr);
+    const totalOutYER = round4(transferYER + feeYER);
+    const creditedToAmount = round4(transferYER / toRate);
+    // Use effective rate on destination FX leg so DebitBase === transferYER without rounding drift
+    const toEffectiveRate = creditedToAmount > 0 ? transferYER / creditedToAmount : toRate;
+
+    await tx.treasuryAccount.update({
+      where: { id: from.id },
+      data: {
+        balance: round4(toNum(from.balance) - totalOutFrom),
+        balanceYER: round4(from.balanceYER - totalOutYER),
+      },
+    });
+
+    await tx.treasuryAccount.update({
+      where: { id: to.id },
+      data: {
+        balance: round4(toNum(to.balance) + creditedToAmount),
+        balanceYER: round4(to.balanceYER + transferYER),
+      },
+    });
+
+    const lines: JournalLineInput[] = [
+      {
+        accountId: to.accountId,
+        debit: creditedToAmount,
+        currency: to.currency,
+        exchangeRate: toEffectiveRate,
+        memo: `تحويل وارد من ${from.nameAr}`,
+      },
+      ...(feeInFromCurr > 0
+        ? [
+            {
+              accountCode: "531201",
+              debit: feeInFromCurr,
+              currency: from.currency,
+              exchangeRate: fromRate,
+              memo: `رسوم تحويل بين الخزائن (${from.nameAr} -> ${to.nameAr})`,
+            },
+          ]
+        : []),
+      {
+        accountId: from.accountId,
+        credit: totalOutFrom,
+        currency: from.currency,
+        exchangeRate: fromRate,
+        memo: input.notes || `تحويل صادر إلى ${to.nameAr}`,
+      },
+    ];
+
+    const je = await postJournalEntry({
+      tx,
+      date: input.date ? new Date(input.date) : new Date(),
+      reference: input.reference || `TRF-${Date.now().toString().slice(-6)}`,
+      narrationAr: `تحويل مالي من ${from.nameAr} إلى ${to.nameAr}${feeInFromCurr > 0 ? ` (شامل رسوم ${feeInFromCurr} ${from.currency})` : ""}`,
+      narrationEn: `Treasury Transfer: ${from.nameEn} -> ${to.nameEn}`,
+      sourceType: "TREASURY_TRANSFER",
+      sourceId: `${from.id}->${to.id}`,
+      createdById: input.createdById,
+      status: "POSTED",
+      lines,
+    });
+
+    await recordAuditDiffTx(tx, {
+      userId: input.createdById,
+      action: "POST",
+      entity: "TreasuryTransfer",
+      entityId: je.id,
+      before: { fromBalance: toNum(from.balance), toBalance: toNum(to.balance) },
+      after: {
+        fromBalance: round4(toNum(from.balance) - totalOutFrom),
+        toBalance: round4(toNum(to.balance) + creditedToAmount),
+        amount,
+        feeInFromCurr,
+        transferYER,
+      },
+    });
+
+    return {
+      journalEntry: je,
+      transferYER,
+      feeYER,
+      creditedToAmount,
+      fromCurrency: from.currency,
+      toCurrency: to.currency,
+    };
+  });
+}
+
+export async function getTreasuryLedgerAndReconcile(treasuryId: string) {
+  const treasury = await prisma.treasuryAccount.findUnique({
+    where: { id: treasuryId },
+    include: { account: true },
+  });
+  if (!treasury) throw new Error("TREASURY_NOT_FOUND");
+
+  const [lines, logs] = await Promise.all([
+    prisma.journalEntryLine.findMany({
+      where: {
+        accountId: treasury.accountId,
+        journalEntry: { status: "POSTED" },
+      },
+      include: {
+        journalEntry: {
+          select: {
+            id: true,
+            entryNumber: true,
+            date: true,
+            reference: true,
+            narrationAr: true,
+            sourceType: true,
+          },
+        },
+      },
+      orderBy: { journalEntry: { date: "desc" } },
+    }),
+    prisma.auditLog.findMany({
+      where: {
+        entity: "TreasuryAccount",
+        entityId: treasuryId,
+        action: "RECONCILE",
+      },
+      orderBy: { timestamp: "desc" },
+      take: 25,
+    }),
+  ]);
+
+  const reconciledEntryIds = new Set<string>();
+  for (let i = logs.length - 1; i >= 0; i--) {
+    const d = logs[i].details as Record<string, unknown> | null;
+    if (d && Array.isArray(d.reconciledEntryIds)) {
+      for (const id of d.reconciledEntryIds) reconciledEntryIds.add(String(id));
+    }
+    if (d && typeof d.toggleEntryId === "string") {
+      if (d.reconciled) reconciledEntryIds.add(d.toggleEntryId);
+      else reconciledEntryIds.delete(d.toggleEntryId);
+    }
+  }
+
+  const glBookBalanceYER = round4(
+    lines.reduce((s, l) => s + toNum(l.debitBase) - toNum(l.creditBase), 0)
+  );
+
+  return {
+    treasury: {
+      id: treasury.id,
+      code: treasury.code,
+      nameAr: treasury.nameAr,
+      nameEn: treasury.nameEn,
+      type: treasury.type,
+      currency: treasury.currency,
+      balance: toNum(treasury.balance),
+      balanceYER: treasury.balanceYER,
+      glBookBalanceYER,
+      varianceYER: round4(treasury.balanceYER - glBookBalanceYER),
+    },
+    entries: lines.map((l) => ({
+      lineId: l.id,
+      journalEntryId: l.journalEntry.id,
+      entryNumber: l.journalEntry.entryNumber,
+      date: l.journalEntry.date.toISOString(),
+      reference: l.journalEntry.reference,
+      narrationAr: l.journalEntry.narrationAr,
+      sourceType: l.journalEntry.sourceType,
+      debit: toNum(l.debit),
+      credit: toNum(l.credit),
+      debitBase: toNum(l.debitBase),
+      creditBase: toNum(l.creditBase),
+      reconciled: reconciledEntryIds.has(l.journalEntry.id),
+    })),
+    reconciliationHistory: logs.map((l) => ({
+      id: l.id,
+      timestamp: l.timestamp.toISOString(),
+      details: l.details,
+    })),
+  };
+}
+
+export async function reconcileTreasuryAccount(input: {
+  treasuryId: string;
+  statementBalance?: number;
+  statementDate?: string;
+  toggleEntryId?: string;
+  reconciled?: boolean;
+  reconciledEntryIds?: string[];
+  notes?: string;
+  createdById?: string;
+}) {
+  const treasury = await prisma.treasuryAccount.findUnique({ where: { id: input.treasuryId } });
+  if (!treasury) throw new Error("TREASURY_NOT_FOUND");
+
+  const actorId = await resolveActorId(prisma, input.createdById);
+  await prisma.auditLog.create({
+    data: {
+      userId: actorId,
+      action: "RECONCILE",
+      entity: "TreasuryAccount",
+      entityId: treasury.id,
+      details: {
+        statementBalance: input.statementBalance ?? toNum(treasury.balance),
+        statementDate: input.statementDate || new Date().toISOString().slice(0, 10),
+        bookBalance: toNum(treasury.balance),
+        difference:
+          input.statementBalance !== undefined
+            ? round4(Number(input.statementBalance) - toNum(treasury.balance))
+            : 0,
+        ...(input.toggleEntryId ? { toggleEntryId: input.toggleEntryId, reconciled: Boolean(input.reconciled) } : {}),
+        ...(input.reconciledEntryIds ? { reconciledEntryIds: input.reconciledEntryIds } : {}),
+        notes: input.notes || "",
+      },
+    },
+  });
+
+  return getTreasuryLedgerAndReconcile(treasury.id);
+}
+
+export interface GenerateAcquisitionBillInput {
+  projectId: string;
+  acquisitionCycleId: string;
+  vendorId?: string;
+  amount?: number;
+  currency?: string;
+  date?: Date | string;
+  dueDate?: Date | string | null;
+  capitalizeAsset?: boolean;
+  debitAccountCode?: string;
+  notes?: string;
+  createdById?: string;
+  tx?: Prisma.TransactionClient;
+}
+
+export async function generateAcquisitionBill(input: GenerateAcquisitionBillInput) {
+  return runAtomic(input.tx, async (tx) => {
+    const project = await tx.project.findUnique({
+      where: { id: input.projectId },
+      include: { ownerVendor: true },
+    });
+    if (!project) throw new Error("PROJECT_NOT_FOUND");
+
+    const cycle = await tx.projectAcquisitionCycle.findUnique({
+      where: { id: input.acquisitionCycleId },
+    });
+    if (!cycle || cycle.projectId !== project.id) {
+      throw new Error("ACQUISITION_CYCLE_NOT_FOUND");
+    }
+
+    const vendorId = input.vendorId || project.vendorId;
+    if (!vendorId) throw new Error("PROJECT_OWNER_VENDOR_REQUIRED");
+
+    const amount = round4(Number(input.amount ?? cycle.contractAmount) || 0);
+    if (amount <= 0) throw new Error("INVALID_ACQUISITION_AMOUNT");
+
+    const currency = (input.currency || cycle.currency || "YER").toUpperCase();
+    const poNumber = await nextSequenceCode(tx, "purchaseOrder", "PO-ACQ");
+    const po = await tx.purchaseOrder.create({
+      data: {
+        poNumber,
+        vendorId,
+        projectId: project.id,
+        acquisitionCycleId: cycle.id,
+        date: input.date ? new Date(input.date) : new Date(),
+        status: "APPROVED",
+        subTotal: amount,
+        taxTotal: 0,
+        grandTotal: amount,
+        currency,
+        notes: input.notes || `أمر توريد واستحواذ: ${cycle.cycleTitle}`,
+        items: {
+          create: [
+            {
+              description: cycle.cycleTitle,
+              unit: "عقد/دورة",
+              quantity: 1,
+              unitPrice: amount,
+              totalPrice: amount,
+            },
+          ],
+        },
+      },
+    });
+
+    const debitAccountCode =
+      input.debitAccountCode || (input.capitalizeAsset ? "121101" : "512101");
+
+    const { bill, journalEntry } = await postVendorBill({
+      tx,
+      vendorId,
+      projectId: project.id,
+      purchaseOrderId: po.id,
+      acquisitionCycleId: cycle.id,
+      totalAmount: amount,
+      currency,
+      date: input.date || new Date(),
+      dueDate: input.dueDate ?? cycle.endDate,
+      debitAccountCode,
+      notes: input.notes || `استحقاق دورة استحواذ المشروع: ${cycle.cycleTitle}`,
+      createdById: input.createdById,
+    });
+
+    return { purchaseOrder: po, bill, journalEntry };
+  });
+}
+
+export async function postOwnerBatchPayment(input: {
+  projectId: string;
+  acquisitionCycleId?: string | null;
+  vendorId?: string;
+  billId?: string | null;
+  treasuryId: string;
+  amount: number;
+  transferFee?: number;
+  currency?: string;
+  date?: Date | string;
+  referenceNumber?: string;
+  notes?: string;
+  createdById?: string;
+  tx?: Prisma.TransactionClient;
+}) {
+  return runAtomic(input.tx, async (tx) => {
+    const project = await tx.project.findUnique({ where: { id: input.projectId } });
+    if (!project) throw new Error("PROJECT_NOT_FOUND");
+
+    const vendorId = input.vendorId || project.vendorId;
+    if (!vendorId) throw new Error("PROJECT_OWNER_VENDOR_REQUIRED");
+
+    return postVendorPayment({
+      tx,
+      vendorId,
+      billId: input.billId ?? null,
+      projectId: project.id,
+      acquisitionCycleId: input.acquisitionCycleId ?? null,
+      treasuryId: input.treasuryId,
+      amount: input.amount,
+      transferFee: input.transferFee,
+      currency: input.currency,
+      date: input.date,
+      referenceNumber: input.referenceNumber,
+      notes: input.notes || `دفعة مجمعة لصاحب المشروع (${project.nameAr})`,
+      createdById: input.createdById,
+    });
+  });
+}
+
+export async function updateJournalEntry(input: {
+  id: string;
+  date?: Date | string;
+  reference?: string;
+  narrationAr?: string;
+  narrationEn?: string;
+  projectId?: string | null;
+  lines?: JournalLineInput[];
+  allowLockedAdjustment?: boolean;
+  createdById?: string;
+  tx?: Prisma.TransactionClient;
+}) {
+  return runAtomic(input.tx, async (tx) => {
+    const existing = await tx.journalEntry.findUnique({
+      where: { id: input.id },
+      include: { lines: true },
+    });
+    if (!existing) throw new Error("JOURNAL_NOT_FOUND");
+    if (existing.status === "VOIDED") throw new Error("JOURNAL_ALREADY_VOIDED");
+
+    if (!input.allowLockedAdjustment) {
+      for (const oldLine of existing.lines) {
+        if (oldLine.harvestCycleId) {
+          const cycle = await tx.harvestCycle.findUnique({ where: { id: oldLine.harvestCycleId } });
+          if (cycle?.isLocked) {
+            throw new Error(`HARVEST_LOCKED: Cycle "${cycle.name}" is locked for direct edits.`);
+          }
+        }
+      }
+    }
+
+    const nextDate = input.date ? new Date(input.date) : existing.date;
+    const nextNarrationAr = input.narrationAr?.trim() || existing.narrationAr;
+    const nextNarrationEn =
+      input.narrationEn !== undefined ? input.narrationEn?.trim() || null : existing.narrationEn;
+    const nextReference = input.reference !== undefined ? input.reference.trim() : existing.reference;
+    const nextProjectId = input.projectId !== undefined ? input.projectId : existing.projectId;
+
+    if (input.lines) {
+      if (input.lines.length < 2) {
+        throw new Error("JOURNAL_MIN_TWO_LINES: A journal entry must contain at least 2 lines.");
+      }
+
+      let totalDebitBase = 0;
+      let totalCreditBase = 0;
+      const preparedLines: Array<{
+        accountId: string;
+        debit: number;
+        credit: number;
+        currency: string;
+        exchangeRate: number;
+        debitBase: number;
+        creditBase: number;
+        memo: string;
+        projectId: string | null;
+        subProjectId: string | null;
+        harvestCycleId: string | null;
+      }> = [];
+
+      for (const line of input.lines) {
+        const account = await resolvePostingAccount(tx, line);
+        const debit = round4(Number(line.debit) || 0);
+        const credit = round4(Number(line.credit) || 0);
+        if (debit < 0 || credit < 0) throw new Error("NEGATIVE_LINE_AMOUNT");
+        if (debit === 0 && credit === 0) throw new Error("ZERO_LINE_AMOUNT");
+        if (debit > 0 && credit > 0) throw new Error("DUAL_SIDED_LINE");
+
+        if (line.harvestCycleId && !input.allowLockedAdjustment) {
+          const cycle = await tx.harvestCycle.findUnique({ where: { id: line.harvestCycleId } });
+          if (cycle?.isLocked) {
+            throw new Error(`HARVEST_LOCKED: Cycle "${cycle.name}" is locked for direct edits.`);
+          }
+        }
+
+        const currency = (line.currency || "YER").toUpperCase();
+        const rate =
+          line.exchangeRate && line.exchangeRate > 0
+            ? line.exchangeRate
+            : await getExchangeRateToYER(tx, currency);
+        const debitBase = round4(debit * rate);
+        const creditBase = round4(credit * rate);
+        totalDebitBase = round4(totalDebitBase + debitBase);
+        totalCreditBase = round4(totalCreditBase + creditBase);
+
+        preparedLines.push({
+          accountId: account.id,
+          debit,
+          credit,
+          currency,
+          exchangeRate: rate,
+          debitBase,
+          creditBase,
+          memo: line.memo || nextNarrationAr,
+          projectId: line.projectId !== undefined ? line.projectId : nextProjectId,
+          subProjectId: line.subProjectId ?? null,
+          harvestCycleId: line.harvestCycleId ?? null,
+        });
+      }
+
+      if (Math.abs(totalDebitBase - totalCreditBase) > 0.005) {
+        throw new Error(
+          `UNBALANCED_JOURNAL_ENTRY: Sum(Debits)=${totalDebitBase} !== Sum(Credits)=${totalCreditBase}`
+        );
+      }
+
+      await tx.journalEntryLine.deleteMany({ where: { journalEntryId: existing.id } });
+      await tx.journalEntryLine.createMany({
+        data: preparedLines.map((l) => ({ ...l, journalEntryId: existing.id })),
+      });
+    }
+
+    const updated = await tx.journalEntry.update({
+      where: { id: existing.id },
+      data: {
+        date: nextDate,
+        reference: nextReference,
+        narrationAr: nextNarrationAr,
+        narrationEn: nextNarrationEn,
+        projectId: nextProjectId,
+      },
+      include: {
+        lines: { include: { account: true } },
+        attachments: true,
+      },
+    });
+
+    await recordAuditDiffTx(tx, {
+      userId: input.createdById,
+      action: "UPDATE",
+      entity: "JournalEntry",
+      entityId: existing.id,
+      before: {
+        date: existing.date.toISOString(),
+        reference: existing.reference,
+        narrationAr: existing.narrationAr,
+        lineCount: existing.lines.length,
+      },
+      after: {
+        date: updated.date.toISOString(),
+        reference: updated.reference,
+        narrationAr: updated.narrationAr,
+        lineCount: updated.lines.length,
+      },
+    });
+
+    return updated;
+  });
+}
+
+export async function updateOperatingExpenseAtomic(input: {
+  id: string;
+  projectId?: string;
+  harvestName?: string;
+  category?: string;
+  subType?: string;
+  quantity?: number;
+  unitPrice?: number;
+  date?: string;
+  notes?: string;
+  createdById?: string;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.operatingExpense.findUnique({ where: { id: input.id } });
+    if (!existing) throw new Error("EXPENSE_NOT_FOUND");
+
+    const oldCycle = await tx.harvestCycle.findFirst({
+      where: { projectId: existing.projectId, name: existing.harvestName },
+    });
+    if (oldCycle?.isLocked) throw new Error("HARVEST_LOCKED");
+
+    const nextProjectId = input.projectId?.trim() || existing.projectId;
+    const nextHarvest = input.harvestName?.trim() || existing.harvestName;
+    const nextCycle = await tx.harvestCycle.findFirst({
+      where: { projectId: nextProjectId, name: nextHarvest },
+    });
+    if (nextCycle?.isLocked) throw new Error("HARVEST_LOCKED");
+
+    const nextCategory = input.category?.trim() || existing.category;
+    const nextSubType = input.subType?.trim() || existing.subType;
+    const nextQty = input.quantity !== undefined ? Number(input.quantity) : existing.quantity;
+    const nextUnitPrice =
+      input.unitPrice !== undefined ? Number(input.unitPrice) : existing.unitPrice;
+    const nextTotal = computeOperatingExpenseTotal(nextQty, nextUnitPrice);
+    const nextDate = input.date?.trim() || existing.expenseDate;
+    const nextNotes = input.notes !== undefined ? input.notes.trim() : existing.notes;
+
+    const financialChanged =
+      Math.abs(nextTotal - existing.totalAmount) > 0.005 ||
+      nextCategory !== existing.category ||
+      nextProjectId !== existing.projectId ||
+      nextCycle?.id !== existing.harvestCycleId;
+
+    let nextJournalEntryId = existing.journalEntryId;
+    if (financialChanged) {
+      if (existing.journalEntryId) {
+        await reverseJournalEntry({
+          tx,
+          journalEntryId: existing.journalEntryId,
+          createdById: input.createdById,
+          reason: `تعديل مصروف تشغيلي (${existing.subType})`,
+        }).catch(() => null);
+      }
+      const je = await postOperatingExpenseJournalTx(tx, {
+        expenseId: existing.id,
+        projectId: nextProjectId,
+        harvestCycleId: nextCycle?.id ?? null,
+        category: nextCategory,
+        subType: nextSubType,
+        totalAmount: nextTotal,
+        date: nextDate,
+        createdById: input.createdById,
+      });
+      nextJournalEntryId = je?.id ?? null;
+    } else if (existing.journalEntryId && nextDate !== existing.expenseDate) {
+      await tx.journalEntry.update({
+        where: { id: existing.journalEntryId },
+        data: { date: new Date(`${nextDate}T10:00:00Z`) },
+      });
+    }
+
+    const updated = await tx.operatingExpense.update({
+      where: { id: existing.id },
+      data: {
+        projectId: nextProjectId,
+        harvestCycleId: nextCycle?.id ?? null,
+        harvestName: nextHarvest,
+        category: nextCategory,
+        subType: nextSubType,
+        quantity: nextQty,
+        unitPrice: nextUnitPrice,
+        totalAmount: nextTotal,
+        expenseDate: nextDate,
+        notes: nextNotes,
+        journalEntryId: nextJournalEntryId,
+      },
+    });
+
+    await recordAuditDiffTx(tx, {
+      userId: input.createdById,
+      action: "UPDATE",
+      entity: "OperatingExpense",
+      entityId: existing.id,
+      before: {
+        date: existing.expenseDate,
+        category: existing.category,
+        totalAmount: existing.totalAmount,
+        harvestName: existing.harvestName,
+      },
+      after: {
+        date: updated.expenseDate,
+        category: updated.category,
+        totalAmount: updated.totalAmount,
+        harvestName: updated.harvestName,
+      },
+    });
+
+    return updated;
+  });
+}
+
+export async function updateWorkerWageAtomic(input: {
+  id: string;
+  projectId?: string;
+  harvestName?: string;
+  name?: string;
+  dailyWage?: number;
+  daysWorked?: number;
+  creditAmount?: number;
+  date?: string;
+  notes?: string;
+  createdById?: string;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.workerWageEntry.findUnique({ where: { id: input.id } });
+    if (!existing) throw new Error("WORKER_WAGE_NOT_FOUND");
+
+    const oldCycle = await tx.harvestCycle.findFirst({
+      where: { projectId: existing.projectId, name: existing.harvestName },
+    });
+    if (oldCycle?.isLocked) throw new Error("HARVEST_LOCKED");
+
+    const nextProjectId = input.projectId?.trim() || existing.projectId;
+    const nextHarvest = input.harvestName?.trim() || existing.harvestName;
+    const nextCycle = await tx.harvestCycle.findFirst({
+      where: { projectId: nextProjectId, name: nextHarvest },
+    });
+    if (nextCycle?.isLocked) throw new Error("HARVEST_LOCKED");
+
+    const nextName = input.name?.trim() || existing.workerName;
+    const nextDailyWage =
+      input.dailyWage !== undefined ? Number(input.dailyWage) : existing.dailyWage;
+    const nextDays =
+      input.daysWorked !== undefined ? Number(input.daysWorked) : existing.daysWorked;
+    const nextCredit =
+      input.creditAmount !== undefined ? Number(input.creditAmount) : existing.creditAmount;
+    const { totalWage: nextTotal, debitBalance: nextDebit } = computeWorkerWageTotals(
+      nextDailyWage,
+      nextDays,
+      nextCredit
+    );
+    const nextDate = input.date?.trim() || existing.workDate;
+    const nextNotes = input.notes !== undefined ? input.notes.trim() : existing.notes;
+
+    const worker = await ensureWorkerWithAccountTx(tx, {
+      name: nextName,
+      defaultDailyWage: nextDailyWage,
+    });
+
+    const financialChanged =
+      Math.abs(nextTotal - existing.totalWage) > 0.005 ||
+      Math.abs(nextCredit - existing.creditAmount) > 0.005 ||
+      nextName !== existing.workerName ||
+      nextProjectId !== existing.projectId ||
+      nextCycle?.id !== existing.harvestCycleId;
+
+    let nextJournalEntryId = existing.journalEntryId;
+    if (financialChanged) {
+      const linkedEntries = await tx.journalEntry.findMany({
+        where: { sourceId: existing.id, status: { not: "VOIDED" } },
+        select: { id: true },
+      });
+      for (const je of linkedEntries) {
+        await reverseJournalEntry({
+          tx,
+          journalEntryId: je.id,
+          createdById: input.createdById,
+          reason: `تعديل سجل أجر العامل (${existing.workerName})`,
+        }).catch(() => null);
+      }
+      if (worker.accountId) {
+        const newAccrual = await postWorkerWageJournalTx(tx, {
+          wageEntryId: existing.id,
+          workerName: worker.name,
+          workerAccountId: worker.accountId,
+          projectId: nextProjectId,
+          harvestCycleId: nextCycle?.id ?? null,
+          totalWage: nextTotal,
+          creditAmount: nextCredit,
+          date: nextDate,
+          createdById: input.createdById,
+        });
+        nextJournalEntryId = newAccrual?.id ?? null;
+      }
+    } else if (nextDate !== existing.workDate) {
+      await tx.journalEntry.updateMany({
+        where: { sourceId: existing.id, status: { not: "VOIDED" } },
+        data: { date: new Date(`${nextDate}T10:00:00Z`) },
+      });
+    }
+
+    const updated = await tx.workerWageEntry.update({
+      where: { id: existing.id },
+      data: {
+        workerId: worker.id,
+        workerName: worker.name,
+        projectId: nextProjectId,
+        harvestCycleId: nextCycle?.id ?? null,
+        harvestName: nextHarvest,
+        dailyWage: nextDailyWage,
+        daysWorked: nextDays,
+        totalWage: nextTotal,
+        creditAmount: nextCredit,
+        debitBalance: nextDebit,
+        workDate: nextDate,
+        notes: nextNotes,
+        journalEntryId: nextJournalEntryId,
+      },
+    });
+
+    await recordAuditDiffTx(tx, {
+      userId: input.createdById,
+      action: "UPDATE",
+      entity: "WorkerWageEntry",
+      entityId: existing.id,
+      before: {
+        date: existing.workDate,
+        workerName: existing.workerName,
+        totalWage: existing.totalWage,
+        creditAmount: existing.creditAmount,
+      },
+      after: {
+        date: updated.workDate,
+        workerName: updated.workerName,
+        totalWage: updated.totalWage,
+        creditAmount: updated.creditAmount,
+      },
+    });
+
+    return updated;
+  });
+}
+
+export async function updateSaleTransactionAtomic(input: {
+  id: string;
+  projectId?: string;
+  harvestName?: string;
+  batch?: string;
+  customer?: string;
+  phone?: string;
+  grade?: string;
+  bundles?: number;
+  price?: number;
+  credit?: number;
+  date?: string;
+  voucherNo?: string;
+  notes?: string;
+  createdById?: string;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.saleTransaction.findUnique({ where: { id: input.id } });
+    if (!existing) throw new Error("SALE_NOT_FOUND");
+
+    const oldCycle = await tx.harvestCycle.findFirst({
+      where: { projectId: existing.projectId, name: existing.harvestName },
+    });
+    if (oldCycle?.isLocked) throw new Error("HARVEST_LOCKED");
+
+    const nextProjectId = input.projectId?.trim() || existing.projectId;
+    const nextHarvest = input.harvestName?.trim() || existing.harvestName;
+    const nextCycle = await tx.harvestCycle.findFirst({
+      where: { projectId: nextProjectId, name: nextHarvest },
+    });
+    if (nextCycle?.isLocked) throw new Error("HARVEST_LOCKED");
+
+    const nextCustomerName = input.customer?.trim() || existing.customerName;
+    const nextPhone = input.phone?.trim() || existing.customerPhone;
+    const nextBundles =
+      input.bundles !== undefined ? Math.max(0, Math.round(Number(input.bundles) || 0)) : existing.bundlesCount;
+    const nextPrice = input.price !== undefined ? Number(input.price) : existing.unitPrice;
+    const nextCredit = input.credit !== undefined ? Number(input.credit) : existing.creditPaid;
+    const { totalAmount: nextTotal, debitReceivable: nextDebit } = computeSaleTotals(
+      nextBundles,
+      nextPrice,
+      nextCredit
+    );
+    const nextDate = input.date?.trim() || existing.saleDate;
+    const nextBatch = input.batch?.trim() || existing.saleBatchLabel;
+    const nextGrade = input.grade?.trim() || existing.productGrade;
+    const nextVoucherNo = input.voucherNo?.trim() || existing.receiptVoucherNo;
+    const nextNotes = input.notes !== undefined ? input.notes.trim() : existing.notes;
+
+    const customer = await ensureCustomerWithAccountTx(tx, {
+      name: nextCustomerName,
+      phone: nextPhone,
+    });
+
+    const financialChanged =
+      Math.abs(nextTotal - existing.totalAmount) > 0.005 ||
+      Math.abs(nextCredit - existing.creditPaid) > 0.005 ||
+      nextCustomerName !== existing.customerName ||
+      nextProjectId !== existing.projectId ||
+      nextCycle?.id !== existing.harvestCycleId;
+
+    let nextJournalEntryId = existing.journalEntryId;
+    if (financialChanged) {
+      if (existing.journalEntryId) {
+        await reverseJournalEntry({
+          tx,
+          journalEntryId: existing.journalEntryId,
+          createdById: input.createdById,
+          reason: `تعديل عملية بيع (${existing.customerName})`,
+        }).catch(() => null);
+      }
+
+      if (nextTotal > 0) {
+        const invRes = await postSalesInvoice({
+          tx,
+          customerId: customer.id,
+          projectId: nextProjectId,
+          harvestCycleId: nextCycle?.id ?? null,
+          amount: nextTotal,
+          currency: "YER",
+          date: new Date(`${nextDate}T10:00:00Z`),
+          notes: nextNotes || `${nextBatch} (${nextBundles} × ${nextPrice})`,
+          createdById: input.createdById,
+        });
+        nextJournalEntryId = invRes.journalEntry.id;
+
+        if (nextCredit > 0) {
+          await postCustomerReceipt({
+            tx,
+            customerId: customer.id,
+            invoiceId: invRes.invoice.id,
+            treasuryId: "t1",
+            amount: nextCredit,
+            currency: "YER",
+            date: new Date(`${nextDate}T10:05:00Z`),
+            notes: `تحصيل معدل عند البيع (${nextVoucherNo})`,
+            createdById: input.createdById,
+          });
+        }
+      } else {
+        nextJournalEntryId = null;
+      }
+    } else if (existing.journalEntryId && nextDate !== existing.saleDate) {
+      await tx.journalEntry.update({
+        where: { id: existing.journalEntryId },
+        data: { date: new Date(`${nextDate}T10:00:00Z`) },
+      });
+    }
+
+    const updated = await tx.saleTransaction.update({
+      where: { id: existing.id },
+      data: {
+        projectId: nextProjectId,
+        harvestCycleId: nextCycle?.id ?? null,
+        harvestName: nextHarvest,
+        saleBatchLabel: nextBatch,
+        customerId: customer.id,
+        customerName: customer.name,
+        customerPhone: customer.phone,
+        productGrade: nextGrade,
+        bundlesCount: nextBundles,
+        unitPrice: nextPrice,
+        totalAmount: nextTotal,
+        creditPaid: nextCredit,
+        debitReceivable: nextDebit,
+        saleDate: nextDate,
+        receiptVoucherNo: nextVoucherNo,
+        notes: nextNotes,
+        journalEntryId: nextJournalEntryId,
+      },
+    });
+
+    await recordAuditDiffTx(tx, {
+      userId: input.createdById,
+      action: "UPDATE",
+      entity: "SaleTransaction",
+      entityId: existing.id,
+      before: {
+        date: existing.saleDate,
+        customerName: existing.customerName,
+        totalAmount: existing.totalAmount,
+        creditPaid: existing.creditPaid,
+      },
+      after: {
+        date: updated.saleDate,
+        customerName: updated.customerName,
+        totalAmount: updated.totalAmount,
+        creditPaid: updated.creditPaid,
+      },
+    });
+
+    return updated;
+  });
 }
 

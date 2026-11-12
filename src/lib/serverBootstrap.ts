@@ -8,6 +8,7 @@ import type {
   InstallmentVoucher,
   OperatingExpense,
   Prisma,
+  ProjectAcquisitionCycle,
   SaleTransaction,
   SubProject,
   SystemSettings,
@@ -31,7 +32,12 @@ import type {
 } from "@/types/uas";
 
 type ProjectWithRelations = Prisma.ProjectGetPayload<{
-  include: { harvestCycles: true; subProjects: true };
+  include: {
+    harvestCycles: true;
+    subProjects: true;
+    ownerVendor: { select: { id: true; nameAr: true } };
+    acquisitions: true;
+  };
 }>;
 
 export function hashPassword(password: string): string {
@@ -50,7 +56,9 @@ export function generateAuditHash(payload: string): string {
   );
 }
 
-export function parseAssignedProjects(raw: string | null | undefined): string[] {
+export function parseAssignedProjects(
+  raw: string | null | undefined,
+): string[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -63,7 +71,7 @@ export function parseAssignedProjects(raw: string | null | undefined): string[] 
 export async function findHarvestCycle(
   tx: Prisma.TransactionClient,
   projectId: string,
-  harvestName: string
+  harvestName: string,
 ): Promise<HarvestCycle | null> {
   return tx.harvestCycle.findFirst({
     where: {
@@ -76,7 +84,7 @@ export async function findHarvestCycle(
 export async function isHarvestLockedTx(
   tx: Prisma.TransactionClient,
   projectId: string,
-  harvestName: string
+  harvestName: string,
 ): Promise<boolean> {
   const cycle = await findHarvestCycle(tx, projectId, harvestName);
   return Boolean(cycle?.isLocked);
@@ -91,11 +99,11 @@ export async function appendAuditLogTx(
     actionType: string;
     entityReference: string;
     details: string;
-  }
+  },
 ): Promise<ImmutableAuditLog> {
   const timestamp = formatAuditTimestamp(new Date());
   const sha256Hash = generateAuditHash(
-    `${timestamp}|${input.userDisplay}|${input.actionType}|${input.entityReference}|${input.details}`
+    `${timestamp}|${input.userDisplay}|${input.actionType}|${input.entityReference}|${input.details}`,
   );
   return tx.immutableAuditLog.create({
     data: {
@@ -111,11 +119,14 @@ export async function appendAuditLogTx(
   });
 }
 
-function mapEnterpriseProfile(row: EnterpriseProfile | null): UasEnterpriseProfile {
+function mapEnterpriseProfile(
+  row: EnterpriseProfile | null,
+): UasEnterpriseProfile {
   return {
     id: row?.id || "default",
     legalNameAr: row?.legalNameAr || "شركة الجبري الزراعية للتنمية والاستثمار",
-    legalNameEn: row?.legalNameEn || "Al-Jabri Agricultural Development & Investment Co.",
+    legalNameEn:
+      row?.legalNameEn || "Al-Jabri Agricultural Development & Investment Co.",
     taxNumber: row?.taxNumber ?? "30049811200003",
     commercialReg: row?.commercialReg ?? "CR-YE-2026-8841",
     currencyCode: row?.currencyCode || "YER",
@@ -124,6 +135,40 @@ function mapEnterpriseProfile(row: EnterpriseProfile | null): UasEnterpriseProfi
     email: row?.email ?? "finance@aljabri-agri.com",
     logoUrl: row?.logoUrl ?? "/icons/icon.svg",
     brandColor: row?.brandColor || "#059669",
+    showUasLogo: row?.showUasLogo ?? true,
+    uasLogoStyle: row?.uasLogoStyle || "geometric",
+    uasLogoCustomUrl: row?.uasLogoCustomUrl ?? null,
+    showEnterpriseLogo: row?.showEnterpriseLogo ?? true,
+    enterpriseLogoStyle: row?.enterpriseLogoStyle || "emblem",
+    enterpriseLogoCustomUrl: row?.enterpriseLogoCustomUrl ?? null,
+    heroBadgeAr: row?.heroBadgeAr || "نظام المحاسبة الموحد (UAS Enterprise)",
+    heroBadgeEn:
+      row?.heroBadgeEn || "Unified Accounting System (UAS Enterprise)",
+    heroTitleAr:
+      row?.heroTitleAr ||
+      "الإدارة المالية والمحاسبية المتكاملة للمشاريع الزراعية",
+    heroTitleEn:
+      row?.heroTitleEn ||
+      "Integrated Financial & Agricultural Enterprise Resource Planning",
+    heroSubtitleAr:
+      row?.heroSubtitleAr ||
+      "منظومة قيد مزدوج متكاملة، إدارة الخزينة والبنوك، المشتريات والمبيعات، وتتبع مواسم الحصاد بدقة مؤسسية.",
+    heroSubtitleEn:
+      row?.heroSubtitleEn ||
+      "Complete double-entry GL engine, multi-currency treasury, procurement, sales, and harvest cycle analytics.",
+    aboutMissionAr:
+      row?.aboutMissionAr ||
+      "تحقيق أعلى مستويات الشفافية المالية والانضباط المحاسبي لجميع المشاريع الاستثمارية والزراعية.",
+    aboutMissionEn:
+      row?.aboutMissionEn ||
+      "Delivering institutional financial transparency and double-entry precision across agricultural ventures.",
+    contactPhone: row?.contactPhone || "783118231",
+    contactWhatsApp: row?.contactWhatsApp || "967783118231",
+    contactAddress: row?.contactAddress || "الجمهورية اليمنية - صنعاء",
+    showPublicMetrics: row?.showPublicMetrics ?? true,
+    showPublicVerify: row?.showPublicVerify ?? true,
+    ctaPrimaryTextAr: row?.ctaPrimaryTextAr || "دخول النظام المالي",
+    ctaPrimaryTextEn: row?.ctaPrimaryTextEn || "Launch ERP Console",
   };
 }
 
@@ -134,11 +179,13 @@ function mapSettings(settingsRow: SystemSettings | null): UasSystemSettings {
     logoText: settingsRow?.logoText || "UAS",
     defaultLang: settingsRow?.defaultLang === "en" ? "en" : "ar",
     defaultTheme:
-      settingsRow?.defaultTheme === "dark" || settingsRow?.defaultTheme === "royal"
+      settingsRow?.defaultTheme === "dark" ||
+      settingsRow?.defaultTheme === "royal"
         ? settingsRow.defaultTheme
         : "emerald",
     defaultCurrency:
-      settingsRow?.defaultCurrency === "SAR" || settingsRow?.defaultCurrency === "USD"
+      settingsRow?.defaultCurrency === "SAR" ||
+      settingsRow?.defaultCurrency === "USD"
         ? settingsRow.defaultCurrency
         : "YER",
   };
@@ -151,7 +198,11 @@ function mapExchangeRates(rates: CurrencyRate[]): Record<CurrencyCode, number> {
     USD: 1620,
   };
   for (const r of rates) {
-    if (r.currencyCode === "YER" || r.currencyCode === "SAR" || r.currencyCode === "USD") {
+    if (
+      r.currencyCode === "YER" ||
+      r.currencyCode === "SAR" ||
+      r.currencyCode === "USD"
+    ) {
       exchangeRates[r.currencyCode] = r.rateToYER;
     }
   }
@@ -163,42 +214,57 @@ function mapProjects(projects: ProjectWithRelations[]): {
   lockedPeriods: Record<string, boolean>;
 } {
   const lockedPeriods: Record<string, boolean> = {};
-  const mappedProjects: UasProject[] = projects.map((p: ProjectWithRelations) => {
-    for (const hc of p.harvestCycles) {
-      lockedPeriods[`${p.id}::${hc.name}`] = hc.isLocked;
-    }
-    return {
-      id: p.id,
-      code: p.code,
-      name: p.name,
-      nameAr: p.nameAr,
-      nameEn: p.nameEn,
-      type: p.type,
-      parentProjectId: p.parentProjectId || "",
-      budgetTotal: Number(p.budgetTotal) || p.estimatedValue,
-      estimatedValue: p.estimatedValue,
-      plannedHarvests: p.plannedHarvestCount,
-      status: p.status,
-      notes: p.notes,
-      harvests: p.harvestCycles.map((hc: HarvestCycle) => hc.name),
-      harvestCycles: p.harvestCycles.map((hc: HarvestCycle) => ({
-        id: hc.id,
-        projectId: hc.projectId,
-        cycleNumber: hc.cycleNumber,
-        name: hc.name,
-        sortOrder: hc.sortOrder,
-        isLocked: hc.isLocked,
-      })),
-      subProjects: p.subProjects.map((sp: SubProject) => ({
-        id: sp.id,
-        projectId: sp.projectId,
-        code: sp.code,
-        nameAr: sp.nameAr,
-        nameEn: sp.nameEn,
-        budget: Number(sp.budget) || 0,
-      })),
-    };
-  });
+  const mappedProjects: UasProject[] = projects.map(
+    (p: ProjectWithRelations) => {
+      for (const hc of p.harvestCycles) {
+        lockedPeriods[`${p.id}::${hc.name}`] = hc.isLocked;
+      }
+      return {
+        id: p.id,
+        code: p.code,
+        name: p.name,
+        nameAr: p.nameAr,
+        nameEn: p.nameEn,
+        type: p.type,
+        parentProjectId: p.parentProjectId || "",
+        vendorId: p.vendorId ?? null,
+        ownerVendorName: p.ownerVendor?.nameAr ?? null,
+        budgetTotal: Number(p.budgetTotal) || p.estimatedValue,
+        estimatedValue: p.estimatedValue,
+        plannedHarvests: p.plannedHarvestCount,
+        status: p.status,
+        notes: p.notes,
+        harvests: p.harvestCycles.map((hc: HarvestCycle) => hc.name),
+        harvestCycles: p.harvestCycles.map((hc: HarvestCycle) => ({
+          id: hc.id,
+          projectId: hc.projectId,
+          cycleNumber: hc.cycleNumber,
+          name: hc.name,
+          sortOrder: hc.sortOrder,
+          isLocked: hc.isLocked,
+        })),
+        subProjects: p.subProjects.map((sp: SubProject) => ({
+          id: sp.id,
+          projectId: sp.projectId,
+          code: sp.code,
+          nameAr: sp.nameAr,
+          nameEn: sp.nameEn,
+          budget: Number(sp.budget) || 0,
+        })),
+        acquisitions: p.acquisitions.map((ac: ProjectAcquisitionCycle) => ({
+          id: ac.id,
+          projectId: ac.projectId,
+          cycleTitle: ac.cycleTitle,
+          startDate: ac.startDate.toISOString().slice(0, 10),
+          endDate: ac.endDate.toISOString().slice(0, 10),
+          contractAmount: Number(ac.contractAmount) || 0,
+          currency: ac.currency,
+          status: ac.status,
+          notes: ac.notes ?? "",
+        })),
+      };
+    },
+  );
   return { mappedProjects, lockedPeriods };
 }
 
@@ -210,7 +276,18 @@ function mapTreasury(accounts: TreasuryAccount[]): UasTreasuryAccount[] {
     nameAr: t.nameAr,
     nameEn: t.nameEn,
     type: t.type,
+    providerNameAr: t.providerNameAr,
+    providerNameEn: t.providerNameEn,
+    accountHolderName: t.accountHolderName,
     accountNo: t.accountNumber,
+    ibanOrSwift: t.ibanOrSwift,
+    branchOrAgent: t.branchOrAgent,
+    transferFeePercent: Number(t.transferFeePercent) || 0,
+    dailyLimit: Number(t.dailyLimit) || 0,
+    isDefaultReceipts: t.isDefaultReceipts,
+    isDefaultPayments: t.isDefaultPayments,
+    isActive: t.isActive,
+    notes: t.notes,
     accountId: t.accountId,
     currencyCode: t.currencyCode || t.currency,
     balance: Number(t.balance) || t.balanceYER,
@@ -218,7 +295,9 @@ function mapTreasury(accounts: TreasuryAccount[]): UasTreasuryAccount[] {
   }));
 }
 
-function mapInstallments(installments: InstallmentVoucher[]): UasInstallmentVoucher[] {
+function mapInstallments(
+  installments: InstallmentVoucher[],
+): UasInstallmentVoucher[] {
   return installments.map((inst: InstallmentVoucher) => ({
     id: inst.id,
     voucherNo: inst.voucherNo,
@@ -339,6 +418,7 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
         fullName: true,
         email: true,
         role: true,
+        department: true,
         active: true,
         avatarChar: true,
         assignedProjects: true,
@@ -352,6 +432,12 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
         },
         subProjects: {
           orderBy: { code: "asc" },
+        },
+        ownerVendor: {
+          select: { id: true, nameAr: true },
+        },
+        acquisitions: {
+          orderBy: { startDate: "asc" },
         },
       },
     }),
@@ -378,6 +464,7 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
       fullName: u.fullName,
       email: u.email,
       role: u.role,
+      department: u.department,
       active: u.active,
       avatarChar: u.avatarChar,
       assignedProjects: parseAssignedProjects(u.assignedProjects),

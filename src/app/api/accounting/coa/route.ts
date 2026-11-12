@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getCoaTreeWithBalances } from "@/lib/accounting/ledgerService";
-import { jsonError } from "@/lib/apiHelpers";
+import {
+  getCoaTreeWithBalances,
+  recordAuditDiffTx,
+} from "@/lib/accounting/ledgerService";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +26,12 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "coa",
+      action: "post",
+    });
+    if (!auth.ok) return auth.response;
+
     const parentId = String(body.parentId || "").trim();
     const code = String(body.code || "").trim();
     const nameAr = String(body.nameAr || "").trim();
@@ -66,16 +75,27 @@ export async function POST(req: NextRequest) {
       return jsonError(`رمز الحساب ${finalCode} مستخدم مسبقاً`, 409);
     }
 
-    const created = await prisma.account.create({
-      data: {
-        code: finalCode,
-        nameAr,
-        nameEn,
-        level,
-        type: parent.type,
-        isPosting,
-        parentId: parent.id,
-      },
+    const created = await prisma.$transaction(async (tx) => {
+      const acc = await tx.account.create({
+        data: {
+          code: finalCode,
+          nameAr,
+          nameEn,
+          level,
+          type: parent.type,
+          isPosting,
+          parentId: parent.id,
+        },
+      });
+      await recordAuditDiffTx(tx, {
+        userId: auth.actor.userId,
+        action: "CREATE",
+        entity: "Account",
+        entityId: acc.id,
+        before: null,
+        after: { code: acc.code, nameAr: acc.nameAr, level: acc.level },
+      });
+      return acc;
     });
 
     const treeData = await getCoaTreeWithBalances();
@@ -84,5 +104,68 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/accounting/coa error:", error);
     return jsonError("تعذر إنشاء الحساب الفرعي", 500);
   }
+}
+
+async function handleCoaUpdate(req: NextRequest) {
+  try {
+    const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "coa",
+      action: "post",
+    });
+    if (!auth.ok) return auth.response;
+
+    const id = String(body.id || "").trim();
+    if (!id) return jsonError("معرف الحساب مطلوب للتعديل", 400);
+
+    const existing = await prisma.account.findUnique({ where: { id } });
+    if (!existing) return jsonError("الحساب غير موجود", 404);
+
+    const nextCode = body.code !== undefined ? String(body.code).trim() : existing.code;
+    if (nextCode !== existing.code) {
+      const duplicate = await prisma.account.findUnique({ where: { code: nextCode } });
+      if (duplicate) return jsonError(`رمز الحساب ${nextCode} مستخدم مسبقاً`, 409);
+    }
+
+    const nextNameAr = body.nameAr !== undefined ? String(body.nameAr).trim() : existing.nameAr;
+    const nextNameEn = body.nameEn !== undefined ? String(body.nameEn).trim() : existing.nameEn;
+    if (!nextNameAr) return jsonError("اسم الحساب العربي مطلوب", 400);
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const acc = await tx.account.update({
+        where: { id },
+        data: {
+          code: nextCode,
+          nameAr: nextNameAr,
+          nameEn: nextNameEn || nextNameAr,
+        },
+      });
+
+      await recordAuditDiffTx(tx, {
+        userId: auth.actor.userId,
+        action: "UPDATE",
+        entity: "Account",
+        entityId: id,
+        before: { code: existing.code, nameAr: existing.nameAr, nameEn: existing.nameEn },
+        after: { code: acc.code, nameAr: acc.nameAr, nameEn: acc.nameEn },
+      });
+
+      return acc;
+    });
+
+    const treeData = await getCoaTreeWithBalances();
+    return NextResponse.json({ account: updated, ...treeData });
+  } catch (error) {
+    console.error("PATCH /api/accounting/coa error:", error);
+    return jsonError("تعذر تعديل بيانات الحساب", 500);
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  return handleCoaUpdate(req);
+}
+
+export async function PUT(req: NextRequest) {
+  return handleCoaUpdate(req);
 }
 

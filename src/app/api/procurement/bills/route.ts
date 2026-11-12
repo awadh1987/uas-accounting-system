@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { postVendorBill } from "@/lib/accounting/ledgerService";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import {
+  postJournalEntry,
+  postVendorBill,
+  recordAuditDiffTx,
+  reverseJournalEntry,
+} from "@/lib/accounting/ledgerService";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
@@ -78,12 +83,19 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "procurement",
+      action: "create",
+      dateChanged: Boolean(body.date),
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
     const vendorId = String(body.vendorId || "").trim();
     const projectId = String(body.projectId || "").trim();
     const subProjectId = body.subProjectId ? String(body.subProjectId).trim() : null;
     const purchaseOrderId = body.purchaseOrderId ? String(body.purchaseOrderId).trim() : null;
+    const acquisitionCycleId = body.acquisitionCycleId ? String(body.acquisitionCycleId).trim() : null;
     const totalAmount = Number(body.totalAmount) || 0;
     const currency = String(body.currency || "YER").toUpperCase();
     const isInventory = Boolean(body.isInventory);
@@ -100,6 +112,7 @@ export async function POST(req: NextRequest) {
       projectId,
       subProjectId,
       purchaseOrderId,
+      acquisitionCycleId,
       totalAmount,
       currency,
       date: body.date ? String(body.date) : new Date(),
@@ -119,5 +132,170 @@ export async function POST(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر إصدار فاتورة المورد";
     return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
   }
+}
+
+async function handleBillUpdate(req: NextRequest) {
+  try {
+    const body = (await req.json()) as Record<string, unknown>;
+    const id = String(body.id || "").trim();
+    if (!id) return jsonError("معرف فاتورة المورد مطلوب للتعديل", 400);
+
+    const existing = await prisma.vendorBill.findUnique({
+      where: { id },
+      include: { vendor: true },
+    });
+    if (!existing) return jsonError("فاتورة المورد غير موجودة", 404);
+    if (existing.status === "VOIDED") return jsonError("لا يمكن تعديل فاتورة ملغاة", 400);
+
+    const dateChanged =
+      body.date !== undefined &&
+      String(body.date).slice(0, 10) !== existing.date.toISOString().slice(0, 10);
+
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "procurement",
+      action: "edit",
+      dateChanged,
+    });
+    if (!auth.ok) return auth.response;
+
+    const nextTotal =
+      body.totalAmount !== undefined ? Number(body.totalAmount) : Number(existing.totalAmount);
+    if (!Number.isFinite(nextTotal) || nextTotal <= 0) {
+      return jsonError("إجمالي الفاتورة يجب أن يكون أكبر من صفر", 400);
+    }
+
+    const nextDate = body.date ? new Date(String(body.date)) : existing.date;
+    const nextProjectId = body.projectId ? String(body.projectId).trim() : existing.projectId;
+    const nextNotes = body.notes !== undefined ? (body.notes ? String(body.notes).trim() : null) : existing.notes;
+    const nextDebitAccountId = body.debitAccountId
+      ? String(body.debitAccountId).trim()
+      : existing.debitAccountId;
+    const nextCurrency = body.currency ? String(body.currency).toUpperCase() : existing.currency;
+
+    const financialChanged =
+      Math.abs(nextTotal - Number(existing.totalAmount)) > 0.005 ||
+      nextProjectId !== existing.projectId ||
+      nextCurrency !== existing.currency ||
+      (nextDebitAccountId && nextDebitAccountId !== existing.debitAccountId);
+
+    const updated = await prisma.$transaction(async (tx) => {
+      let nextJournalEntryId = existing.journalEntryId;
+
+      if (financialChanged && existing.journalEntryId) {
+        await reverseJournalEntry({
+          tx,
+          journalEntryId: existing.journalEntryId,
+          createdById: auth.actor.userId ?? undefined,
+          reason: `تعديل فاتورة المورد ${existing.billNumber}`,
+        });
+
+        let debitAccId = nextDebitAccountId;
+        if (!debitAccId) {
+          const fallbackAcc = await tx.account.findUnique({
+            where: { code: existing.isInventory ? "113201" : "524101" },
+          });
+          debitAccId = fallbackAcc?.id ?? null;
+        }
+        if (!debitAccId) throw new Error("DEBIT_ACCOUNT_NOT_FOUND");
+
+        const rateRow = await tx.currencyRate.findUnique({ where: { currencyCode: nextCurrency } });
+        const rate = nextCurrency === "YER" ? 1 : rateRow?.rateToYER || (nextCurrency === "SAR" ? 425 : 1620);
+
+        const newJe = await postJournalEntry({
+          tx,
+          date: nextDate,
+          reference: `${existing.billNumber}-REV`,
+          narrationAr: `قيد معدل لفاتورة المورد ${existing.billNumber} - ${existing.vendor.nameAr}`,
+          narrationEn: `Amended Vendor Bill ${existing.billNumber}`,
+          sourceType: "VENDOR_BILL",
+          sourceId: existing.id,
+          projectId: nextProjectId,
+          createdById: auth.actor.userId ?? undefined,
+          lines: [
+            {
+              accountId: debitAccId,
+              debit: nextTotal,
+              currency: nextCurrency,
+              exchangeRate: rate,
+              memo: nextNotes || `مشتريات معدلة - ${existing.vendor.nameAr}`,
+              projectId: nextProjectId,
+            },
+            {
+              accountId: existing.vendor.accountId,
+              credit: nextTotal,
+              currency: nextCurrency,
+              exchangeRate: rate,
+              memo: `ذمة دائنة - ${existing.vendor.nameAr}`,
+              projectId: nextProjectId,
+            },
+          ],
+        });
+        nextJournalEntryId = newJe.id;
+      } else if (existing.journalEntryId && dateChanged) {
+        await tx.journalEntry.update({
+          where: { id: existing.journalEntryId },
+          data: { date: nextDate },
+        });
+      }
+
+      const paid = Number(existing.paidAmount);
+      const nextDue = Math.max(0, nextTotal - paid);
+      const nextStatus =
+        nextDue <= 0.005 ? "PAID" : paid > 0 ? "PARTIALLY_PAID" : "POSTED";
+
+      const bill = await tx.vendorBill.update({
+        where: { id },
+        data: {
+          projectId: nextProjectId,
+          date: nextDate,
+          ...(body.dueDate !== undefined
+            ? { dueDate: body.dueDate ? new Date(String(body.dueDate)) : null }
+            : {}),
+          totalAmount: nextTotal,
+          balanceDue: nextDue,
+          status: nextStatus,
+          currency: nextCurrency,
+          debitAccountId: nextDebitAccountId,
+          journalEntryId: nextJournalEntryId,
+          notes: nextNotes,
+        },
+        include: { vendor: true, project: true, subProject: true },
+      });
+
+      await recordAuditDiffTx(tx, {
+        userId: auth.actor.userId,
+        action: "UPDATE",
+        entity: "VendorBill",
+        entityId: id,
+        before: {
+          date: existing.date.toISOString().slice(0, 10),
+          totalAmount: Number(existing.totalAmount),
+          projectId: existing.projectId,
+          notes: existing.notes,
+        },
+        after: {
+          date: bill.date.toISOString().slice(0, 10),
+          totalAmount: Number(bill.totalAmount),
+          projectId: bill.projectId,
+          notes: bill.notes,
+        },
+      });
+
+      return bill;
+    });
+
+    return NextResponse.json({ bill: updated });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "تعذر تعديل فاتورة المورد";
+    return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  return handleBillUpdate(req);
+}
+
+export async function PUT(req: NextRequest) {
+  return handleBillUpdate(req);
 }
 

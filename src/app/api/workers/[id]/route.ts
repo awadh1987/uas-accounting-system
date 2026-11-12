@@ -1,8 +1,66 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { reverseJournalEntry } from "@/lib/accounting/ledgerService";
+import {
+  reverseJournalEntry,
+  updateWorkerWageAtomic,
+} from "@/lib/accounting/ledgerService";
 import { appendAuditLogTx, getBootstrapState, isHarvestLockedTx } from "@/lib/serverBootstrap";
-import { extractActor, jsonError, lockedError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
+
+async function handleWorkerByIdUpdate(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await context.params;
+    const body = (await req.json()) as Record<string, unknown>;
+    const existing = await prisma.workerWageEntry.findUnique({ where: { id } });
+    if (!existing) return jsonError("سجل العامل غير موجود", 404);
+
+    const dateChanged =
+      body.date !== undefined && String(body.date).trim() !== existing.workDate;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "workers",
+      action: "edit",
+      dateChanged,
+    });
+    if (!auth.ok) return auth.response;
+
+    const updated = await updateWorkerWageAtomic({
+      id,
+      projectId: body.projectId ? String(body.projectId) : undefined,
+      harvestName: body.harvest ? String(body.harvest) : undefined,
+      name: body.name ? String(body.name) : undefined,
+      dailyWage: body.dailyWage !== undefined ? Number(body.dailyWage) : undefined,
+      daysWorked: body.days !== undefined ? Number(body.days) : undefined,
+      creditAmount: body.credit !== undefined ? Number(body.credit) : undefined,
+      date: body.date ? String(body.date) : undefined,
+      notes: body.notes !== undefined ? String(body.notes) : undefined,
+      createdById: auth.actor.userId ?? undefined,
+    });
+
+    const state = await getBootstrapState();
+    return NextResponse.json({ workerEntry: updated, state });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "تعذر تعديل سجل العامل";
+    if (msg.includes("HARVEST_LOCKED")) return lockedError();
+    return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
+  }
+}
+
+export async function PATCH(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  return handleWorkerByIdUpdate(req, context);
+}
+
+export async function PUT(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  return handleWorkerByIdUpdate(req, context);
+}
 
 export async function DELETE(
   req: NextRequest,
@@ -16,7 +74,12 @@ export async function DELETE(
     } catch {
       body = {};
     }
-    const actor = extractActor(body);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "workers",
+      action: "delete",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
     const result = await prisma.$transaction(async (tx) => {
       const rec = await tx.workerWageEntry.findUnique({ where: { id } });

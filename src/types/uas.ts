@@ -3,8 +3,30 @@ import type { CurrencyCode } from "@/lib/formulas";
 export type ThemeName = "emerald" | "dark" | "royal";
 export type LanguageCode = "ar" | "en";
 
+export type UserRole =
+  | "SUPER_ADMIN"
+  | "PROJECT_MANAGER"
+  | "CHIEF_ACCOUNTANT"
+  | "PROCUREMENT_OFFICER"
+  | "SALES_COLLECTOR"
+  | "FIELD_ACCOUNTANT"
+  | "EXTERNAL_AUDITOR";
+
+export type ErpGroupId =
+  | "public"
+  | "projects"
+  | "commercial"
+  | "operations"
+  | "finance"
+  | "intelligence"
+  | "admin";
+
 export type TabId =
   | "dashboard"
+  | "commercial"
+  | "operations"
+  | "finance"
+  | "accounting"
   | "coa"
   | "ledger"
   | "procurement"
@@ -27,7 +49,8 @@ export interface UasUser {
   name: string;
   fullName?: string;
   email: string;
-  role: string;
+  role: UserRole | string;
+  department?: string;
   active: boolean;
   avatarChar: string;
   assignedProjects?: string[];
@@ -45,6 +68,27 @@ export interface UasEnterpriseProfile {
   email?: string | null;
   logoUrl?: string | null;
   brandColor: string;
+  showUasLogo?: boolean;
+  uasLogoStyle?: string;
+  uasLogoCustomUrl?: string | null;
+  showEnterpriseLogo?: boolean;
+  enterpriseLogoStyle?: string;
+  enterpriseLogoCustomUrl?: string | null;
+  heroBadgeAr?: string;
+  heroBadgeEn?: string;
+  heroTitleAr?: string;
+  heroTitleEn?: string;
+  heroSubtitleAr?: string;
+  heroSubtitleEn?: string;
+  aboutMissionAr?: string;
+  aboutMissionEn?: string;
+  contactPhone?: string;
+  contactWhatsApp?: string;
+  contactAddress?: string;
+  showPublicMetrics?: boolean;
+  showPublicVerify?: boolean;
+  ctaPrimaryTextAr?: string;
+  ctaPrimaryTextEn?: string;
 }
 
 export interface UasSubProject {
@@ -65,6 +109,18 @@ export interface UasHarvestCycle {
   isLocked: boolean;
 }
 
+export interface UasProjectAcquisitionCycle {
+  id: string;
+  projectId: string;
+  cycleTitle: string;
+  startDate: string;
+  endDate: string;
+  contractAmount: number;
+  currency: string;
+  status: string;
+  notes?: string | null;
+}
+
 export interface UasProject {
   id: string;
   code?: string;
@@ -73,6 +129,8 @@ export interface UasProject {
   nameEn?: string;
   type: string;
   parentProjectId: string;
+  vendorId?: string | null;
+  ownerVendorName?: string | null;
   budgetTotal?: number;
   estimatedValue: number;
   plannedHarvests: number;
@@ -81,6 +139,7 @@ export interface UasProject {
   harvests: string[];
   harvestCycles?: UasHarvestCycle[];
   subProjects?: UasSubProject[];
+  acquisitions?: UasProjectAcquisitionCycle[];
 }
 
 export interface UasOperatingExpense {
@@ -137,7 +196,18 @@ export interface UasTreasuryAccount {
   nameAr?: string;
   nameEn?: string;
   type: "VAULT" | "CASH" | "BANK" | "WALLET" | string;
+  providerNameAr?: string;
+  providerNameEn?: string;
+  accountHolderName?: string;
   accountNo: string;
+  ibanOrSwift?: string;
+  branchOrAgent?: string;
+  transferFeePercent?: number;
+  dailyLimit?: number;
+  isDefaultReceipts?: boolean;
+  isDefaultPayments?: boolean;
+  isActive?: boolean;
+  notes?: string;
   accountId?: string;
   currencyCode: CurrencyCode | string;
   balance?: number;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { jsonError } from "@/lib/apiHelpers";
+import { recordAuditDiffTx } from "@/lib/accounting/ledgerService";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
@@ -91,6 +92,12 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "procurement",
+      action: "create",
+      dateChanged: Boolean(body.date),
+    });
+    if (!auth.ok) return auth.response;
 
     // Action: Create Goods Receipt Note (GRN) for Three-Way Matching
     if (body.action === "CREATE_GRN") {
@@ -161,6 +168,8 @@ export async function POST(req: NextRequest) {
         vendorId,
         projectId,
         subProjectId,
+        acquisitionCycleId: body.acquisitionCycleId ? String(body.acquisitionCycleId) : null,
+        ...(body.date ? { date: new Date(String(body.date)) } : {}),
         status: String(body.status || "APPROVED"),
         subTotal,
         taxTotal,
@@ -177,5 +186,115 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/procurement/pos error:", error);
     return jsonError("تعذر إنشاء أمر الشراء", 500);
   }
+}
+
+async function handlePoUpdate(req: NextRequest) {
+  try {
+    const body = (await req.json()) as Record<string, unknown>;
+    const id = String(body.id || "").trim();
+    if (!id) return jsonError("معرف أمر الشراء مطلوب للتعديل", 400);
+
+    const existing = await prisma.purchaseOrder.findUnique({
+      where: { id },
+      include: { items: true },
+    });
+    if (!existing) return jsonError("أمر الشراء غير موجود", 404);
+
+    const dateChanged =
+      body.date !== undefined &&
+      String(body.date).slice(0, 10) !== existing.date.toISOString().slice(0, 10);
+
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "procurement",
+      action: "edit",
+      dateChanged,
+    });
+    if (!auth.ok) return auth.response;
+
+    const rawItems = Array.isArray(body.items) ? body.items : null;
+    const taxTotal =
+      body.taxTotal !== undefined ? Math.max(0, Number(body.taxTotal) || 0) : Number(existing.taxTotal);
+
+    const updated = await prisma.$transaction(async (tx) => {
+      let nextSubTotal = Number(existing.subTotal);
+      if (rawItems && rawItems.length > 0) {
+        const parsedItems = rawItems.map((raw) => {
+          const r = raw as Record<string, unknown>;
+          const qty = Math.max(0.01, Number(r.quantity) || 1);
+          const price = Math.max(0, Number(r.unitPrice) || 0);
+          return {
+            purchaseOrderId: id,
+            description: String(r.description || "صنف مشتريات").trim(),
+            unit: String(r.unit || "وحدة").trim(),
+            quantity: qty,
+            unitPrice: price,
+            totalPrice: Math.round(qty * price * 10000) / 10000,
+          };
+        });
+        nextSubTotal = parsedItems.reduce((s, it) => s + it.totalPrice, 0);
+        await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: id } });
+        await tx.purchaseOrderItem.createMany({ data: parsedItems });
+      }
+      const nextGrandTotal = nextSubTotal + taxTotal;
+
+      const po = await tx.purchaseOrder.update({
+        where: { id },
+        data: {
+          ...(body.vendorId !== undefined ? { vendorId: String(body.vendorId).trim() } : {}),
+          ...(body.projectId !== undefined ? { projectId: String(body.projectId).trim() } : {}),
+          ...(body.subProjectId !== undefined
+            ? { subProjectId: body.subProjectId ? String(body.subProjectId).trim() : null }
+            : {}),
+          ...(body.acquisitionCycleId !== undefined
+            ? {
+                acquisitionCycleId: body.acquisitionCycleId
+                  ? String(body.acquisitionCycleId).trim()
+                  : null,
+              }
+            : {}),
+          ...(body.date !== undefined ? { date: new Date(String(body.date)) } : {}),
+          ...(body.status !== undefined ? { status: String(body.status).trim() } : {}),
+          ...(body.currency !== undefined ? { currency: String(body.currency).toUpperCase() } : {}),
+          ...(body.notes !== undefined ? { notes: body.notes ? String(body.notes).trim() : null } : {}),
+          subTotal: nextSubTotal,
+          taxTotal,
+          grandTotal: nextGrandTotal,
+        },
+        include: { vendor: true, project: true, subProject: true, items: true },
+      });
+
+      await recordAuditDiffTx(tx, {
+        userId: auth.actor.userId,
+        action: "UPDATE",
+        entity: "PurchaseOrder",
+        entityId: id,
+        before: {
+          date: existing.date.toISOString().slice(0, 10),
+          status: existing.status,
+          grandTotal: Number(existing.grandTotal),
+        },
+        after: {
+          date: po.date.toISOString().slice(0, 10),
+          status: po.status,
+          grandTotal: Number(po.grandTotal),
+        },
+      });
+
+      return po;
+    });
+
+    return NextResponse.json({ purchaseOrder: updated });
+  } catch (error) {
+    console.error("PATCH /api/procurement/pos error:", error);
+    return jsonError("تعذر تحديث أمر الشراء", 500);
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  return handlePoUpdate(req);
+}
+
+export async function PUT(req: NextRequest) {
+  return handlePoUpdate(req);
 }
 

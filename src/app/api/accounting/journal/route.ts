@@ -3,10 +3,11 @@ import { prisma } from "@/lib/prisma";
 import {
   postJournalEntry,
   reverseJournalEntry,
+  updateJournalEntry,
   type AttachmentInput,
   type JournalLineInput,
 } from "@/lib/accounting/ledgerService";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
@@ -127,7 +128,13 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "ledger",
+      action: "post",
+      dateChanged: Boolean(body.date),
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
     if (body.action === "REVERSE") {
       const journalEntryId = String(body.journalEntryId || "").trim();
@@ -170,8 +177,62 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ entry }, { status: 201 });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "تعذر ترحيل القيد المحاسبي";
-    const status = msg.includes("UNBALANCED") || msg.includes("NON_POSTING") || msg.includes("HARVEST_LOCKED") ? 400 : 500;
+    if (msg.includes("HARVEST_LOCKED")) return lockedError();
+    const status = msg.includes("UNBALANCED") || msg.includes("NON_POSTING") ? 400 : 500;
     return jsonError(msg, status);
   }
+}
+
+async function handleJournalUpdate(req: NextRequest) {
+  try {
+    const body = (await req.json()) as Record<string, unknown>;
+    const id = String(body.id || "").trim();
+    if (!id) return jsonError("معرف القيد مطلوب للتعديل", 400);
+
+    const existing = await prisma.journalEntry.findUnique({ where: { id } });
+    if (!existing) return jsonError("القيد المحاسبي غير موجود", 404);
+
+    const dateChanged =
+      body.date !== undefined &&
+      String(body.date).slice(0, 10) !== existing.date.toISOString().slice(0, 10);
+
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "ledger",
+      action: "post",
+      dateChanged,
+    });
+    if (!auth.ok) return auth.response;
+
+    const entry = await updateJournalEntry({
+      id,
+      date: body.date ? String(body.date) : undefined,
+      reference: body.reference !== undefined ? String(body.reference) : undefined,
+      narrationAr: body.narrationAr !== undefined ? String(body.narrationAr) : undefined,
+      narrationEn: body.narrationEn !== undefined ? String(body.narrationEn) : undefined,
+      projectId:
+        body.projectId !== undefined
+          ? body.projectId && body.projectId !== "ALL"
+            ? String(body.projectId)
+            : null
+          : undefined,
+      lines: Array.isArray(body.lines) ? (body.lines as JournalLineInput[]) : undefined,
+      createdById: auth.actor.userId ?? undefined,
+    });
+
+    return NextResponse.json({ entry });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "تعذر تعديل القيد المحاسبي";
+    if (msg.includes("HARVEST_LOCKED")) return lockedError();
+    const status = msg.includes("NOT_FOUND") ? 404 : 400;
+    return jsonError(msg, status);
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  return handleJournalUpdate(req);
+}
+
+export async function PUT(req: NextRequest) {
+  return handleJournalUpdate(req);
 }
 

@@ -1,23 +1,32 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
+import { Pencil, Plus, Printer } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
+import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { computeWorkerWageTotals, fmtNum } from "@/lib/formulas";
 import type { UasProject, UasWorkerWage } from "@/types/uas";
+
+type WorkerPayload = {
+  projectId: string;
+  harvest: string;
+  name: string;
+  dailyWage: number;
+  days: number;
+  credit: number;
+  date: string;
+  notes: string;
+};
 
 interface WorkersTabProps {
   projects: UasProject[];
   workers: UasWorkerWage[];
   allWorkers: UasWorkerWage[];
-  onAddWorker: (payload: {
-    projectId: string;
-    harvest: string;
-    name: string;
-    dailyWage: number;
-    days: number;
-    credit: number;
-    date: string;
-    notes: string;
-  }) => Promise<boolean>;
+  readOnly?: boolean;
+  canEditRecords?: boolean;
+  canEditDate?: boolean;
+  onAddWorker: (payload: WorkerPayload) => Promise<boolean>;
+  onEditWorker?: (id: string, payload: WorkerPayload) => Promise<boolean>;
   onDeleteWorker: (id: string) => Promise<void>;
   onOpenWorkerVoucher: (w: UasWorkerWage) => void;
   onExportWorkerExcel: (workerFilter: string) => void;
@@ -28,7 +37,11 @@ export function WorkersTab({
   projects,
   workers,
   allWorkers,
+  readOnly = false,
+  canEditRecords = false,
+  canEditDate = false,
   onAddWorker,
+  onEditWorker,
   onDeleteWorker,
   onOpenWorkerVoucher,
   onExportWorkerExcel,
@@ -44,6 +57,8 @@ export function WorkersTab({
   const [date, setDate] = useState("2026-11-10");
   const [notes, setNotes] = useState("");
   const [filterWorker, setFilterWorker] = useState("ALL");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const preview = computeWorkerWageTotals(
     Number(dailyWage),
@@ -71,6 +86,33 @@ export function WorkersTab({
     if (p && p.harvests.length > 0) setHarvest(p.harvests[0]);
   }
 
+  function openCreateDrawer() {
+    setEditingId(null);
+    const defProj = projects[0];
+    setProjectId(defProj?.id || "");
+    setHarvest(defProj?.harvests[0] || "القطفة الأولى");
+    setName("");
+    setDailyWage("5000");
+    setDays("10");
+    setCredit("10000");
+    setDate(new Date().toISOString().slice(0, 10));
+    setNotes("");
+    setDrawerOpen(true);
+  }
+
+  function openEditDrawer(w: UasWorkerWage) {
+    setEditingId(w.id);
+    setProjectId(w.projectId);
+    setHarvest(w.harvest);
+    setName(w.name);
+    setDailyWage(String(w.dailyWage));
+    setDays(String(w.days));
+    setCredit(String(w.credit));
+    setDate(w.date.slice(0, 10));
+    setNotes(w.notes || "");
+    setDrawerOpen(true);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) {
@@ -80,7 +122,7 @@ export function WorkersTab({
     const pid = activeProj?.id || projectId;
     const harv =
       activeProj?.harvests.includes(harvest) ? harvest : activeProj?.harvests[0] || "القطفة الأولى";
-    const ok = await onAddWorker({
+    const payload: WorkerPayload = {
       projectId: pid,
       harvest: harv,
       name: name.trim(),
@@ -89,18 +131,31 @@ export function WorkersTab({
       credit: Number(credit) || 0,
       date: date || "2026-11-10",
       notes: notes.trim(),
-    });
+    };
+    const ok =
+      editingId && onEditWorker
+        ? await onEditWorker(editingId, payload)
+        : await onAddWorker(payload);
     if (ok) {
+      setEditingId(null);
       setName("");
       setNotes("");
+      setDrawerOpen(false);
     }
   }
 
   return (
     <section className="space-y-6">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <form onSubmit={handleSubmit} className="card-surface rounded-2xl p-5 space-y-3 text-xs">
-          <h3 className="text-sm font-extrabold border-b pb-2">إضافة عامل جديد / أجر عامل</h3>
+      <SlideOverDrawer
+        open={drawerOpen && !readOnly}
+        onClose={() => {
+          setEditingId(null);
+          setDrawerOpen(false);
+        }}
+        title={editingId ? "تعديل سجل أجر عامل" : "إضافة سجل أجر عامل وحساب الأيام"}
+        subtitle="حساب الاستحقاق اليومي والدائن (المسلم) والمدين (المتبقي) وتوليد القيد المزدوج"
+      >
+        <form onSubmit={handleSubmit} className="space-y-3 text-xs">
           <div>
             <label className="block font-semibold mb-1">المشروع</label>
             <select
@@ -136,7 +191,6 @@ export function WorkersTab({
           <div>
             <label className="block font-semibold mb-1">اسم العامل</label>
             <input
-              id="wrkNameInput"
               value={name}
               onChange={(e) => setName(e.target.value)}
               type="text"
@@ -175,7 +229,7 @@ export function WorkersTab({
                 value={fmtNum(preview.totalWage)}
                 type="text"
                 readOnly
-                className="w-full rounded-xl border border-slate-200 bg-slate-100 dark:bg-slate-800 px-2.5 py-2 font-bold"
+                className="w-full rounded-xl border border-slate-200 bg-slate-100 dark:bg-slate-800 px-2.5 py-2 font-bold tabular-nums"
               />
             </div>
             <div>
@@ -195,18 +249,24 @@ export function WorkersTab({
                 value={fmtNum(preview.debitBalance)}
                 type="text"
                 readOnly
-                className="w-full rounded-xl border border-slate-200 bg-slate-100 dark:bg-slate-800 px-2.5 py-2 font-bold text-rose-600"
+                className="w-full rounded-xl border border-slate-200 bg-slate-100 dark:bg-slate-800 px-2.5 py-2 font-bold text-rose-600 tabular-nums"
               />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="block font-semibold mb-1">التاريخ</label>
+              <label className="block font-semibold mb-1">
+                التاريخ{" "}
+                {editingId && !canEditDate && (
+                  <span className="text-[10px] text-amber-600">(مقفل حسب الصلاحية)</span>
+                )}
+              </label>
               <input
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
                 type="date"
-                className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+                disabled={Boolean(editingId) && !canEditDate}
+                className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 disabled:opacity-50"
               />
             </div>
             <div>
@@ -221,46 +281,66 @@ export function WorkersTab({
             </div>
           </div>
           <button type="submit" className="w-full py-2.5 rounded-xl accent-bg font-bold shadow-sm">
-            + إضافة سجل أجر العامل
+            {editingId ? "حفظ تعديلات سجل العامل" : "+ إضافة سجل أجر العامل"}
           </button>
         </form>
+      </SlideOverDrawer>
 
-        <div className="lg:col-span-2 card-surface rounded-2xl p-5 space-y-4 overflow-x-auto">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h3 className="text-sm font-extrabold">كشف حساب وأجور العمال (Worker Account Report)</h3>
-              <p className="text-xs text-slate-500">فرز العمال وتصدير التقارير إلى إكسل و بي دي إف</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 no-print">
-              <select
-                value={filterWorker}
-                onChange={(e) => setFilterWorker(e.target.value)}
-                className="rounded-xl border border-slate-300 bg-transparent px-3 py-1.5 text-xs font-semibold"
-              >
-                <option value="ALL">جميع العمال (الكل)</option>
-                {uniqueWorkerNames.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={() => onExportWorkerExcel(filterWorker)}
-                className="px-3 py-1.5 rounded-xl accent-bg text-xs font-bold"
-              >
-                تصدير Excel
-              </button>
-              <button
-                onClick={() => window.print()}
-                className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold"
-              >
-                طباعة PDF
-              </button>
-            </div>
+      <div className="card-surface rounded-2xl p-5 space-y-4 overflow-x-auto">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-extrabold">كشف حساب وأجور العمال (Worker Account Report)</h3>
+            <p className="text-xs text-slate-500">فرز العمال وتصدير التقارير إلى إكسل و بي دي إف</p>
           </div>
+          <div className="flex flex-wrap items-center gap-2 no-print">
+            <select
+              value={filterWorker}
+              onChange={(e) => setFilterWorker(e.target.value)}
+              className="rounded-xl border border-slate-300 bg-transparent px-3 py-1.5 text-xs font-semibold"
+            >
+              <option value="ALL">جميع العمال (الكل)</option>
+              {uniqueWorkerNames.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => onExportWorkerExcel(filterWorker)}
+              className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold"
+            >
+              تصدير Excel
+            </button>
+            <button
+              onClick={() => window.print()}
+              className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold inline-flex items-center gap-1"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>PDF</span>
+            </button>
+            {!readOnly && (
+              <button
+                id="wrkNameInput"
+                type="button"
+                onClick={openCreateDrawer}
+                className="px-3.5 py-1.5 rounded-xl accent-bg text-xs font-extrabold inline-flex items-center gap-1.5 shadow-sm"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>تسجيل أجر عامل</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {visibleWorkers.length === 0 ? (
+          <EmptyState
+            title="لا توجد سجلات أجور للعمال"
+            description="سجل أيام العمل والأجر اليومي لمتابعة المستحقات والدفعات."
+          />
+        ) : (
           <table className="w-full text-xs text-right border-collapse">
             <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-800/60">
+              <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/90 dark:bg-slate-800/90">
                 <th className="p-2.5">الاسم</th>
                 <th className="p-2.5">المشروع / القطفة</th>
                 <th className="p-2.5">الأجر اليومي</th>
@@ -281,31 +361,45 @@ export function WorkersTab({
                     <td className="p-2.5">
                       {proj ? proj.name : ""} — {w.harvest}
                     </td>
-                    <td className="p-2.5">{fmtNum(w.dailyWage)}</td>
-                    <td className="p-2.5">{fmtNum(w.days)}</td>
-                    <td className="p-2.5 font-bold">{fmtNum(w.total)}</td>
-                    <td className="p-2.5 text-emerald-600 font-semibold">{fmtNum(w.credit)}</td>
-                    <td className="p-2.5 text-rose-600 font-bold">{fmtNum(w.debit)}</td>
-                    <td className="p-2.5">{w.date}</td>
+                    <td className="p-2.5 tabular-nums">{fmtNum(w.dailyWage)}</td>
+                    <td className="p-2.5 tabular-nums">{fmtNum(w.days)}</td>
+                    <td className="p-2.5 font-bold tabular-nums">{fmtNum(w.total)}</td>
+                    <td className="p-2.5 text-emerald-600 font-semibold tabular-nums">{fmtNum(w.credit)}</td>
+                    <td className="p-2.5 text-rose-600 font-bold tabular-nums">{fmtNum(w.debit)}</td>
+                    <td className="p-2.5 font-mono">{w.date}</td>
                     <td className="p-2.5 no-print flex items-center gap-2">
                       <button
+                        type="button"
                         onClick={() => onOpenWorkerVoucher(w)}
                         className="px-2 py-1 rounded bg-indigo-50 text-indigo-700 font-bold"
                       >
                         سند
                       </button>
-                      <button
-                        onClick={() => onDeleteWorker(w.id)}
-                        className="text-rose-600 hover:underline font-bold"
-                      >
-                        حذف
-                      </button>
+                      {!readOnly && canEditRecords && onEditWorker && (
+                        <button
+                          type="button"
+                          onClick={() => openEditDrawer(w)}
+                          className="inline-flex items-center gap-1 text-indigo-600 hover:underline font-bold"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>تعديل</span>
+                        </button>
+                      )}
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          onClick={() => onDeleteWorker(w.id)}
+                          className="text-rose-600 hover:underline font-bold"
+                        >
+                          حذف
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
               })}
             </tbody>
-            <tfoot className="font-extrabold bg-slate-50 dark:bg-slate-800/40">
+            <tfoot className="font-extrabold bg-slate-50 dark:bg-slate-800/40 tabular-nums">
               <tr>
                 <td colSpan={3} className="p-2.5">
                   الإجمالي الكلي لأجور العمال
@@ -318,7 +412,7 @@ export function WorkersTab({
               </tr>
             </tfoot>
           </table>
-        </div>
+        )}
       </div>
     </section>
   );

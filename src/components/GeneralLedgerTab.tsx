@@ -1,9 +1,11 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { BookOpen, CheckCircle2, Plus, RotateCcw, Search, Trash2, AlertTriangle } from "lucide-react";
+import { BookOpen, CheckCircle2, Pencil, Plus, RotateCcw, Search, Trash2, AlertTriangle } from "lucide-react";
 import { fmtNum } from "@/lib/formulas";
 import type { UasProject, UasUser } from "@/types/uas";
+import { SlideOverDrawer } from "@/components/SlideOverDrawer";
+import { EmptyState } from "@/components/EmptyState";
 
 interface AccountOption {
   id: string;
@@ -60,6 +62,9 @@ interface GeneralLedgerTabProps {
   currentUser: UasUser;
   exchangeRates: Record<string, number>;
   selectedProjectId: string;
+  readOnly?: boolean;
+  canPost?: boolean;
+  canEditDate?: boolean;
   onToast: (msg: string) => void;
 }
 
@@ -68,6 +73,9 @@ export function GeneralLedgerTab({
   currentUser,
   exchangeRates,
   selectedProjectId,
+  readOnly = false,
+  canPost = true,
+  canEditDate = false,
   onToast,
 }: GeneralLedgerTabProps) {
   const [entries, setEntries] = useState<JournalEntryRecord[]>([]);
@@ -80,8 +88,9 @@ export function GeneralLedgerTab({
   const [filterTo, setFilterTo] = useState("");
   const [search, setSearch] = useState("");
 
-  // New Journal Entry Form
+  // New / Edit Journal Entry Form
   const [showBuilder, setShowBuilder] = useState(false);
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [reference, setReference] = useState("");
   const [narrationAr, setNarrationAr] = useState("");
@@ -184,6 +193,52 @@ export function GeneralLedgerTab({
     return { drBase, crBase, diff, balanced: Math.abs(diff) <= 0.005 && drBase > 0 };
   }, [draftLines, exchangeRates]);
 
+  function openCreateEntry() {
+    setEditingEntryId(null);
+    setDate(new Date().toISOString().slice(0, 10));
+    setReference("");
+    setNarrationAr("");
+    setAttachmentName("");
+    setDraftLines([
+      {
+        accountId: postingAccounts[0]?.id || "",
+        debit: "10000",
+        credit: "0",
+        currency: "YER",
+        memo: "",
+        projectId: projects[0]?.id || "",
+      },
+      {
+        accountId: postingAccounts[Math.min(1, postingAccounts.length - 1)]?.id || "",
+        debit: "0",
+        credit: "10000",
+        currency: "YER",
+        memo: "",
+        projectId: projects[0]?.id || "",
+      },
+    ]);
+    setShowBuilder(true);
+  }
+
+  function openEditEntry(je: JournalEntryRecord) {
+    setEditingEntryId(je.id);
+    setDate(je.date.slice(0, 10));
+    setReference(je.reference || "");
+    setNarrationAr(je.narrationAr);
+    setAttachmentName("");
+    setDraftLines(
+      je.lines.map((l) => ({
+        accountId: l.accountId,
+        debit: String(l.debit || 0),
+        credit: String(l.credit || 0),
+        currency: l.currency || "YER",
+        memo: l.memo || "",
+        projectId: l.project?.id || je.project?.id || "",
+      }))
+    );
+    setShowBuilder(true);
+  }
+
   async function handlePostJournal(e: React.FormEvent) {
     e.preventDefault();
     if (!totals.balanced) {
@@ -196,10 +251,12 @@ export function GeneralLedgerTab({
     }
     setSubmitting(true);
     try {
+      const isEdit = Boolean(editingEntryId);
       const res = await fetch("/api/accounting/journal", {
-        method: "POST",
+        method: isEdit ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          ...(isEdit ? { id: editingEntryId } : {}),
           date,
           reference: reference.trim() || undefined,
           narrationAr: narrationAr.trim(),
@@ -218,17 +275,26 @@ export function GeneralLedgerTab({
             memo: l.memo.trim() || narrationAr.trim(),
             projectId: l.projectId || null,
           })),
-          attachments: attachmentName.trim()
-            ? [{ fileName: attachmentName.trim(), fileUrl: `/attachments/${attachmentName.trim()}`, fileType: "application/pdf" }]
-            : undefined,
+          ...(!isEdit && attachmentName.trim()
+            ? {
+                attachments: [
+                  { fileName: attachmentName.trim(), fileUrl: `/attachments/${attachmentName.trim()}`, fileType: "application/pdf" },
+                ],
+              }
+            : {}),
         }),
       });
       const data = (await res.json()) as { error?: string };
       if (!res.ok) {
-        onToast(data.error || "فشل ترحيل القيد");
+        onToast(data.error || (isEdit ? "تعذر تعديل القيد" : "فشل ترحيل القيد"));
         return;
       }
-      onToast("✅ تم ترحيل قيد اليومية المزدوج وتحديث الأرصدة بنجاح");
+      onToast(
+        isEdit
+          ? "✅ تم تعديل القيد المحاسبي وإعادة احتساب الأرصدة وتوثيق التغيير"
+          : "✅ تم ترحيل قيد اليومية المزدوج وتحديث الأرصدة بنجاح"
+      );
+      setEditingEntryId(null);
       setNarrationAr("");
       setReference("");
       setAttachmentName("");
@@ -299,30 +365,48 @@ export function GeneralLedgerTab({
               </span>
             </span>
 
-            <button
-              onClick={() => setShowBuilder((v) => !v)}
-              className="px-4 py-2 rounded-xl accent-bg text-xs font-extrabold flex items-center gap-1.5"
-            >
-              <Plus className="w-4 h-4" />
-              <span>{showBuilder ? "إغلاق منشئ القيد" : "قيد يومية جديد"}</span>
-            </button>
+            {canPost && !readOnly && (
+              <button
+                type="button"
+                onClick={openCreateEntry}
+                className="px-4 py-2 rounded-xl accent-bg text-xs font-extrabold flex items-center gap-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                <span>قيد يومية جديد</span>
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Interactive Journal Entry Builder */}
-        {showBuilder && (
+        {/* Interactive Journal Entry Builder in SlideOverDrawer */}
+        <SlideOverDrawer
+          open={showBuilder && canPost && !readOnly}
+          onClose={() => {
+            setEditingEntryId(null);
+            setShowBuilder(false);
+          }}
+          title={editingEntryId ? "تعديل قيد يومية محاسبي" : "إنشاء قيد يومية محاسبي جديد"}
+          subtitle="القيد المزدوج المتوازن — يجب تساوي إجمالي المدين والدائن بالعملة الأساسية (YER)"
+          size="xl"
+        >
           <form
             onSubmit={handlePostJournal}
-            className="p-4 rounded-2xl border-2 border-emerald-500/30 bg-slate-50/70 dark:bg-slate-900/40 space-y-4 text-xs"
+            className="space-y-4 text-xs"
           >
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
               <div>
-                <label className="block font-semibold mb-1">التاريخ</label>
+                <label className="block font-semibold mb-1">
+                  التاريخ{" "}
+                  {editingEntryId && !canEditDate && (
+                    <span className="text-[10px] text-amber-600">(مقفل حسب الصلاحية)</span>
+                  )}
+                </label>
                 <input
                   type="date"
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 bg-white dark:bg-slate-900 px-3 py-2"
+                  disabled={Boolean(editingEntryId) && !canEditDate}
+                  className="w-full rounded-xl border border-slate-300 bg-white dark:bg-slate-900 px-3 py-2 disabled:opacity-50"
                 />
               </div>
               <div>
@@ -515,12 +599,16 @@ export function GeneralLedgerTab({
                   disabled={!totals.balanced || submitting}
                   className="px-5 py-2 rounded-xl accent-bg font-extrabold disabled:opacity-40"
                 >
-                  {submitting ? "جاري الترحيل..." : "ترحيل القيد (Post)"}
+                  {submitting
+                    ? "جاري الحفظ..."
+                    : editingEntryId
+                    ? "حفظ تعديلات القيد"
+                    : "ترحيل القيد (Post)"}
                 </button>
               </div>
             </div>
           </form>
-        )}
+        </SlideOverDrawer>
 
         {/* Filter Bar */}
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
@@ -562,6 +650,13 @@ export function GeneralLedgerTab({
         {/* Entries List */}
         {loading ? (
           <div className="py-10 text-center text-xs text-slate-500">جاري تحميل القيود...</div>
+        ) : entries.length === 0 ? (
+          <EmptyState
+            title="لا توجد قيود يومية مطابقة"
+            description="لم يتم العثور على قيود يومية في دفتر الأستاذ العام وفق الفلاتر المحددة."
+            actionLabel={canPost && !readOnly ? "إنشاء قيد يومية جديد" : undefined}
+            onAction={canPost && !readOnly ? () => setShowBuilder(true) : undefined}
+          />
         ) : (
           <div className="space-y-3">
             {entries.map((je) => (
@@ -597,15 +692,27 @@ export function GeneralLedgerTab({
                     >
                       {je.status}
                     </span>
-                    {je.status === "POSTED" && (
-                      <button
-                        onClick={() => handleReverse(je.id, je.entryNumber)}
-                        className="px-2.5 py-1 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 font-bold flex items-center gap-1"
-                        title="عكس القيد المحاسبي"
-                      >
-                        <RotateCcw className="w-3 h-3" />
-                        <span>قيد عكسي</span>
-                      </button>
+                    {je.status === "POSTED" && canPost && !readOnly && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => openEditEntry(je)}
+                          className="px-2.5 py-1 rounded-lg border border-indigo-300 text-indigo-700 hover:bg-indigo-50 font-bold flex items-center gap-1"
+                          title="تعديل بيانات وأسطر القيد"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>تعديل</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleReverse(je.id, je.entryNumber)}
+                          className="px-2.5 py-1 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 font-bold flex items-center gap-1"
+                          title="عكس القيد المحاسبي"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>قيد عكسي</span>
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>

@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, FolderTree, Plus, RefreshCw, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, Edit3, FolderTree, Plus, RefreshCw, Search } from "lucide-react";
+import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
 import { fmtNum } from "@/lib/formulas";
 
 export interface CoaNodeItem {
@@ -23,6 +24,8 @@ export interface CoaNodeItem {
 
 interface CoaTreeTabProps {
   selectedProjectId: string;
+  readOnly?: boolean;
+  canEdit?: boolean;
   onToast: (msg: string) => void;
 }
 
@@ -34,7 +37,12 @@ const TYPE_BADGE: Record<string, string> = {
   EXPENSE: "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300",
 };
 
-export function CoaTreeTab({ selectedProjectId, onToast }: CoaTreeTabProps) {
+export function CoaTreeTab({
+  selectedProjectId,
+  readOnly = false,
+  canEdit = true,
+  onToast,
+}: CoaTreeTabProps) {
   const [tree, setTree] = useState<CoaNodeItem[]>([]);
   const [flat, setFlat] = useState<Omit<CoaNodeItem, "children">[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,6 +53,11 @@ export function CoaTreeTab({ selectedProjectId, onToast }: CoaTreeTabProps) {
   const [newNameEn, setNewNameEn] = useState("");
   const [newCode, setNewCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [quickTier5Open, setQuickTier5Open] = useState(false);
+  const [editingNode, setEditingNode] = useState<CoaNodeItem | null>(null);
+  const [editCode, setEditCode] = useState("");
+  const [editNameAr, setEditNameAr] = useState("");
+  const [editNameEn, setEditNameEn] = useState("");
 
   const fetchTreePayload = useCallback(async () => {
     const qs =
@@ -144,6 +157,39 @@ export function CoaTreeTab({ selectedProjectId, onToast }: CoaTreeTabProps) {
     }
   }
 
+  async function handleSaveEditNode(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingNode || !editNameAr.trim()) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/accounting/coa", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: editingNode.id,
+          code: editCode.trim() || editingNode.code,
+          nameAr: editNameAr.trim(),
+          nameEn: editNameEn.trim() || editNameAr.trim(),
+        }),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        tree?: CoaNodeItem[];
+        flat?: Omit<CoaNodeItem, "children">[];
+      };
+      if (!res.ok) {
+        onToast(data.error || "تعذر تعديل الحساب");
+        return;
+      }
+      if (data.tree) setTree(data.tree);
+      if (data.flat) setFlat(data.flat);
+      setEditingNode(null);
+      onToast("✅ تم تحديث بيانات الحساب في شجرة الحسابات");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   function matchesSearch(node: CoaNodeItem): boolean {
     if (!search.trim()) return true;
     const q = search.trim().toLowerCase();
@@ -219,20 +265,39 @@ export function CoaTreeTab({ selectedProjectId, onToast }: CoaTreeTabProps) {
               </div>
             </div>
 
-            {node.level < 5 && (
-              <button
-                type="button"
-                onClick={() => {
-                  setAddingParent(node);
-                  setNewNameAr("");
-                  setNewNameEn("");
-                  setNewCode("");
-                }}
-                className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-[11px] font-bold flex items-center gap-1"
-              >
-                <Plus className="w-3 h-3" />
-                <span>فرع T{node.level + 1}</span>
-              </button>
+            {!readOnly && canEdit && (
+              <div className="flex items-center gap-1">
+                {node.level < 5 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddingParent(node);
+                      setEditingNode(null);
+                      setNewNameAr("");
+                      setNewNameEn("");
+                      setNewCode("");
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-[11px] font-bold flex items-center gap-1"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>فرع T{node.level + 1}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingNode(node);
+                    setAddingParent(null);
+                    setEditCode(node.code);
+                    setEditNameAr(node.nameAr);
+                    setEditNameEn(node.nameEn);
+                  }}
+                  className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 text-[11px] font-bold hover:border-emerald-500 flex items-center gap-1"
+                >
+                  <Edit3 className="w-3 h-3" />
+                  <span>تعديل</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -287,13 +352,33 @@ export function CoaTreeTab({ selectedProjectId, onToast }: CoaTreeTabProps) {
             </button>
             <button
               onClick={loadTree}
-              className="px-3 py-1.5 rounded-xl accent-bg text-xs font-bold flex items-center gap-1"
+              className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold flex items-center gap-1"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               <span>تحديث</span>
             </button>
+            {!readOnly && canEdit && (
+              <button
+                type="button"
+                onClick={() => setQuickTier5Open(true)}
+                className="px-3.5 py-1.5 rounded-xl accent-bg text-xs font-extrabold flex items-center gap-1 shadow-sm"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>حساب مستوى 5 جديد</span>
+              </button>
+            )}
           </div>
         </div>
+
+        <QuickMasterCreateModal
+          open={quickTier5Open}
+          mode="coa"
+          onClose={() => setQuickTier5Open(false)}
+          onCreatedCoa={() => {
+            void loadTree();
+          }}
+          onToast={onToast}
+        />
 
         {/* Tier-1 Summary Strip */}
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -307,7 +392,71 @@ export function CoaTreeTab({ selectedProjectId, onToast }: CoaTreeTabProps) {
           ))}
         </div>
 
-        {addingParent && (
+        {!readOnly && canEdit && editingNode && (
+          <form
+            onSubmit={handleSaveEditNode}
+            className="p-4 rounded-2xl border-2 border-indigo-400 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-3 text-xs"
+          >
+            <div className="flex items-center justify-between">
+              <h4 className="font-extrabold text-sm">
+                تعديل بيانات الحساب: [{editingNode.code}] {editingNode.nameAr}
+              </h4>
+              <button
+                type="button"
+                onClick={() => setEditingNode(null)}
+                className="text-slate-500 font-bold"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block font-semibold mb-1">رمز الحساب *</label>
+                <input
+                  value={editCode}
+                  onChange={(e) => setEditCode(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-slate-300 bg-white dark:bg-slate-900 px-3 py-2 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold mb-1">اسم الحساب (عربي) *</label>
+                <input
+                  value={editNameAr}
+                  onChange={(e) => setEditNameAr(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-slate-300 bg-white dark:bg-slate-900 px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold mb-1">Account Name (English)</label>
+                <input
+                  value={editNameEn}
+                  onChange={(e) => setEditNameEn(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 bg-white dark:bg-slate-900 px-3 py-2"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingNode(null)}
+                className="px-4 py-2 rounded-xl border border-slate-300 font-bold"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="px-5 py-2 rounded-xl accent-bg font-extrabold"
+              >
+                {submitting ? "جاري التحديث..." : "حفظ تعديل الحساب"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {!readOnly && canEdit && addingParent && (
           <form
             onSubmit={handleCreateChild}
             className="p-4 rounded-2xl border-2 border-emerald-400 bg-emerald-50/40 dark:bg-emerald-950/20 space-y-3 text-xs"

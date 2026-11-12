@@ -5,6 +5,7 @@ import {
   ensureCustomerWithAccountTx,
   postCustomerReceipt,
   postSalesInvoice,
+  updateSaleTransactionAtomic,
 } from "@/lib/accounting/ledgerService";
 import {
   appendAuditLogTx,
@@ -12,11 +13,19 @@ import {
   getBootstrapState,
   isHarvestLockedTx,
 } from "@/lib/serverBootstrap";
-import { extractActor, jsonError, lockedError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
 
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "sales",
+      action: "create",
+      dateChanged: Boolean(body.date),
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
+
     const projectId = String(body.projectId || "").trim();
     const harvestName = String(body.harvest || "").trim();
     const saleBatchLabel = String(body.batch || "عملية بيع 1").trim();
@@ -30,7 +39,6 @@ export async function POST(req: NextRequest) {
     const receiptVoucherNo =
       String(body.voucherNo || "").trim() || `RV-${Math.floor(100 + Math.random() * 900)}`;
     const notes = String(body.notes || "").trim();
-    const actor = extractActor(body);
 
     if (!customerName || !projectId || !harvestName) {
       return jsonError("يرجى إدخال اسم العميل والمشروع والقطفة", 400);
@@ -143,4 +151,56 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/sales error:", error);
     return jsonError("تعذر حفظ عملية البيع", 500);
   }
+}
+
+async function handleSalePatch(req: NextRequest) {
+  try {
+    const body = (await req.json()) as Record<string, unknown>;
+    const id = String(body.id || "").trim();
+    if (!id) return jsonError("معرف عملية البيع مطلوب للتعديل", 400);
+
+    const existing = await prisma.saleTransaction.findUnique({ where: { id } });
+    if (!existing) return jsonError("عملية البيع غير موجودة", 404);
+
+    const dateChanged =
+      body.date !== undefined && String(body.date).trim() !== existing.saleDate;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "sales",
+      action: "edit",
+      dateChanged,
+    });
+    if (!auth.ok) return auth.response;
+
+    const updated = await updateSaleTransactionAtomic({
+      id,
+      projectId: body.projectId ? String(body.projectId) : undefined,
+      harvestName: body.harvest ? String(body.harvest) : undefined,
+      batch: body.batch ? String(body.batch) : undefined,
+      customer: body.customer ? String(body.customer) : undefined,
+      phone: body.phone ? String(body.phone) : undefined,
+      grade: body.grade ? String(body.grade) : undefined,
+      bundles: body.bundles !== undefined ? Number(body.bundles) : undefined,
+      price: body.price !== undefined ? Number(body.price) : undefined,
+      credit: body.credit !== undefined ? Number(body.credit) : undefined,
+      date: body.date ? String(body.date) : undefined,
+      voucherNo: body.voucherNo ? String(body.voucherNo) : undefined,
+      notes: body.notes !== undefined ? String(body.notes) : undefined,
+      createdById: auth.actor.userId ?? undefined,
+    });
+
+    const state = await getBootstrapState();
+    return NextResponse.json({ sale: updated, state });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "تعذر تعديل عملية البيع";
+    if (msg.includes("HARVEST_LOCKED")) return lockedError();
+    return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  return handleSalePatch(req);
+}
+
+export async function PUT(req: NextRequest) {
+  return handleSalePatch(req);
 }

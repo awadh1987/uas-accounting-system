@@ -3,6 +3,24 @@ import { prisma } from "@/lib/prisma";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
 import { extractActor, jsonError } from "@/lib/apiHelpers";
 
+export async function GET() {
+  try {
+    const diffLogs = await prisma.auditLog.findMany({
+      orderBy: { timestamp: "desc" },
+      take: 80,
+      include: {
+        user: {
+          select: { id: true, name: true, fullName: true, role: true },
+        },
+      },
+    });
+    return NextResponse.json({ diffLogs });
+  } catch (error) {
+    console.error("GET /api/audit/log error:", error);
+    return jsonError("تعذر تحميل سجل تعديلات الحقول", 500);
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
