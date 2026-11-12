@@ -17,6 +17,7 @@ interface QuickCustomerOption {
 
 type SalePayload = {
   projectId: string;
+  subProjectId?: string | null;
   harvest: string;
   batch: string;
   grade: string;
@@ -60,6 +61,7 @@ export function SalesTab({
   const [projectId, setProjectId] = useState(projects[0]?.id || "");
   const activeProj = projects.find((p) => p.id === projectId) || projects[0];
   const [harvest, setHarvest] = useState(activeProj?.harvests[0] || "القطفة الأولى");
+  const [subProjectId, setSubProjectId] = useState<string>("");
   const [batch, setBatch] = useState("عملية بيع 1");
   const [grade, setGrade] = useState("رقم 1/رقم 2/رقم 3/ روس/بزغة");
   const [customer, setCustomer] = useState("");
@@ -93,6 +95,7 @@ export function SalesTab({
 
   function handleProjChange(nextPid: string) {
     setProjectId(nextPid);
+    setSubProjectId("");
     const p = projects.find((x) => x.id === nextPid);
     if (p && p.harvests.length > 0) setHarvest(p.harvests[0]);
   }
@@ -101,6 +104,7 @@ export function SalesTab({
     setEditingId(null);
     const defProj = projects[0];
     setProjectId(defProj?.id || "");
+    setSubProjectId("");
     setHarvest(defProj?.harvests[0] || "القطفة الأولى");
     setBatch("عملية بيع 1");
     setGrade("رقم 1/رقم 2/رقم 3/ روس/بزغة");
@@ -118,6 +122,7 @@ export function SalesTab({
   function openEditDrawer(s: UasSaleTransaction) {
     setEditingId(s.id);
     setProjectId(s.projectId);
+    setSubProjectId(s.subProjectId || "");
     setHarvest(s.harvest);
     setBatch(s.batch);
     setGrade(s.grade);
@@ -143,6 +148,7 @@ export function SalesTab({
       activeProj?.harvests.includes(harvest) ? harvest : activeProj?.harvests[0] || "القطفة الأولى";
     const payload: SalePayload = {
       projectId: pid,
+      subProjectId: subProjectId || undefined,
       harvest: harv,
       batch,
       grade,
@@ -203,23 +209,41 @@ export function SalesTab({
               </select>
             </div>
             <div>
-              <label className="block font-semibold mb-1">القطفة / المرشة</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold">القطاع الفرعي</label>
+                <span className="text-[10px] text-slate-400">اختياري</span>
+              </div>
               <select
-                value={
-                  activeProj?.harvests.includes(harvest)
-                    ? harvest
-                    : activeProj?.harvests[0] || ""
-                }
-                onChange={(e) => setHarvest(e.target.value)}
+                value={subProjectId}
+                onChange={(e) => setSubProjectId(e.target.value)}
                 className="w-full rounded-xl border border-slate-300 bg-transparent px-2.5 py-2"
               >
-                {(activeProj?.harvests || []).map((h) => (
-                  <option key={h} value={h}>
-                    {h}
+                <option value="">-- بدون قطاع --</option>
+                {(activeProj?.subProjects || []).map((sp) => (
+                  <option key={sp.id} value={sp.id}>
+                    {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
                   </option>
                 ))}
               </select>
             </div>
+          </div>
+          <div>
+            <label className="block font-semibold mb-1">القطفة / المرشة</label>
+            <select
+              value={
+                activeProj?.harvests.includes(harvest)
+                  ? harvest
+                  : activeProj?.harvests[0] || ""
+              }
+              onChange={(e) => setHarvest(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-2.5 py-2"
+            >
+              {(activeProj?.harvests || []).map((h) => (
+                <option key={h} value={h}>
+                  {h}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
@@ -506,6 +530,14 @@ export function SalesTab({
                       <div className="text-[11px] text-slate-500">
                         {proj ? proj.name : ""} ({s.harvest})
                       </div>
+                      {s.subProjectId && (() => {
+                        const sp = proj?.subProjects?.find((x) => x.id === s.subProjectId);
+                        return sp ? (
+                          <span className="inline-block mt-0.5 text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                            {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
+                          </span>
+                        ) : null;
+                      })()}
                     </td>
                     <td className="p-2.5">
                       <div className="font-extrabold">{s.customer}</div>

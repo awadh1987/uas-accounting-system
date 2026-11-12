@@ -32,6 +32,7 @@ export async function POST(req: NextRequest) {
     const actor = auth.actor;
 
     const projectId = String(body.projectId || "").trim();
+    const subProjectId = body.subProjectId ? String(body.subProjectId).trim() : null;
     const harvestName = String(body.harvest || "").trim();
     const productGrade = String(body.grade || "رقم 1").trim();
     const harvestedBundles = Math.max(0, Math.round(Number(body.harvestedBundles) || 0));
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest) {
       const batch = await tx.harvestInventoryBatch.create({
         data: {
           projectId,
+          subProjectId,
           harvestCycleId: cycle?.id ?? null,
           harvestName,
           productGrade,
@@ -114,6 +116,9 @@ async function handleInventoryUpdate(req: NextRequest) {
         where: { id },
         data: {
           projectId: nextProjectId,
+          ...(body.subProjectId !== undefined
+            ? { subProjectId: body.subProjectId ? String(body.subProjectId).trim() : null }
+            : {}),
           harvestCycleId: cycle?.id ?? existing.harvestCycleId,
           harvestName: nextHarvestName,
           ...(body.grade !== undefined ? { productGrade: String(body.grade).trim() } : {}),

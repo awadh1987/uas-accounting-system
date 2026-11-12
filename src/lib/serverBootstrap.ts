@@ -10,7 +10,6 @@ import type {
   Prisma,
   ProjectAcquisitionCycle,
   SaleTransaction,
-  SubProject,
   SystemSettings,
   TreasuryAccount,
   WorkerWageEntry,
@@ -34,7 +33,11 @@ import type {
 type ProjectWithRelations = Prisma.ProjectGetPayload<{
   include: {
     harvestCycles: true;
-    subProjects: true;
+    subProjects: {
+      include: {
+        vendor: { select: { id: true; nameAr: true } };
+      };
+    };
     ownerVendor: { select: { id: true; nameAr: true } };
     acquisitions: true;
   };
@@ -243,13 +246,17 @@ function mapProjects(projects: ProjectWithRelations[]): {
           sortOrder: hc.sortOrder,
           isLocked: hc.isLocked,
         })),
-        subProjects: p.subProjects.map((sp: SubProject) => ({
+        subProjects: p.subProjects.map((sp) => ({
           id: sp.id,
           projectId: sp.projectId,
           code: sp.code,
           nameAr: sp.nameAr,
           nameEn: sp.nameEn,
           budget: Number(sp.budget) || 0,
+          status: sp.status,
+          notes: sp.notes,
+          vendorId: sp.vendorId,
+          vendorName: sp.vendor?.nameAr ?? null,
         })),
         acquisitions: p.acquisitions.map((ac: ProjectAcquisitionCycle) => ({
           id: ac.id,
@@ -317,6 +324,7 @@ function mapInventory(batches: HarvestInventoryBatch[]): UasInventoryBatch[] {
   return batches.map((b: HarvestInventoryBatch) => ({
     id: b.id,
     projectId: b.projectId,
+    subProjectId: b.subProjectId ?? null,
     harvest: b.harvestName,
     grade: b.productGrade,
     harvestedBundles: b.harvestedBundles,
@@ -340,6 +348,7 @@ function mapExpenses(expenses: OperatingExpense[]): UasOperatingExpense[] {
   return expenses.map((e: OperatingExpense) => ({
     id: e.id,
     projectId: e.projectId,
+    subProjectId: e.subProjectId ?? null,
     harvest: e.harvestName,
     category: e.category,
     subType: e.subType,
@@ -356,6 +365,7 @@ function mapWorkers(workers: WorkerWageEntry[]): UasWorkerWage[] {
     id: w.id,
     workerId: w.workerId,
     projectId: w.projectId,
+    subProjectId: w.subProjectId ?? null,
     harvest: w.harvestName,
     name: w.workerName,
     dailyWage: w.dailyWage,
@@ -373,6 +383,7 @@ function mapSales(sales: SaleTransaction[]): UasSaleTransaction[] {
     id: s.id,
     customerId: s.customerId,
     projectId: s.projectId,
+    subProjectId: s.subProjectId ?? null,
     harvest: s.harvestName,
     batch: s.saleBatchLabel,
     customer: s.customerName,
@@ -432,6 +443,11 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
         },
         subProjects: {
           orderBy: { code: "asc" },
+          include: {
+            vendor: {
+              select: { id: true, nameAr: true },
+            },
+          },
         },
         ownerVendor: {
           select: { id: true, nameAr: true },

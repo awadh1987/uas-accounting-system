@@ -166,6 +166,12 @@ async function handleBillUpdate(req: NextRequest) {
 
     const nextDate = body.date ? new Date(String(body.date)) : existing.date;
     const nextProjectId = body.projectId ? String(body.projectId).trim() : existing.projectId;
+    const nextSubProjectId =
+      body.subProjectId !== undefined
+        ? body.subProjectId
+          ? String(body.subProjectId).trim()
+          : null
+        : existing.subProjectId;
     const nextNotes = body.notes !== undefined ? (body.notes ? String(body.notes).trim() : null) : existing.notes;
     const nextDebitAccountId = body.debitAccountId
       ? String(body.debitAccountId).trim()
@@ -175,6 +181,7 @@ async function handleBillUpdate(req: NextRequest) {
     const financialChanged =
       Math.abs(nextTotal - Number(existing.totalAmount)) > 0.005 ||
       nextProjectId !== existing.projectId ||
+      nextSubProjectId !== existing.subProjectId ||
       nextCurrency !== existing.currency ||
       (nextDebitAccountId && nextDebitAccountId !== existing.debitAccountId);
 
@@ -210,6 +217,7 @@ async function handleBillUpdate(req: NextRequest) {
           sourceType: "VENDOR_BILL",
           sourceId: existing.id,
           projectId: nextProjectId,
+          subProjectId: nextSubProjectId,
           createdById: auth.actor.userId ?? undefined,
           lines: [
             {
@@ -219,6 +227,7 @@ async function handleBillUpdate(req: NextRequest) {
               exchangeRate: rate,
               memo: nextNotes || `مشتريات معدلة - ${existing.vendor.nameAr}`,
               projectId: nextProjectId,
+              subProjectId: nextSubProjectId,
             },
             {
               accountId: existing.vendor.accountId,
@@ -227,6 +236,7 @@ async function handleBillUpdate(req: NextRequest) {
               exchangeRate: rate,
               memo: `ذمة دائنة - ${existing.vendor.nameAr}`,
               projectId: nextProjectId,
+              subProjectId: nextSubProjectId,
             },
           ],
         });
@@ -247,6 +257,7 @@ async function handleBillUpdate(req: NextRequest) {
         where: { id },
         data: {
           projectId: nextProjectId,
+          subProjectId: nextSubProjectId,
           date: nextDate,
           ...(body.dueDate !== undefined
             ? { dueDate: body.dueDate ? new Date(String(body.dueDate)) : null }

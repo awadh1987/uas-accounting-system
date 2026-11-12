@@ -28,7 +28,10 @@ interface JournalLineRecord {
   debitBase: number;
   creditBase: number;
   memo: string | null;
+  projectId?: string | null;
   project?: { id: string; code: string; nameAr: string } | null;
+  subProjectId?: string | null;
+  subProject?: { id: string; code: string; nameAr: string } | null;
 }
 
 interface JournalEntryRecord {
@@ -39,7 +42,10 @@ interface JournalEntryRecord {
   narrationAr: string;
   status: string;
   sourceType: string | null;
+  projectId?: string | null;
   project?: { id: string; code: string; nameAr: string } | null;
+  subProjectId?: string | null;
+  subProject?: { id: string; code: string; nameAr: string } | null;
   createdBy: { id: string; name: string; role: string };
   attachments: Array<{ id: string; fileName: string; fileUrl: string }>;
   totalDebitBase: number;
@@ -55,6 +61,7 @@ interface DraftLine {
   currency: string;
   memo: string;
   projectId: string;
+  subProjectId: string;
 }
 
 interface GeneralLedgerTabProps {
@@ -62,6 +69,7 @@ interface GeneralLedgerTabProps {
   currentUser: UasUser;
   exchangeRates: Record<string, number>;
   selectedProjectId: string;
+  selectedSubProjectId?: string;
   readOnly?: boolean;
   canPost?: boolean;
   canEditDate?: boolean;
@@ -73,6 +81,7 @@ export function GeneralLedgerTab({
   currentUser,
   exchangeRates,
   selectedProjectId,
+  selectedSubProjectId = "ALL",
   readOnly = false,
   canPost = true,
   canEditDate = false,
@@ -94,16 +103,19 @@ export function GeneralLedgerTab({
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [reference, setReference] = useState("");
   const [narrationAr, setNarrationAr] = useState("");
+  const [headerProjectId, setHeaderProjectId] = useState(projects[0]?.id || "");
+  const [headerSubProjectId, setHeaderSubProjectId] = useState("");
   const [attachmentName, setAttachmentName] = useState("");
   const [draftLines, setDraftLines] = useState<DraftLine[]>([
-    { accountId: "", debit: "10000", credit: "0", currency: "YER", memo: "", projectId: projects[0]?.id || "" },
-    { accountId: "", debit: "0", credit: "10000", currency: "YER", memo: "", projectId: projects[0]?.id || "" },
+    { accountId: "", debit: "10000", credit: "0", currency: "YER", memo: "", projectId: projects[0]?.id || "", subProjectId: "" },
+    { accountId: "", debit: "0", credit: "10000", currency: "YER", memo: "", projectId: projects[0]?.id || "", subProjectId: "" },
   ]);
   const [submitting, setSubmitting] = useState(false);
 
   const fetchJournalAndCoa = useCallback(async () => {
     const params = new URLSearchParams();
     if (selectedProjectId && selectedProjectId !== "ALL") params.set("projectId", selectedProjectId);
+    if (selectedSubProjectId && selectedSubProjectId !== "ALL") params.set("subProjectId", selectedSubProjectId);
     if (filterAccountId !== "ALL") params.set("accountId", filterAccountId);
     if (filterFrom) params.set("fromDate", filterFrom);
     if (filterTo) params.set("toDate", filterTo);
@@ -122,7 +134,7 @@ export function GeneralLedgerTab({
         : null,
       cData: coaRes.ok ? ((await coaRes.json()) as { flat: AccountOption[] }) : null,
     };
-  }, [selectedProjectId, filterAccountId, filterFrom, filterTo, search]);
+  }, [selectedProjectId, selectedSubProjectId, filterAccountId, filterFrom, filterTo, search]);
 
   const applyJournalAndCoa = useCallback(
     (res: {
@@ -198,6 +210,8 @@ export function GeneralLedgerTab({
     setDate(new Date().toISOString().slice(0, 10));
     setReference("");
     setNarrationAr("");
+    setHeaderProjectId(projects[0]?.id || "");
+    setHeaderSubProjectId("");
     setAttachmentName("");
     setDraftLines([
       {
@@ -207,6 +221,7 @@ export function GeneralLedgerTab({
         currency: "YER",
         memo: "",
         projectId: projects[0]?.id || "",
+        subProjectId: "",
       },
       {
         accountId: postingAccounts[Math.min(1, postingAccounts.length - 1)]?.id || "",
@@ -215,6 +230,7 @@ export function GeneralLedgerTab({
         currency: "YER",
         memo: "",
         projectId: projects[0]?.id || "",
+        subProjectId: "",
       },
     ]);
     setShowBuilder(true);
@@ -225,6 +241,8 @@ export function GeneralLedgerTab({
     setDate(je.date.slice(0, 10));
     setReference(je.reference || "");
     setNarrationAr(je.narrationAr);
+    setHeaderProjectId(je.projectId || je.project?.id || "");
+    setHeaderSubProjectId(je.subProjectId || je.subProject?.id || "");
     setAttachmentName("");
     setDraftLines(
       je.lines.map((l) => ({
@@ -233,7 +251,8 @@ export function GeneralLedgerTab({
         credit: String(l.credit || 0),
         currency: l.currency || "YER",
         memo: l.memo || "",
-        projectId: l.project?.id || je.project?.id || "",
+        projectId: l.projectId || l.project?.id || je.projectId || je.project?.id || "",
+        subProjectId: l.subProjectId || l.subProject?.id || je.subProjectId || je.subProject?.id || "",
       }))
     );
     setShowBuilder(true);
@@ -260,7 +279,8 @@ export function GeneralLedgerTab({
           date,
           reference: reference.trim() || undefined,
           narrationAr: narrationAr.trim(),
-          projectId: selectedProjectId !== "ALL" ? selectedProjectId : draftLines[0]?.projectId || null,
+          projectId: headerProjectId || (selectedProjectId !== "ALL" ? selectedProjectId : draftLines[0]?.projectId || null),
+          subProjectId: headerSubProjectId || (selectedSubProjectId !== "ALL" ? selectedSubProjectId : draftLines[0]?.subProjectId || null),
           actor: {
             userId: currentUser.id,
             userDisplay: `${currentUser.name} (${currentUser.role})`,
@@ -273,7 +293,8 @@ export function GeneralLedgerTab({
             currency: l.currency,
             exchangeRate: exchangeRates[l.currency] || 1,
             memo: l.memo.trim() || narrationAr.trim(),
-            projectId: l.projectId || null,
+            projectId: l.projectId || headerProjectId || null,
+            subProjectId: l.subProjectId || headerSubProjectId || null,
           })),
           ...(!isEdit && attachmentName.trim()
             ? {
@@ -419,7 +440,50 @@ export function GeneralLedgerTab({
                   className="w-full rounded-xl border border-slate-300 bg-white dark:bg-slate-900 px-3 py-2"
                 />
               </div>
-              <div className="sm:col-span-2">
+              <div>
+                <label className="block font-semibold mb-1">المشروع العام للقيد</label>
+                <select
+                  value={headerProjectId}
+                  onChange={(e) => {
+                    const pid = e.target.value;
+                    setHeaderProjectId(pid);
+                    setHeaderSubProjectId("");
+                    setDraftLines((prev) =>
+                      prev.map((l) => (!l.projectId ? { ...l, projectId: pid } : l))
+                    );
+                  }}
+                  className="w-full rounded-xl border border-slate-300 bg-white dark:bg-slate-900 px-3 py-2"
+                >
+                  <option value="">عام / بدون مشروع</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block font-semibold mb-1">القطاع الفرعي العام للقيد</label>
+                <select
+                  value={headerSubProjectId}
+                  onChange={(e) => {
+                    const spid = e.target.value;
+                    setHeaderSubProjectId(spid);
+                    setDraftLines((prev) =>
+                      prev.map((l) => (!l.subProjectId ? { ...l, subProjectId: spid } : l))
+                    );
+                  }}
+                  className="w-full rounded-xl border border-slate-300 bg-white dark:bg-slate-900 px-3 py-2"
+                >
+                  <option value="">بدون قطاع فرعي</option>
+                  {(projects.find((p) => p.id === headerProjectId)?.subProjects || []).map((sp) => (
+                    <option key={sp.id} value={sp.id}>
+                      {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="sm:col-span-4">
                 <label className="block font-semibold mb-1">البيان المحاسبي العام *</label>
                 <input
                   type="text"
@@ -433,11 +497,12 @@ export function GeneralLedgerTab({
             </div>
 
             <div className="space-y-2 overflow-x-auto">
-              <table className="w-full text-right border-collapse min-w-[680px]">
+              <table className="w-full text-right border-collapse min-w-[760px]">
                 <thead>
                   <tr className="border-b text-[11px] text-slate-500">
                     <th className="py-2">الحساب (المستوى 5 فقط)</th>
                     <th className="py-2">المشروع</th>
+                    <th className="py-2">القطاع الفرعي</th>
                     <th className="py-2">العملة</th>
                     <th className="py-2">مدين (DR)</th>
                     <th className="py-2">دائن (CR)</th>
@@ -470,7 +535,7 @@ export function GeneralLedgerTab({
                           value={line.projectId}
                           onChange={(e) =>
                             setDraftLines((prev) =>
-                              prev.map((x, i) => (i === idx ? { ...x, projectId: e.target.value } : x))
+                              prev.map((x, i) => (i === idx ? { ...x, projectId: e.target.value, subProjectId: "" } : x))
                             )
                           }
                           className="w-full rounded-lg border border-slate-300 bg-white dark:bg-slate-900 px-2 py-1.5"
@@ -479,6 +544,24 @@ export function GeneralLedgerTab({
                           {projects.map((p) => (
                             <option key={p.id} value={p.id}>
                               {p.name}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="py-2 pl-2">
+                        <select
+                          value={line.subProjectId || ""}
+                          onChange={(e) =>
+                            setDraftLines((prev) =>
+                              prev.map((x, i) => (i === idx ? { ...x, subProjectId: e.target.value } : x))
+                            )
+                          }
+                          className="w-full rounded-lg border border-slate-300 bg-white dark:bg-slate-900 px-2 py-1.5"
+                        >
+                          <option value="">بدون قطاع</option>
+                          {(projects.find((p) => p.id === (line.projectId || headerProjectId))?.subProjects || []).map((sp) => (
+                            <option key={sp.id} value={sp.id}>
+                              {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
                             </option>
                           ))}
                         </select>
@@ -573,7 +656,8 @@ export function GeneralLedgerTab({
                         credit: "0",
                         currency: "YER",
                         memo: "",
-                        projectId: projects[0]?.id || "",
+                        projectId: headerProjectId || projects[0]?.id || "",
+                        subProjectId: headerSubProjectId || "",
                       },
                     ])
                   }
@@ -679,6 +763,16 @@ export function GeneralLedgerTab({
                         Ref: {je.reference}
                       </span>
                     )}
+                    {je.project && (
+                      <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-mono text-[11px]">
+                        {je.project.nameAr}
+                      </span>
+                    )}
+                    {je.subProject && (
+                      <span className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-mono text-[11px]">
+                        {je.subProject.code ? `${je.subProject.code} • ${je.subProject.nameAr}` : je.subProject.nameAr}
+                      </span>
+                    )}
                     <span className="font-bold text-sm">{je.narrationAr}</span>
                   </div>
 
@@ -734,7 +828,14 @@ export function GeneralLedgerTab({
                         <tr key={line.id}>
                           <td className="py-1.5 font-mono font-bold">{line.account.code}</td>
                           <td className="py-1.5 font-semibold">{line.account.nameAr}</td>
-                          <td className="py-1.5 text-slate-500">{line.project?.nameAr || "—"}</td>
+                          <td className="py-1.5 text-slate-500">
+                            <div>{line.project?.nameAr || "—"}</div>
+                            {line.subProject && (
+                              <span className="inline-block mt-0.5 text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                                {line.subProject.code ? `${line.subProject.code} • ${line.subProject.nameAr}` : line.subProject.nameAr}
+                              </span>
+                            )}
+                          </td>
                           <td className="py-1.5 text-slate-500">{line.memo || "—"}</td>
                           <td className="py-1.5 font-mono font-bold text-emerald-700">
                             {line.debitBase > 0 ? fmtNum(line.debitBase) : "—"}

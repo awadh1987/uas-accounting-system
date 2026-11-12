@@ -29,6 +29,7 @@ interface DashboardTabProps {
   lang: LanguageCode;
   currency: CurrencyCode;
   selectedProjectId: string;
+  selectedSubProjectId?: string;
   filteredSales: UasSaleTransaction[];
   filteredExpenses: UasOperatingExpense[];
   filteredWorkers: UasWorkerWage[];
@@ -42,6 +43,7 @@ export function DashboardTab({
   lang,
   currency,
   selectedProjectId,
+  selectedSubProjectId = "ALL",
   filteredSales,
   filteredExpenses,
   filteredWorkers,
@@ -57,6 +59,15 @@ export function DashboardTab({
       ? `${fmtNum(amountYER)} ريال`
       : formatCurrencyVal(amountYER, currency, state.exchangeRates);
 
+  const selectedSubProject = useMemo(() => {
+    if (!selectedSubProjectId || selectedSubProjectId === "ALL") return null;
+    for (const p of state.projects) {
+      const sp = p.subProjects?.find((s) => s.id === selectedSubProjectId);
+      if (sp) return sp;
+    }
+    return null;
+  }, [state.projects, selectedSubProjectId]);
+
   const filteredProjects = useMemo(
     () =>
       selectedProjectId === "ALL"
@@ -65,7 +76,9 @@ export function DashboardTab({
     [state.projects, selectedProjectId]
   );
 
-  const totalProjVal = filteredProjects.reduce((acc, p) => acc + (Number(p.estimatedValue) || 0), 0);
+  const totalProjVal = selectedSubProject
+    ? Number(selectedSubProject.budget) || 0
+    : filteredProjects.reduce((acc, p) => acc + (Number(p.estimatedValue) || 0), 0);
   const totalSales = filteredSales.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
   const totalSalesCredit = filteredSales.reduce((acc, s) => acc + (Number(s.credit) || 0), 0);
   const totalSalesDebit = filteredSales.reduce((acc, s) => acc + (Number(s.debit) || 0), 0);

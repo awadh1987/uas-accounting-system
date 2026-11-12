@@ -38,6 +38,7 @@ export interface PostJournalEntryInput {
   sourceType?: string;
   sourceId?: string;
   projectId?: string | null;
+  subProjectId?: string | null;
   createdById?: string;
   status?: "DRAFT" | "PENDING_APPROVAL" | "APPROVED" | "POSTED" | "VOIDED";
   lines: JournalLineInput[];
@@ -69,6 +70,7 @@ export interface PostVendorPaymentInput {
   vendorId: string;
   billId?: string | null;
   projectId?: string | null;
+  subProjectId?: string | null;
   acquisitionCycleId?: string | null;
   treasuryId: string;
   amount: number;
@@ -84,6 +86,7 @@ export interface PostVendorPaymentInput {
 export interface PostSalesInvoiceInput {
   customerId: string;
   projectId: string;
+  subProjectId?: string | null;
   harvestCycleId?: string | null;
   amount: number;
   currency?: string;
@@ -97,6 +100,8 @@ export interface PostSalesInvoiceInput {
 export interface PostCustomerReceiptInput {
   customerId: string;
   invoiceId?: string | null;
+  projectId?: string | null;
+  subProjectId?: string | null;
   treasuryId: string;
   amount: number;
   currency?: string;
@@ -110,6 +115,7 @@ export interface FinancialReportFilters {
   fromDate?: string | Date;
   toDate?: string | Date;
   projectId?: string;
+  subProjectId?: string;
   maxLevel?: number;
 }
 
@@ -441,7 +447,10 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
         creditBase,
         memo: line.memo || input.narrationAr,
         projectId: line.projectId !== undefined ? line.projectId : input.projectId ?? null,
-        subProjectId: line.subProjectId ?? null,
+        subProjectId:
+          line.subProjectId !== undefined
+            ? line.subProjectId
+            : input.subProjectId ?? null,
         harvestCycleId: line.harvestCycleId ?? null,
       });
     }
@@ -463,6 +472,7 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
         sourceType: input.sourceType || "MANUAL",
         sourceId: input.sourceId || null,
         projectId: input.projectId || null,
+        subProjectId: input.subProjectId || null,
         createdById,
         lines: { create: preparedLines },
         ...(input.attachments && input.attachments.length > 0
@@ -607,6 +617,7 @@ export async function postVendorBill(input: PostVendorBillInput) {
       narrationEn: `Vendor Bill ${billNumber} - ${vendor.nameEn || vendor.nameAr}`,
       sourceType: "VENDOR_BILL",
       projectId: project.id,
+      subProjectId: input.subProjectId ?? null,
       createdById: input.createdById,
       status: "POSTED",
       lines: [
@@ -703,14 +714,14 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
     const payDate = input.date ? new Date(input.date) : new Date();
 
     let projectId: string | null = input.projectId ?? null;
-    let subProjectId: string | null = null;
+    let subProjectId: string | null = input.subProjectId ?? null;
     let acquisitionCycleId: string | null = input.acquisitionCycleId ?? null;
 
     if (input.billId) {
       const bill = await tx.vendorBill.findUnique({ where: { id: input.billId } });
       if (!bill) throw new Error("BILL_NOT_FOUND");
       projectId = projectId || bill.projectId;
-      subProjectId = bill.subProjectId;
+      subProjectId = subProjectId || bill.subProjectId;
       acquisitionCycleId = acquisitionCycleId || bill.acquisitionCycleId;
 
       const billRate = await getExchangeRateToYER(tx, bill.currency);
@@ -779,6 +790,7 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
       narrationEn: `Payment Voucher ${voucherNumber} to ${vendor.nameEn || vendor.nameAr}`,
       sourceType: "VENDOR_PAYMENT",
       projectId,
+      subProjectId,
       createdById: input.createdById,
       status: "POSTED",
       lines,
@@ -801,6 +813,7 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
         referenceNumber: input.referenceNumber || null,
         notes: input.notes || null,
         projectId,
+        subProjectId,
         acquisitionCycleId,
         journalEntryId: je.id,
         qrVerificationHash,
@@ -858,6 +871,7 @@ export async function postSalesInvoice(input: PostSalesInvoiceInput) {
       narrationEn: `Sales Invoice ${invoiceNumber} - ${customer.nameEn || customer.nameAr}`,
       sourceType: "SALES_INVOICE",
       projectId: project.id,
+      subProjectId: input.subProjectId ?? null,
       createdById: input.createdById,
       status: "POSTED",
       lines: [
@@ -868,6 +882,7 @@ export async function postSalesInvoice(input: PostSalesInvoiceInput) {
           exchangeRate: rate,
           memo: `ذمة مدينة - ${customer.nameAr}`,
           projectId: project.id,
+          subProjectId: input.subProjectId ?? null,
           harvestCycleId: input.harvestCycleId ?? null,
         },
         {
@@ -877,6 +892,7 @@ export async function postSalesInvoice(input: PostSalesInvoiceInput) {
           exchangeRate: rate,
           memo: input.notes || `إيراد مبيعات ${project.nameAr}`,
           projectId: project.id,
+          subProjectId: input.subProjectId ?? null,
           harvestCycleId: input.harvestCycleId ?? null,
         },
       ],
@@ -891,6 +907,7 @@ export async function postSalesInvoice(input: PostSalesInvoiceInput) {
         invoiceNumber,
         customerId: customer.id,
         projectId: project.id,
+        subProjectId: input.subProjectId ?? null,
         harvestCycleId: input.harvestCycleId ?? null,
         date: invDate,
         totalAmount,
@@ -931,13 +948,15 @@ export async function postCustomerReceipt(input: PostCustomerReceiptInput) {
     const voucherNumber = await nextSequenceCode(tx, "receiptVoucher", "RV");
     const rcpDate = input.date ? new Date(input.date) : new Date();
 
-    let projectId: string | null = null;
+    let projectId: string | null = input.projectId ?? null;
+    let subProjectId: string | null = input.subProjectId ?? null;
     let harvestCycleId: string | null = null;
 
     if (input.invoiceId) {
       const inv = await tx.salesInvoice.findUnique({ where: { id: input.invoiceId } });
       if (!inv) throw new Error("INVOICE_NOT_FOUND");
-      projectId = inv.projectId;
+      projectId = projectId || inv.projectId;
+      subProjectId = subProjectId || inv.subProjectId;
       harvestCycleId = inv.harvestCycleId;
 
       const invRate = await getExchangeRateToYER(tx, inv.currency);
@@ -973,6 +992,7 @@ export async function postCustomerReceipt(input: PostCustomerReceiptInput) {
       narrationEn: `Receipt Voucher ${voucherNumber} from ${customer.nameEn || customer.nameAr}`,
       sourceType: "CUSTOMER_RECEIPT",
       projectId,
+      subProjectId,
       createdById: input.createdById,
       status: "POSTED",
       lines: [
@@ -983,6 +1003,7 @@ export async function postCustomerReceipt(input: PostCustomerReceiptInput) {
           exchangeRate: rate,
           memo: `توريد إلى ${treasury.nameAr}`,
           projectId,
+          subProjectId,
           harvestCycleId,
         },
         {
@@ -992,6 +1013,7 @@ export async function postCustomerReceipt(input: PostCustomerReceiptInput) {
           exchangeRate: rate,
           memo: input.notes || `تحصيل من العميل ${customer.nameAr}`,
           projectId,
+          subProjectId,
           harvestCycleId,
         },
       ],
@@ -1008,6 +1030,7 @@ export async function postCustomerReceipt(input: PostCustomerReceiptInput) {
         customerId: customer.id,
         invoiceId: input.invoiceId ?? null,
         treasuryId: treasury.id,
+        subProjectId,
         amount,
         currency,
         notes: input.notes || null,
@@ -1029,6 +1052,7 @@ export async function postOperatingExpenseJournalTx(
   input: {
     expenseId: string;
     projectId: string;
+    subProjectId?: string | null;
     harvestCycleId?: string | null;
     category: string;
     subType: string;
@@ -1050,12 +1074,14 @@ export async function postOperatingExpenseJournalTx(
     sourceType: "EXPENSE",
     sourceId: input.expenseId,
     projectId: input.projectId,
+    subProjectId: input.subProjectId ?? null,
     createdById: input.createdById,
     lines: [
       {
         accountCode: expCode,
         debit: input.totalAmount,
         projectId: input.projectId,
+        subProjectId: input.subProjectId ?? null,
         harvestCycleId: input.harvestCycleId ?? null,
         memo: input.subType,
       },
@@ -1063,6 +1089,7 @@ export async function postOperatingExpenseJournalTx(
         ...(cashAccountId ? { accountId: cashAccountId } : { accountCode: "111101" }),
         credit: input.totalAmount,
         projectId: input.projectId,
+        subProjectId: input.subProjectId ?? null,
         harvestCycleId: input.harvestCycleId ?? null,
         memo: `صرف نقدي - ${input.subType}`,
       },
@@ -1080,6 +1107,7 @@ export async function postWorkerWageJournalTx(
     workerName: string;
     workerAccountId: string;
     projectId: string;
+    subProjectId?: string | null;
     harvestCycleId?: string | null;
     totalWage: number;
     creditAmount: number;
@@ -1097,12 +1125,14 @@ export async function postWorkerWageJournalTx(
     sourceType: "WORKER_ACCRUAL",
     sourceId: input.wageEntryId,
     projectId: input.projectId,
+    subProjectId: input.subProjectId ?? null,
     createdById: input.createdById,
     lines: [
       {
         accountCode: "511101",
         debit: input.totalWage,
         projectId: input.projectId,
+        subProjectId: input.subProjectId ?? null,
         harvestCycleId: input.harvestCycleId ?? null,
         memo: `أجور عمالة مباشرة - ${input.workerName}`,
       },
@@ -1110,6 +1140,7 @@ export async function postWorkerWageJournalTx(
         accountId: input.workerAccountId,
         credit: input.totalWage,
         projectId: input.projectId,
+        subProjectId: input.subProjectId ?? null,
         harvestCycleId: input.harvestCycleId ?? null,
         memo: `مستحق للعامل ${input.workerName}`,
       },
@@ -1126,12 +1157,14 @@ export async function postWorkerWageJournalTx(
       sourceType: "WORKER_PAYOUT",
       sourceId: input.wageEntryId,
       projectId: input.projectId,
+      subProjectId: input.subProjectId ?? null,
       createdById: input.createdById,
       lines: [
         {
           accountId: input.workerAccountId,
           debit: input.creditAmount,
           projectId: input.projectId,
+          subProjectId: input.subProjectId ?? null,
           harvestCycleId: input.harvestCycleId ?? null,
           memo: `تسوية مستحقات ${input.workerName}`,
         },
@@ -1139,6 +1172,7 @@ export async function postWorkerWageJournalTx(
           accountCode: "111101",
           credit: input.creditAmount,
           projectId: input.projectId,
+          subProjectId: input.subProjectId ?? null,
           harvestCycleId: input.harvestCycleId ?? null,
           memo: `صرف نقدي للعامل ${input.workerName}`,
         },
@@ -1260,6 +1294,7 @@ function buildPostedLineWhere(filters: FinancialReportFilters): Prisma.JournalEn
 
   return {
     ...(filters.projectId && filters.projectId !== "ALL" ? { projectId: filters.projectId } : {}),
+    ...(filters.subProjectId && filters.subProjectId !== "ALL" ? { subProjectId: filters.subProjectId } : {}),
     journalEntry: {
       status: "POSTED",
       ...(filters.fromDate || filters.toDate ? { date: dateFilter } : {}),
@@ -1375,6 +1410,54 @@ export async function generateFinancialReports(filters: FinancialReportFilters =
     };
   });
 
+  const subProjectBreakdown = projects.flatMap((proj) =>
+    proj.subProjects
+      .filter((sp) => !filters.subProjectId || filters.subProjectId === "ALL" || sp.id === filters.subProjectId)
+      .map((sp) => {
+        const spLines = postedLinesWithAccount.filter((l) => l.subProjectId === sp.id);
+        const rev = round4(
+          spLines
+            .filter((l) => l.account.type === "REVENUE")
+            .reduce((s, l) => s + toNum(l.creditBase) - toNum(l.debitBase), 0)
+        );
+        const cogs = round4(
+          spLines
+            .filter((l) => l.account.type === "EXPENSE" && l.account.code.startsWith("51"))
+            .reduce((s, l) => s + toNum(l.debitBase) - toNum(l.creditBase), 0)
+        );
+        const opex = round4(
+          spLines
+            .filter((l) => l.account.type === "EXPENSE" && !l.account.code.startsWith("51"))
+            .reduce((s, l) => s + toNum(l.debitBase) - toNum(l.creditBase), 0)
+        );
+        const actualCost = round4(cogs + opex);
+        const budget = round4(toNum(sp.budget) || 0);
+        const variance = round4(budget - actualCost);
+        const utilizationPct = budget > 0 ? round4((actualCost / budget) * 100) : 0;
+
+        return {
+          subProjectId: sp.id,
+          projectId: proj.id,
+          projectCode: proj.code,
+          projectNameAr: proj.nameAr,
+          code: sp.code,
+          nameAr: sp.nameAr,
+          nameEn: sp.nameEn,
+          budgetTotal: budget,
+          budget,
+          revenue: rev,
+          cogs,
+          operatingExpenses: opex,
+          actualCost,
+          netProfit: round4(rev - actualCost),
+          variance,
+          utilizationPct,
+          isOverBudget: actualCost > budget && budget > 0,
+          status: sp.status,
+        };
+      })
+  );
+
   // Balance Sheet
   const assetAccounts = postingRows.filter((n) => n.type === "ASSET" && n.balance !== 0);
   const liabilityAccounts = postingRows.filter((n) => n.type === "LIABILITY" && n.balance !== 0);
@@ -1392,6 +1475,7 @@ export async function generateFinancialReports(filters: FinancialReportFilters =
       fromDate: filters.fromDate || null,
       toDate: filters.toDate || null,
       projectId: filters.projectId || "ALL",
+      subProjectId: filters.subProjectId || "ALL",
       maxLevel,
     },
     trialBalance: {
@@ -1414,6 +1498,7 @@ export async function generateFinancialReports(filters: FinancialReportFilters =
       totalExpenses,
       netProfit,
       projectBreakdown,
+      subProjectBreakdown,
     },
     balanceSheet: {
       assetLines: assetAccounts,
@@ -2092,6 +2177,7 @@ export async function updateJournalEntry(input: {
   narrationAr?: string;
   narrationEn?: string;
   projectId?: string | null;
+  subProjectId?: string | null;
   lines?: JournalLineInput[];
   allowLockedAdjustment?: boolean;
   createdById?: string;
@@ -2122,6 +2208,8 @@ export async function updateJournalEntry(input: {
       input.narrationEn !== undefined ? input.narrationEn?.trim() || null : existing.narrationEn;
     const nextReference = input.reference !== undefined ? input.reference.trim() : existing.reference;
     const nextProjectId = input.projectId !== undefined ? input.projectId : existing.projectId;
+    const nextSubProjectId =
+      input.subProjectId !== undefined ? input.subProjectId : existing.subProjectId;
 
     if (input.lines) {
       if (input.lines.length < 2) {
@@ -2179,7 +2267,7 @@ export async function updateJournalEntry(input: {
           creditBase,
           memo: line.memo || nextNarrationAr,
           projectId: line.projectId !== undefined ? line.projectId : nextProjectId,
-          subProjectId: line.subProjectId ?? null,
+          subProjectId: line.subProjectId !== undefined ? line.subProjectId : nextSubProjectId,
           harvestCycleId: line.harvestCycleId ?? null,
         });
       }
@@ -2204,6 +2292,7 @@ export async function updateJournalEntry(input: {
         narrationAr: nextNarrationAr,
         narrationEn: nextNarrationEn,
         projectId: nextProjectId,
+        subProjectId: nextSubProjectId,
       },
       include: {
         lines: { include: { account: true } },
@@ -2237,6 +2326,7 @@ export async function updateJournalEntry(input: {
 export async function updateOperatingExpenseAtomic(input: {
   id: string;
   projectId?: string;
+  subProjectId?: string | null;
   harvestName?: string;
   category?: string;
   subType?: string;
@@ -2256,6 +2346,12 @@ export async function updateOperatingExpenseAtomic(input: {
     if (oldCycle?.isLocked) throw new Error("HARVEST_LOCKED");
 
     const nextProjectId = input.projectId?.trim() || existing.projectId;
+    const nextSubProjectId =
+      input.subProjectId !== undefined
+        ? input.subProjectId
+          ? input.subProjectId.trim()
+          : null
+        : existing.subProjectId;
     const nextHarvest = input.harvestName?.trim() || existing.harvestName;
     const nextCycle = await tx.harvestCycle.findFirst({
       where: { projectId: nextProjectId, name: nextHarvest },
@@ -2275,6 +2371,7 @@ export async function updateOperatingExpenseAtomic(input: {
       Math.abs(nextTotal - existing.totalAmount) > 0.005 ||
       nextCategory !== existing.category ||
       nextProjectId !== existing.projectId ||
+      nextSubProjectId !== existing.subProjectId ||
       nextCycle?.id !== existing.harvestCycleId;
 
     let nextJournalEntryId = existing.journalEntryId;
@@ -2290,6 +2387,7 @@ export async function updateOperatingExpenseAtomic(input: {
       const je = await postOperatingExpenseJournalTx(tx, {
         expenseId: existing.id,
         projectId: nextProjectId,
+        subProjectId: nextSubProjectId,
         harvestCycleId: nextCycle?.id ?? null,
         category: nextCategory,
         subType: nextSubType,
@@ -2309,6 +2407,7 @@ export async function updateOperatingExpenseAtomic(input: {
       where: { id: existing.id },
       data: {
         projectId: nextProjectId,
+        subProjectId: nextSubProjectId,
         harvestCycleId: nextCycle?.id ?? null,
         harvestName: nextHarvest,
         category: nextCategory,
@@ -2348,6 +2447,7 @@ export async function updateOperatingExpenseAtomic(input: {
 export async function updateWorkerWageAtomic(input: {
   id: string;
   projectId?: string;
+  subProjectId?: string | null;
   harvestName?: string;
   name?: string;
   dailyWage?: number;
@@ -2367,6 +2467,12 @@ export async function updateWorkerWageAtomic(input: {
     if (oldCycle?.isLocked) throw new Error("HARVEST_LOCKED");
 
     const nextProjectId = input.projectId?.trim() || existing.projectId;
+    const nextSubProjectId =
+      input.subProjectId !== undefined
+        ? input.subProjectId
+          ? input.subProjectId.trim()
+          : null
+        : existing.subProjectId;
     const nextHarvest = input.harvestName?.trim() || existing.harvestName;
     const nextCycle = await tx.harvestCycle.findFirst({
       where: { projectId: nextProjectId, name: nextHarvest },
@@ -2398,6 +2504,7 @@ export async function updateWorkerWageAtomic(input: {
       Math.abs(nextCredit - existing.creditAmount) > 0.005 ||
       nextName !== existing.workerName ||
       nextProjectId !== existing.projectId ||
+      nextSubProjectId !== existing.subProjectId ||
       nextCycle?.id !== existing.harvestCycleId;
 
     let nextJournalEntryId = existing.journalEntryId;
@@ -2420,6 +2527,7 @@ export async function updateWorkerWageAtomic(input: {
           workerName: worker.name,
           workerAccountId: worker.accountId,
           projectId: nextProjectId,
+          subProjectId: nextSubProjectId,
           harvestCycleId: nextCycle?.id ?? null,
           totalWage: nextTotal,
           creditAmount: nextCredit,
@@ -2441,6 +2549,7 @@ export async function updateWorkerWageAtomic(input: {
         workerId: worker.id,
         workerName: worker.name,
         projectId: nextProjectId,
+        subProjectId: nextSubProjectId,
         harvestCycleId: nextCycle?.id ?? null,
         harvestName: nextHarvest,
         dailyWage: nextDailyWage,
@@ -2480,6 +2589,7 @@ export async function updateWorkerWageAtomic(input: {
 export async function updateSaleTransactionAtomic(input: {
   id: string;
   projectId?: string;
+  subProjectId?: string | null;
   harvestName?: string;
   batch?: string;
   customer?: string;
@@ -2503,6 +2613,12 @@ export async function updateSaleTransactionAtomic(input: {
     if (oldCycle?.isLocked) throw new Error("HARVEST_LOCKED");
 
     const nextProjectId = input.projectId?.trim() || existing.projectId;
+    const nextSubProjectId =
+      input.subProjectId !== undefined
+        ? input.subProjectId
+          ? input.subProjectId.trim()
+          : null
+        : existing.subProjectId;
     const nextHarvest = input.harvestName?.trim() || existing.harvestName;
     const nextCycle = await tx.harvestCycle.findFirst({
       where: { projectId: nextProjectId, name: nextHarvest },
@@ -2536,6 +2652,7 @@ export async function updateSaleTransactionAtomic(input: {
       Math.abs(nextCredit - existing.creditPaid) > 0.005 ||
       nextCustomerName !== existing.customerName ||
       nextProjectId !== existing.projectId ||
+      nextSubProjectId !== existing.subProjectId ||
       nextCycle?.id !== existing.harvestCycleId;
 
     let nextJournalEntryId = existing.journalEntryId;
@@ -2554,6 +2671,7 @@ export async function updateSaleTransactionAtomic(input: {
           tx,
           customerId: customer.id,
           projectId: nextProjectId,
+          subProjectId: nextSubProjectId,
           harvestCycleId: nextCycle?.id ?? null,
           amount: nextTotal,
           currency: "YER",
@@ -2568,6 +2686,8 @@ export async function updateSaleTransactionAtomic(input: {
             tx,
             customerId: customer.id,
             invoiceId: invRes.invoice.id,
+            projectId: nextProjectId,
+            subProjectId: nextSubProjectId,
             treasuryId: "t1",
             amount: nextCredit,
             currency: "YER",
@@ -2590,6 +2710,7 @@ export async function updateSaleTransactionAtomic(input: {
       where: { id: existing.id },
       data: {
         projectId: nextProjectId,
+        subProjectId: nextSubProjectId,
         harvestCycleId: nextCycle?.id ?? null,
         harvestName: nextHarvest,
         saleBatchLabel: nextBatch,

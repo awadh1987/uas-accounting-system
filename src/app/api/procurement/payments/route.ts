@@ -23,6 +23,7 @@ export async function GET(req: NextRequest) {
         vendor: { select: { id: true, code: true, nameAr: true, nameEn: true, phone: true } },
         bill: { select: { id: true, billNumber: true, totalAmount: true, balanceDue: true } },
         treasury: { select: { id: true, code: true, nameAr: true, nameEn: true, currency: true } },
+        subProject: { select: { id: true, code: true, nameAr: true } },
       },
       orderBy: { date: "desc" },
     });
@@ -50,6 +51,8 @@ export async function GET(req: NextRequest) {
         currency: p.currency,
         referenceNumber: p.referenceNumber,
         projectId: p.projectId,
+        subProjectId: p.subProjectId,
+        subProject: p.subProject,
         acquisitionCycleId: p.acquisitionCycleId,
         notes: p.notes,
         journalEntryId: p.journalEntryId,
@@ -76,6 +79,7 @@ export async function POST(req: NextRequest) {
     const vendorId = String(body.vendorId || "").trim();
     const billId = body.billId ? String(body.billId).trim() : null;
     const projectId = body.projectId ? String(body.projectId).trim() : null;
+    const subProjectId = body.subProjectId ? String(body.subProjectId).trim() : null;
     const acquisitionCycleId = body.acquisitionCycleId ? String(body.acquisitionCycleId).trim() : null;
     const treasuryId = String(body.treasuryId || "").trim();
     const amount = Number(body.amount) || 0;
@@ -92,6 +96,7 @@ export async function POST(req: NextRequest) {
       vendorId,
       billId,
       projectId,
+      subProjectId,
       acquisitionCycleId,
       treasuryId,
       amount,
@@ -143,6 +148,12 @@ async function handlePaymentUpdate(req: NextRequest) {
     const nextFee =
       body.transferFee !== undefined ? Math.max(0, Number(body.transferFee) || 0) : Number(existing.transferFee);
     const nextTreasuryId = body.treasuryId ? String(body.treasuryId).trim() : existing.treasuryId;
+    const nextSubProjectId =
+      body.subProjectId !== undefined
+        ? body.subProjectId
+          ? String(body.subProjectId).trim()
+          : null
+        : existing.subProjectId;
     const nextDate = body.date ? new Date(String(body.date)) : existing.date;
     const nextNotes =
       body.notes !== undefined ? (body.notes ? String(body.notes).trim() : null) : existing.notes;
@@ -156,7 +167,8 @@ async function handlePaymentUpdate(req: NextRequest) {
     const financialChanged =
       Math.abs(nextAmount - Number(existing.amount)) > 0.005 ||
       Math.abs(nextFee - Number(existing.transferFee)) > 0.005 ||
-      nextTreasuryId !== existing.treasuryId;
+      nextTreasuryId !== existing.treasuryId ||
+      nextSubProjectId !== existing.subProjectId;
 
     const updated = await prisma.$transaction(async (tx) => {
       let nextJournalEntryId = existing.journalEntryId;
@@ -249,6 +261,7 @@ async function handlePaymentUpdate(req: NextRequest) {
           sourceType: "VENDOR_PAYMENT",
           sourceId: existing.id,
           projectId: existing.projectId,
+          subProjectId: nextSubProjectId,
           createdById: auth.actor.userId ?? undefined,
           lines: [
             {
@@ -258,6 +271,7 @@ async function handlePaymentUpdate(req: NextRequest) {
               exchangeRate: payRate,
               memo: nextNotes || `سداد معدل للمورد ${existing.vendor.nameAr}`,
               projectId: existing.projectId,
+              subProjectId: nextSubProjectId,
             },
             ...(nextFee > 0
               ? [
@@ -268,6 +282,7 @@ async function handlePaymentUpdate(req: NextRequest) {
                     exchangeRate: payRate,
                     memo: `رسوم تحويل معدلة ${existing.voucherNumber}`,
                     projectId: existing.projectId,
+                    subProjectId: nextSubProjectId,
                   },
                 ]
               : []),
@@ -278,6 +293,7 @@ async function handlePaymentUpdate(req: NextRequest) {
               exchangeRate: payRate,
               memo: `صرف من ${nextTreasury.nameAr}`,
               projectId: existing.projectId,
+              subProjectId: nextSubProjectId,
             },
           ],
         });
@@ -294,6 +310,7 @@ async function handlePaymentUpdate(req: NextRequest) {
         data: {
           date: nextDate,
           treasuryId: nextTreasuryId,
+          subProjectId: nextSubProjectId,
           amount: nextAmount,
           transferFee: nextFee,
           referenceNumber: nextRef,

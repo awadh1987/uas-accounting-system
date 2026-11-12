@@ -60,6 +60,22 @@ interface AcquisitionCycleItem {
   vendorBills: AcquisitionBillRef[];
 }
 
+interface ApiSubProjectItem {
+  id: string;
+  projectId?: string;
+  code: string;
+  nameAr: string;
+  nameEn: string;
+  budget: number;
+  status?: string;
+  notes?: string | null;
+  vendorId?: string | null;
+  actualSpend?: number;
+  revenue?: number;
+  netProfit?: number;
+  remainingBudget?: number;
+}
+
 interface ApiProjectItem {
   id: string;
   code: string;
@@ -72,7 +88,7 @@ interface ApiProjectItem {
   budgetTotal: number;
   status: string;
   notes: string;
-  subProjects: Array<{ id: string; code: string; nameAr: string; nameEn: string; budget: number }>;
+  subProjects: ApiSubProjectItem[];
   harvestCycles: Array<{ id: string; cycleNumber: number; name: string; isLocked: boolean }>;
   metrics: {
     revenue: number;
@@ -134,7 +150,7 @@ export function ProjectsManagerTab({
   >(null);
 
   const [drawerMode, setDrawerMode] = useState<
-    null | "project" | "editProject" | "subproject" | "harvest" | "acquisition" | "batchPayment"
+    null | "project" | "editProject" | "subproject" | "editSubproject" | "harvest" | "acquisition" | "batchPayment"
   >(null);
 
   // Create Project state
@@ -154,10 +170,26 @@ export function ProjectsManagerTab({
   const [editProjStatus, setEditProjStatus] = useState("ACTIVE");
   const [editProjNotes, setEditProjNotes] = useState("");
 
-  // Sub-project creator
+  // Sub-project create state
   const [subTargetProjectId, setSubTargetProjectId] = useState(projects[0]?.id || "");
+  const [subCode, setSubCode] = useState("");
   const [subNameAr, setSubNameAr] = useState("");
+  const [subNameEn, setSubNameEn] = useState("");
   const [subBudget, setSubBudget] = useState("250000");
+  const [subStatus, setSubStatus] = useState("ACTIVE");
+  const [subNotes, setSubNotes] = useState("");
+  const [subVendorId, setSubVendorId] = useState("");
+
+  // Sub-project edit state
+  const [editSubId, setEditSubId] = useState("");
+  const [editSubProjectId, setEditSubProjectId] = useState(projects[0]?.id || "");
+  const [editSubCode, setEditSubCode] = useState("");
+  const [editSubNameAr, setEditSubNameAr] = useState("");
+  const [editSubNameEn, setEditSubNameEn] = useState("");
+  const [editSubBudget, setEditSubBudget] = useState("");
+  const [editSubStatus, setEditSubStatus] = useState("ACTIVE");
+  const [editSubNotes, setEditSubNotes] = useState("");
+  const [editSubVendorId, setEditSubVendorId] = useState("");
 
   // Harvest creator
   const [harvestProjId, setHarvestProjId] = useState(projects[0]?.id || "");
@@ -294,28 +326,91 @@ export function ProjectsManagerTab({
     await Promise.all([loadPortfolioData(), onRefreshState()]);
   }
 
+  function openCreateSubProjectDrawer(proj?: ApiProjectItem) {
+    setSubTargetProjectId(proj?.id || projects[0]?.id || "");
+    setSubCode("");
+    setSubNameAr("");
+    setSubNameEn("");
+    setSubBudget("250000");
+    setSubStatus("ACTIVE");
+    setSubNotes("");
+    setSubVendorId("");
+    setDrawerMode("subproject");
+  }
+
+  function openEditSubProjectDrawer(sp: ApiSubProjectItem, parentProjId: string) {
+    setEditSubId(sp.id);
+    setEditSubProjectId(sp.projectId || parentProjId);
+    setEditSubCode(sp.code || "");
+    setEditSubNameAr(sp.nameAr || "");
+    setEditSubNameEn(sp.nameEn || "");
+    setEditSubBudget(String(sp.budget || 0));
+    setEditSubStatus(sp.status || "ACTIVE");
+    setEditSubNotes(sp.notes || "");
+    setEditSubVendorId(sp.vendorId || "");
+    setDrawerMode("editSubproject");
+  }
+
   async function handleAddSubProject(e: React.FormEvent) {
     e.preventDefault();
     const pid = subTargetProjectId || projects[0]?.id;
     if (!pid || !subNameAr.trim()) return;
-    const res = await fetch("/api/projects", {
-      method: "PATCH",
+    const res = await fetch("/api/projects/sub-projects", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        action: "ADD_SUBPROJECT",
         projectId: pid,
+        code: subCode.trim() || undefined,
         nameAr: subNameAr.trim(),
+        nameEn: subNameEn.trim() || undefined,
         budget: Number(subBudget) || 0,
+        status: subStatus || "ACTIVE",
+        notes: subNotes.trim() || undefined,
+        vendorId: subVendorId || undefined,
         actor,
       }),
     });
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
     if (!res.ok) {
-      onToast("تعذر إضافة المشروع الفرعي");
+      onToast(data.error || "تعذر إضافة المشروع الفرعي");
       return;
     }
+    setSubCode("");
     setSubNameAr("");
+    setSubNameEn("");
+    setSubBudget("250000");
+    setSubNotes("");
     setDrawerMode(null);
     onToast("✅ تم إضافة القطاع / المشروع الفرعي بنجاح");
+    await Promise.all([loadPortfolioData(), onRefreshState()]);
+  }
+
+  async function handleSaveEditSubProject(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editSubId || !editSubNameAr.trim()) return;
+    const res = await fetch("/api/projects/sub-projects", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: editSubId,
+        projectId: editSubProjectId,
+        code: editSubCode.trim() || undefined,
+        nameAr: editSubNameAr.trim(),
+        nameEn: editSubNameEn.trim() || undefined,
+        budget: Number(editSubBudget) || 0,
+        status: editSubStatus,
+        notes: editSubNotes.trim() || undefined,
+        vendorId: editSubVendorId || null,
+        actor,
+      }),
+    });
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) {
+      onToast(data.error || "تعذر تعديل بيانات المشروع الفرعي");
+      return;
+    }
+    setDrawerMode(null);
+    onToast("✅ تم تحديث بيانات القطاع الفرعي في قاعدة البيانات");
     await Promise.all([loadPortfolioData(), onRefreshState()]);
   }
 
@@ -693,21 +788,117 @@ export function ProjectsManagerTab({
                   </div>
                 </div>
 
-                {/* Sub-Projects */}
-                {proj.subProjects.length > 0 && (
-                  <div>
-                    <div className="font-bold text-slate-500 mb-1.5">المشاريع والقطاعات الفرعية (Cost Centers):</div>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      {proj.subProjects.map((sp) => (
-                        <div key={sp.id} className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                          <div className="font-mono text-[10px] text-slate-400">{sp.code}</div>
-                          <div className="font-bold">{sp.nameAr}</div>
-                          <div className="text-emerald-600 font-bold tabular-nums">{fmtNum(sp.budget)} YER</div>
-                        </div>
-                      ))}
+                {/* Sub-Projects / Cost Centers Section */}
+                <div className="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40 p-3.5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <FolderKanban className="w-4 h-4 text-emerald-600" />
+                      <span className="font-bold text-xs text-slate-700 dark:text-slate-300">
+                        {isAr ? "المشاريع والقطاعات الفرعية (Cost Centers)" : "Sub-Projects / Cost Centers"}
+                      </span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-mono font-bold">
+                        {proj.subProjects.length}
+                      </span>
                     </div>
+                    {canEditRecords && !readOnly && (
+                      <button
+                        type="button"
+                        onClick={() => openCreateSubProjectDrawer(proj)}
+                        className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 hover:text-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800 transition"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>{isAr ? "+ إضافة قطاع فرعي" : "+ Add Sub-Project"}</span>
+                      </button>
+                    )}
                   </div>
-                )}
+
+                  {proj.subProjects.length === 0 ? (
+                    <div className="text-center py-3 text-xs text-slate-400">
+                      {isAr ? "لا توجد قطاعات فرعية مرتبطة بهذا المشروع حالياً" : "No sub-projects configured for this project yet"}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                      {proj.subProjects.map((sp) => {
+                        const spSpend = sp.actualSpend || 0;
+                        const spBudget = sp.budget || 0;
+                        const spPct = spBudget > 0 ? Math.min(100, Math.round((spSpend / spBudget) * 100)) : 0;
+                        const isOver = spSpend > spBudget && spBudget > 0;
+                        return (
+                          <div
+                            key={sp.id}
+                            className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/80 shadow-sm flex flex-col justify-between gap-2 transition hover:border-slate-300 dark:hover:border-slate-700"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                                    {sp.code}
+                                  </span>
+                                  <span
+                                    className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full ${
+                                      sp.status === "COMPLETED"
+                                        ? "bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300"
+                                        : sp.status === "PAUSED"
+                                        ? "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"
+                                        : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+                                    }`}
+                                  >
+                                    {sp.status === "COMPLETED" ? "مكتمل" : sp.status === "PAUSED" ? "موقوف" : "نشط"}
+                                  </span>
+                                </div>
+                                <div className="font-bold text-xs mt-1 text-slate-800 dark:text-slate-100">
+                                  {sp.nameAr}
+                                </div>
+                                {sp.nameEn && sp.nameEn !== sp.nameAr && (
+                                  <div className="text-[10px] text-slate-400 font-sans">{sp.nameEn}</div>
+                                )}
+                              </div>
+                              {canEditRecords && !readOnly && (
+                                <button
+                                  type="button"
+                                  onClick={() => openEditSubProjectDrawer(sp, proj.id)}
+                                  className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-600 hover:text-emerald-600 bg-slate-100 hover:bg-emerald-50 dark:bg-slate-700/60 dark:hover:bg-emerald-950/40 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 transition"
+                                  title="تعديل القطاع الفرعي"
+                                >
+                                  <Edit3 className="w-3 h-3" />
+                                  <span>تعديل</span>
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Live Budget Progress Bar */}
+                            <div className="space-y-1 pt-1 border-t border-slate-100 dark:border-slate-700/60 text-[10px]">
+                              <div className="flex justify-between items-center font-semibold">
+                                <span className="text-slate-500">الموازنة:</span>
+                                <span className="font-mono tabular-nums text-slate-700 dark:text-slate-200">
+                                  {fmtNum(spBudget)} YER
+                                </span>
+                              </div>
+                              <div className="flex justify-between items-center font-semibold">
+                                <span className="text-slate-500">المنصرف الفعلي:</span>
+                                <span className={`font-mono tabular-nums font-bold ${isOver ? "text-rose-600" : "text-slate-700 dark:text-slate-200"}`}>
+                                  {fmtNum(spSpend)} YER
+                                </span>
+                              </div>
+                              <div className="w-full h-1.5 rounded-full bg-slate-100 dark:bg-slate-700 overflow-hidden">
+                                <div
+                                  className={`h-full transition-all ${
+                                    isOver ? "bg-rose-500" : spPct > 80 ? "bg-amber-500" : "bg-emerald-500"
+                                  }`}
+                                  style={{ width: `${Math.min(100, spPct)}%` }}
+                                />
+                              </div>
+                              <div className="flex justify-between text-[9px] text-slate-400">
+                                <span>{spPct}% استهلاك</span>
+                                <span>المتبقي: {fmtNum(sp.remainingBudget ?? (spBudget - spSpend))} YER</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
 
                 {/* Harvest Cycles with Lock Switches */}
                 <div>
@@ -1307,39 +1498,215 @@ export function ProjectsManagerTab({
         )}
       </SlideOverDrawer>
 
+      {/* Create Sub-Project Drawer */}
       <SlideOverDrawer
         open={drawerMode === "subproject" && !readOnly}
         onClose={() => setDrawerMode(null)}
-        title="إضافة قطاع فرعي (Sub-Project Cost Center)"
-        subtitle="ربط مركز تكلفة فرعي بمشروع رئيسي"
+        title={isAr ? "إضافة قطاع فرعي (Sub-Project Cost Center)" : "Add Sub-Project / Cost Center"}
+        subtitle={isAr ? "ربط مركز تكلفة فرعي بمشروع رئيسي وتحديد الموازنة" : "Link cost center to project with budget"}
       >
         <form onSubmit={handleAddSubProject} className="space-y-3 text-xs">
-          <select
-            value={subTargetProjectId}
-            onChange={(e) => setSubTargetProjectId(e.target.value)}
-            className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-          >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <input
-            value={subNameAr}
-            onChange={(e) => setSubNameAr(e.target.value)}
-            placeholder="اسم القطاع (مثال: قطاع C - البئر الشمالية)"
-            className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-          />
-          <input
-            type="number"
-            value={subBudget}
-            onChange={(e) => setSubBudget(e.target.value)}
-            placeholder="موازنة القطاع (YER)"
-            className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 tabular-nums"
-          />
+          <div>
+            <label className="block font-bold mb-1">المشروع الرئيسي التابع له *</label>
+            <select
+              value={subTargetProjectId}
+              onChange={(e) => setSubTargetProjectId(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.nameAr || p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block font-bold mb-1">كود القطاع الفرعي (اختياري)</label>
+              <input
+                value={subCode}
+                onChange={(e) => setSubCode(e.target.value)}
+                placeholder="تلقائي SUB-XX"
+                className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-mono uppercase"
+              />
+            </div>
+            <div>
+              <label className="block font-bold mb-1">حالة القطاع</label>
+              <select
+                value={subStatus}
+                onChange={(e) => setSubStatus(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+              >
+                <option value="ACTIVE">نشط (ACTIVE)</option>
+                <option value="PAUSED">موقوف مؤقتاً (PAUSED)</option>
+                <option value="COMPLETED">مكتمل (COMPLETED)</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block font-bold mb-1">اسم القطاع بالعربية *</label>
+            <input
+              required
+              value={subNameAr}
+              onChange={(e) => setSubNameAr(e.target.value)}
+              placeholder="مثال: قطاع C - البئر الشمالية"
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">اسم القطاع بالإنجليزية (اختياري)</label>
+            <input
+              value={subNameEn}
+              onChange={(e) => setSubNameEn(e.target.value)}
+              placeholder="e.g. Sector C - North Well"
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-sans"
+            />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">موازنة القطاع التقديرية (YER) *</label>
+            <input
+              type="number"
+              min={0}
+              step="1"
+              value={subBudget}
+              onChange={(e) => setSubBudget(e.target.value)}
+              placeholder="250000"
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 tabular-nums"
+            />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">المقاول أو المورد المشرف (اختياري)</label>
+            <select
+              value={subVendorId}
+              onChange={(e) => setSubVendorId(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            >
+              <option value="">بدون مقاول محدد</option>
+              {vendors.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.nameAr} ({v.phone || v.code})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block font-bold mb-1">ملاحظات وبيانات القطاع</label>
+            <textarea
+              rows={2}
+              value={subNotes}
+              onChange={(e) => setSubNotes(e.target.value)}
+              placeholder="ملاحظات تشغيلية أو زراعية خاصة بهذا القطاع..."
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            />
+          </div>
           <button type="submit" className="w-full py-2.5 rounded-xl accent-bg font-bold">
-            + إضافة القطاع الفرعي
+            + إنشاء القطاع الفرعي
+          </button>
+        </form>
+      </SlideOverDrawer>
+
+      {/* Edit Sub-Project Drawer */}
+      <SlideOverDrawer
+        open={drawerMode === "editSubproject" && !readOnly && canEditRecords}
+        onClose={() => setDrawerMode(null)}
+        title={isAr ? "تعديل القطاع الفرعي (Edit Sub-Project)" : "Edit Sub-Project"}
+        subtitle={isAr ? "تحديث مركز التكلفة والموازنة والحالة مع توثيق التغييرات" : "Update cost center, budget and status with audit log"}
+      >
+        <form onSubmit={handleSaveEditSubProject} className="space-y-3 text-xs">
+          <div>
+            <label className="block font-bold mb-1">المشروع الرئيسي التابع له *</label>
+            <select
+              value={editSubProjectId}
+              onChange={(e) => setEditSubProjectId(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.nameAr || p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block font-bold mb-1">كود القطاع</label>
+              <input
+                value={editSubCode}
+                onChange={(e) => setEditSubCode(e.target.value)}
+                placeholder="SUB-01"
+                className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-mono uppercase"
+              />
+            </div>
+            <div>
+              <label className="block font-bold mb-1">الحالة</label>
+              <select
+                value={editSubStatus}
+                onChange={(e) => setEditSubStatus(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+              >
+                <option value="ACTIVE">نشط (ACTIVE)</option>
+                <option value="PAUSED">موقوف مؤقتاً (PAUSED)</option>
+                <option value="COMPLETED">مكتمل (COMPLETED)</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block font-bold mb-1">اسم القطاع بالعربية *</label>
+            <input
+              required
+              value={editSubNameAr}
+              onChange={(e) => setEditSubNameAr(e.target.value)}
+              placeholder="اسم القطاع"
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">اسم القطاع بالإنجليزية</label>
+            <input
+              value={editSubNameEn}
+              onChange={(e) => setEditSubNameEn(e.target.value)}
+              placeholder="Sector Name in English"
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-sans"
+            />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">موازنة القطاع التقديرية (YER) *</label>
+            <input
+              type="number"
+              min={0}
+              step="1"
+              value={editSubBudget}
+              onChange={(e) => setEditSubBudget(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 tabular-nums"
+            />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">المقاول أو المورد المشرف (اختياري)</label>
+            <select
+              value={editSubVendorId}
+              onChange={(e) => setEditSubVendorId(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            >
+              <option value="">بدون مقاول محدد</option>
+              {vendors.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.nameAr} ({v.phone || v.code})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block font-bold mb-1">ملاحظات وبيانات القطاع</label>
+            <textarea
+              rows={2}
+              value={editSubNotes}
+              onChange={(e) => setEditSubNotes(e.target.value)}
+              placeholder="ملاحظات..."
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            />
+          </div>
+          <button type="submit" className="w-full py-2.5 rounded-xl accent-bg font-bold">
+            حفظ تعديلات القطاع الفرعي
           </button>
         </form>
       </SlideOverDrawer>

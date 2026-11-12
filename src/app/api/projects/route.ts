@@ -32,6 +32,9 @@ export async function GET() {
     const breakdownByProj = new Map(
       reports.incomeStatement.projectBreakdown.map((b) => [b.projectId, b])
     );
+    const breakdownBySub = new Map(
+      (reports.incomeStatement.subProjectBreakdown || []).map((b) => [b.subProjectId, b])
+    );
 
     return NextResponse.json({
       projects: projects.map((p) => {
@@ -52,13 +55,28 @@ export async function GET() {
           notes: p.notes,
           startDate: p.startDate ? p.startDate.toISOString() : null,
           endDate: p.endDate ? p.endDate.toISOString() : null,
-          subProjects: p.subProjects.map((sp) => ({
-            id: sp.id,
-            code: sp.code,
-            nameAr: sp.nameAr,
-            nameEn: sp.nameEn,
-            budget: Number(sp.budget),
-          })),
+          subProjects: p.subProjects.map((sp) => {
+            const sm = breakdownBySub.get(sp.id);
+            const actualSpend = sm ? sm.actualCost : 0;
+            const revenue = sm ? sm.revenue : 0;
+            const netProfit = sm ? sm.netProfit : 0;
+            const budget = Number(sp.budget) || 0;
+            return {
+              id: sp.id,
+              projectId: sp.projectId,
+              code: sp.code,
+              nameAr: sp.nameAr,
+              nameEn: sp.nameEn,
+              budget,
+              status: sp.status,
+              notes: sp.notes,
+              vendorId: sp.vendorId,
+              actualSpend,
+              revenue,
+              netProfit,
+              remainingBudget: budget - actualSpend,
+            };
+          }),
           harvestCycles: p.harvestCycles.map((hc) => ({
             id: hc.id,
             cycleNumber: hc.cycleNumber,

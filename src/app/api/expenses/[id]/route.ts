@@ -29,6 +29,12 @@ async function handleExpenseByIdUpdate(
     const updated = await updateOperatingExpenseAtomic({
       id,
       projectId: body.projectId ? String(body.projectId) : undefined,
+      subProjectId:
+        body.subProjectId !== undefined
+          ? body.subProjectId
+            ? String(body.subProjectId)
+            : null
+          : undefined,
       harvestName: body.harvest ? String(body.harvest) : undefined,
       category: body.category ? String(body.category) : undefined,
       subType: body.subType ? String(body.subType) : undefined,

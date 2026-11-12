@@ -60,6 +60,8 @@ interface VendorBillItem {
   vendor: { id: string; code: string; nameAr: string; phone: string };
   projectId: string;
   project: { id: string; code: string; nameAr: string };
+  subProjectId?: string | null;
+  subProject?: { id: string; code: string; nameAr: string } | null;
   poNumber: string | null;
   date: string;
   status: string;
@@ -82,6 +84,10 @@ interface PaymentVoucherItem {
   bill: { id: string; billNumber: string; totalAmount: number; balanceDue: number } | null;
   treasuryId?: string;
   treasury: { id: string; code: string; nameAr: string; currency: string };
+  projectId?: string | null;
+  project?: { id: string; code: string; nameAr: string } | null;
+  subProjectId?: string | null;
+  subProject?: { id: string; code: string; nameAr: string } | null;
   amount: number;
   transferFee?: number;
   currency: string;
@@ -95,6 +101,7 @@ interface ProcurementTabProps {
   treasuryAccounts: UasTreasuryAccount[];
   currentUser: UasUser;
   selectedProjectId: string;
+  selectedSubProjectId?: string;
   readOnly?: boolean;
   canApprove?: boolean;
   canEditRecords?: boolean;
@@ -109,6 +116,7 @@ export function ProcurementTab({
   treasuryAccounts,
   currentUser,
   selectedProjectId,
+  selectedSubProjectId = "ALL",
   readOnly = false,
   canApprove = true,
   canEditRecords = false,
@@ -153,6 +161,7 @@ export function ProcurementTab({
   // Create Vendor Bill state
   const [billVendorId, setBillVendorId] = useState("");
   const [billProjectId, setBillProjectId] = useState(projects[0]?.id || "");
+  const [billSubProjectId, setBillSubProjectId] = useState("");
   const [billPoId, setBillPoId] = useState("");
   const [billAmount, setBillAmount] = useState("");
   const [billIsInventory, setBillIsInventory] = useState(true);
@@ -162,6 +171,8 @@ export function ProcurementTab({
   // Create Payment Voucher state
   const [payVendorId, setPayVendorId] = useState("");
   const [payBillId, setPayBillId] = useState("");
+  const [payProjectId, setPayProjectId] = useState("");
+  const [paySubProjectId, setPaySubProjectId] = useState("");
   const [payTreasuryId, setPayTreasuryId] = useState(treasuryAccounts[0]?.id || "t1");
   const [payAmount, setPayAmount] = useState("");
   const [payRef, setPayRef] = useState("");
@@ -174,10 +185,10 @@ export function ProcurementTab({
   };
 
   const fetchProcurementBundle = useCallback(async () => {
-    const qs =
-      selectedProjectId && selectedProjectId !== "ALL"
-        ? `?projectId=${encodeURIComponent(selectedProjectId)}`
-        : "";
+    const params = new URLSearchParams();
+    if (selectedProjectId && selectedProjectId !== "ALL") params.set("projectId", selectedProjectId);
+    if (selectedSubProjectId && selectedSubProjectId !== "ALL") params.set("subProjectId", selectedSubProjectId);
+    const qs = params.toString() ? `?${params.toString()}` : "";
     const [vRes, pRes, bRes, payRes] = await Promise.all([
       fetch("/api/procurement/vendors", { cache: "no-store" }),
       fetch(`/api/procurement/pos${qs}`, { cache: "no-store" }),
@@ -190,7 +201,7 @@ export function ProcurementTab({
       bd: bRes.ok ? ((await bRes.json()) as { bills: VendorBillItem[] }) : null,
       pyd: payRes.ok ? ((await payRes.json()) as { payments: PaymentVoucherItem[] }) : null,
     };
-  }, [selectedProjectId]);
+  }, [selectedProjectId, selectedSubProjectId]);
 
   const applyProcurementBundle = useCallback(
     (bundle: {
@@ -357,6 +368,7 @@ export function ProcurementTab({
           ? {
               id: editingBillId,
               projectId: billProjectId,
+              subProjectId: billSubProjectId || null,
               date: billDate,
               totalAmount: numericAmt,
               notes: billNotes.trim() || null,
@@ -365,6 +377,7 @@ export function ProcurementTab({
           : {
               vendorId: billVendorId,
               projectId: billProjectId,
+              subProjectId: billSubProjectId || undefined,
               purchaseOrderId: billPoId || undefined,
               date: billDate,
               totalAmount: numericAmt,
@@ -410,6 +423,8 @@ export function ProcurementTab({
               treasuryId: payTreasuryId,
               date: payDate,
               amount: amt,
+              projectId: payProjectId || null,
+              subProjectId: paySubProjectId || null,
               referenceNumber: payRef.trim() || null,
               notes: payNotes.trim() || null,
               actor: actorPayload,
@@ -417,6 +432,8 @@ export function ProcurementTab({
           : {
               vendorId: payVendorId,
               billId: payBillId || undefined,
+              projectId: payProjectId || undefined,
+              subProjectId: paySubProjectId || undefined,
               treasuryId: payTreasuryId,
               date: payDate,
               amount: amt,
@@ -585,6 +602,11 @@ export function ProcurementTab({
                         </span>
                         <span className="font-bold text-sm">{po.vendor.nameAr}</span>
                         <span className="text-slate-500">({po.project.nameAr})</span>
+                        {po.subProject && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                            {po.subProject.code ? `${po.subProject.code} • ${po.subProject.nameAr}` : po.subProject.nameAr}
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="font-extrabold text-sm text-emerald-600 tabular-nums">
@@ -655,6 +677,7 @@ export function ProcurementTab({
                                 setBillDate(new Date().toISOString().slice(0, 10));
                                 setBillVendorId(po.vendorId);
                                 setBillProjectId(po.projectId);
+                                setBillSubProjectId(po.subProject?.id || "");
                                 setBillPoId(po.id);
                                 setBillAmount(String(po.grandTotal));
                                 setSubTab("bills");
@@ -704,7 +727,14 @@ export function ProcurementTab({
                       <tr key={b.id}>
                         <td className="py-2.5 px-2 font-mono font-bold">{b.billNumber}</td>
                         <td className="py-2.5 px-2 font-semibold">{b.vendor.nameAr}</td>
-                        <td className="py-2.5 px-2">{b.project.nameAr}</td>
+                        <td className="py-2.5 px-2">
+                          <div>{b.project.nameAr}</div>
+                          {b.subProject && (
+                            <span className="inline-block mt-0.5 text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                              {b.subProject.code ? `${b.subProject.code} • ${b.subProject.nameAr}` : b.subProject.nameAr}
+                            </span>
+                          )}
+                        </td>
                         <td className="py-2.5 px-2">
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
@@ -732,6 +762,8 @@ export function ProcurementTab({
                                   setPayDate(new Date().toISOString().slice(0, 10));
                                   setPayVendorId(b.vendorId);
                                   setPayBillId(b.id);
+                                  setPayProjectId(b.projectId);
+                                  setPaySubProjectId(b.subProjectId || b.subProject?.id || "");
                                   setPayAmount(String(b.balanceDue));
                                   setSubTab("payments");
                                   setDrawerKind("payment");
@@ -748,6 +780,7 @@ export function ProcurementTab({
                                   setEditingBillId(b.id);
                                   setBillVendorId(b.vendorId);
                                   setBillProjectId(b.projectId);
+                                  setBillSubProjectId(b.subProjectId || b.subProject?.id || "");
                                   setBillPoId("");
                                   setBillDate(b.date.slice(0, 10));
                                   setBillAmount(String(b.totalAmount));
@@ -824,6 +857,8 @@ export function ProcurementTab({
                                   setEditingPaymentId(p.id);
                                   setPayVendorId(p.vendorId || p.vendor.id);
                                   setPayBillId(p.billId || p.bill?.id || "");
+                                  setPayProjectId(p.projectId || "");
+                                  setPaySubProjectId(p.subProjectId || p.subProject?.id || "");
                                   setPayTreasuryId(p.treasuryId || p.treasury.id);
                                   setPayDate(p.date.slice(0, 10));
                                   setPayAmount(String(p.amount));
@@ -1122,12 +1157,33 @@ export function ProcurementTab({
             <label className="block font-semibold mb-1">المشروع</label>
             <select
               value={billProjectId}
-              onChange={(e) => setBillProjectId(e.target.value)}
+              onChange={(e) => {
+                setBillProjectId(e.target.value);
+                setBillSubProjectId("");
+              }}
               className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
             >
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block font-semibold">القطاع / المشروع الفرعي (Cost Center)</label>
+              <span className="text-[10px] text-slate-400">اختياري</span>
+            </div>
+            <select
+              value={billSubProjectId}
+              onChange={(e) => setBillSubProjectId(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            >
+              <option value="">-- بدون تحديد قطاع فرعي --</option>
+              {(projects.find((p) => p.id === billProjectId)?.subProjects || []).map((sp) => (
+                <option key={sp.id} value={sp.id}>
+                  {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
                 </option>
               ))}
             </select>
@@ -1243,7 +1299,17 @@ export function ProcurementTab({
             <label className="block font-semibold mb-1">الفاتورة (اختياري)</label>
             <select
               value={payBillId}
-              onChange={(e) => setPayBillId(e.target.value)}
+              onChange={(e) => {
+                const bid = e.target.value;
+                setPayBillId(bid);
+                if (bid) {
+                  const b = bills.find((x) => x.id === bid);
+                  if (b) {
+                    setPayProjectId(b.projectId);
+                    setPaySubProjectId(b.subProjectId || b.subProject?.id || "");
+                  }
+                }
+              }}
               className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
             >
               <option value="">دفعة عامة للمورد</option>
@@ -1256,6 +1322,44 @@ export function ProcurementTab({
                 ))}
             </select>
           </div>
+          <div>
+            <label className="block font-semibold mb-1">المشروع المرتبط بالصرف (اختياري)</label>
+            <select
+              value={payProjectId}
+              onChange={(e) => {
+                setPayProjectId(e.target.value);
+                setPaySubProjectId("");
+              }}
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            >
+              <option value="">-- بدون تحديد مشروع --</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {payProjectId && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold">القطاع / المشروع الفرعي (Cost Center)</label>
+                <span className="text-[10px] text-slate-400">اختياري</span>
+              </div>
+              <select
+                value={paySubProjectId}
+                onChange={(e) => setPaySubProjectId(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+              >
+                <option value="">-- بدون تحديد قطاع فرعي --</option>
+                {(projects.find((p) => p.id === payProjectId)?.subProjects || []).map((sp) => (
+                  <option key={sp.id} value={sp.id}>
+                    {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div>
             <label className="block font-semibold mb-1">حساب الخزينة / البنك الدافع</label>
             <select

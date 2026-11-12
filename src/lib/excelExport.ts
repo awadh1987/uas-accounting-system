@@ -37,6 +37,13 @@ export function exportFullWorkbookToExcel(
   const projectNameById = (pid: string) =>
     state.projects.find((p) => p.id === pid)?.name || "";
 
+  const subProjectNameById = (pid: string, spId?: string | null) => {
+    if (!spId) return "";
+    const p = state.projects.find((proj) => proj.id === pid);
+    const sp = p?.subProjects?.find((s) => s.id === spId);
+    return sp ? (sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr) : "";
+  };
+
   // Sheet 1: Projects Summary
   const projRows = state.projects.map((p) => {
     const sTotal = state.sales
@@ -73,6 +80,27 @@ export function exportFullWorkbookToExcel(
     "Projects Summary"
   );
 
+  // Sheet 1.5: Sub-Projects (Cost Centers)
+  const subProjRows = state.projects.flatMap((p) =>
+    (p.subProjects || []).map((sp) => ({
+      "كود القطاع": sp.code,
+      "اسم القطاع الفرعي": sp.nameAr,
+      "Sector Name": sp.nameEn || "",
+      "المشروع الرئيسي": p.name,
+      "الحالة": sp.status || "ACTIVE",
+      "الموازنة التقديرية (YER)": Number(sp.budget) || 0,
+      "المقاول / المورد": sp.vendorName || "—",
+      "ملاحظات": sp.notes || "",
+    }))
+  );
+  if (subProjRows.length > 0) {
+    XLSX.utils.book_append_sheet(
+      wb,
+      createRtlSheet(subProjRows, ["الموازنة التقديرية (YER)"]),
+      "Sub-Projects"
+    );
+  }
+
   // Sheet 2: Customer Sales
   const filteredSales =
     options?.customerFilter && options.customerFilter !== "ALL"
@@ -81,6 +109,7 @@ export function exportFullWorkbookToExcel(
 
   const saleRows = filteredSales.map((s) => ({
     "المشروع": projectNameById(s.projectId),
+    "القطاع الفرعي": subProjectNameById(s.projectId, s.subProjectId) || "—",
     "القطفة": s.harvest,
     "عملية البيع": s.batch,
     "اسم العميل": s.customer,
@@ -115,6 +144,7 @@ export function exportFullWorkbookToExcel(
   const wrkRows = filteredWorkers.map((w) => ({
     "الاسم": w.name,
     "المشروع": projectNameById(w.projectId),
+    "القطاع الفرعي": subProjectNameById(w.projectId, w.subProjectId) || "—",
     "القطفة": w.harvest,
     "الأجر اليومي": Number(w.dailyWage),
     "عدد الأيام": Number(w.days),
@@ -132,6 +162,7 @@ export function exportFullWorkbookToExcel(
   // Sheet 4: Operating Expenses
   const expRows = state.expenses.map((e) => ({
     "المشروع": projectNameById(e.projectId),
+    "القطاع الفرعي": subProjectNameById(e.projectId, e.subProjectId) || "—",
     "القطفة": e.harvest,
     "الفئة": e.category,
     "البيان": e.subType,
@@ -229,6 +260,17 @@ export interface FinancialExportPayload {
       actualCost: number;
       netProfit: number;
       variance: number;
+    }>;
+    subProjectBreakdown?: Array<{
+      code: string;
+      nameAr: string;
+      projectNameAr?: string;
+      budget: number;
+      revenue: number;
+      actualCost: number;
+      netProfit: number;
+      variance: number;
+      utilizationPct?: number;
     }>;
   };
   balanceSheet: {
@@ -337,6 +379,30 @@ export function exportFinancialStatementsToExcel(data: FinancialExportPayload): 
   const bsSheet = createRtlSheet(bsRows, ["الرصيد (YER)"]);
   bsSheet["!views"] = [{ rightToLeft: true, state: "frozen", ySplit: 1 }];
   XLSX.utils.book_append_sheet(wb, bsSheet, "Balance Sheet");
+
+  // 4. Sub-Projects Cost Centers Breakdown
+  if (data.incomeStatement.subProjectBreakdown && data.incomeStatement.subProjectBreakdown.length > 0) {
+    const spRows = data.incomeStatement.subProjectBreakdown.map((sp) => ({
+      "كود القطاع": sp.code,
+      "اسم القطاع الفرعي": sp.nameAr,
+      "المشروع الرئيسي": sp.projectNameAr || "—",
+      "الموازنة التقديرية (YER)": Number(sp.budget),
+      "الإيرادات (YER)": Number(sp.revenue),
+      "التكاليف الفعلية (YER)": Number(sp.actualCost),
+      "صافي الربح (YER)": Number(sp.netProfit),
+      "المتبقي من الموازنة": Number(sp.variance),
+      "نسبة الاستهلاك": `${(Number(sp.utilizationPct) || 0).toFixed(1)}%`,
+    }));
+    const spSheet = createRtlSheet(spRows, [
+      "الموازنة التقديرية (YER)",
+      "الإيرادات (YER)",
+      "التكاليف الفعلية (YER)",
+      "صافي الربح (YER)",
+      "المتبقي من الموازنة",
+    ]);
+    spSheet["!views"] = [{ rightToLeft: true, state: "frozen", ySplit: 1 }];
+    XLSX.utils.book_append_sheet(wb, spSheet, "Sub-Projects Variance");
+  }
 
   XLSX.writeFile(wb, "UAS_Enterprise_Financial_Statements.xlsx");
 }

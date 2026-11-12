@@ -20,6 +20,7 @@ export async function GET(req: NextRequest) {
       include: {
         customer: { select: { id: true, code: true, nameAr: true, phone: true } },
         project: { select: { id: true, code: true, nameAr: true } },
+        subProject: { select: { id: true, code: true, nameAr: true } },
         harvestCycle: { select: { id: true, name: true } },
       },
       orderBy: { date: "desc" },
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest) {
 
     const customerId = String(body.customerId || "").trim();
     const projectId = String(body.projectId || "").trim();
+    const subProjectId = body.subProjectId ? String(body.subProjectId).trim() : null;
     const harvestCycleId = body.harvestCycleId ? String(body.harvestCycleId).trim() : null;
     const amount = Number(body.amount) || 0;
     const currency = String(body.currency || "YER").toUpperCase();
@@ -63,6 +65,7 @@ export async function POST(req: NextRequest) {
     const result = await postSalesInvoice({
       customerId,
       projectId,
+      subProjectId,
       harvestCycleId,
       amount,
       currency,
@@ -108,6 +111,12 @@ async function handleInvoiceUpdate(req: NextRequest) {
       return jsonError("قيمة الفاتورة غير صالحة", 400);
     }
     const nextProjectId = body.projectId ? String(body.projectId).trim() : existing.projectId;
+    const nextSubProjectId =
+      body.subProjectId !== undefined
+        ? body.subProjectId
+          ? String(body.subProjectId).trim()
+          : null
+        : existing.subProjectId;
     const nextCycleId =
       body.harvestCycleId !== undefined
         ? body.harvestCycleId
@@ -126,6 +135,7 @@ async function handleInvoiceUpdate(req: NextRequest) {
     const financialChanged =
       Math.abs(nextAmount - Number(existing.totalAmount)) > 0.005 ||
       nextProjectId !== existing.projectId ||
+      nextSubProjectId !== existing.subProjectId ||
       nextCycleId !== existing.harvestCycleId;
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -153,6 +163,7 @@ async function handleInvoiceUpdate(req: NextRequest) {
           sourceType: "SALES_INVOICE",
           sourceId: existing.id,
           projectId: nextProjectId,
+          subProjectId: nextSubProjectId,
           createdById: auth.actor.userId ?? undefined,
           lines: [
             {
@@ -162,6 +173,7 @@ async function handleInvoiceUpdate(req: NextRequest) {
               exchangeRate: rate,
               memo: `ذمة مدينة معدلة - ${existing.customer.nameAr}`,
               projectId: nextProjectId,
+              subProjectId: nextSubProjectId,
               harvestCycleId: nextCycleId,
             },
             {
@@ -171,6 +183,7 @@ async function handleInvoiceUpdate(req: NextRequest) {
               exchangeRate: rate,
               memo: nextNotes || `إيراد مبيعات معدل`,
               projectId: nextProjectId,
+              subProjectId: nextSubProjectId,
               harvestCycleId: nextCycleId,
             },
           ],
@@ -189,6 +202,7 @@ async function handleInvoiceUpdate(req: NextRequest) {
         where: { id },
         data: {
           projectId: nextProjectId,
+          subProjectId: nextSubProjectId,
           harvestCycleId: nextCycleId,
           date: nextDate,
           totalAmount: nextAmount,

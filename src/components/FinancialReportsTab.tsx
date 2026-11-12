@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArcElement,
   BarElement,
@@ -47,6 +47,27 @@ interface ProjectBreakdownRow {
   isOverBudget: boolean;
 }
 
+interface SubProjectBreakdownRow {
+  subProjectId: string;
+  projectId: string;
+  projectCode?: string;
+  projectNameAr?: string;
+  code: string;
+  nameAr: string;
+  nameEn?: string | null;
+  budgetTotal: number;
+  budget: number;
+  revenue: number;
+  cogs: number;
+  operatingExpenses: number;
+  actualCost: number;
+  netProfit: number;
+  variance: number;
+  utilizationPct: number;
+  isOverBudget: boolean;
+  status?: string;
+}
+
 interface TrialBalancePayload {
   rows: TrialBalanceRow[];
   totalDebits: number;
@@ -68,6 +89,7 @@ interface IncomeStatementPayload {
   totalExpenses: number;
   netProfit: number;
   projectBreakdown: ProjectBreakdownRow[];
+  subProjectBreakdown?: SubProjectBreakdownRow[];
 }
 
 interface BalanceSheetPayload {
@@ -86,18 +108,24 @@ interface BalanceSheetPayload {
 interface FinancialReportsTabProps {
   projects: UasProject[];
   selectedProjectId: string;
+  selectedSubProjectId?: string;
   onToast: (msg: string) => void;
 }
 
 export function FinancialReportsTab({
   projects,
   selectedProjectId,
+  selectedSubProjectId = "ALL",
   onToast,
 }: FinancialReportsTabProps) {
   const [reportTab, setReportTab] = useState<"tb" | "pl" | "bs" | "budget">("tb");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
-  const [localProjectId, setLocalProjectId] = useState(selectedProjectId || "ALL");
+  const [projectIdOverride, setProjectIdOverride] = useState<string | null>(null);
+  const [subProjectIdOverride, setSubProjectIdOverride] = useState<string | null>(null);
+
+  const localProjectId = projectIdOverride ?? selectedProjectId ?? "ALL";
+  const localSubProjectId = subProjectIdOverride ?? selectedSubProjectId ?? "ALL";
   const [coaLevel, setCoaLevel] = useState(5);
 
   const [tb, setTb] = useState<TrialBalancePayload | null>(null);
@@ -105,12 +133,21 @@ export function FinancialReportsTab({
   const [bs, setBs] = useState<BalanceSheetPayload | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const availableSubProjects = useMemo(() => {
+    if (!localProjectId || localProjectId === "ALL") {
+      return projects.flatMap((p) => p.subProjects || []);
+    }
+    const current = projects.find((p) => p.id === localProjectId);
+    return current?.subProjects || [];
+  }, [projects, localProjectId]);
+
   useEffect(() => {
     let active = true;
     const qs = new URLSearchParams();
     if (fromDate) qs.set("fromDate", fromDate);
     if (toDate) qs.set("toDate", toDate);
     if (localProjectId && localProjectId !== "ALL") qs.set("projectId", localProjectId);
+    if (localSubProjectId && localSubProjectId !== "ALL") qs.set("subProjectId", localSubProjectId);
     qs.set("level", String(coaLevel));
 
     Promise.all([
@@ -134,7 +171,7 @@ export function FinancialReportsTab({
     return () => {
       active = false;
     };
-  }, [fromDate, toDate, localProjectId, coaLevel, onToast]);
+  }, [fromDate, toDate, localProjectId, localSubProjectId, coaLevel, onToast]);
 
   function handleExportExcel() {
     if (!tb || !pl || !bs) return;
@@ -209,16 +246,31 @@ export function FinancialReportsTab({
         </div>
 
         {/* Filters */}
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs no-print">
+        <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 text-xs no-print">
           <select
             value={localProjectId}
-            onChange={(e) => setLocalProjectId(e.target.value)}
+            onChange={(e) => {
+              setProjectIdOverride(e.target.value);
+              setSubProjectIdOverride("ALL");
+            }}
             className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-bold"
           >
             <option value="ALL">كافة المشاريع (قوائم موحدة)</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={localSubProjectId}
+            onChange={(e) => setSubProjectIdOverride(e.target.value)}
+            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-bold"
+          >
+            <option value="ALL">كافة القطاعات الفرعية</option>
+            {availableSubProjects.map((sp) => (
+              <option key={sp.id} value={sp.id}>
+                {sp.code} - {sp.nameAr}
               </option>
             ))}
           </select>
@@ -502,6 +554,72 @@ export function FinancialReportsTab({
                 </tbody>
               </table>
             </div>
+
+            {/* Sub-Projects / Cost Centers Breakdown */}
+            {pl.subProjectBreakdown && pl.subProjectBreakdown.length > 0 && (
+              <div className="pt-6 border-t border-slate-200">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-black text-slate-800">
+                    تحليل القطاعات والمشاريع الفرعية ومراكز التكلفة (Sub-Projects & Cost Centers)
+                  </h4>
+                  <span className="text-xs text-slate-500 font-mono">
+                    {pl.subProjectBreakdown.length} قطاعات فرعية
+                  </span>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-right border-collapse">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-600">
+                      <tr>
+                        <th className="py-2.5 px-3">رمز القطاع</th>
+                        <th className="py-2.5 px-3">القطاع الفرعي</th>
+                        <th className="py-2.5 px-3">المشروع الأب</th>
+                        <th className="py-2.5 px-3">الموازنة التقديرية</th>
+                        <th className="py-2.5 px-3">المصروف الفعلي</th>
+                        <th className="py-2.5 px-3">الانحراف (Variance)</th>
+                        <th className="py-2.5 px-3">نسبة الاستهلاك</th>
+                        <th className="py-2.5 px-3">الإيرادات</th>
+                        <th className="py-2.5 px-3">صافي الربح</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {pl.subProjectBreakdown.map((sp) => {
+                        const budget = sp.budgetTotal ?? sp.budget ?? 0;
+                        return (
+                          <tr key={sp.subProjectId} className="hover:bg-slate-50/70 transition-colors">
+                            <td className="py-2.5 px-3 font-mono font-bold text-sky-700">{sp.code}</td>
+                            <td className="py-2.5 px-3 font-bold text-slate-900">{sp.nameAr}</td>
+                            <td className="py-2.5 px-3 text-slate-600">
+                              <span className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded ml-1">
+                                {sp.projectCode}
+                              </span>
+                              {sp.projectNameAr}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono">{fmtNum(budget)}</td>
+                            <td className="py-2.5 px-3 font-mono text-amber-700 font-bold">{fmtNum(sp.actualCost)}</td>
+                            <td className={`py-2.5 px-3 font-mono font-bold ${sp.isOverBudget ? "text-rose-600" : "text-emerald-600"}`}>
+                              {fmtNum(sp.variance)}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <span
+                                className={`px-2 py-0.5 rounded-full font-bold text-[11px] ${
+                                  sp.isOverBudget ? "bg-rose-100 text-rose-800" : "bg-emerald-100 text-emerald-800"
+                                }`}
+                              >
+                                {sp.utilizationPct.toFixed(1)}%
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-emerald-700 font-bold">{fmtNum(sp.revenue)}</td>
+                            <td className={`py-2.5 px-3 font-mono font-extrabold ${sp.netProfit >= 0 ? "text-slate-900" : "text-rose-600"}`}>
+                              {fmtNum(sp.netProfit)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

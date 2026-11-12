@@ -9,6 +9,7 @@ import type { UasOperatingExpense, UasProject } from "@/types/uas";
 
 type ExpensePayload = {
   projectId: string;
+  subProjectId?: string | null;
   harvest: string;
   category: string;
   subType: string;
@@ -73,6 +74,7 @@ export function ExpensesTab({
   const [projectId, setProjectId] = useState(projects[0]?.id || "");
   const activeProj = projects.find((p) => p.id === projectId) || projects[0];
   const [harvest, setHarvest] = useState(activeProj?.harvests[0] || "القطفة الأولى");
+  const [subProjectId, setSubProjectId] = useState<string>("");
   const [category, setCategory] = useState("وقود/محروقات");
   const [subType, setSubType] = useState("");
   const [qty, setQty] = useState("20");
@@ -88,6 +90,7 @@ export function ExpensesTab({
 
   function handleProjChange(nextPid: string) {
     setProjectId(nextPid);
+    setSubProjectId("");
     const p = projects.find((x) => x.id === nextPid);
     if (p && p.harvests.length > 0) setHarvest(p.harvests[0]);
   }
@@ -96,6 +99,7 @@ export function ExpensesTab({
     setEditingId(null);
     const defProj = projects[0];
     setProjectId(defProj?.id || "");
+    setSubProjectId("");
     setHarvest(defProj?.harvests[0] || "القطفة الأولى");
     setCategory("وقود/محروقات");
     setSubType("");
@@ -109,6 +113,7 @@ export function ExpensesTab({
   function openEditDrawer(e: UasOperatingExpense) {
     setEditingId(e.id);
     setProjectId(e.projectId);
+    setSubProjectId(e.subProjectId || "");
     setHarvest(e.harvest);
     setCategory(e.category);
     setSubType(e.subType);
@@ -126,6 +131,7 @@ export function ExpensesTab({
       activeProj?.harvests.includes(harvest) ? harvest : activeProj?.harvests[0] || "القطفة الأولى";
     const payload: ExpensePayload = {
       projectId: pid,
+      subProjectId: subProjectId || undefined,
       harvest: harv,
       category,
       subType: subType.trim() || category,
@@ -173,6 +179,24 @@ export function ExpensesTab({
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block font-semibold">القطاع / المشروع الفرعي (Cost Center)</label>
+              <span className="text-[10px] text-slate-400">اختياري</span>
+            </div>
+            <select
+              value={subProjectId}
+              onChange={(e) => setSubProjectId(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            >
+              <option value="">-- بدون تحديد قطاع فرعي --</option>
+              {(activeProj?.subProjects || []).map((sp) => (
+                <option key={sp.id} value={sp.id}>
+                  {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
                 </option>
               ))}
             </select>
@@ -347,7 +371,15 @@ export function ExpensesTab({
                 return (
                   <tr key={e.id}>
                     <td className="p-2.5 font-semibold">
-                      {proj ? proj.name : ""} — {e.harvest}
+                      <div>{proj ? proj.name : ""} — {e.harvest}</div>
+                      {e.subProjectId && (() => {
+                        const sp = proj?.subProjects?.find((s) => s.id === e.subProjectId);
+                        return sp ? (
+                          <span className="inline-block mt-0.5 text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                            {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
+                          </span>
+                        ) : null;
+                      })()}
                     </td>
                     <td className="p-2.5">
                       <span className="accent-badge px-2 py-0.5 rounded font-semibold">

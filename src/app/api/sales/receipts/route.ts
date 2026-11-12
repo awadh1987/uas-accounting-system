@@ -17,6 +17,7 @@ export async function GET() {
         customer: { select: { id: true, code: true, nameAr: true, phone: true } },
         invoice: { select: { id: true, invoiceNumber: true, totalAmount: true, balanceDue: true } },
         treasury: { select: { id: true, code: true, nameAr: true, currency: true } },
+        subProject: { select: { id: true, code: true, nameAr: true } },
       },
       orderBy: { date: "desc" },
     });
@@ -45,6 +46,7 @@ export async function POST(req: NextRequest) {
 
     const customerId = String(body.customerId || "").trim();
     const invoiceId = body.invoiceId ? String(body.invoiceId).trim() : null;
+    const subProjectId = body.subProjectId ? String(body.subProjectId).trim() : null;
     const treasuryId = String(body.treasuryId || "").trim();
     const amount = Number(body.amount) || 0;
     const currency = String(body.currency || "YER").toUpperCase();
@@ -57,6 +59,7 @@ export async function POST(req: NextRequest) {
     const result = await postCustomerReceipt({
       customerId,
       invoiceId,
+      subProjectId,
       treasuryId,
       amount,
       currency,
@@ -99,13 +102,20 @@ async function handleReceiptUpdate(req: NextRequest) {
       return jsonError("مبلغ سند القبض غير صالح", 400);
     }
     const nextTreasuryId = body.treasuryId ? String(body.treasuryId).trim() : existing.treasuryId;
+    const nextSubProjectId =
+      body.subProjectId !== undefined
+        ? body.subProjectId
+          ? String(body.subProjectId).trim()
+          : null
+        : existing.subProjectId;
     const nextDate = body.date ? new Date(String(body.date)) : existing.date;
     const nextNotes =
       body.notes !== undefined ? (body.notes ? String(body.notes).trim() : null) : existing.notes;
 
     const financialChanged =
       Math.abs(nextAmount - Number(existing.amount)) > 0.005 ||
-      nextTreasuryId !== existing.treasuryId;
+      nextTreasuryId !== existing.treasuryId ||
+      nextSubProjectId !== existing.subProjectId;
 
     const updated = await prisma.$transaction(async (tx) => {
       let nextJournalEntryId = existing.journalEntryId;
@@ -191,6 +201,7 @@ async function handleReceiptUpdate(req: NextRequest) {
           sourceType: "CUSTOMER_RECEIPT",
           sourceId: existing.id,
           projectId: existing.invoice?.projectId ?? null,
+          subProjectId: nextSubProjectId,
           createdById: auth.actor.userId ?? undefined,
           lines: [
             {
@@ -200,6 +211,7 @@ async function handleReceiptUpdate(req: NextRequest) {
               exchangeRate: rcpRate,
               memo: `توريد إلى ${nextTreasury.nameAr}`,
               projectId: existing.invoice?.projectId ?? null,
+              subProjectId: nextSubProjectId,
               harvestCycleId: existing.invoice?.harvestCycleId ?? null,
             },
             {
@@ -209,6 +221,7 @@ async function handleReceiptUpdate(req: NextRequest) {
               exchangeRate: rcpRate,
               memo: nextNotes || `تحصيل معدل من العميل ${existing.customer.nameAr}`,
               projectId: existing.invoice?.projectId ?? null,
+              subProjectId: nextSubProjectId,
               harvestCycleId: existing.invoice?.harvestCycleId ?? null,
             },
           ],
@@ -226,6 +239,7 @@ async function handleReceiptUpdate(req: NextRequest) {
         data: {
           date: nextDate,
           treasuryId: nextTreasuryId,
+          subProjectId: nextSubProjectId,
           amount: nextAmount,
           notes: nextNotes,
           journalEntryId: nextJournalEntryId,

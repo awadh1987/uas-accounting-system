@@ -48,6 +48,8 @@ model JournalEntry {
   sourceId    String?
   projectId   String?
   project     Project?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  subProjectId String?
+  subProject   SubProject?       @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
 
   lines       JournalEntryLine[]
   attachments Attachment[]
@@ -215,19 +217,32 @@ model ProjectAcquisitionCycle {
 }
 
 model SubProject {
-  id             String             @id @default(cuid())
-  projectId      String
-  project        Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  code           String
-  nameAr         String
-  nameEn         String
-  budget         Decimal            @default(0)
+  id               String                  @id @default(cuid())
+  projectId        String
+  project          Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  code             String
+  nameAr           String
+  nameEn           String
+  budget           Decimal                 @default(0)
+  status           String                  @default("ACTIVE") // ACTIVE | PAUSED | COMPLETED
+  notes            String                  @default("")
+  vendorId         String?
+  vendor           Vendor?                 @relation(fields: [vendorId], references: [id], onDelete: SetNull)
 
-  journalLines   JournalEntryLine[]
-  purchaseOrders PurchaseOrder[]
-  vendorBills    VendorBill[]
+  journalEntries   JournalEntry[]
+  journalLines     JournalEntryLine[]
+  purchaseOrders   PurchaseOrder[]
+  vendorBills      VendorBill[]
+  paymentVouchers  PaymentVoucher[]
+  salesInvoices    SalesInvoice[]
+  receiptVouchers  ReceiptVoucher[]
+  sales            SaleTransaction[]
+  expenses         OperatingExpense[]
+  workerWages      WorkerWageEntry[]
+  inventoryBatches HarvestInventoryBatch[]
 
-  createdAt      DateTime           @default(now())
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @default(now()) @updatedAt
 
   @@unique([projectId, code])
 }
@@ -275,6 +290,7 @@ model Vendor {
   account         Account          @relation(fields: [accountId], references: [id], onDelete: Restrict)
 
   ownedProjects   Project[]        @relation("ProjectOwnerVendor")
+  subProjects     SubProject[]
   purchaseOrders  PurchaseOrder[]
   bills           VendorBill[]
   payments        PaymentVoucher[]
@@ -383,6 +399,8 @@ model PaymentVoucher {
   notes              String?
   projectId          String?
   project            Project?                 @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  subProjectId       String?
+  subProject         SubProject?              @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
   acquisitionCycleId String?
   acquisitionCycle   ProjectAcquisitionCycle? @relation(fields: [acquisitionCycleId], references: [id], onDelete: SetNull)
   journalEntryId     String?
@@ -421,6 +439,8 @@ model SalesInvoice {
   customer           Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
   projectId          String
   project            Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  subProjectId       String?
+  subProject         SubProject?      @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
   harvestCycleId     String?
   harvestCycle       HarvestCycle?    @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
 
@@ -448,6 +468,8 @@ model ReceiptVoucher {
   invoice            SalesInvoice?   @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   treasuryId         String
   treasury           TreasuryAccount @relation(fields: [treasuryId], references: [id], onDelete: Restrict)
+  subProjectId       String?
+  subProject         SubProject?     @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
 
   amount             Decimal
   currency           String          @default("YER")
@@ -480,6 +502,8 @@ model HarvestInventoryBatch {
   id               String        @id @default(cuid())
   projectId        String
   project          Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  subProjectId     String?
+  subProject       SubProject?   @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
   harvestCycleId   String?
   harvestCycle     HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
   harvestName      String
@@ -530,6 +554,8 @@ model OperatingExpense {
   id             String        @id @default(cuid())
   projectId      String
   project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  subProjectId   String?
+  subProject     SubProject?   @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
   harvestCycleId String?
   harvestCycle   HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
   harvestName    String
@@ -562,6 +588,8 @@ model WorkerWageEntry {
   workerName     String
   projectId      String
   project        Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  subProjectId   String?
+  subProject     SubProject?          @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
   harvestCycleId String?
   harvestCycle   HarvestCycle?        @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
   harvestName    String
@@ -581,6 +609,8 @@ model SaleTransaction {
   id               String               @id @default(cuid())
   projectId        String
   project          Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  subProjectId     String?
+  subProject       SubProject?          @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
   harvestCycleId   String?
   harvestCycle     HarvestCycle?        @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
   harvestName      String

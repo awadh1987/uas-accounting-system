@@ -29,6 +29,12 @@ async function handleWorkerByIdUpdate(
     const updated = await updateWorkerWageAtomic({
       id,
       projectId: body.projectId ? String(body.projectId) : undefined,
+      subProjectId:
+        body.subProjectId !== undefined
+          ? body.subProjectId
+            ? String(body.subProjectId)
+            : null
+          : undefined,
       harvestName: body.harvest ? String(body.harvest) : undefined,
       name: body.name ? String(body.name) : undefined,
       dailyWage: body.dailyWage !== undefined ? Number(body.dailyWage) : undefined,

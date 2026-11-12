@@ -15,6 +15,7 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const projectId = searchParams.get("projectId");
+    const subProjectId = searchParams.get("subProjectId");
     const accountId = searchParams.get("accountId");
     const status = searchParams.get("status");
     const fromDate = searchParams.get("fromDate");
@@ -32,6 +33,14 @@ export async function GET(req: NextRequest) {
     const entries = await prisma.journalEntry.findMany({
       where: {
         ...(projectId && projectId !== "ALL" ? { projectId } : {}),
+        ...(subProjectId && subProjectId !== "ALL"
+          ? {
+              OR: [
+                { subProjectId },
+                { lines: { some: { subProjectId } } },
+              ],
+            }
+          : {}),
         ...(status && status !== "ALL" ? { status } : {}),
         ...(fromDate || toDate ? { date: dateFilter } : {}),
         ...(accountId && accountId !== "ALL"
@@ -49,6 +58,7 @@ export async function GET(req: NextRequest) {
       },
       include: {
         project: { select: { id: true, code: true, nameAr: true, nameEn: true } },
+        subProject: { select: { id: true, code: true, nameAr: true, nameEn: true } },
         createdBy: { select: { id: true, name: true, role: true } },
         attachments: true,
         lines: {
@@ -84,6 +94,8 @@ export async function GET(req: NextRequest) {
         sourceType: e.sourceType,
         projectId: e.projectId,
         project: e.project,
+        subProjectId: e.subProjectId,
+        subProject: e.subProject,
         createdBy: e.createdBy,
         attachments: e.attachments,
         totalDebitBase: dr,
@@ -151,6 +163,8 @@ export async function POST(req: NextRequest) {
     const narrationEn = body.narrationEn ? String(body.narrationEn).trim() : undefined;
     const reference = body.reference ? String(body.reference).trim() : undefined;
     const projectId = body.projectId && body.projectId !== "ALL" ? String(body.projectId) : null;
+    const subProjectId =
+      body.subProjectId && body.subProjectId !== "ALL" ? String(body.subProjectId) : null;
     const date = body.date ? String(body.date) : new Date().toISOString();
     const lines = Array.isArray(body.lines) ? (body.lines as JournalLineInput[]) : [];
     const attachments = Array.isArray(body.attachments)
@@ -167,6 +181,7 @@ export async function POST(req: NextRequest) {
       narrationAr,
       narrationEn,
       projectId,
+      subProjectId,
       createdById: actor.userId ?? undefined,
       sourceType: "MANUAL",
       status: "POSTED",
@@ -213,6 +228,12 @@ async function handleJournalUpdate(req: NextRequest) {
         body.projectId !== undefined
           ? body.projectId && body.projectId !== "ALL"
             ? String(body.projectId)
+            : null
+          : undefined,
+      subProjectId:
+        body.subProjectId !== undefined
+          ? body.subProjectId && body.subProjectId !== "ALL"
+            ? String(body.subProjectId)
             : null
           : undefined,
       lines: Array.isArray(body.lines) ? (body.lines as JournalLineInput[]) : undefined,

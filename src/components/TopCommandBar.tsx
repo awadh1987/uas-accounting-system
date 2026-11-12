@@ -44,6 +44,8 @@ interface TopCommandBarProps {
   activeTab: TabId;
   projects: UasProject[];
   selectedProjectId: string;
+  selectedSubProjectId?: string;
+  availableSubProjects?: Array<{ id: string; code?: string; nameAr: string; nameEn?: string }>;
   selectedHarvest: string;
   availableHarvests: string[];
   currentUser: UasUser;
@@ -51,6 +53,7 @@ interface TopCommandBarProps {
   onOpenMobileSidebar: () => void;
   onOpenSearch: () => void;
   onProjectChange: (pid: string) => void;
+  onSubProjectChange?: (subId: string) => void;
   onHarvestChange: (harvest: string) => void;
   onCurrencyChange: (cur: CurrencyCode) => void;
   onToggleOffline: () => void;
@@ -75,6 +78,8 @@ export function TopCommandBar({
   activeTab,
   projects,
   selectedProjectId,
+  selectedSubProjectId = "ALL",
+  availableSubProjects = [],
   selectedHarvest,
   availableHarvests,
   currentUser,
@@ -82,6 +87,7 @@ export function TopCommandBar({
   onOpenMobileSidebar,
   onOpenSearch,
   onProjectChange,
+  onSubProjectChange,
   onHarvestChange,
   onCurrencyChange,
   onToggleOffline,
@@ -184,6 +190,21 @@ export function TopCommandBar({
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
+                </option>
+              ))}
+            </select>
+
+            {/* Cascading Sub-Project Filter */}
+            <select
+              aria-label={isAr ? "القطاع الفرعي" : "Sub-Project"}
+              value={selectedSubProjectId}
+              onChange={(e) => onSubProjectChange?.(e.target.value)}
+              className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 px-2.5 py-1.5 text-[11px] font-bold focus:outline-none max-w-[160px]"
+            >
+              <option value="ALL">{isAr ? "كل القطاعات الفرعية" : "All Sub-Projects"}</option>
+              {availableSubProjects.map((sp) => (
+                <option key={sp.id} value={sp.id}>
+                  {sp.code ? `${sp.code} - ${sp.nameAr}` : sp.nameAr}
                 </option>
               ))}
             </select>

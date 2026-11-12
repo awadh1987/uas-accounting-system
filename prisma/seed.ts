@@ -464,6 +464,8 @@ async function main() {
         nameAr: "قطاع A - المدرجات",
         nameEn: "Sector A - Terraces",
         budget: 450000,
+        status: "ACTIVE",
+        notes: "قطاع زراعي وإنتاجي رئيسي للمدرجات الجبلية",
       },
       {
         id: "sp2",
@@ -472,6 +474,8 @@ async function main() {
         nameAr: "قطاع B - الوادي",
         nameEn: "Sector B - Valley",
         budget: 350000,
+        status: "ACTIVE",
+        notes: "القطاع المنبسط بوادي الجبري",
       },
       {
         id: "sp3",
@@ -480,6 +484,8 @@ async function main() {
         nameAr: "الآبار ومنظومات الضخ",
         nameEn: "Wells & Solar Pumping",
         budget: 200000,
+        status: "ACTIVE",
+        notes: "منظومة الطاقة الشمسية وضخ المياه",
       },
       {
         id: "sp4",
@@ -488,6 +494,8 @@ async function main() {
         nameAr: "قطاع الوسطى الشرقي",
         nameEn: "Middle East Sector",
         budget: 450000,
+        status: "ACTIVE",
+        notes: "المدرجات الشرقية لمزارع الوسطى",
       },
       {
         id: "sp5",
@@ -496,6 +504,8 @@ async function main() {
         nameAr: "شبكة الري والتخزين",
         nameEn: "Irrigation & Storage",
         budget: 300000,
+        status: "ACTIVE",
+        notes: "خزانات وشبكات التقطير",
       },
       {
         id: "sp6",
@@ -504,6 +514,8 @@ async function main() {
         nameAr: "قطاع السفلى الرئيسي",
         nameEn: "Lower Main Sector",
         budget: 500000,
+        status: "ACTIVE",
+        notes: "المزارع الرئيسية للمنطقة السفلى",
       },
     ],
   });
@@ -693,6 +705,7 @@ async function main() {
     sourceType: string;
     sourceId?: string;
     projectId?: string | null;
+    subProjectId?: string | null;
     createdById?: string;
     lines: Array<{
       accountCode: string;
@@ -750,6 +763,7 @@ async function main() {
         sourceType: params.sourceType,
         sourceId: params.sourceId ?? null,
         projectId: params.projectId ?? null,
+        subProjectId: params.subProjectId ?? null,
         createdById: params.createdById ?? "u1",
         lines: { create: preparedLines },
       },
@@ -1075,6 +1089,7 @@ async function main() {
     {
       id: "e1",
       projectId: "p1",
+      subProjectId: "sp1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
       category: "وقود/محروقات",
@@ -1087,6 +1102,7 @@ async function main() {
     {
       id: "e2",
       projectId: "p1",
+      subProjectId: "sp1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
       category: "وجبات غذائية",
@@ -1099,6 +1115,7 @@ async function main() {
     {
       id: "e3",
       projectId: "p1",
+      subProjectId: "sp2",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
       category: "مواد غذائية",
@@ -1111,6 +1128,7 @@ async function main() {
     {
       id: "e4",
       projectId: "p1",
+      subProjectId: "sp1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
       category: "أجور نقل",
@@ -1135,12 +1153,14 @@ async function main() {
       sourceType: "EXPENSE",
       sourceId: exp.id,
       projectId: exp.projectId,
+      subProjectId: exp.subProjectId,
       createdById: "u3",
       lines: [
         {
           accountCode: mapExpenseCategoryToCoaCode(exp.category),
           debit: totalAmount,
           projectId: exp.projectId,
+          subProjectId: exp.subProjectId,
           harvestCycleId: exp.harvestCycleId,
           memo: exp.subType,
         },
@@ -1148,6 +1168,7 @@ async function main() {
           accountCode: "111101",
           credit: totalAmount,
           projectId: exp.projectId,
+          subProjectId: exp.subProjectId,
           harvestCycleId: exp.harvestCycleId,
           memo: `صرف نقدي - ${exp.subType}`,
         },
@@ -1171,6 +1192,7 @@ async function main() {
       workerName: "بلال",
       payableCode: "212101",
       projectId: "p1",
+      subProjectId: "sp1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
       dailyWage: 5000,
@@ -1185,6 +1207,7 @@ async function main() {
       workerName: "معاذ",
       payableCode: "212102",
       projectId: "p1",
+      subProjectId: "sp1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
       dailyWage: 4000,
@@ -1199,6 +1222,7 @@ async function main() {
       workerName: "فواز",
       payableCode: "212103",
       projectId: "p1",
+      subProjectId: "sp2",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
       dailyWage: 3000,
@@ -1223,12 +1247,14 @@ async function main() {
       sourceType: "WORKER_ACCRUAL",
       sourceId: w.id,
       projectId: w.projectId,
+      subProjectId: w.subProjectId,
       createdById: "u3",
       lines: [
         {
           accountCode: "511101",
           debit: totals.totalWage,
           projectId: w.projectId,
+          subProjectId: w.subProjectId,
           harvestCycleId: w.harvestCycleId,
           memo: `أجور عمالة مباشرة - ${w.workerName}`,
         },
@@ -1236,6 +1262,7 @@ async function main() {
           accountCode: w.payableCode,
           credit: totals.totalWage,
           projectId: w.projectId,
+          subProjectId: w.subProjectId,
           harvestCycleId: w.harvestCycleId,
           memo: `مستحق للعامل ${w.workerName}`,
         },
@@ -1251,12 +1278,14 @@ async function main() {
         sourceType: "WORKER_PAYOUT",
         sourceId: w.id,
         projectId: w.projectId,
+        subProjectId: w.subProjectId,
         createdById: "u3",
         lines: [
           {
             accountCode: w.payableCode,
             debit: w.creditAmount,
             projectId: w.projectId,
+            subProjectId: w.subProjectId,
             harvestCycleId: w.harvestCycleId,
             memo: `تسوية مستحقات ${w.workerName}`,
           },
@@ -1264,6 +1293,7 @@ async function main() {
             accountCode: "111101",
             credit: w.creditAmount,
             projectId: w.projectId,
+            subProjectId: w.subProjectId,
             harvestCycleId: w.harvestCycleId,
             memo: `صرف نقدي للعامل ${w.workerName}`,
           },
@@ -1277,6 +1307,7 @@ async function main() {
         workerId: w.workerId,
         workerName: w.workerName,
         projectId: w.projectId,
+        subProjectId: w.subProjectId,
         harvestCycleId: w.harvestCycleId,
         harvestName: w.harvestName,
         dailyWage: w.dailyWage,
@@ -1302,6 +1333,7 @@ async function main() {
       treasuryId: "t1",
       treasuryAccountCode: "111101",
       projectId: "p1",
+      subProjectId: "sp1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
       saleBatchLabel: "عملية بيع 1",
@@ -1325,6 +1357,7 @@ async function main() {
       treasuryId: "t3",
       treasuryAccountCode: "111203",
       projectId: "p1",
+      subProjectId: "sp2",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
       saleBatchLabel: "عملية بيع 1",
@@ -1348,6 +1381,7 @@ async function main() {
       treasuryId: "t1",
       treasuryAccountCode: "111101",
       projectId: "p1",
+      subProjectId: "sp1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
       saleBatchLabel: "عملية بيع 2",
@@ -1371,6 +1405,7 @@ async function main() {
       treasuryId: "t3",
       treasuryAccountCode: "111203",
       projectId: "p1",
+      subProjectId: "sp2",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
       saleBatchLabel: "عملية بيع 2",
@@ -1397,12 +1432,14 @@ async function main() {
       sourceType: "SALES_INVOICE",
       sourceId: s.invoiceId,
       projectId: s.projectId,
+      subProjectId: s.subProjectId,
       createdById: "u3",
       lines: [
         {
           accountCode: s.customerAccountCode,
           debit: totals.totalAmount,
           projectId: s.projectId,
+          subProjectId: s.subProjectId,
           harvestCycleId: s.harvestCycleId,
           memo: `استحقاق على العميل ${s.customerName}`,
         },
@@ -1410,6 +1447,7 @@ async function main() {
           accountCode: "411101",
           credit: totals.totalAmount,
           projectId: s.projectId,
+          subProjectId: s.subProjectId,
           harvestCycleId: s.harvestCycleId,
           memo: `إيراد مبيعات ${s.harvestName} (${s.bundlesCount} علاقية)`,
         },
@@ -1424,12 +1462,14 @@ async function main() {
       sourceType: "CUSTOMER_RECEIPT",
       sourceId: s.rvId,
       projectId: s.projectId,
+      subProjectId: s.subProjectId,
       createdById: "u3",
       lines: [
         {
           accountCode: s.treasuryAccountCode,
           debit: s.creditPaid,
           projectId: s.projectId,
+          subProjectId: s.subProjectId,
           harvestCycleId: s.harvestCycleId,
           memo: `توريد نقدي/محفظة من ${s.customerName}`,
         },
@@ -1437,6 +1477,7 @@ async function main() {
           accountCode: s.customerAccountCode,
           credit: s.creditPaid,
           projectId: s.projectId,
+          subProjectId: s.subProjectId,
           harvestCycleId: s.harvestCycleId,
           memo: `تحصيل دفعة فاتورة ${s.invoiceNumber}`,
         },
@@ -1447,6 +1488,7 @@ async function main() {
       data: {
         id: s.id,
         projectId: s.projectId,
+        subProjectId: s.subProjectId,
         harvestCycleId: s.harvestCycleId,
         harvestName: s.harvestName,
         saleBatchLabel: s.saleBatchLabel,
@@ -1472,6 +1514,7 @@ async function main() {
         invoiceNumber: s.invoiceNumber,
         customerId: s.customerId,
         projectId: s.projectId,
+        subProjectId: s.subProjectId,
         harvestCycleId: s.harvestCycleId,
         date: new Date(`${s.saleDate}T12:00:00Z`),
         totalAmount: totals.totalAmount,
@@ -1500,6 +1543,7 @@ async function main() {
         customerId: s.customerId,
         invoiceId: s.invoiceId,
         treasuryId: s.treasuryId,
+        subProjectId: s.subProjectId,
         amount: s.creditPaid,
         currency: "YER",
         notes: `دفعة مسددة على ${s.invoiceNumber}`,
@@ -1594,6 +1638,7 @@ async function main() {
     data: {
       id: "inv1",
       projectId: "p1",
+      subProjectId: "sp1",
       harvestCycleId: "hc_p1_1",
       harvestName: "القطفة الأولى",
       productGrade: "رقم 1/رقم 2/رقم 3/ روس/بزغة",

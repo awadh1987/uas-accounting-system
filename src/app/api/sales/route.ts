@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
     const actor = auth.actor;
 
     const projectId = String(body.projectId || "").trim();
+    const subProjectId = body.subProjectId ? String(body.subProjectId).trim() : null;
     const harvestName = String(body.harvest || "").trim();
     const saleBatchLabel = String(body.batch || "عملية بيع 1").trim();
     const productGrade = String(body.grade || "رقم 1").trim();
@@ -63,6 +64,7 @@ export async function POST(req: NextRequest) {
           tx,
           customerId: customer.id,
           projectId,
+          subProjectId,
           harvestCycleId: cycle?.id ?? null,
           amount: totalAmount,
           currency: "YER",
@@ -77,6 +79,8 @@ export async function POST(req: NextRequest) {
             tx,
             customerId: customer.id,
             invoiceId: invRes.invoice.id,
+            projectId,
+            subProjectId,
             treasuryId: "t1",
             amount: creditPaid,
             currency: "YER",
@@ -90,6 +94,7 @@ export async function POST(req: NextRequest) {
       const sale = await tx.saleTransaction.create({
         data: {
           projectId,
+          subProjectId,
           harvestCycleId: cycle?.id ?? null,
           harvestName,
           saleBatchLabel,

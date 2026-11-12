@@ -85,6 +85,7 @@ export function UasAppShell() {
   const [mobileSimulatorActive, setMobileSimulatorActive] = useState(false);
 
   const [selectedProjectId, setSelectedProjectId] = useState("ALL");
+  const [selectedSubProjectId, setSelectedSubProjectId] = useState("ALL");
   const [selectedHarvest, setSelectedHarvest] = useState("ALL");
 
   const [currentUser, setCurrentUser] = useState<UasUser>(INITIAL_FALLBACK_STATE.users[0]);
@@ -211,6 +212,14 @@ export function UasAppShell() {
     [scopedProjects]
   );
 
+  const availableSubProjects = useMemo(() => {
+    if (selectedProjectId === "ALL") {
+      return scopedProjects.flatMap((p) => p.subProjects || []);
+    }
+    const proj = scopedProjects.find((p) => p.id === selectedProjectId);
+    return proj ? proj.subProjects || [] : [];
+  }, [scopedProjects, selectedProjectId]);
+
   const availableHarvests = useMemo(() => {
     if (selectedProjectId === "ALL") {
       const set = new Set<string>();
@@ -222,16 +231,20 @@ export function UasAppShell() {
   }, [scopedProjects, selectedProjectId]);
 
   const filterList = useCallback(
-    <T extends { projectId: string; harvest: string }>(list: T[]): T[] =>
+    <T extends { projectId: string; harvest: string; subProjectId?: string | null }>(
+      list: T[]
+    ): T[] =>
       list.filter((item) => {
         if (!scopedProjectIdSet.has(item.projectId)) return false;
         const matchProj =
           selectedProjectId === "ALL" || item.projectId === selectedProjectId;
+        const matchSubProj =
+          selectedSubProjectId === "ALL" || item.subProjectId === selectedSubProjectId;
         const matchHarv =
           selectedHarvest === "ALL" || item.harvest === selectedHarvest;
-        return matchProj && matchHarv;
+        return matchProj && matchSubProj && matchHarv;
       }),
-    [scopedProjectIdSet, selectedProjectId, selectedHarvest]
+    [scopedProjectIdSet, selectedProjectId, selectedSubProjectId, selectedHarvest]
   );
 
   const filteredSales = useMemo(() => filterList(state.sales), [filterList, state.sales]);
@@ -242,6 +255,20 @@ export function UasAppShell() {
   const filteredWorkers = useMemo(
     () => filterList(state.workers),
     [filterList, state.workers]
+  );
+  const filteredInventoryBatches = useMemo(
+    () =>
+      state.inventoryBatches.filter((b) => {
+        if (!scopedProjectIdSet.has(b.projectId)) return false;
+        const matchProj =
+          selectedProjectId === "ALL" || b.projectId === selectedProjectId;
+        const matchSubProj =
+          selectedSubProjectId === "ALL" || b.subProjectId === selectedSubProjectId;
+        const matchHarv =
+          selectedHarvest === "ALL" || b.harvest === selectedHarvest;
+        return matchProj && matchSubProj && matchHarv;
+      }),
+    [scopedProjectIdSet, selectedProjectId, selectedSubProjectId, selectedHarvest, state.inventoryBatches]
   );
 
   async function runMutation(
@@ -294,7 +321,12 @@ export function UasAppShell() {
 
   function handleProjectFilterChange(pid: string) {
     setSelectedProjectId(pid);
+    setSelectedSubProjectId("ALL");
     setSelectedHarvest("ALL");
+  }
+
+  function handleSubProjectFilterChange(subId: string) {
+    setSelectedSubProjectId(subId);
   }
 
   function openSaleVoucher(s: UasSaleTransaction) {
@@ -577,6 +609,8 @@ export function UasAppShell() {
               activeTab={activeTab}
               projects={scopedProjects}
               selectedProjectId={selectedProjectId}
+              selectedSubProjectId={selectedSubProjectId}
+              availableSubProjects={availableSubProjects}
               selectedHarvest={selectedHarvest}
               availableHarvests={availableHarvests}
               currentUser={currentUser}
@@ -584,6 +618,7 @@ export function UasAppShell() {
               onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
               onOpenSearch={() => setSearchModalOpen(true)}
               onProjectChange={handleProjectFilterChange}
+              onSubProjectChange={handleSubProjectFilterChange}
               onHarvestChange={setSelectedHarvest}
               onCurrencyChange={(c) => {
                 setCurrency(c);
@@ -723,6 +758,7 @@ export function UasAppShell() {
                   lang={lang}
                   currency={currency}
                   selectedProjectId={selectedProjectId}
+                  selectedSubProjectId={selectedSubProjectId}
                   filteredSales={filteredSales}
                   filteredExpenses={filteredExpenses}
                   filteredWorkers={filteredWorkers}
@@ -750,6 +786,7 @@ export function UasAppShell() {
                   currentUser={currentUser}
                   exchangeRates={state.exchangeRates}
                   selectedProjectId={selectedProjectId}
+                  selectedSubProjectId={selectedSubProjectId}
                   readOnly={userReadOnly}
                   canPost={userCanPost}
                   canEditDate={userCanEditDate}
@@ -763,6 +800,7 @@ export function UasAppShell() {
                   treasuryAccounts={state.treasuryAccounts}
                   currentUser={currentUser}
                   selectedProjectId={selectedProjectId}
+                  selectedSubProjectId={selectedSubProjectId}
                   readOnly={userReadOnly}
                   canApprove={userCanApprove}
                   canEditRecords={canEdit(currentUser, "procurement")}
@@ -777,6 +815,7 @@ export function UasAppShell() {
                 <FinancialReportsTab
                   projects={scopedProjects}
                   selectedProjectId={selectedProjectId}
+                  selectedSubProjectId={selectedSubProjectId}
                   onToast={showToast}
                 />
               )}
@@ -1126,7 +1165,7 @@ export function UasAppShell() {
               {activeTab === "inventory" && (
                 <InventoryTab
                   projects={scopedProjects}
-                  inventoryBatches={state.inventoryBatches}
+                  inventoryBatches={filteredInventoryBatches}
                   sales={state.sales}
                   readOnly={userReadOnly}
                   canEditRecords={canEdit(currentUser, "inventory")}

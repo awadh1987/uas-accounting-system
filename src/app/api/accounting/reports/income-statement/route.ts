@@ -10,8 +10,9 @@ export async function GET(req: NextRequest) {
     const fromDate = searchParams.get("fromDate") || undefined;
     const toDate = searchParams.get("toDate") || undefined;
     const projectId = searchParams.get("projectId") || undefined;
+    const subProjectId = searchParams.get("subProjectId") || undefined;
 
-    const reports = await generateFinancialReports({ fromDate, toDate, projectId });
+    const reports = await generateFinancialReports({ fromDate, toDate, projectId, subProjectId });
     return NextResponse.json({
       filters: reports.filters,
       ...reports.incomeStatement,

@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
     const actor = auth.actor;
 
     const projectId = String(body.projectId || "").trim();
+    const subProjectId = body.subProjectId ? String(body.subProjectId).trim() : null;
     const harvestName = String(body.harvest || "").trim();
     const name = String(body.name || "").trim();
     const dailyWage = Number(body.dailyWage) || 0;
@@ -57,6 +58,7 @@ export async function POST(req: NextRequest) {
           workerId: worker.id,
           workerName: worker.name,
           projectId,
+          subProjectId,
           harvestCycleId: cycle?.id ?? null,
           harvestName,
           dailyWage,
@@ -75,6 +77,7 @@ export async function POST(req: NextRequest) {
           workerName: worker.name,
           workerAccountId: worker.accountId,
           projectId,
+          subProjectId,
           harvestCycleId: cycle?.id ?? null,
           totalWage,
           creditAmount,

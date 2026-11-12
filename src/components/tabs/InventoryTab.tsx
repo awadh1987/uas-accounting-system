@@ -9,6 +9,7 @@ import type { UasInventoryBatch, UasProject, UasSaleTransaction } from "@/types/
 
 type InventoryPayload = {
   projectId: string;
+  subProjectId?: string | null;
   harvest: string;
   grade: string;
   harvestedBundles: number;
@@ -38,6 +39,7 @@ export function InventoryTab({
   const [projectId, setProjectId] = useState(projects[0]?.id || "");
   const activeProj = projects.find((p) => p.id === projectId) || projects[0];
   const [harvest, setHarvest] = useState(activeProj?.harvests[0] || "القطفة الأولى");
+  const [subProjectId, setSubProjectId] = useState<string>("");
   const [grade, setGrade] = useState("رقم 1/رقم 2/رقم 3/ روس/بزغة");
   const [harvestedBundles, setHarvestedBundles] = useState("250");
   const [shrinkageBundles, setShrinkageBundles] = useState("5");
@@ -47,6 +49,7 @@ export function InventoryTab({
 
   function handleProjChange(nextPid: string) {
     setProjectId(nextPid);
+    setSubProjectId("");
     const p = projects.find((x) => x.id === nextPid);
     if (p && p.harvests.length > 0) setHarvest(p.harvests[0]);
   }
@@ -55,6 +58,7 @@ export function InventoryTab({
     setEditingId(null);
     const defProj = projects[0];
     setProjectId(defProj?.id || "");
+    setSubProjectId("");
     setHarvest(defProj?.harvests[0] || "القطفة الأولى");
     setGrade("رقم 1/رقم 2/رقم 3/ روس/بزغة");
     setHarvestedBundles("250");
@@ -66,6 +70,7 @@ export function InventoryTab({
   function openEditDrawer(b: UasInventoryBatch) {
     setEditingId(b.id);
     setProjectId(b.projectId);
+    setSubProjectId(b.subProjectId || "");
     setHarvest(b.harvest);
     setGrade(b.grade);
     setHarvestedBundles(String(b.harvestedBundles));
@@ -81,6 +86,7 @@ export function InventoryTab({
       activeProj?.harvests.includes(harvest) ? harvest : activeProj?.harvests[0] || "القطفة الأولى";
     const payload: InventoryPayload = {
       projectId: pid,
+      subProjectId: subProjectId || undefined,
       harvest: harv,
       grade,
       harvestedBundles: Number(harvestedBundles) || 0,
@@ -120,6 +126,24 @@ export function InventoryTab({
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block font-semibold">القطاع / المشروع الفرعي (Cost Center)</label>
+              <span className="text-[10px] text-slate-400">اختياري</span>
+            </div>
+            <select
+              value={subProjectId}
+              onChange={(e) => setSubProjectId(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            >
+              <option value="">-- بدون تحديد قطاع فرعي --</option>
+              {(activeProj?.subProjects || []).map((sp) => (
+                <option key={sp.id} value={sp.id}>
+                  {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
                 </option>
               ))}
             </select>
@@ -262,7 +286,15 @@ export function InventoryTab({
                 return (
                   <tr key={b.id}>
                     <td className="p-2.5 font-bold">
-                      {proj ? proj.name : ""} — {b.harvest}
+                      <div>{proj ? proj.name : ""} — {b.harvest}</div>
+                      {b.subProjectId && (() => {
+                        const sp = proj?.subProjects?.find((x) => x.id === b.subProjectId);
+                        return sp ? (
+                          <span className="inline-block mt-0.5 text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                            {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
+                          </span>
+                        ) : null;
+                      })()}
                     </td>
                     <td className="p-2.5">
                       <span className="accent-badge px-2 py-0.5 rounded font-semibold">

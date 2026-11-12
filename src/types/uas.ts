@@ -98,6 +98,14 @@ export interface UasSubProject {
   nameAr: string;
   nameEn: string;
   budget: number;
+  status?: "ACTIVE" | "PAUSED" | "COMPLETED" | string;
+  notes?: string;
+  vendorId?: string | null;
+  vendorName?: string | null;
+  actualSpend?: number;
+  revenue?: number;
+  netProfit?: number;
+  remainingBudget?: number;
 }
 
 export interface UasHarvestCycle {
@@ -145,6 +153,7 @@ export interface UasProject {
 export interface UasOperatingExpense {
   id: string;
   projectId: string;
+  subProjectId?: string | null;
   harvest: string;
   category: string;
   subType: string;
@@ -159,6 +168,7 @@ export interface UasWorkerWage {
   id: string;
   workerId?: string;
   projectId: string;
+  subProjectId?: string | null;
   harvest: string;
   name: string;
   dailyWage: number;
@@ -174,6 +184,7 @@ export interface UasSaleTransaction {
   id: string;
   customerId?: string;
   projectId: string;
+  subProjectId?: string | null;
   harvest: string;
   batch: string;
   customer: string;
@@ -231,6 +242,7 @@ export interface UasInstallmentVoucher {
 export interface UasInventoryBatch {
   id: string;
   projectId: string;
+  subProjectId?: string | null;
   harvest: string;
   grade: string;
   harvestedBundles: number;

@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
     const actor = auth.actor;
 
     const projectId = String(body.projectId || "").trim();
+    const subProjectId = body.subProjectId ? String(body.subProjectId).trim() : null;
     const harvestName = String(body.harvest || "").trim();
     const category = String(body.category || "وقود/محروقات").trim();
     const subType = String(body.subType || category).trim();
@@ -48,6 +49,7 @@ export async function POST(req: NextRequest) {
       const expense = await tx.operatingExpense.create({
         data: {
           projectId,
+          subProjectId,
           harvestCycleId: cycle?.id ?? null,
           harvestName,
           category,
@@ -63,6 +65,7 @@ export async function POST(req: NextRequest) {
       const je = await postOperatingExpenseJournalTx(tx, {
         expenseId: expense.id,
         projectId,
+        subProjectId,
         harvestCycleId: cycle?.id ?? null,
         category,
         subType,
