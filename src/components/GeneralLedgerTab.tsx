@@ -525,7 +525,7 @@ export function GeneralLedgerTab({
                         >
                           {postingAccounts.map((acc) => (
                             <option key={acc.id} value={acc.id}>
-                              {acc.code} — {acc.nameAr}
+                              [{acc.code}] {acc.nameAr} (الجيل {acc.level})
                             </option>
                           ))}
                         </select>
@@ -710,10 +710,10 @@ export function GeneralLedgerTab({
             onChange={(e) => setFilterAccountId(e.target.value)}
             className="rounded-xl border border-slate-300 bg-transparent px-3 py-2"
           >
-            <option value="ALL">جميع حسابات الترحيل (T5)</option>
+            <option value="ALL">جميع حسابات الترحيل (الجيل 5 والجيل 6)</option>
             {postingAccounts.map((a) => (
               <option key={a.id} value={a.id}>
-                {a.code} — {a.nameAr}
+                [{a.code}] {a.nameAr} (الجيل {a.level})
               </option>
             ))}
           </select>

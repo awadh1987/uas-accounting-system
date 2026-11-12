@@ -18,6 +18,10 @@ import type { UasProject, UasTreasuryAccount, UasUser, VoucherModalPayload } fro
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { EmptyState } from "@/components/EmptyState";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
+import {
+  AccountingDirectionSelector,
+  type CustomAccountPayload,
+} from "@/components/AccountingDirectionSelector";
 
 interface VendorItem {
   id: string;
@@ -166,6 +170,8 @@ export function ProcurementTab({
   const [billAmount, setBillAmount] = useState("");
   const [billIsInventory, setBillIsInventory] = useState(true);
   const [billDebitCode, setBillDebitCode] = useState("113201");
+  const [billDebitAccountId, setBillDebitAccountId] = useState<string | undefined>(undefined);
+  const [billCustomAccount, setBillCustomAccount] = useState<CustomAccountPayload | undefined>(undefined);
   const [billNotes, setBillNotes] = useState("");
 
   // Create Payment Voucher state
@@ -382,7 +388,9 @@ export function ProcurementTab({
               date: billDate,
               totalAmount: numericAmt,
               isInventory: billIsInventory,
-              debitAccountCode: billDebitCode,
+              debitAccountCode: billDebitCode || undefined,
+              debitAccountId: billDebitAccountId || undefined,
+              customAccount: billCustomAccount || undefined,
               notes: billNotes.trim() || undefined,
               actor: actorPayload,
             }
@@ -1203,24 +1211,30 @@ export function ProcurementTab({
               ))}
             </select>
           </div>
-          <div>
-            <label className="block font-semibold mb-1">التوجيه المحاسبي (الطرف المدين)</label>
-            <select
-              value={billDebitCode}
-              onChange={(e) => {
-                const c = e.target.value;
-                setBillDebitCode(c);
-                setBillIsInventory(c.startsWith("113"));
-              }}
-              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-            >
-              <option value="113201">113201 — مخزون الأسمدة والمبيدات (أصل مخزني)</option>
-              <option value="113202">113202 — مخزون الوقود والمحروقات (أصل مخزني)</option>
-              <option value="113203">113203 — أدوات التعبئة والتغليف (أصل مخزني)</option>
-              <option value="521101">521101 — مصروف الديزل والوقود المباشر</option>
-              <option value="524101">524101 — مصروف صيانة المزرعة والعدد</option>
-            </select>
-          </div>
+          <AccountingDirectionSelector
+            label="التوجيه المحاسبي (الطرف المدين)"
+            value={{
+              accountId: billDebitAccountId,
+              accountCode: billDebitCode,
+              isCustom: Boolean(billCustomAccount),
+              customAccount: billCustomAccount,
+            }}
+            onChange={(val) => {
+              if (val.isCustom) {
+                setBillCustomAccount(val.customAccount);
+                setBillDebitAccountId(undefined);
+                setBillDebitCode(val.customAccount?.code || "");
+                setBillIsInventory(false);
+              } else {
+                setBillCustomAccount(undefined);
+                setBillDebitAccountId(val.accountId);
+                setBillDebitCode(val.accountCode || "");
+                setBillIsInventory(Boolean(val.accountCode?.startsWith("113")));
+              }
+            }}
+            allowedTypes={["ASSET", "EXPENSE"]}
+            defaultParentCode="113200"
+          />
           <div>
             <label className="block font-semibold mb-1">إجمالي الفاتورة (YER) *</label>
             <input

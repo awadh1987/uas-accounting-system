@@ -101,6 +101,10 @@ export async function POST(req: NextRequest) {
     const isInventory = Boolean(body.isInventory);
     const debitAccountCode = body.debitAccountCode ? String(body.debitAccountCode).trim() : undefined;
     const debitAccountId = body.debitAccountId ? String(body.debitAccountId).trim() : undefined;
+    const customAccount =
+      body.customAccount && typeof body.customAccount === "object"
+        ? (body.customAccount as { nameAr: string; nameEn?: string; parentCode: string; code?: string })
+        : undefined;
     const notes = body.notes ? String(body.notes).trim() : undefined;
 
     if (!vendorId || !projectId || totalAmount <= 0) {
@@ -120,6 +124,7 @@ export async function POST(req: NextRequest) {
       isInventory,
       debitAccountCode,
       debitAccountId,
+      customAccount,
       notes,
       createdById: actor.userId ?? undefined,
     });

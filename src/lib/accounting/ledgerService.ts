@@ -1,3 +1,4 @@
+import type { Account } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
@@ -47,6 +48,13 @@ export interface PostJournalEntryInput {
   tx?: Prisma.TransactionClient;
 }
 
+export interface CustomAccountInput {
+  nameAr: string;
+  nameEn?: string;
+  parentCode: string;
+  code?: string;
+}
+
 export interface PostVendorBillInput {
   vendorId: string;
   projectId: string;
@@ -59,8 +67,9 @@ export interface PostVendorBillInput {
   date?: Date | string;
   dueDate?: Date | string | null;
   isInventory?: boolean;
-  debitAccountId?: string;
-  debitAccountCode?: string;
+  debitAccountId?: string | null;
+  debitAccountCode?: string | null;
+  customAccount?: CustomAccountInput | null;
   notes?: string;
   createdById?: string;
   tx?: Prisma.TransactionClient;
@@ -92,7 +101,14 @@ export interface PostSalesInvoiceInput {
   currency?: string;
   date?: Date | string;
   notes?: string;
-  revenueAccountCode?: string;
+  revenueAccountId?: string | null;
+  revenueAccountCode?: string | null;
+  customAccount?: CustomAccountInput | null;
+  sequenceNumber?: string | null;
+  dailyBatchLabel?: string | null;
+  salesOfficerId?: string | null;
+  salesOfficerTitle?: string | null;
+  treasuryAccountId?: string | null;
   createdById?: string;
   tx?: Prisma.TransactionClient;
 }
@@ -216,12 +232,56 @@ async function resolvePostingAccount(
   if (!account) {
     throw new Error(`ACCOUNT_NOT_FOUND:${line.accountCode || line.accountId || "unknown"}`);
   }
-  if (!account.isPosting || account.level !== 5) {
+  if (!account.isPosting) {
     throw new Error(
-      `NON_POSTING_ACCOUNT: Account ${account.code} (${account.nameAr}) is Tier-${account.level}. Only Tier-5 detail accounts accept direct journal postings.`
+      `NON_POSTING_ACCOUNT: Account ${account.code} (${account.nameAr}) is Tier-${account.level}. Only operational posting leaf accounts (isPosting = true) accept direct journal postings.`
     );
   }
   return account;
+}
+
+export async function resolveOrCreatePostingAccountTx(
+  tx: Prisma.TransactionClient,
+  input: {
+    accountId?: string | null;
+    accountCode?: string | null;
+    customAccount?: CustomAccountInput | null;
+    fallbackDefaultCode?: string;
+    userId?: string | null;
+  }
+): Promise<Account> {
+  // If customAccount is specified with a name and parentCode, create it atomically
+  if (
+    input.customAccount &&
+    input.customAccount.nameAr?.trim() &&
+    input.customAccount.parentCode?.trim()
+  ) {
+    const custom = input.customAccount;
+    const parent = await tx.account.findUnique({ where: { code: custom.parentCode.trim() } });
+    if (!parent) {
+      throw new Error(`PARENT_COA_MISSING: الحساب الأب برمز '${custom.parentCode}' غير موجود لإنشاء الحساب المخصص`);
+    }
+
+    return await createHierarchicalAccount({
+      code: custom.code?.trim() || undefined,
+      nameAr: custom.nameAr.trim(),
+      nameEn: custom.nameEn?.trim() || custom.nameAr.trim(),
+      parentId: parent.id,
+      parentCode: parent.code,
+      type: parent.type,
+      tx,
+      userId: input.userId,
+    });
+  }
+
+  // Otherwise resolve existing posting leaf account
+  const targetCode = input.accountId
+    ? undefined
+    : input.accountCode?.trim() || input.fallbackDefaultCode;
+  return await resolvePostingAccount(tx, {
+    accountId: input.accountId || undefined,
+    accountCode: targetCode,
+  });
 }
 
 async function ensureChildPostingAccount(
@@ -604,9 +664,12 @@ export async function postVendorBill(input: PostVendorBillInput) {
     const billDate = input.date ? new Date(input.date) : new Date();
 
     const defaultDebitCode = input.isInventory ? "113201" : "524101";
-    const debitAccount = await resolvePostingAccount(tx, {
+    const debitAccount = await resolveOrCreatePostingAccountTx(tx, {
       accountId: input.debitAccountId,
-      accountCode: input.debitAccountId ? undefined : input.debitAccountCode || defaultDebitCode,
+      accountCode: input.debitAccountCode,
+      customAccount: input.customAccount,
+      fallbackDefaultCode: defaultDebitCode,
+      userId: input.createdById,
     });
 
     const je = await postJournalEntry({
@@ -861,7 +924,14 @@ export async function postSalesInvoice(input: PostSalesInvoiceInput) {
     const rate = await getExchangeRateToYER(tx, currency);
     const invoiceNumber = await nextSequenceCode(tx, "salesInvoice", "INV");
     const invDate = input.date ? new Date(input.date) : new Date();
-    const revenueCode = input.revenueAccountCode || mapProjectIdToSalesRevenueCode(project.id);
+    const defaultRevenueCode = mapProjectIdToSalesRevenueCode(project.id);
+    const revenueAccount = await resolveOrCreatePostingAccountTx(tx, {
+      accountId: input.revenueAccountId,
+      accountCode: input.revenueAccountCode,
+      customAccount: input.customAccount,
+      fallbackDefaultCode: defaultRevenueCode,
+      userId: input.createdById,
+    });
 
     const je = await postJournalEntry({
       tx,
@@ -886,7 +956,7 @@ export async function postSalesInvoice(input: PostSalesInvoiceInput) {
           harvestCycleId: input.harvestCycleId ?? null,
         },
         {
-          accountCode: revenueCode,
+          accountId: revenueAccount.id,
           credit: totalAmount,
           currency,
           exchangeRate: rate,
@@ -905,6 +975,12 @@ export async function postSalesInvoice(input: PostSalesInvoiceInput) {
     const invoice = await tx.salesInvoice.create({
       data: {
         invoiceNumber,
+        sequenceNumber: input.sequenceNumber ?? null,
+        dailyBatchLabel: input.dailyBatchLabel ?? null,
+        salesOfficerId: input.salesOfficerId ?? null,
+        salesOfficerTitle: input.salesOfficerTitle ?? null,
+        revenueAccountCode: revenueAccount.code,
+        treasuryAccountId: input.treasuryAccountId ?? null,
         customerId: customer.id,
         projectId: project.id,
         subProjectId: input.subProjectId ?? null,
@@ -1058,13 +1134,33 @@ export async function postOperatingExpenseJournalTx(
     subType: string;
     totalAmount: number;
     date: string;
+    expenseAccountId?: string | null;
+    expenseAccountCode?: string | null;
+    customAccount?: CustomAccountInput | null;
+    treasuryAccountId?: string | null;
     createdById?: string;
   }
 ) {
   if (input.totalAmount <= 0) return null;
-  const expCode = mapExpenseCategoryToCoaCode(input.category);
-  const treasury = await tx.treasuryAccount.findUnique({ where: { id: "t1" } });
-  const cashAccountId = treasury?.accountId;
+  const defaultExpCode = mapExpenseCategoryToCoaCode(input.category);
+  const debitAccount = await resolveOrCreatePostingAccountTx(tx, {
+    accountId: input.expenseAccountId,
+    accountCode: input.expenseAccountCode,
+    customAccount: input.customAccount,
+    fallbackDefaultCode: defaultExpCode,
+    userId: input.createdById,
+  });
+
+  let creditAccountId: string | undefined;
+  if (input.treasuryAccountId) {
+    const t = await tx.treasuryAccount.findUnique({ where: { id: input.treasuryAccountId } });
+    if (t?.accountId) creditAccountId = t.accountId;
+  }
+  if (!creditAccountId) {
+    const defaultTreasury = await tx.treasuryAccount.findUnique({ where: { id: "t1" } });
+    creditAccountId = defaultTreasury?.accountId;
+  }
+
   return postJournalEntry({
     tx,
     date: new Date(`${input.date}T10:00:00Z`),
@@ -1078,7 +1174,7 @@ export async function postOperatingExpenseJournalTx(
     createdById: input.createdById,
     lines: [
       {
-        accountCode: expCode,
+        accountId: debitAccount.id,
         debit: input.totalAmount,
         projectId: input.projectId,
         subProjectId: input.subProjectId ?? null,
@@ -1086,7 +1182,7 @@ export async function postOperatingExpenseJournalTx(
         memo: input.subType,
       },
       {
-        ...(cashAccountId ? { accountId: cashAccountId } : { accountCode: "111101" }),
+        ...(creditAccountId ? { accountId: creditAccountId } : { accountCode: "111101" }),
         credit: input.totalAmount,
         projectId: input.projectId,
         subProjectId: input.subProjectId ?? null,
@@ -1194,10 +1290,388 @@ export interface CoaTreeNode {
   parentId: string | null;
   directDebit: number;
   directCredit: number;
+  rolledUpDebit: number;
+  rolledUpCredit: number;
+  rolledUpBalance: number;
+  // Aliases for full backwards compatibility
   rollupDebit: number;
   rollupCredit: number;
   balance: number; // Natural balance: DR - CR for ASSET/EXPENSE; CR - DR for LIABILITY/EQUITY/REVENUE
+  childrenCount: number;
+  lineageChain: {
+    id: string;
+    code: string;
+    nameAr: string;
+    nameEn: string;
+    level: number;
+  }[];
   children: CoaTreeNode[];
+}
+
+/**
+ * Standard 6-Generation Hierarchical Chart of Accounts Engine
+ * Computes directDebit, directCredit, rolledUpDebit, rolledUpCredit, rolledUpBalance,
+ * childrenCount, and lineageChain (ordered array of ancestor accounts from Gen 1 to current node).
+ */
+export function buildHierarchicalCoaTree(
+  accounts: Array<{
+    id: string;
+    code: string;
+    nameAr: string;
+    nameEn: string;
+    level: number;
+    type: string;
+    isPosting: boolean;
+    parentId: string | null;
+  }>,
+  journalLines: Array<{
+    accountId: string;
+    debitBase?: number | Prisma.Decimal | null;
+    creditBase?: number | Prisma.Decimal | null;
+    debit?: number | Prisma.Decimal | null;
+    credit?: number | Prisma.Decimal | null;
+  }>
+): {
+  tree: CoaTreeNode[];
+  flat: Omit<CoaTreeNode, "children">[];
+  nodeMap: Map<string, CoaTreeNode>;
+} {
+  const totalsByAccount = new Map<string, { dr: number; cr: number }>();
+  for (const line of journalLines) {
+    const dr = toNum(line.debitBase ?? line.debit ?? 0);
+    const cr = toNum(line.creditBase ?? line.credit ?? 0);
+    const curr = totalsByAccount.get(line.accountId) || { dr: 0, cr: 0 };
+    curr.dr += dr;
+    curr.cr += cr;
+    totalsByAccount.set(line.accountId, curr);
+  }
+
+  const nodeMap = new Map<string, CoaTreeNode>();
+  for (const acc of accounts) {
+    const direct = totalsByAccount.get(acc.id) || { dr: 0, cr: 0 };
+    nodeMap.set(acc.id, {
+      id: acc.id,
+      code: acc.code,
+      nameAr: acc.nameAr,
+      nameEn: acc.nameEn,
+      level: acc.level,
+      type: acc.type,
+      isPosting: acc.isPosting,
+      parentId: acc.parentId,
+      directDebit: round4(direct.dr),
+      directCredit: round4(direct.cr),
+      rolledUpDebit: round4(direct.dr),
+      rolledUpCredit: round4(direct.cr),
+      rolledUpBalance: 0,
+      rollupDebit: round4(direct.dr),
+      rollupCredit: round4(direct.cr),
+      balance: 0,
+      childrenCount: 0,
+      lineageChain: [],
+      children: [],
+    });
+  }
+
+  const roots: CoaTreeNode[] = [];
+  for (const node of nodeMap.values()) {
+    if (node.parentId && nodeMap.has(node.parentId)) {
+      nodeMap.get(node.parentId)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  // Compute lineageChain from Gen 1 down to the node itself
+  for (const node of nodeMap.values()) {
+    const chain: { id: string; code: string; nameAr: string; nameEn: string; level: number }[] = [];
+    let curr: CoaTreeNode | undefined = node;
+    const visited = new Set<string>();
+    while (curr && !visited.has(curr.id)) {
+      visited.add(curr.id);
+      chain.unshift({
+        id: curr.id,
+        code: curr.code,
+        nameAr: curr.nameAr,
+        nameEn: curr.nameEn,
+        level: curr.level,
+      });
+      curr = curr.parentId ? nodeMap.get(curr.parentId) : undefined;
+    }
+    node.lineageChain = chain;
+  }
+
+  // Recursive post-order rollup calculation
+  function computeRollup(node: CoaTreeNode): { dr: number; cr: number } {
+    let dr = node.directDebit;
+    let cr = node.directCredit;
+    for (const child of node.children) {
+      const childSum = computeRollup(child);
+      dr = round4(dr + childSum.dr);
+      cr = round4(cr + childSum.cr);
+    }
+    node.rolledUpDebit = dr;
+    node.rolledUpCredit = cr;
+    node.rollupDebit = dr;
+    node.rollupCredit = cr;
+    node.childrenCount = node.children.length;
+    const isDebitNormal = node.type === "ASSET" || node.type === "EXPENSE";
+    const bal = round4(isDebitNormal ? dr - cr : cr - dr);
+    node.rolledUpBalance = bal;
+    node.balance = bal;
+    return { dr, cr };
+  }
+
+  for (const root of roots) {
+    computeRollup(root);
+  }
+
+  const flat = Array.from(nodeMap.values()).map((n) => {
+    const { children: _children, ...rest } = n;
+    void _children;
+    return rest;
+  });
+
+  return { tree: roots, flat, nodeMap };
+}
+
+export async function suggestNextHierarchicalCodeTx(
+  tx: Prisma.TransactionClient,
+  parent: Account | null,
+  level: number,
+  type?: string
+): Promise<string> {
+  void type;
+  if (!parent) {
+    const roots = await tx.account.findMany({
+      where: { level: 1 },
+      select: { code: true },
+      orderBy: { code: "desc" },
+    });
+    let highestNum = 0;
+    for (const r of roots) {
+      const n = parseInt(r.code, 10);
+      if (Number.isFinite(n) && n > highestNum) highestNum = n;
+    }
+    return highestNum > 0 ? String(highestNum + 100000) : "100000";
+  }
+
+  const siblings = await tx.account.findMany({
+    where: { parentId: parent.id },
+    select: { code: true },
+    orderBy: { code: "desc" },
+  });
+
+  if (level === 6) {
+    // Gen 6 sub-leaves: parent.code + 2 digits (e.g., 11110101)
+    if (siblings.length === 0) {
+      return `${parent.code}01`;
+    }
+    let maxSuffix = 0;
+    for (const s of siblings) {
+      if (s.code.startsWith(parent.code)) {
+        const suffixStr = s.code.slice(parent.code.length);
+        const suffixNum = parseInt(suffixStr, 10);
+        if (Number.isFinite(suffixNum) && suffixNum > maxSuffix) {
+          maxSuffix = suffixNum;
+        }
+      }
+    }
+    const nextSuffix = String(maxSuffix + 1).padStart(2, "0");
+    return `${parent.code}${nextSuffix}`;
+  }
+
+  if (level === 5) {
+    // Gen 5 analytical accounts
+    if (siblings.length === 0) {
+      if (parent.code.endsWith("00") && parent.code.length === 6) {
+        return `${parent.code.slice(0, 4)}01`;
+      }
+      return `${parent.code}01`;
+    }
+    let maxVal = 0;
+    for (const s of siblings) {
+      const val = parseInt(s.code, 10);
+      if (Number.isFinite(val) && val > maxVal) {
+        maxVal = val;
+      }
+    }
+    return String(maxVal + 1);
+  }
+
+  const step = level === 2 ? 10000 : level === 3 ? 1000 : 100;
+  if (siblings.length === 0) {
+    const pNum = parseInt(parent.code, 10);
+    if (Number.isFinite(pNum)) {
+      return String(pNum + step);
+    }
+    return `${parent.code}01`;
+  }
+
+  let maxVal = 0;
+  for (const s of siblings) {
+    const val = parseInt(s.code, 10);
+    if (Number.isFinite(val) && val > maxVal) {
+      maxVal = val;
+    }
+  }
+  return String(maxVal + step);
+}
+
+export interface CreateHierarchicalAccountInput {
+  code?: string;
+  nameAr: string;
+  nameEn?: string;
+  type?: AccountType | string;
+  level?: 1 | 2 | 3 | 4 | 5 | 6 | number;
+  parentId?: string | null;
+  parentCode?: string | null;
+  isPosting?: boolean;
+  tx?: Prisma.TransactionClient;
+  userId?: string | null;
+}
+
+/**
+ * Creates an account across any generation (Gen 1 to Gen 6) following IFRS COA integrity rules:
+ * - isPosting = false for summary headers (Gen 1-4, or Gen 5 with Gen 6 children)
+ * - isPosting = true for operational posting leaves (Gen 5 leaves or Gen 6 leaves)
+ * - Auto-promotes zero-transaction Gen 5 leaves to summary headers if a Gen 6 child is added
+ * - Rejects adding children if the parent already holds posted journal lines
+ */
+export async function createHierarchicalAccount(
+  input: CreateHierarchicalAccountInput
+): Promise<Account> {
+  const run = async (tx: Prisma.TransactionClient): Promise<Account> => {
+    const nameAr = input.nameAr?.trim();
+    if (!nameAr) {
+      throw new Error("ACCOUNT_NAME_REQUIRED: يرجى إدخال اسم الحساب بالعربية");
+    }
+    const nameEn = input.nameEn?.trim() || nameAr;
+
+    // Resolve parent if provided
+    let parent: Account | null = null;
+    if (input.parentId) {
+      parent = await tx.account.findUnique({ where: { id: input.parentId } });
+      if (!parent) {
+        throw new Error(`PARENT_ACCOUNT_NOT_FOUND: الحساب الأب المعرف برقم ${input.parentId} غير موجود`);
+      }
+    } else if (input.parentCode) {
+      parent = await tx.account.findUnique({ where: { code: input.parentCode } });
+      if (!parent) {
+        throw new Error(`PARENT_ACCOUNT_NOT_FOUND: الحساب الأب بالرمز ${input.parentCode} غير موجود`);
+      }
+    }
+
+    let level: number;
+    let type: string;
+    let isPosting: boolean;
+
+    if (parent) {
+      if (parent.level >= 6) {
+        throw new Error(
+          "CANNOT_EXCEED_LEVEL_6: لا يمكن إنشاء حساب فرعي دون المستوى السادس (الجيل السادس هو أدنى مستوى تشغيلي في النظام)"
+        );
+      }
+      level = parent.level + 1;
+      if (input.level && input.level !== level) {
+        throw new Error(
+          `INVALID_LEVEL_DEPTH: مستوى الحساب (${input.level}) غير مطابق للعمق الهيكلي للحساب الأب (${parent.level}). يجب أن يكون المستوى ${level}`
+        );
+      }
+      type = (input.type as string) || parent.type;
+
+      // IFRS COA integrity check:
+      // If parent was a posting leaf, check if it has existing journal entries
+      if (parent.isPosting) {
+        const txCount = await tx.journalEntryLine.count({
+          where: { accountId: parent.id },
+        });
+        if (txCount > 0) {
+          throw new Error(
+            `PARENT_HAS_TRANSACTIONS: لا يمكن تفريع الحساب '${parent.code} - ${parent.nameAr}' (المستوى ${parent.level}) لوجود ${txCount} قيد/حركات يومية مسجلة عليه مباشرة. يرجى نقل أو إعادة تبويب القيود إلى حساب فرعي قبل التفريع لضمان سلامة القيود المزدوجة.`
+          );
+        }
+        // Auto-promote parent from posting leaf to summary header
+        await tx.account.update({
+          where: { id: parent.id },
+          data: { isPosting: false },
+        });
+      }
+
+      // Determine posting eligibility:
+      // Gen 1-4 are headers (false)
+      // Gen 5 is leaf by default (true), unless caller specifies isPosting = false
+      // Gen 6 is always posting leaf (true)
+      if (level <= 4) {
+        isPosting = false;
+      } else if (level === 5) {
+        isPosting = input.isPosting !== undefined ? input.isPosting : true;
+      } else {
+        // level === 6
+        isPosting = true;
+      }
+    } else {
+      // Root Generation 1 (Main Class)
+      level = 1;
+      if (input.level && input.level !== 1) {
+        throw new Error("ROOT_MUST_BE_LEVEL_1: الحساب الرئيسي الذي ليس له أب يجب أن يكون من الجيل الأول (Level 1)");
+      }
+      if (!input.type) {
+        throw new Error(
+          "ACCOUNT_TYPE_REQUIRED: يجب تحديد نوع الحساب (ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE) للحساب الرئيسي"
+        );
+      }
+      type = input.type;
+      isPosting = false; // Gen 1 is never a posting leaf
+    }
+
+    // Determine code
+    let finalCode = input.code?.trim();
+    if (!finalCode) {
+      finalCode = await suggestNextHierarchicalCodeTx(tx, parent, level, type);
+    }
+
+    const duplicate = await tx.account.findUnique({ where: { code: finalCode } });
+    if (duplicate) {
+      throw new Error(`DUPLICATE_ACCOUNT_CODE: رمز الحساب '${finalCode}' مستخدم مسبقاً (${duplicate.nameAr})`);
+    }
+
+    const created = await tx.account.create({
+      data: {
+        code: finalCode,
+        nameAr,
+        nameEn,
+        level,
+        type,
+        isPosting,
+        parentId: parent ? parent.id : null,
+      },
+    });
+
+    if (input.userId) {
+      await recordAuditDiffTx(tx, {
+        userId: input.userId,
+        action: "CREATE",
+        entity: "Account",
+        entityId: created.id,
+        before: null,
+        after: {
+          code: created.code,
+          nameAr: created.nameAr,
+          level: created.level,
+          type: created.type,
+          isPosting: created.isPosting,
+          parentId: created.parentId,
+        },
+      });
+    }
+
+    return created;
+  };
+
+  if (input.tx) {
+    return run(input.tx);
+  }
+  return prisma.$transaction(run);
 }
 
 export async function getCoaTreeWithBalances(filters: FinancialReportFilters = {}): Promise<{
@@ -1215,70 +1689,14 @@ export async function getCoaTreeWithBalances(filters: FinancialReportFilters = {
     _sum: { debitBase: true, creditBase: true },
   });
 
-  const totalsByAccount = new Map<string, { dr: number; cr: number }>();
-  for (const row of grouped) {
-    totalsByAccount.set(row.accountId, {
-      dr: toNum(row._sum.debitBase),
-      cr: toNum(row._sum.creditBase),
-    });
-  }
+  const lines = grouped.map((g) => ({
+    accountId: g.accountId,
+    debitBase: g._sum.debitBase,
+    creditBase: g._sum.creditBase,
+  }));
 
-  const nodeMap = new Map<string, CoaTreeNode>();
-  for (const acc of accounts) {
-    const direct = totalsByAccount.get(acc.id) || { dr: 0, cr: 0 };
-    nodeMap.set(acc.id, {
-      id: acc.id,
-      code: acc.code,
-      nameAr: acc.nameAr,
-      nameEn: acc.nameEn,
-      level: acc.level,
-      type: acc.type,
-      isPosting: acc.isPosting,
-      parentId: acc.parentId,
-      directDebit: round4(direct.dr),
-      directCredit: round4(direct.cr),
-      rollupDebit: round4(direct.dr),
-      rollupCredit: round4(direct.cr),
-      balance: 0,
-      children: [],
-    });
-  }
-
-  const roots: CoaTreeNode[] = [];
-  for (const node of nodeMap.values()) {
-    if (node.parentId && nodeMap.has(node.parentId)) {
-      nodeMap.get(node.parentId)!.children.push(node);
-    } else {
-      roots.push(node);
-    }
-  }
-
-  function computeRollup(node: CoaTreeNode): { dr: number; cr: number } {
-    let dr = node.directDebit;
-    let cr = node.directCredit;
-    for (const child of node.children) {
-      const childSum = computeRollup(child);
-      dr = round4(dr + childSum.dr);
-      cr = round4(cr + childSum.cr);
-    }
-    node.rollupDebit = dr;
-    node.rollupCredit = cr;
-    const isDebitNormal = node.type === "ASSET" || node.type === "EXPENSE";
-    node.balance = round4(isDebitNormal ? dr - cr : cr - dr);
-    return { dr, cr };
-  }
-
-  for (const root of roots) {
-    computeRollup(root);
-  }
-
-  const flat = Array.from(nodeMap.values()).map((n) => {
-    const { children: _children, ...rest } = n;
-    void _children;
-    return rest;
-  });
-
-  return { tree: roots, flat };
+  const { tree, flat } = buildHierarchicalCoaTree(accounts, lines);
+  return { tree, flat };
 }
 
 function buildPostedLineWhere(filters: FinancialReportFilters): Prisma.JournalEntryLineWhereInput {
@@ -1311,7 +1729,7 @@ function buildPostedLineWhere(filters: FinancialReportFilters): Prisma.JournalEn
  */
 export async function generateFinancialReports(filters: FinancialReportFilters = {}) {
   const { flat } = await getCoaTreeWithBalances(filters);
-  const maxLevel = filters.maxLevel && filters.maxLevel >= 1 && filters.maxLevel <= 5 ? filters.maxLevel : 5;
+  const maxLevel = filters.maxLevel && filters.maxLevel >= 1 && filters.maxLevel <= 6 ? filters.maxLevel : 6;
 
   // Trial Balance
   const trialBalanceRows = flat
@@ -2045,6 +2463,7 @@ export async function reconcileTreasuryAccount(input: {
 
 export interface GenerateAcquisitionBillInput {
   projectId: string;
+  subProjectId?: string | null;
   acquisitionCycleId: string;
   vendorId?: string;
   amount?: number;
@@ -2052,7 +2471,9 @@ export interface GenerateAcquisitionBillInput {
   date?: Date | string;
   dueDate?: Date | string | null;
   capitalizeAsset?: boolean;
-  debitAccountCode?: string;
+  debitAccountId?: string | null;
+  debitAccountCode?: string | null;
+  customAccount?: CustomAccountInput | null;
   notes?: string;
   createdById?: string;
   tx?: Prisma.TransactionClient;
@@ -2086,6 +2507,7 @@ export async function generateAcquisitionBill(input: GenerateAcquisitionBillInpu
         poNumber,
         vendorId,
         projectId: project.id,
+        subProjectId: input.subProjectId ?? null,
         acquisitionCycleId: cycle.id,
         date: input.date ? new Date(input.date) : new Date(),
         status: "APPROVED",
@@ -2108,20 +2530,22 @@ export async function generateAcquisitionBill(input: GenerateAcquisitionBillInpu
       },
     });
 
-    const debitAccountCode =
-      input.debitAccountCode || (input.capitalizeAsset ? "121101" : "512101");
+    const defaultDebitCode = input.capitalizeAsset ? "121101" : "512101";
 
     const { bill, journalEntry } = await postVendorBill({
       tx,
       vendorId,
       projectId: project.id,
+      subProjectId: input.subProjectId ?? null,
       purchaseOrderId: po.id,
       acquisitionCycleId: cycle.id,
       totalAmount: amount,
       currency,
       date: input.date || new Date(),
       dueDate: input.dueDate ?? cycle.endDate,
-      debitAccountCode,
+      debitAccountId: input.debitAccountId,
+      debitAccountCode: input.debitAccountCode || defaultDebitCode,
+      customAccount: input.customAccount,
       notes: input.notes || `استحقاق دورة استحواذ المشروع: ${cycle.cycleTitle}`,
       createdById: input.createdById,
     });
@@ -2334,6 +2758,10 @@ export async function updateOperatingExpenseAtomic(input: {
   unitPrice?: number;
   date?: string;
   notes?: string;
+  expenseAccountId?: string;
+  expenseAccountCode?: string;
+  customAccount?: CustomAccountInput;
+  treasuryAccountId?: string;
   createdById?: string;
 }) {
   return prisma.$transaction(async (tx) => {
@@ -2367,12 +2795,20 @@ export async function updateOperatingExpenseAtomic(input: {
     const nextDate = input.date?.trim() || existing.expenseDate;
     const nextNotes = input.notes !== undefined ? input.notes.trim() : existing.notes;
 
+    const directionChanged = Boolean(
+      input.expenseAccountId ||
+        input.expenseAccountCode ||
+        input.customAccount ||
+        input.treasuryAccountId
+    );
+
     const financialChanged =
       Math.abs(nextTotal - existing.totalAmount) > 0.005 ||
       nextCategory !== existing.category ||
       nextProjectId !== existing.projectId ||
       nextSubProjectId !== existing.subProjectId ||
-      nextCycle?.id !== existing.harvestCycleId;
+      nextCycle?.id !== existing.harvestCycleId ||
+      directionChanged;
 
     let nextJournalEntryId = existing.journalEntryId;
     if (financialChanged) {
@@ -2393,6 +2829,10 @@ export async function updateOperatingExpenseAtomic(input: {
         subType: nextSubType,
         totalAmount: nextTotal,
         date: nextDate,
+        expenseAccountId: input.expenseAccountId,
+        expenseAccountCode: input.expenseAccountCode,
+        customAccount: input.customAccount,
+        treasuryAccountId: input.treasuryAccountId,
         createdById: input.createdById,
       });
       nextJournalEntryId = je?.id ?? null;
@@ -2601,6 +3041,12 @@ export async function updateSaleTransactionAtomic(input: {
   date?: string;
   voucherNo?: string;
   notes?: string;
+  sequenceNumber?: string;
+  dailyBatchLabel?: string;
+  salesOfficerId?: string;
+  salesOfficerTitle?: string;
+  revenueAccountCode?: string;
+  treasuryAccountId?: string;
   createdById?: string;
 }) {
   return prisma.$transaction(async (tx) => {
@@ -2641,6 +3087,12 @@ export async function updateSaleTransactionAtomic(input: {
     const nextGrade = input.grade?.trim() || existing.productGrade;
     const nextVoucherNo = input.voucherNo?.trim() || existing.receiptVoucherNo;
     const nextNotes = input.notes !== undefined ? input.notes.trim() : existing.notes;
+    const nextSeqNo = input.sequenceNumber?.trim() || existing.sequenceNumber;
+    const nextDailyLabel = input.dailyBatchLabel?.trim() || existing.dailyBatchLabel || nextBatch;
+    const nextOfficerId = input.salesOfficerId?.trim() || existing.salesOfficerId;
+    const nextOfficerTitle = input.salesOfficerTitle?.trim() || existing.salesOfficerTitle;
+    const nextRevenueCode = input.revenueAccountCode?.trim() || existing.revenueAccountCode;
+    const nextTreasuryId = input.treasuryAccountId?.trim() || existing.treasuryAccountId || "t1";
 
     const customer = await ensureCustomerWithAccountTx(tx, {
       name: nextCustomerName,
@@ -2677,6 +3129,12 @@ export async function updateSaleTransactionAtomic(input: {
           currency: "YER",
           date: new Date(`${nextDate}T10:00:00Z`),
           notes: nextNotes || `${nextBatch} (${nextBundles} × ${nextPrice})`,
+          sequenceNumber: nextSeqNo,
+          dailyBatchLabel: nextDailyLabel,
+          salesOfficerId: nextOfficerId,
+          salesOfficerTitle: nextOfficerTitle,
+          revenueAccountCode: nextRevenueCode,
+          treasuryAccountId: nextTreasuryId,
           createdById: input.createdById,
         });
         nextJournalEntryId = invRes.journalEntry.id;
@@ -2688,7 +3146,7 @@ export async function updateSaleTransactionAtomic(input: {
             invoiceId: invRes.invoice.id,
             projectId: nextProjectId,
             subProjectId: nextSubProjectId,
-            treasuryId: "t1",
+            treasuryId: nextTreasuryId,
             amount: nextCredit,
             currency: "YER",
             date: new Date(`${nextDate}T10:05:00Z`),
@@ -2709,6 +3167,12 @@ export async function updateSaleTransactionAtomic(input: {
     const updated = await tx.saleTransaction.update({
       where: { id: existing.id },
       data: {
+        sequenceNumber: nextSeqNo,
+        dailyBatchLabel: nextDailyLabel,
+        salesOfficerId: nextOfficerId,
+        salesOfficerTitle: nextOfficerTitle,
+        revenueAccountCode: nextRevenueCode,
+        treasuryAccountId: nextTreasuryId,
         projectId: nextProjectId,
         subProjectId: nextSubProjectId,
         harvestCycleId: nextCycle?.id ?? null,

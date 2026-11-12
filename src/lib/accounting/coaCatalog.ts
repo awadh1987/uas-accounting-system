@@ -21,16 +21,30 @@ export interface CoaSeedNode {
   code: string;
   nameAr: string;
   nameEn: string;
-  level: 1 | 2 | 3 | 4 | 5;
+  level: 1 | 2 | 3 | 4 | 5 | 6;
   type: AccountType;
   isPosting: boolean;
   parentCode: string | null;
 }
 
+export const COA_GENERATION_LABELS: Record<
+  number,
+  { ar: string; en: string; badge: string; role: "SUMMARY" | "POSTING" }
+> = {
+  1: { ar: "الجيل الأول: الفئة الرئيسية", en: "Gen 1: Main Class", badge: "Gen 1 رئيسي", role: "SUMMARY" },
+  2: { ar: "الجيل الثاني: المجموعة الأولية", en: "Gen 2: Primary Group", badge: "Gen 2 مجموعة", role: "SUMMARY" },
+  3: { ar: "الجيل الثالث: المجموعة الثانوية", en: "Gen 3: Secondary Group", badge: "Gen 3 فرعي", role: "SUMMARY" },
+  4: { ar: "الجيل الرابع: حساب التحكم والمراقبة", en: "Gen 4: Control Account", badge: "Gen 4 رقابي", role: "SUMMARY" },
+  5: { ar: "الجيل الخامس: حساب تحليلي فرعي", en: "Gen 5: Analytical Sub-Account", badge: "Gen 5 تحليلي", role: "POSTING" },
+  6: { ar: "الجيل السادس: حساب تفصيلي تشغيلي", en: "Gen 6: Operational Posting Leaf", badge: "Gen 6 تشغيلي", role: "POSTING" },
+};
+
 /**
- * Standard 5-Tier Chart of Accounts (COA) Architecture for UAS:
- * Level 1 (Class) -> Level 2 (Group) -> Level 3 (Control) -> Level 4 (Sub-Control) -> Level 5 (Detail/Posting)
- * Only Level 5 accounts have isPosting = true and accept direct journal lines.
+ * Standard 6-Generation Chart of Accounts (COA) Architecture for UAS (IFRS / Enterprise ERP Standard):
+ * Gen 1 (Main Class) -> Gen 2 (Primary Group) -> Gen 3 (Secondary Group) -> Gen 4 (Control Account) -> Gen 5 (Analytical Account) -> Gen 6 (Operational Posting Leaf)
+ * - Generations 1-4 are always summary header accounts (isPosting = false).
+ * - Generation 5 accounts are posting leaves by default, or summary headers if branched into Gen 6.
+ * - Generation 6 accounts are always posting leaves (isPosting = true).
  */
 export const STANDARD_COA_NODES: CoaSeedNode[] = [
   // =========================================================================

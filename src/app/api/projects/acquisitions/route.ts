@@ -126,8 +126,14 @@ export async function POST(req: NextRequest) {
         return jsonError("يرجى تحديد المشروع ودورة الاستحواذ", 400);
       }
 
+      const customAccount =
+        body.customAccount && typeof body.customAccount === "object"
+          ? (body.customAccount as { nameAr: string; nameEn?: string; parentCode: string; code?: string })
+          : undefined;
+
       const result = await generateAcquisitionBill({
         projectId,
+        subProjectId: body.subProjectId ? String(body.subProjectId).trim() : undefined,
         acquisitionCycleId,
         vendorId: body.vendorId ? String(body.vendorId) : undefined,
         amount: body.amount !== undefined ? Number(body.amount) : undefined,
@@ -135,9 +141,11 @@ export async function POST(req: NextRequest) {
         date: body.date ? String(body.date) : new Date(),
         dueDate: body.dueDate ? String(body.dueDate) : undefined,
         capitalizeAsset: Boolean(body.capitalizeAsset),
+        debitAccountId: body.debitAccountId ? String(body.debitAccountId).trim() : undefined,
         debitAccountCode: body.debitAccountCode
           ? String(body.debitAccountCode)
           : undefined,
+        customAccount,
         notes: body.notes ? String(body.notes) : undefined,
         createdById: auth.actor.userId ?? undefined,
       });

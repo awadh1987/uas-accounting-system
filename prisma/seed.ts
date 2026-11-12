@@ -203,9 +203,9 @@ async function main() {
     ],
   });
 
-  // 5. Complete 5-Tier Chart of Accounts (Assets 100000 -> Expenses 500000)
+  // 5. Complete 6-Generation Chart of Accounts (Assets 100000 -> Expenses 500000)
   const accountIdByCode = new Map<string, string>();
-  for (const level of [1, 2, 3, 4, 5] as const) {
+  for (const level of [1, 2, 3, 4, 5, 6] as const) {
     const nodes = STANDARD_COA_NODES.filter((n) => n.level === level);
     for (const node of nodes) {
       const parentId = node.parentCode
@@ -1422,7 +1422,9 @@ async function main() {
     },
   ];
 
-  for (const s of rawSales) {
+  for (let idx = 0; idx < rawSales.length; idx++) {
+    const s = rawSales[idx];
+    const seqNo = `SO-2026-000${idx + 1}`;
     const totals = computeSaleTotals(s.bundlesCount, s.unitPrice, s.creditPaid);
     const invJe = await seedJournal({
       date: s.saleDate,
@@ -1487,6 +1489,12 @@ async function main() {
     await prisma.saleTransaction.create({
       data: {
         id: s.id,
+        sequenceNumber: seqNo,
+        dailyBatchLabel: s.saleBatchLabel,
+        salesOfficerId: "u3",
+        salesOfficerTitle: "فواز الجابري (مسؤول مبيعات)",
+        revenueAccountCode: "411101",
+        treasuryAccountId: s.treasuryId,
         projectId: s.projectId,
         subProjectId: s.subProjectId,
         harvestCycleId: s.harvestCycleId,
@@ -1511,6 +1519,12 @@ async function main() {
     await prisma.salesInvoice.create({
       data: {
         id: s.invoiceId,
+        sequenceNumber: seqNo,
+        dailyBatchLabel: s.saleBatchLabel,
+        salesOfficerId: "u3",
+        salesOfficerTitle: "فواز الجابري (مسؤول مبيعات)",
+        revenueAccountCode: "411101",
+        treasuryAccountId: s.treasuryId,
         invoiceNumber: s.invoiceNumber,
         customerId: s.customerId,
         projectId: s.projectId,

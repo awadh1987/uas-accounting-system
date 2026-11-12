@@ -372,6 +372,110 @@ export function DashboardTab({
           </tbody>
         </table>
       </div>
+
+      {/* Sub-Projects / Cost Centers Profitability & Budget Utilization */}
+      <div className="card-surface rounded-2xl p-4 overflow-x-auto space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-bold flex items-center gap-2">
+              <span>تحليل ربحية القطاعات الفرعية ومراكز التكلفة (Sub-Projects & Cost Centers)</span>
+              <span className="accent-badge px-2 py-0.5 rounded text-[10px] font-mono font-bold">
+                IFRS Multi-Dimensional
+              </span>
+            </h3>
+            <p className="text-xs text-slate-500">
+              متابعة الموازنة، المصروفات الفعلية، الإيرادات المباشرة، وهامش الربحية لكل قطاع فرعي
+            </p>
+          </div>
+          <button
+            onClick={() => onSwitchTab("projects")}
+            className="text-xs font-bold text-sky-600 hover:underline"
+          >
+            إدارة القطاعات الفرعية ←
+          </button>
+        </div>
+
+        {state.projects.every((p) => !p.subProjects || p.subProjects.length === 0) ? (
+          <div className="text-center py-6 text-xs text-slate-500">
+            لم يتم إنشاء قطاعات فرعية بعد. يمكنك إضافة قطاعات من تبويب المشاريع لمتابعة مراكز التكلفة التحليلية.
+          </div>
+        ) : (
+          <table className="w-full text-xs text-right border-collapse">
+            <thead>
+              <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300">
+                <th className="p-2.5">رمز القطاع</th>
+                <th className="p-2.5">اسم القطاع الفرعي</th>
+                <th className="p-2.5">المشروع الأب</th>
+                <th className="p-2.5">الموازنة التقديرية</th>
+                <th className="p-2.5">المصروف الفعلي</th>
+                <th className="p-2.5">نسبة الاستهلاك</th>
+                <th className="p-2.5">الإيرادات المحققة</th>
+                <th className="p-2.5">صافي الربح / الخسارة</th>
+                <th className="p-2.5">الهامش %</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+              {state.projects.flatMap((p) =>
+                (p.subProjects || []).map((sp) => {
+                  const spExp = state.expenses
+                    .filter((e) => e.subProjectId === sp.id)
+                    .reduce((a, b) => a + Number(b.total), 0);
+                  const spWrk = state.workers
+                    .filter((w) => w.subProjectId === sp.id)
+                    .reduce((a, b) => a + Number(b.total), 0);
+                  const spSales = state.sales
+                    .filter((s) => s.subProjectId === sp.id)
+                    .reduce((a, b) => a + Number(b.total), 0);
+                  const actualCost = spExp + spWrk;
+                  const profit = spSales - actualCost;
+                  const budget = Number(sp.budget) || 0;
+                  const utilPct = budget > 0 ? (actualCost / budget) * 100 : 0;
+                  const marginPct = spSales > 0 ? (profit / spSales) * 100 : 0;
+                  const isOver = budget > 0 && actualCost > budget;
+
+                  return (
+                    <tr key={sp.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                      <td className="p-2.5 font-mono font-bold text-sky-700 dark:text-sky-300">{sp.code}</td>
+                      <td className="p-2.5 font-bold">{sp.nameAr}</td>
+                      <td className="p-2.5 text-slate-600 dark:text-slate-400">{p.name}</td>
+                      <td className="p-2.5 font-mono">{fmtNum(budget)}</td>
+                      <td className="p-2.5 font-mono text-amber-700 dark:text-amber-400 font-bold">
+                        {fmtNum(actualCost)}
+                      </td>
+                      <td className="p-2.5">
+                        <span
+                          className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
+                            isOver ? "bg-rose-100 text-rose-800" : "bg-emerald-100 text-emerald-800"
+                          }`}
+                        >
+                          {utilPct.toFixed(1)}%
+                        </span>
+                      </td>
+                      <td className="p-2.5 font-mono text-emerald-600 dark:text-emerald-400 font-bold">
+                        {fmtNum(spSales)}
+                      </td>
+                      <td
+                        className={`p-2.5 font-mono font-extrabold ${
+                          profit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"
+                        }`}
+                      >
+                        {fmtNum(profit)}
+                      </td>
+                      <td
+                        className={`p-2.5 font-mono font-bold ${
+                          marginPct >= 0 ? "text-emerald-700 dark:text-emerald-300" : "text-rose-600"
+                        }`}
+                      >
+                        {marginPct.toFixed(1)}%
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        )}
+      </div>
     </section>
   );
 }

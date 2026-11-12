@@ -111,15 +111,19 @@ export function exportFullWorkbookToExcel(
     "المشروع": projectNameById(s.projectId),
     "القطاع الفرعي": subProjectNameById(s.projectId, s.subProjectId) || "—",
     "القطفة": s.harvest,
-    "عملية البيع": s.batch,
+    "رقم العملية التسلسلي": s.sequenceNumber || s.batch,
+    "الوردية / الدفعة": s.dailyBatchLabel || s.batch,
+    "مسؤول المبيعات": s.salesOfficerTitle || "—",
     "اسم العميل": s.customer,
     "رقم الهاتف": s.phone,
-    "النوع": s.grade,
+    "النوع / الدرجة": s.grade,
     "عدد العلاقيات": Number(s.bundles),
     "السعر": Number(s.price),
     "الإجمالي": Number(s.total),
     "دائن (مقبوض)": Number(s.credit),
     "مدين (متبقي)": Number(s.debit),
+    "الحساب الإيرادي": s.revenueAccountCode || "411101",
+    "الخزينة": s.treasuryName || "—",
     "التاريخ": s.date,
     "رقم السند": s.voucherNo,
   }));
@@ -289,17 +293,20 @@ export function exportFinancialStatementsToExcel(data: FinancialExportPayload): 
   wb.Workbook = { Views: [{ RTL: true }] };
 
   // 1. Trial Balance with Freeze Panes & Active SUM Formulas
-  const tbRows = data.trialBalance.rows.map((r) => ({
-    "رقم الحساب": r.code,
-    "اسم الحساب": r.nameAr,
-    "Account Name": r.nameEn,
-    "المستوى": r.level,
-    "التصنيف": r.type,
-    "إجمالي المدين": Number(r.totalDebit),
-    "إجمالي الدائن": Number(r.totalCredit),
-    "رصيد مدين": Number(r.netDebit),
-    "رصيد دائن": Number(r.netCredit),
-  }));
+  const tbRows = data.trialBalance.rows.map((r) => {
+    const indent = "  ".repeat(Math.max(0, r.level - 1));
+    return {
+      "رقم الحساب": r.code,
+      "اسم الحساب": `${indent}${r.nameAr}`,
+      "Account Name": `${indent}${r.nameEn || ""}`,
+      "الجيل / المستوى": `الجيل ${r.level}`,
+      "التصنيف": r.type,
+      "إجمالي المدين": Number(r.totalDebit),
+      "إجمالي الدائن": Number(r.totalCredit),
+      "رصيد مدين": Number(r.netDebit),
+      "رصيد دائن": Number(r.netCredit),
+    };
+  });
   const tbSheet = createRtlSheet(tbRows, [
     "إجمالي المدين",
     "إجمالي الدائن",
@@ -312,7 +319,7 @@ export function exportFinancialStatementsToExcel(data: FinancialExportPayload): 
       tbSheet,
       [
         [
-          "الإجمالي العام (للمستوى 5)",
+          "الإجمالي العام (ميزان المراجعة)",
           "",
           "",
           "",
@@ -382,17 +389,25 @@ export function exportFinancialStatementsToExcel(data: FinancialExportPayload): 
 
   // 4. Sub-Projects Cost Centers Breakdown
   if (data.incomeStatement.subProjectBreakdown && data.incomeStatement.subProjectBreakdown.length > 0) {
-    const spRows = data.incomeStatement.subProjectBreakdown.map((sp) => ({
-      "كود القطاع": sp.code,
-      "اسم القطاع الفرعي": sp.nameAr,
-      "المشروع الرئيسي": sp.projectNameAr || "—",
-      "الموازنة التقديرية (YER)": Number(sp.budget),
-      "الإيرادات (YER)": Number(sp.revenue),
-      "التكاليف الفعلية (YER)": Number(sp.actualCost),
-      "صافي الربح (YER)": Number(sp.netProfit),
-      "المتبقي من الموازنة": Number(sp.variance),
-      "نسبة الاستهلاك": `${(Number(sp.utilizationPct) || 0).toFixed(1)}%`,
-    }));
+    const spRows = data.incomeStatement.subProjectBreakdown.map((sp) => {
+      const budget = Number(sp.budget) || 0;
+      const actual = Number(sp.actualCost) || 0;
+      const rev = Number(sp.revenue) || 0;
+      const profit = Number(sp.netProfit) || 0;
+      const margin = rev > 0 ? (profit / rev) * 100 : 0;
+      return {
+        "كود القطاع": sp.code,
+        "اسم القطاع الفرعي": sp.nameAr,
+        "المشروع الرئيسي": sp.projectNameAr || "—",
+        "الموازنة التقديرية (YER)": budget,
+        "الإيرادات (YER)": rev,
+        "التكاليف الفعلية (YER)": actual,
+        "صافي الربح (YER)": profit,
+        "المتبقي من الموازنة": Number(sp.variance),
+        "نسبة الاستهلاك": `${(Number(sp.utilizationPct) || 0).toFixed(1)}%`,
+        "هامش الربح %": `${margin.toFixed(1)}%`,
+      };
+    });
     const spSheet = createRtlSheet(spRows, [
       "الموازنة التقديرية (YER)",
       "الإيرادات (YER)",

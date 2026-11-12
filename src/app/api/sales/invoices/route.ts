@@ -62,6 +62,18 @@ export async function POST(req: NextRequest) {
       return jsonError("يرجى تحديد العميل والمشروع وإدخال المبلغ", 400);
     }
 
+    const customAccount =
+      body.customAccount && typeof body.customAccount === "object"
+        ? (body.customAccount as { nameAr: string; nameEn?: string; parentCode: string; code?: string })
+        : undefined;
+    const revenueAccountCode = body.revenueAccountCode ? String(body.revenueAccountCode).trim() : undefined;
+    const revenueAccountId = body.revenueAccountId ? String(body.revenueAccountId).trim() : undefined;
+    const treasuryAccountId = body.treasuryAccountId ? String(body.treasuryAccountId).trim() : undefined;
+    const sequenceNumber = body.sequenceNumber ? String(body.sequenceNumber).trim() : undefined;
+    const dailyBatchLabel = body.dailyBatchLabel ? String(body.dailyBatchLabel).trim() : undefined;
+    const salesOfficerId = body.salesOfficerId ? String(body.salesOfficerId).trim() : undefined;
+    const salesOfficerTitle = body.salesOfficerTitle ? String(body.salesOfficerTitle).trim() : undefined;
+
     const result = await postSalesInvoice({
       customerId,
       projectId,
@@ -71,6 +83,14 @@ export async function POST(req: NextRequest) {
       currency,
       date: body.date ? String(body.date) : new Date(),
       notes,
+      revenueAccountId,
+      revenueAccountCode,
+      customAccount,
+      sequenceNumber,
+      dailyBatchLabel,
+      salesOfficerId,
+      salesOfficerTitle,
+      treasuryAccountId,
       createdById: actor.userId ?? undefined,
     });
     return NextResponse.json(result, { status: 201 });

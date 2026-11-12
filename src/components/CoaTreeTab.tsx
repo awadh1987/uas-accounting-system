@@ -29,12 +29,13 @@ interface CoaTreeTabProps {
   onToast: (msg: string) => void;
 }
 
-const TYPE_BADGE: Record<string, string> = {
-  ASSET: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-  LIABILITY: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
-  EQUITY: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300",
-  REVENUE: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-300",
-  EXPENSE: "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300",
+const GENERATION_BADGES: Record<number, { bg: string; text: string; labelAr: string; role: string }> = {
+  1: { bg: "bg-purple-100 dark:bg-purple-950/70", text: "text-purple-800 dark:text-purple-200", labelAr: "الجيل 1", role: "فئة رئيسية" },
+  2: { bg: "bg-blue-100 dark:bg-blue-950/70", text: "text-blue-800 dark:text-blue-200", labelAr: "الجيل 2", role: "مجموعة رئيسية" },
+  3: { bg: "bg-cyan-100 dark:bg-cyan-950/70", text: "text-cyan-800 dark:text-cyan-200", labelAr: "الجيل 3", role: "مجموعة مساعدة" },
+  4: { bg: "bg-amber-100 dark:bg-amber-950/70", text: "text-amber-800 dark:text-amber-200", labelAr: "الجيل 4", role: "حساب رقابي" },
+  5: { bg: "bg-emerald-100 dark:bg-emerald-950/70", text: "text-emerald-800 dark:text-emerald-200", labelAr: "الجيل 5", role: "حساب تحليلي" },
+  6: { bg: "bg-rose-100 dark:bg-rose-950/70", text: "text-rose-800 dark:text-rose-200", labelAr: "الجيل 6", role: "حساب تشغيلي ترحيلي" },
 };
 
 export function CoaTreeTab({
@@ -246,9 +247,25 @@ export function CoaTreeTab({
                 ({node.nameEn})
               </span>
             </div>
-            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${TYPE_BADGE[node.type] || ""}`}>
-              T{node.level} • {node.isPosting ? "حساب ترحيل (Posting)" : "حساب تجميعي"}
-            </span>
+            {(() => {
+              const genMeta = GENERATION_BADGES[node.level] || GENERATION_BADGES[6];
+              return (
+                <div className="flex flex-wrap items-center gap-1 shrink-0">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${genMeta.bg} ${genMeta.text}`}>
+                    {genMeta.labelAr}: {genMeta.role}
+                  </span>
+                  <span
+                    className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                      node.isPosting
+                        ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700"
+                        : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-300 dark:border-slate-700"
+                    }`}
+                  >
+                    {node.isPosting ? "حساب ترحيل عمليات (Posting)" : "حساب تجميعي (Summary)"}
+                  </span>
+                </div>
+              );
+            })()}
           </div>
 
           <div className="flex items-center gap-3 text-xs">
@@ -267,7 +284,7 @@ export function CoaTreeTab({
 
             {!readOnly && canEdit && (
               <div className="flex items-center gap-1">
-                {node.level < 5 && (
+                {node.level < 6 && (
                   <button
                     type="button"
                     onClick={() => {
@@ -277,10 +294,11 @@ export function CoaTreeTab({
                       setNewNameEn("");
                       setNewCode("");
                     }}
-                    className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-[11px] font-bold flex items-center gap-1"
+                    className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 text-[11px] font-bold flex items-center gap-1 border border-emerald-200 dark:border-emerald-800 transition"
+                    title={`إضافة جيل فرعي (الجيل ${node.level + 1}) تحت ${node.nameAr}`}
                   >
                     <Plus className="w-3 h-3" />
-                    <span>فرع T{node.level + 1}</span>
+                    <span>+ جيل {node.level + 1}</span>
                   </button>
                 )}
                 <button
@@ -319,10 +337,10 @@ export function CoaTreeTab({
             </div>
             <div>
               <h2 className="text-base font-extrabold">
-                دليل الحسابات الموحد (5-Tier Chart of Accounts)
+                دليل الحسابات الموحد سداسي الأجيال (6-Generation Enterprise Chart of Accounts)
               </h2>
               <p className="text-xs text-slate-500">
-                هيكلية 5 مستويات (أب ← مجموعة ← رقابي ← فرعي ← تفصيلي). الترحيل المحاسبي مقيد حصرياً بحسابات المستوى الخامس.
+                هيكلية معيارية دولية من 6 أجيال (فئة رئيسية ← مجموعة عامة ← مجموعة مساعدة ← حساب رقابي ← حساب تحليلي ← حساب تشغيلي تفصيلي). تدعم الترحيل على الأجيال التحليلية والتشغيلية والتراكم الآلي للأرصدة حتى الجيل الأول.
               </p>
             </div>
           </div>
@@ -462,9 +480,9 @@ export function CoaTreeTab({
             className="p-4 rounded-2xl border-2 border-emerald-400 bg-emerald-50/40 dark:bg-emerald-950/20 space-y-3 text-xs"
           >
             <div className="flex items-center justify-between">
-              <h4 className="font-extrabold text-sm">
-                إضافة حساب فرعي جديد (المستوى {addingParent.level + 1}) أسفل: [{addingParent.code}]{" "}
-                {addingParent.nameAr}
+              <h4 className="font-extrabold text-sm flex items-center gap-2">
+                <span>إضافة حساب فرعي جديد (الجيل {addingParent.level + 1}) أسفل:</span>
+                <span className="font-mono text-emerald-700 dark:text-emerald-300">[{addingParent.code}] {addingParent.nameAr}</span>
               </h4>
               <button
                 type="button"
@@ -473,6 +491,25 @@ export function CoaTreeTab({
               >
                 ✕
               </button>
+            </div>
+
+            {/* Visual Lineage Chain Preview */}
+            <div className="rounded-xl bg-slate-100 dark:bg-slate-900/80 p-2.5 text-[11px] space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-500">المسار الشجري التراكمي (Lineage Chain):</span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                  الهدف: الجيل {addingParent.level + 1} • {addingParent.level + 1 >= 5 ? "حساب ترحيل عمليات (Posting Leaf)" : "حساب تجميعي (Summary Header)"}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-1 font-mono text-[10px] text-slate-700 dark:text-slate-300">
+                <span className="px-1.5 py-0.5 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                  G{addingParent.level}: {addingParent.code} • {addingParent.nameAr}
+                </span>
+                <span className="text-slate-400">←</span>
+                <span className="px-2 py-0.5 rounded bg-emerald-500 text-white font-bold">
+                  G{addingParent.level + 1} الجديد: {newCode.trim() || "توليد آلي"} • {newNameAr.trim() || "الحساب الجديد"}
+                </span>
+              </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>

@@ -26,6 +26,11 @@ async function handleExpenseByIdUpdate(
     });
     if (!auth.ok) return auth.response;
 
+    const customAccount =
+      body.customAccount && typeof body.customAccount === "object"
+        ? (body.customAccount as { nameAr: string; nameEn?: string; parentCode: string; code?: string })
+        : undefined;
+
     const updated = await updateOperatingExpenseAtomic({
       id,
       projectId: body.projectId ? String(body.projectId) : undefined,
@@ -42,6 +47,10 @@ async function handleExpenseByIdUpdate(
       unitPrice: body.unitPrice !== undefined ? Number(body.unitPrice) : undefined,
       date: body.date ? String(body.date) : undefined,
       notes: body.notes !== undefined ? String(body.notes) : undefined,
+      expenseAccountId: body.expenseAccountId ? String(body.expenseAccountId).trim() : undefined,
+      expenseAccountCode: body.expenseAccountCode ? String(body.expenseAccountCode).trim() : undefined,
+      customAccount,
+      treasuryAccountId: body.treasuryAccountId ? String(body.treasuryAccountId).trim() : undefined,
       createdById: auth.actor.userId ?? undefined,
     });
 

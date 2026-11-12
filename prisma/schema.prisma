@@ -19,9 +19,9 @@ model Account {
   code         String             @unique // e.g. "111101"
   nameAr       String
   nameEn       String
-  level        Int                // 1 (Class) to 5 (Posting Detail)
+  level        Int                // 1 (Class / Gen 1) to 6 (Operational Posting Leaf / Gen 6)
   type         String             // ASSET | LIABILITY | EQUITY | REVENUE | EXPENSE
-  isPosting    Boolean            @default(false) // Only true for Tier 5
+  isPosting    Boolean            @default(false) // False for Gen 1-4 & branched Gen 5, True for leaf Gen 5 & Gen 6
   parentId     String?
   parent       Account?           @relation("AccountHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
   children     Account[]          @relation("AccountHierarchy")
@@ -444,6 +444,14 @@ model SalesInvoice {
   harvestCycleId     String?
   harvestCycle       HarvestCycle?    @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
 
+  sequenceNumber     String?          // e.g. "SO-2026-0001"
+  dailyBatchLabel    String?
+  salesOfficerId     String?
+  salesOfficerTitle  String?
+  revenueAccountCode String?          @default("411101")
+  treasuryAccountId  String?
+  treasuryAccount    TreasuryAccount? @relation(fields: [treasuryAccountId], references: [id], onDelete: SetNull)
+
   date               DateTime         @default(now())
   totalAmount        Decimal
   paidAmount         Decimal          @default(0)
@@ -548,6 +556,8 @@ model TreasuryAccount {
   paymentVouchers    PaymentVoucher[]
   receiptVouchers    ReceiptVoucher[]
   installments       InstallmentVoucher[]
+  salesInvoices      SalesInvoice[]
+  salesTransactions  SaleTransaction[]
 }
 
 model OperatingExpense {
@@ -606,31 +616,39 @@ model WorkerWageEntry {
 }
 
 model SaleTransaction {
-  id               String               @id @default(cuid())
-  projectId        String
-  project          Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  subProjectId     String?
-  subProject       SubProject?          @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
-  harvestCycleId   String?
-  harvestCycle     HarvestCycle?        @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
-  harvestName      String
-  saleBatchLabel   String
-  customerId       String
-  customer         Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  customerName     String
-  customerPhone    String
-  productGrade     String
-  bundlesCount     Int
-  unitPrice        Float
-  totalAmount      Float
-  creditPaid       Float                @default(0)
-  debitReceivable  Float
-  saleDate         String
-  receiptVoucherNo String
-  notes            String               @default("")
-  journalEntryId   String?
-  createdAt        DateTime             @default(now())
-  installments     InstallmentVoucher[]
+  id                 String               @id @default(cuid())
+  sequenceNumber     String?              // e.g. "SO-2026-0001"
+  dailyBatchLabel    String?              // e.g. "عملية بيع #5" / "دفعة صباحية"
+  salesOfficerId     String?
+  salesOfficerTitle  String?
+  revenueAccountCode String               @default("411101")
+  treasuryAccountId  String?
+  treasuryAccount    TreasuryAccount?     @relation(fields: [treasuryAccountId], references: [id], onDelete: SetNull)
+
+  projectId          String
+  project            Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  subProjectId       String?
+  subProject         SubProject?          @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
+  harvestCycleId     String?
+  harvestCycle       HarvestCycle?        @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
+  harvestName        String
+  saleBatchLabel     String
+  customerId         String
+  customer           Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  customerName       String
+  customerPhone      String
+  productGrade       String
+  bundlesCount       Int
+  unitPrice          Float
+  totalAmount        Float
+  creditPaid         Float                @default(0)
+  debitReceivable    Float
+  saleDate           String
+  receiptVoucherNo   String
+  notes              String               @default("")
+  journalEntryId     String?
+  createdAt          DateTime             @default(now())
+  installments       InstallmentVoucher[]
 }
 
 model InstallmentVoucher {

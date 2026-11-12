@@ -91,6 +91,39 @@ export interface UasEnterpriseProfile {
   ctaPrimaryTextEn?: string;
 }
 
+export type CoaGenerationLevel = 1 | 2 | 3 | 4 | 5 | 6;
+
+export interface UasCoaLineageItem {
+  id: string;
+  code: string;
+  nameAr: string;
+  nameEn: string;
+  level: number;
+}
+
+export interface UasCoaAccount {
+  id: string;
+  code: string;
+  nameAr: string;
+  nameEn: string;
+  level: CoaGenerationLevel | number;
+  type: string;
+  isPosting: boolean;
+  parentId: string | null;
+  directDebit: number;
+  directCredit: number;
+  rolledUpDebit: number;
+  rolledUpCredit: number;
+  rolledUpBalance: number;
+  // Aliases for backwards compatibility:
+  rollupDebit?: number;
+  rollupCredit?: number;
+  balance?: number;
+  childrenCount?: number;
+  lineageChain?: UasCoaLineageItem[];
+  children?: UasCoaAccount[];
+}
+
 export interface UasSubProject {
   id: string;
   projectId: string;
@@ -182,6 +215,13 @@ export interface UasWorkerWage {
 
 export interface UasSaleTransaction {
   id: string;
+  sequenceNumber?: string | null;
+  dailyBatchLabel?: string | null;
+  salesOfficerId?: string | null;
+  salesOfficerTitle?: string | null;
+  revenueAccountCode?: string;
+  treasuryAccountId?: string | null;
+  treasuryName?: string | null;
   customerId?: string;
   projectId: string;
   subProjectId?: string | null;

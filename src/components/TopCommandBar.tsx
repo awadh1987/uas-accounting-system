@@ -360,6 +360,19 @@ export function TopCommandBar({
                   ))}
                 </select>
                 <select
+                  aria-label={isAr ? "القطاع الفرعي" : "Sub-Project"}
+                  value={selectedSubProjectId}
+                  onChange={(e) => onSubProjectChange?.(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent px-2 py-1 text-[11px] font-bold"
+                >
+                  <option value="ALL">{isAr ? "كل القطاعات الفرعية" : "All Sub-Projects"}</option>
+                  {availableSubProjects.map((sp) => (
+                    <option key={sp.id} value={sp.id}>
+                      {sp.code ? `${sp.code} - ${sp.nameAr}` : sp.nameAr}
+                    </option>
+                  ))}
+                </select>
+                <select
                   value={selectedHarvest}
                   onChange={(e) => onHarvestChange(e.target.value)}
                   className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent px-2 py-1 text-[11px] font-bold"

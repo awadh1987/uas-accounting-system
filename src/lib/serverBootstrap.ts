@@ -381,6 +381,12 @@ function mapWorkers(workers: WorkerWageEntry[]): UasWorkerWage[] {
 function mapSales(sales: SaleTransaction[]): UasSaleTransaction[] {
   return sales.map((s: SaleTransaction) => ({
     id: s.id,
+    sequenceNumber: s.sequenceNumber ?? null,
+    dailyBatchLabel: s.dailyBatchLabel ?? s.saleBatchLabel,
+    salesOfficerId: s.salesOfficerId ?? null,
+    salesOfficerTitle: s.salesOfficerTitle ?? null,
+    revenueAccountCode: s.revenueAccountCode ?? "411101",
+    treasuryAccountId: s.treasuryAccountId ?? null,
     customerId: s.customerId,
     projectId: s.projectId,
     subProjectId: s.subProjectId ?? null,

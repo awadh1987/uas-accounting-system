@@ -37,6 +37,7 @@ async function handleSaleByIdUpdate(
           : undefined,
       harvestName: body.harvest ? String(body.harvest) : undefined,
       batch: body.batch ? String(body.batch) : undefined,
+      dailyBatchLabel: body.dailyBatchLabel ? String(body.dailyBatchLabel).trim() : undefined,
       customer: body.customer ? String(body.customer) : undefined,
       phone: body.phone ? String(body.phone) : undefined,
       grade: body.grade ? String(body.grade) : undefined,
@@ -46,6 +47,10 @@ async function handleSaleByIdUpdate(
       date: body.date ? String(body.date) : undefined,
       voucherNo: body.voucherNo ? String(body.voucherNo) : undefined,
       notes: body.notes !== undefined ? String(body.notes) : undefined,
+      salesOfficerId: body.salesOfficerId ? String(body.salesOfficerId).trim() : undefined,
+      salesOfficerTitle: body.salesOfficerTitle ? String(body.salesOfficerTitle).trim() : undefined,
+      revenueAccountCode: body.revenueAccountCode ? String(body.revenueAccountCode).trim() : undefined,
+      treasuryAccountId: body.treasuryAccountId ? String(body.treasuryAccountId).trim() : undefined,
       createdById: auth.actor.userId ?? undefined,
     });
 

@@ -126,7 +126,7 @@ export function FinancialReportsTab({
 
   const localProjectId = projectIdOverride ?? selectedProjectId ?? "ALL";
   const localSubProjectId = subProjectIdOverride ?? selectedSubProjectId ?? "ALL";
-  const [coaLevel, setCoaLevel] = useState(5);
+  const [coaLevel, setCoaLevel] = useState(6);
 
   const [tb, setTb] = useState<TrialBalancePayload | null>(null);
   const [pl, setPl] = useState<IncomeStatementPayload | null>(null);
@@ -279,11 +279,12 @@ export function FinancialReportsTab({
             onChange={(e) => setCoaLevel(Number(e.target.value))}
             className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-bold"
           >
-            <option value={5}>عرض حتى المستوى 5 (تفصيلي)</option>
-            <option value={4}>عرض حتى المستوى 4 (فرعي)</option>
-            <option value={3}>عرض حتى المستوى 3 (رقابي)</option>
-            <option value={2}>عرض حتى المستوى 2 (مجموعة)</option>
-            <option value={1}>عرض المستوى 1 فقط (رئيسي)</option>
+            <option value={6}>عرض حتى الجيل 6 (حسابات الترحيل التشغيلية)</option>
+            <option value={5}>عرض حتى الجيل 5 (الحسابات التحليلية)</option>
+            <option value={4}>عرض حتى الجيل 4 (الحسابات الرقابية)</option>
+            <option value={3}>عرض حتى الجيل 3 (الحسابات العامة الفرعية)</option>
+            <option value={2}>عرض حتى الجيل 2 (الحسابات العامة الرئيسية)</option>
+            <option value={1}>عرض الجيل 1 فقط (الحسابات الرئيسية)</option>
           </select>
           <input
             type="date"
@@ -362,7 +363,11 @@ export function FinancialReportsTab({
                       <td className="py-2" style={{ paddingInlineStart: `${(r.level - 1) * 12}px` }}>
                         {r.nameAr}
                       </td>
-                      <td className="py-2">T{r.level}</td>
+                      <td className="py-2">
+                        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-bold">
+                          الجيل {r.level}
+                        </span>
+                      </td>
                       <td className="py-2 font-mono">{fmtNum(r.totalDebit)}</td>
                       <td className="py-2 font-mono">{fmtNum(r.totalCredit)}</td>
                       <td className="py-2 font-mono text-emerald-700 font-bold">
@@ -579,11 +584,14 @@ export function FinancialReportsTab({
                         <th className="py-2.5 px-3">نسبة الاستهلاك</th>
                         <th className="py-2.5 px-3">الإيرادات</th>
                         <th className="py-2.5 px-3">صافي الربح</th>
+                        <th className="py-2.5 px-3">هامش الربح %</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {pl.subProjectBreakdown.map((sp) => {
                         const budget = sp.budgetTotal ?? sp.budget ?? 0;
+                        const marginPct =
+                          sp.revenue > 0 ? (sp.netProfit / sp.revenue) * 100 : 0;
                         return (
                           <tr key={sp.subProjectId} className="hover:bg-slate-50/70 transition-colors">
                             <td className="py-2.5 px-3 font-mono font-bold text-sky-700">{sp.code}</td>
@@ -611,6 +619,9 @@ export function FinancialReportsTab({
                             <td className="py-2.5 px-3 font-mono text-emerald-700 font-bold">{fmtNum(sp.revenue)}</td>
                             <td className={`py-2.5 px-3 font-mono font-extrabold ${sp.netProfit >= 0 ? "text-slate-900" : "text-rose-600"}`}>
                               {fmtNum(sp.netProfit)}
+                            </td>
+                            <td className={`py-2.5 px-3 font-mono font-bold text-xs ${marginPct >= 0 ? "text-emerald-700" : "text-rose-600"}`}>
+                              {marginPct.toFixed(1)}%
                             </td>
                           </tr>
                         );

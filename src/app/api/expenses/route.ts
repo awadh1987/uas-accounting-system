@@ -39,6 +39,13 @@ export async function POST(req: NextRequest) {
     }
 
     const totalAmount = computeOperatingExpenseTotal(quantity, unitPrice);
+    const expenseAccountCode = body.expenseAccountCode ? String(body.expenseAccountCode).trim() : undefined;
+    const expenseAccountId = body.expenseAccountId ? String(body.expenseAccountId).trim() : undefined;
+    const treasuryAccountId = body.treasuryAccountId ? String(body.treasuryAccountId).trim() : undefined;
+    const customAccount =
+      body.customAccount && typeof body.customAccount === "object"
+        ? (body.customAccount as { nameAr: string; nameEn?: string; parentCode: string; code?: string })
+        : undefined;
 
     const result = await prisma.$transaction(async (tx) => {
       if (await isHarvestLockedTx(tx, projectId, harvestName)) {
@@ -71,6 +78,10 @@ export async function POST(req: NextRequest) {
         subType,
         totalAmount,
         date: expenseDate,
+        expenseAccountId,
+        expenseAccountCode,
+        customAccount,
+        treasuryAccountId,
         createdById: actor.userId ?? undefined,
       });
 
@@ -124,6 +135,12 @@ async function handleExpensePatch(req: NextRequest) {
     const updated = await updateOperatingExpenseAtomic({
       id,
       projectId: body.projectId ? String(body.projectId) : undefined,
+      subProjectId:
+        body.subProjectId !== undefined
+          ? body.subProjectId
+            ? String(body.subProjectId).trim()
+            : null
+          : undefined,
       harvestName: body.harvest ? String(body.harvest) : undefined,
       category: body.category ? String(body.category) : undefined,
       subType: body.subType ? String(body.subType) : undefined,

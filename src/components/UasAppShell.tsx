@@ -951,6 +951,7 @@ export function UasAppShell() {
                 <SalesTab
                   projects={scopedProjects}
                   sales={filteredSales}
+                  treasuryAccounts={state.treasuryAccounts}
                   currentUser={currentUser}
                   readOnly={userReadOnly}
                   canEditRecords={canEdit(currentUser, "sales")}

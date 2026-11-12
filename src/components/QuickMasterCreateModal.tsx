@@ -44,6 +44,15 @@ interface CoaParentOption {
   nameEn: string;
   level: number;
   type: string;
+  isPosting: boolean;
+  parentId?: string | null;
+  lineageChain?: Array<{
+    id: string;
+    code: string;
+    nameAr: string;
+    nameEn: string;
+    level: number;
+  }>;
 }
 
 interface QuickMasterCreateModalProps {
@@ -80,10 +89,11 @@ export function QuickMasterCreateModal({
   const [address, setAddress] = useState("");
   const [creditLimit, setCreditLimit] = useState("500000");
 
-  // Tier-5 COA fields
+  // 6-Generation COA fields
   const [coaParents, setCoaParents] = useState<CoaParentOption[]>([]);
-  const [parentId, setParentId] = useState("");
+  const [parentId, setParentId] = useState("__GEN1_ROOT__");
   const [coaCode, setCoaCode] = useState("");
+  const [rootType, setRootType] = useState("EXPENSE");
 
   useEffect(() => {
     if (!open || mode !== "coa") return;
@@ -92,12 +102,15 @@ export function QuickMasterCreateModal({
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { flat?: CoaParentOption[] } | null) => {
         if (!active || !data?.flat) return;
-        const level4 = data.flat.filter((a) => a.level === 4);
-        const list = level4.length > 0 ? level4 : data.flat.filter((a) => a.level < 5);
-        setCoaParents(list);
+        // Include summary nodes from level 1 up to level 5 (parents capable of holding children)
+        const eligibleParents = data.flat.filter((a) => a.level < 6);
+        setCoaParents(eligibleParents);
         const preferred =
-          (defaultParentCode && list.find((a) => a.code === defaultParentCode)) || list[0];
+          (defaultParentCode && eligibleParents.find((a) => a.code === defaultParentCode)) ||
+          eligibleParents.find((a) => a.level === 4) ||
+          eligibleParents[0];
         if (preferred) setParentId(preferred.id);
+        else setParentId("__GEN1_ROOT__");
       })
       .catch(() => null);
     return () => {
@@ -173,15 +186,14 @@ export function QuickMasterCreateModal({
         return;
       }
 
-      if (!parentId) {
-        onToast("يرجى اختيار الحساب الأب (المستوى الرابع)");
-        return;
-      }
+      const isRoot = parentId === "__GEN1_ROOT__" || !parentId;
       const res = await fetch("/api/accounting/coa", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          parentId,
+          parentId: isRoot ? undefined : parentId,
+          level: isRoot ? 1 : undefined,
+          type: isRoot ? rootType : undefined,
           code: coaCode.trim() || undefined,
           nameAr: nameAr.trim(),
           nameEn: nameEn.trim() || nameAr.trim(),
@@ -193,7 +205,7 @@ export function QuickMasterCreateModal({
         onToast(data.error || "تعذر إنشاء الحساب المحاسبي");
         return;
       }
-      onToast(`✅ تم فتح الحساب التفصيلي [${data.account.code}] ${data.account.nameAr}`);
+      onToast(`✅ تم فتح الحساب الهرمي [${data.account.code}] ${data.account.nameAr} (الجيل ${data.account.level})`);
       onCreatedCoa?.(data.account);
       resetAndClose();
     } catch {
@@ -262,20 +274,82 @@ export function QuickMasterCreateModal({
 
         <form onSubmit={handleSubmit} className="space-y-3 text-xs">
           {mode === "coa" && (
-            <div>
-              <label className="block font-bold mb-1">الحساب الأب (المستوى الرابع T4) *</label>
-              <select
-                value={parentId}
-                onChange={(e) => setParentId(e.target.value)}
-                required
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-              >
-                {coaParents.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.code} — {p.nameAr} ({p.type})
+            <div className="space-y-2.5">
+              <div>
+                <label className="block font-bold mb-1">
+                  الحساب الأب (المسار الهرمي من الجيل 1 إلى 5) *
+                </label>
+                <select
+                  value={parentId}
+                  onChange={(e) => setParentId(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-medium"
+                >
+                  <option value="__GEN1_ROOT__">
+                    -- إنشاء فئة رئيسية جديدة (الجيل 1 / Main Class Root) --
                   </option>
-                ))}
-              </select>
+                  {coaParents.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      [الجيل {p.level}] {p.code} — {p.nameAr} ({p.type})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {parentId === "__GEN1_ROOT__" && (
+                <div>
+                  <label className="block font-bold mb-1">نوع الفئة المحاسبية *</label>
+                  <select
+                    value={rootType}
+                    onChange={(e) => setRootType(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-bold"
+                  >
+                    <option value="ASSET">أصول (ASSET)</option>
+                    <option value="LIABILITY">خصوم / التزامات (LIABILITY)</option>
+                    <option value="EQUITY">حقوق ملكية (EQUITY)</option>
+                    <option value="REVENUE">إيرادات (REVENUE)</option>
+                    <option value="EXPENSE">مصروفات وتكاليف (EXPENSE)</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Visual 6-Generation Lineage Cascade Banner */}
+              {(() => {
+                const selectedParent = coaParents.find((p) => p.id === parentId);
+                const targetLevel = selectedParent ? selectedParent.level + 1 : 1;
+                const isPostingLeaf = targetLevel >= 5;
+                return (
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/40 p-2.5 space-y-1.5 text-[11px]">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-500">
+                        مسار النسب الشجري (Lineage Chain):
+                      </span>
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                          isPostingLeaf
+                            ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300"
+                            : "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                        }`}
+                      >
+                        الهدف: الجيل {targetLevel} • {isPostingLeaf ? "حساب ترحيل (Posting Leaf)" : "حساب تجميعي (Summary Header)"}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1 text-[10px] text-slate-700 dark:text-slate-300">
+                      {selectedParent?.lineageChain?.map((l) => (
+                        <React.Fragment key={l.id}>
+                          <span className="px-1.5 py-0.5 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono">
+                            G{l.level}: {l.code} • {l.nameAr}
+                          </span>
+                          <span className="text-slate-400">←</span>
+                        </React.Fragment>
+                      ))}
+                      <span className="px-2 py-0.5 rounded bg-emerald-500 text-white font-extrabold font-mono shadow-sm">
+                        G{targetLevel} الجديد: {coaCode.trim() || "آلي"} • {nameAr.trim() || "الحساب الجديد"}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 

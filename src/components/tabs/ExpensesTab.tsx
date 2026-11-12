@@ -6,6 +6,10 @@ import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { computeOperatingExpenseTotal, fmtNum } from "@/lib/formulas";
 import type { UasOperatingExpense, UasProject } from "@/types/uas";
+import {
+  AccountingDirectionSelector,
+  type CustomAccountPayload,
+} from "@/components/AccountingDirectionSelector";
 
 type ExpensePayload = {
   projectId: string;
@@ -17,6 +21,9 @@ type ExpensePayload = {
   unitPrice: number;
   date: string;
   notes: string;
+  expenseAccountId?: string;
+  expenseAccountCode?: string;
+  customAccount?: CustomAccountPayload;
 };
 
 interface ExpensesTabProps {
@@ -77,6 +84,9 @@ export function ExpensesTab({
   const [subProjectId, setSubProjectId] = useState<string>("");
   const [category, setCategory] = useState("وقود/محروقات");
   const [subType, setSubType] = useState("");
+  const [expenseAccountId, setExpenseAccountId] = useState<string | undefined>(undefined);
+  const [expenseAccountCode, setExpenseAccountCode] = useState<string | undefined>(undefined);
+  const [expenseCustomAccount, setExpenseCustomAccount] = useState<CustomAccountPayload | undefined>(undefined);
   const [qty, setQty] = useState("20");
   const [unitPrice, setUnitPrice] = useState("1200");
   const [date, setDate] = useState("2026-11-10");
@@ -103,6 +113,9 @@ export function ExpensesTab({
     setHarvest(defProj?.harvests[0] || "القطفة الأولى");
     setCategory("وقود/محروقات");
     setSubType("");
+    setExpenseAccountId(undefined);
+    setExpenseAccountCode(undefined);
+    setExpenseCustomAccount(undefined);
     setQty("20");
     setUnitPrice("1200");
     setDate(new Date().toISOString().slice(0, 10));
@@ -117,6 +130,9 @@ export function ExpensesTab({
     setHarvest(e.harvest);
     setCategory(e.category);
     setSubType(e.subType);
+    setExpenseAccountId(undefined);
+    setExpenseAccountCode(undefined);
+    setExpenseCustomAccount(undefined);
     setQty(String(e.qty));
     setUnitPrice(String(e.unitPrice));
     setDate(e.date.slice(0, 10));
@@ -139,6 +155,9 @@ export function ExpensesTab({
       unitPrice: Number(unitPrice) || 0,
       date: date || "2026-11-10",
       notes: notes.trim(),
+      expenseAccountId: expenseAccountId || undefined,
+      expenseAccountCode: expenseAccountCode || undefined,
+      customAccount: expenseCustomAccount || undefined,
     };
     const ok =
       editingId && onEditExpense
@@ -233,6 +252,31 @@ export function ExpensesTab({
               <option value="أخرى">أخرى (مصروفات عامة)</option>
             </select>
           </div>
+          <AccountingDirectionSelector
+            label="التوجيه المحاسبي لمصروف التشغيل"
+            value={{
+              accountId: expenseAccountId,
+              accountCode: expenseAccountCode,
+              isCustom: Boolean(expenseCustomAccount),
+              customAccount: expenseCustomAccount,
+            }}
+            onChange={(val) => {
+              if (val.isCustom) {
+                setExpenseCustomAccount(val.customAccount);
+                setExpenseAccountId(undefined);
+                setExpenseAccountCode(val.customAccount?.code);
+                if (val.customAccount?.nameAr) {
+                  setSubType(val.customAccount.nameAr);
+                }
+              } else {
+                setExpenseCustomAccount(undefined);
+                setExpenseAccountId(val.accountId);
+                setExpenseAccountCode(val.accountCode);
+              }
+            }}
+            allowedTypes={["EXPENSE"]}
+            defaultParentCode="512100"
+          />
           <div>
             <label className="block font-semibold mb-1">البيان / التفصيل</label>
             <input

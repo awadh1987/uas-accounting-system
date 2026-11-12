@@ -414,6 +414,28 @@ export function ProjectsManagerTab({
     await Promise.all([loadPortfolioData(), onRefreshState()]);
   }
 
+  async function handleDeleteSubProject() {
+    if (!editSubId) return;
+    const confirmMsg = isAr
+      ? "هل أنت متأكد من رغبتك في حذف أو أرشفة هذا القطاع الفرعي؟"
+      : "Are you sure you want to delete or archive this sub-project?";
+    if (!window.confirm(confirmMsg)) return;
+
+    const res = await fetch(`/api/projects/sub-projects?id=${encodeURIComponent(editSubId)}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor }),
+    });
+    const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+    if (!res.ok) {
+      onToast(data.error || "تعذر حذف القطاع الفرعي");
+      return;
+    }
+    setDrawerMode(null);
+    onToast(data.message || "✅ تم حذف / أرشفة القطاع الفرعي بنجاح");
+    await Promise.all([loadPortfolioData(), onRefreshState()]);
+  }
+
   async function handleCreateHarvest(e: React.FormEvent) {
     e.preventDefault();
     const pid = harvestProjId || projects[0]?.id;
@@ -519,12 +541,15 @@ export function ProjectsManagerTab({
   }
 
   async function handleGenerateAcquisitionBill(ac: AcquisitionCycleItem) {
+    const proj = projects.find((p) => p.id === ac.projectId);
+    const subProj = proj?.subProjects?.[0];
     const res = await fetch("/api/projects/acquisitions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: "GENERATE_BILL",
         projectId: ac.projectId,
+        subProjectId: subProj?.id || undefined,
         acquisitionCycleId: ac.id,
         vendorId: ac.project.vendorId || ac.project.ownerVendor?.id || undefined,
         amount: ac.contractAmount,
@@ -1705,9 +1730,19 @@ export function ProjectsManagerTab({
               className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
             />
           </div>
-          <button type="submit" className="w-full py-2.5 rounded-xl accent-bg font-bold">
-            حفظ تعديلات القطاع الفرعي
-          </button>
+          <div className="flex gap-2 pt-2">
+            <button type="submit" className="flex-1 py-2.5 rounded-xl accent-bg font-bold">
+              {isAr ? "حفظ تعديلات القطاع الفرعي" : "Save Changes"}
+            </button>
+            <button
+              type="button"
+              onClick={handleDeleteSubProject}
+              className="px-3 py-2.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 font-bold hover:bg-rose-100 transition"
+              title={isAr ? "حذف أو أرشفة القطاع الفرعي" : "Delete / Archive"}
+            >
+              {isAr ? "حذف / أرشفة" : "Delete"}
+            </button>
+          </div>
         </form>
       </SlideOverDrawer>
 

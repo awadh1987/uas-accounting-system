@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
 import { prisma } from "../src/lib/prisma";
 import {
+  buildHierarchicalCoaTree,
+  createHierarchicalAccount,
   createTreasuryAccount,
   generateAcquisitionBill,
   generateFinancialReports,
@@ -12,6 +14,7 @@ import {
   postSalesInvoice,
   postVendorBill,
   postVendorPayment,
+  resolveOrCreatePostingAccountTx,
   transferBetweenTreasuries,
   updateJournalEntry,
   updateTreasuryAccount,
@@ -258,6 +261,322 @@ describe("Enterprise Double-Entry General Ledger & Accounting Assertions", () =>
           const totalDr = allPostedLines.reduce((s, l) => s + Number(l.debitBase), 0);
           const totalCr = allPostedLines.reduce((s, l) => s + Number(l.creditBase), 0);
           assert.ok(Math.abs(totalDr - totalCr) < 0.005);
+
+          throw new Error(SENTINEL);
+        }),
+      new RegExp(SENTINEL)
+    );
+  });
+
+  it("verifies 6-generation COA hierarchy, promotion rules, and lineage chain computation", async () => {
+    // 1. Attempting to add a Gen 6 child under an account with active transactions (111101) must fail
+    await assert.rejects(
+      () =>
+        createHierarchicalAccount({
+          parentCode: "111101",
+          nameAr: "حساب تشغيلي فرعي تحت صندوق به حركات",
+        }),
+      /PARENT_HAS_TRANSACTIONS/
+    );
+
+    // 2. Create a clean Gen 5 analytical account under 111100 (Central Safe)
+    const gen5 = await createHierarchicalAccount({
+      parentCode: "111100",
+      code: "111199",
+      nameAr: "صندوق العمليات الميدانية الخاص",
+      nameEn: "Special Field Operations Safe",
+    });
+    assert.equal(gen5.level, 5);
+    assert.equal(gen5.isPosting, true, "Gen 5 with no children should default to posting leaf");
+
+    // 3. Add a Gen 6 operational leaf under 111199 -> auto-promotes 111199 to summary header (isPosting: false)
+    const gen6 = await createHierarchicalAccount({
+      parentId: gen5.id,
+      code: "11119901",
+      nameAr: "صندوق المندوب رقم 1 (تشغيلي)",
+      nameEn: "Collector 1 Cash Safe (Operational)",
+    });
+    assert.equal(gen6.level, 6);
+    assert.equal(gen6.isPosting, true, "Gen 6 must always be a posting leaf");
+
+    // Verify parent Gen 5 was auto-promoted to summary header
+    const updatedGen5 = await prisma.account.findUniqueOrThrow({ where: { id: gen5.id } });
+    assert.equal(updatedGen5.isPosting, false, "Gen 5 parent must be auto-promoted to isPosting = false");
+
+    // 4. Verify buildHierarchicalCoaTree computes 6-node lineageChain and proper rollups
+    const allAccounts = await prisma.account.findMany();
+    const treeResult = buildHierarchicalCoaTree(allAccounts, []);
+    assert.ok(treeResult.tree.length >= 5, "Expected root generations in buildHierarchicalCoaTree");
+
+    const { flat } = await getCoaTreeWithBalances();
+    const gen6Node = flat.find((n) => n.code === "11119901");
+    assert.ok(gen6Node, "Expected Gen 6 node in COA flat list");
+    assert.equal(gen6Node.lineageChain.length, 6, "Expected exactly 6 nodes in lineageChain for Gen 6");
+    assert.deepEqual(
+      gen6Node.lineageChain.map((l) => l.level),
+      [1, 2, 3, 4, 5, 6],
+      "Lineage chain must be ordered Gen 1 -> Gen 2 -> Gen 3 -> Gen 4 -> Gen 5 -> Gen 6"
+    );
+
+    // Clean up test accounts
+    await prisma.account.delete({ where: { id: gen6.id } });
+    await prisma.account.delete({ where: { id: gen5.id } });
+  });
+
+  it("verifies Concurrent Multi-Officer Sales fields and Sub-Project relations", async () => {
+    const sales = await prisma.saleTransaction.findMany({
+      include: {
+        subProject: true,
+        treasuryAccount: true,
+      },
+    });
+
+    assert.ok(sales.length > 0, "Expected seeded sales");
+    for (const sale of sales) {
+      assert.ok(sale.sequenceNumber, "Expected sequenceNumber on SaleTransaction");
+      assert.ok(sale.sequenceNumber.startsWith("SO-2026-"));
+      assert.ok(sale.dailyBatchLabel, "Expected dailyBatchLabel on SaleTransaction");
+      assert.equal(sale.revenueAccountCode, "411101");
+      assert.ok(sale.subProjectId, "Expected subProjectId link on SaleTransaction");
+      assert.ok(sale.subProject, "Expected loaded subProject relation");
+    }
+
+    const invoices = await prisma.salesInvoice.findMany();
+    for (const inv of invoices) {
+      assert.ok(inv.sequenceNumber, "Expected sequenceNumber on SalesInvoice");
+      assert.ok(inv.revenueAccountCode, "Expected revenueAccountCode on SalesInvoice");
+    }
+  });
+
+  it("verifies atomic 'Other' custom account provisioning and dynamic accounting direction in procurement, expenses, and sales", async () => {
+    const SENTINEL = "ROLLBACK_ATOMIC_PROVISIONING";
+    await assert.rejects(
+      () =>
+        prisma.$transaction(async (tx) => {
+          // 1. Direct atomic custom account provisioning
+          const customExpenseAccount = await resolveOrCreatePostingAccountTx(tx, {
+            customAccount: {
+              parentCode: "512100", // Operating direct expenses parent (Gen 4)
+              nameAr: "مصروف بذور وأسمدة عضوية مخصصة",
+              nameEn: "Custom Organic Seeds Expense",
+            },
+            fallbackDefaultCode: "512101",
+          });
+          assert.ok(customExpenseAccount);
+          assert.equal(customExpenseAccount.level, 5);
+          assert.equal(customExpenseAccount.isPosting, true);
+          assert.equal(customExpenseAccount.nameAr, "مصروف بذور وأسمدة عضوية مخصصة");
+          assert.ok(customExpenseAccount.code.startsWith("5121"));
+
+          // 2. Post vendor bill using the newly provisioned custom account
+          const billRes = await postVendorBill({
+            vendorId: "v1",
+            projectId: "p1",
+            subProjectId: "sp1",
+            totalAmount: 18500,
+            currency: "YER",
+            isInventory: false,
+            debitAccountId: customExpenseAccount.id,
+            notes: "فاتورة شراء بذور مخصصة بالتوجيه الجديد",
+            tx,
+          });
+
+          assert.equal(Number(billRes.bill.totalAmount), 18500);
+          assert.ok(billRes.journalEntry);
+          const customLine = billRes.journalEntry.lines.find(
+            (l) => l.accountId === customExpenseAccount.id
+          );
+          assert.ok(customLine, "Expected journal line to post directly to custom account");
+          assert.equal(Number(customLine.debit), 18500);
+          assert.equal(customLine.subProjectId, "sp1");
+
+          // 3. Post sales invoice with atomic custom revenue account
+          const salesRes = await postSalesInvoice({
+            customerId: "cust1",
+            projectId: "p1",
+            subProjectId: "sp2",
+            amount: 45000,
+            currency: "YER",
+            customAccount: {
+              parentCode: "411100", // Sales revenue control account (Gen 4)
+              nameAr: "إيرادات بيع منتجات زراعية ثانوية مخصصة",
+              nameEn: "Custom Byproduct Sales Revenue",
+            },
+            sequenceNumber: "SO-2026-9999",
+            dailyBatchLabel: "دفعة مسائية رقم 9",
+            salesOfficerId: "usr_acc_1",
+            salesOfficerTitle: "مسؤول المبيعات الميداني المناوب",
+            notes: "فاتورة مبيعات مخصصة بالتوجيه الآلي",
+            tx,
+          });
+
+          assert.equal(Number(salesRes.invoice.totalAmount), 45000);
+          assert.equal(salesRes.invoice.sequenceNumber, "SO-2026-9999");
+          assert.equal(salesRes.invoice.salesOfficerTitle, "مسؤول المبيعات الميداني المناوب");
+          const revAccount = await tx.account.findUnique({
+            where: { code: salesRes.invoice.revenueAccountCode! },
+          });
+          assert.ok(revAccount);
+          assert.equal(revAccount.nameAr, "إيرادات بيع منتجات زراعية ثانوية مخصصة");
+
+          throw new Error(SENTINEL);
+        }),
+      new RegExp(SENTINEL)
+    );
+  });
+
+  it("verifies end-to-end lifecycle of Sub-Projects, multi-officer concurrent sales, and 6-generation financial rollups", async () => {
+    const SENTINEL = "ROLLBACK_PHASE6_E2E";
+    await assert.rejects(
+      () =>
+        prisma.$transaction(async (tx) => {
+          // 1. Create a dynamic Sub-Project (Cost Center)
+          const subProject = await tx.subProject.create({
+            data: {
+              projectId: "p1",
+              code: "SUB-E2E-01",
+              nameAr: "قطاع تجارب البيوت المحمية الحديثة",
+              nameEn: "Modern Greenhouses Sector",
+              budget: 750000,
+              status: "ACTIVE",
+              notes: "قطاع تحليلي لاختبار دورة العمل سداسية الأجيال",
+            },
+          });
+          assert.ok(subProject.id);
+
+          // 2. Create Gen 5 and Gen 6 Accounts under Expenses (512100)
+          const gen5Res = await createHierarchicalAccount({
+            level: 5,
+            parentCode: "512100",
+            nameAr: "مصروفات وقود البيوت المحمية التجريبية",
+            nameEn: "Greenhouse Fuel Expenses",
+            tx,
+          });
+          assert.equal(gen5Res.level, 5);
+
+          const gen6Res = await createHierarchicalAccount({
+            level: 6,
+            parentCode: gen5Res.code,
+            nameAr: "ديزل مولد كهرباء البيت المحمي رقم 1",
+            nameEn: "Greenhouse #1 Generator Diesel",
+            tx,
+          });
+          assert.equal(gen6Res.level, 6);
+          assert.equal(gen6Res.isPosting, true);
+
+          // Verify Gen 5 was promoted to summary parent (isPosting = false)
+          const gen5Parent = await tx.account.findUniqueOrThrow({ where: { id: gen5Res.id } });
+          assert.equal(gen5Parent.isPosting, false);
+
+          // 3. Post Operating Expense referencing Gen 6 account and SubProject
+          const expEntry = await postJournalEntry({
+            date: "2026-11-12",
+            narrationAr: "شراء ديزل للبيت المحمي في القطاع الفرعي",
+            narrationEn: "Greenhouse Diesel Purchase",
+            projectId: "p1",
+            subProjectId: subProject.id,
+            createdById: "usr_acc_1",
+            lines: [
+              {
+                accountId: gen6Res.id,
+                debit: 45000,
+                projectId: "p1",
+                subProjectId: subProject.id,
+              },
+              {
+                accountCode: "111101",
+                credit: 45000,
+                projectId: "p1",
+                subProjectId: subProject.id,
+              },
+            ],
+            tx,
+          });
+          assert.equal(expEntry.lines.length, 2);
+
+          // 4. Concurrent Sale 1 by Officer A (Morning Shift)
+          const saleOfficerA = await postSalesInvoice({
+            customerId: "cust1",
+            projectId: "p1",
+            subProjectId: subProject.id,
+            amount: 120000,
+            currency: "YER",
+            revenueAccountCode: "411101",
+            sequenceNumber: "SO-2026-5001",
+            dailyBatchLabel: "وردية الصباح - حوش 1",
+            salesOfficerId: "officer_1",
+            salesOfficerTitle: "علي المحمودي (مسؤول مبيعات أول)",
+            notes: "بيع علاقيات قطفة تجريبية نخب أول",
+            tx,
+          });
+          assert.equal(saleOfficerA.invoice.sequenceNumber, "SO-2026-5001");
+          assert.equal(saleOfficerA.invoice.subProjectId, subProject.id);
+
+          // Customer payment receipt voucher into treasury
+          const receiptA = await postCustomerReceipt({
+            customerId: "cust1",
+            invoiceId: saleOfficerA.invoice.id,
+            treasuryId: "t2",
+            amount: 80000,
+            currency: "YER",
+            projectId: "p1",
+            subProjectId: subProject.id,
+            notes: "دفعة نقدية مقبوضة من العميل",
+            tx,
+          });
+          assert.equal(Number(receiptA.receipt.amount), 80000);
+
+          // 5. Concurrent Sale 2 by Officer B (Evening Shift)
+          const saleOfficerB = await postSalesInvoice({
+            customerId: "cust2",
+            projectId: "p1",
+            subProjectId: subProject.id,
+            amount: 95000,
+            currency: "YER",
+            revenueAccountCode: "411101",
+            sequenceNumber: "SO-2026-5002",
+            dailyBatchLabel: "وردية المساء - حوش 2",
+            salesOfficerId: "officer_2",
+            salesOfficerTitle: "سامي القدسي (مسؤول مبيعات مسائي)",
+            notes: "بيع محصول درجة مخصصة",
+            tx,
+          });
+          assert.equal(saleOfficerB.invoice.sequenceNumber, "SO-2026-5002");
+          assert.equal(saleOfficerB.invoice.salesOfficerTitle, "سامي القدسي (مسؤول مبيعات مسائي)");
+
+          // 6. Verify Complete Double-Entry Balance
+          const allPostedLines = await tx.journalEntryLine.findMany({
+            where: { journalEntry: { status: "POSTED" } },
+          });
+          let totalDebit = 0;
+          let totalCredit = 0;
+          for (const l of allPostedLines) {
+            totalDebit += Number(l.debitBase);
+            totalCredit += Number(l.creditBase);
+          }
+          assert.ok(
+            Math.abs(totalDebit - totalCredit) < 0.005,
+            `Ledger unbalanced: DR=${totalDebit}, CR=${totalCredit}`
+          );
+
+          // 7. Verify Sub-Project Financial Aggregation
+          const subProjectJournalLines = allPostedLines.filter(
+            (l) => l.subProjectId === subProject.id
+          );
+          assert.ok(
+            subProjectJournalLines.length >= 6,
+            "Expected lines tagged with subProjectId"
+          );
+
+          // 8. Verify Hierarchical 6-Gen COA Rollup
+          const coaAccounts = await tx.account.findMany();
+          const treeData = buildHierarchicalCoaTree(coaAccounts, allPostedLines);
+          const gen1Expense = treeData.tree.find((n) => n.code === "500000");
+          assert.ok(gen1Expense);
+          assert.ok(
+            gen1Expense.rolledUpDebit > 0,
+            "Gen 1 Expense rolled up balance must include Gen 6 posting lines"
+          );
 
           throw new Error(SENTINEL);
         }),
