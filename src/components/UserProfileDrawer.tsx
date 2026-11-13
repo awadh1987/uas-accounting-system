@@ -6,6 +6,7 @@ import {
   Check,
   CheckCircle2,
   Clock,
+  Download,
   Eye,
   EyeOff,
   Globe,
@@ -16,6 +17,7 @@ import {
   Save,
   Shield,
   ShieldAlert,
+  Smartphone,
   User,
   XCircle,
 } from "lucide-react";
@@ -357,6 +359,37 @@ function UserProfileDrawerContent({
                 : "Role Default"}
             </div>
           </div>
+        </div>
+
+        {/* Mobile App (Android APK) Download Action Card */}
+        <div className="p-3.5 rounded-2xl border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/70 dark:bg-emerald-950/25 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+              <Smartphone className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="font-extrabold text-xs text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                <span>{isAr ? "تطبيق الجوال لنظام UAS (أندرويد)" : "UAS Mobile ERP App (Android APK)"}</span>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-600 text-white font-mono">
+                  APK
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                {isAr
+                  ? "تحميل مباشر لتطبيق الأندرويد للهواتف والأجهزة اللوحية والميدان"
+                  : "Direct download for Android smartphones, tablets, and field operations"}
+              </p>
+            </div>
+          </div>
+
+          <a
+            href="/downloads/UAS-Mobile-Release-qat.world.apk"
+            download="UAS-Mobile-Release-qat.world.apk"
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl accent-bg text-xs font-black shadow-xs hover:opacity-95 transition shrink-0"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>{isAr ? "تحميل تطبيق الأندرويد (APK)" : "Download Android App (APK)"}</span>
+          </a>
         </div>
 
         {/* Tab Switcher */}

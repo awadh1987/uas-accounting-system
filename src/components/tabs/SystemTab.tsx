@@ -26,6 +26,8 @@ import {
   RefreshCw,
   Copy,
   Check,
+  Download,
+  Smartphone,
   UserCheck,
   Wifi,
   X,
@@ -341,6 +343,26 @@ export function SystemTab({
       );
     } finally {
       setTestingServer(false);
+    }
+  }
+
+  const [copiedApkLink, setCopiedApkLink] = useState(false);
+
+  async function handleCopyApkLink() {
+    const url = "https://qat.world/downloads/UAS-Mobile-Release-qat.world.apk";
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(url);
+        setCopiedApkLink(true);
+        onToast(
+          isAr
+            ? "✅ تم نسخ رابط تحميل تطبيق الأندرويد (APK)"
+            : "✅ APK download link copied to clipboard"
+        );
+        setTimeout(() => setCopiedApkLink(false), 2500);
+      }
+    } catch {
+      onToast(url);
     }
   }
 
@@ -863,6 +885,53 @@ export function SystemTab({
                   <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
                   <span>{isAr ? "استعادة المحلي الافتراضي" : "Reset Default Origin"}</span>
                 </button>
+              </div>
+
+              {/* Staff Mobile App Distribution Row */}
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 bg-slate-50/70 dark:bg-slate-900/40 p-3 rounded-2xl">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                    <Smartphone className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="font-extrabold text-xs text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                      <span>{isAr ? "توزيع تطبيق الجوال للموظفين (Android APK)" : "Staff Mobile App Distribution (Android APK)"}</span>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-600 text-white font-mono">v2.0</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono" dir="ltr">
+                      https://qat.world/downloads/UAS-Mobile-Release-qat.world.apk
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <a
+                    href="/downloads/UAS-Mobile-Release-qat.world.apk"
+                    download="UAS-Mobile-Release-qat.world.apk"
+                    className="px-3 py-1.5 rounded-xl accent-bg font-extrabold text-xs flex items-center gap-1.5 shadow-xs hover:opacity-95 transition"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>{isAr ? "تحميل APK" : "Download APK"}</span>
+                  </a>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyApkLink()}
+                    className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold text-xs hover:border-emerald-500 flex items-center gap-1.5 transition text-slate-700 dark:text-slate-200"
+                  >
+                    {copiedApkLink ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        <span className="text-emerald-600">{isAr ? "تم النسخ!" : "Copied!"}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-slate-500" />
+                        <span>{isAr ? "نسخ الرابط" : "Copy Link"}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           )}
