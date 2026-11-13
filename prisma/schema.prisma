@@ -22,6 +22,7 @@ model Account {
   level        Int                // 1 (Class / Gen 1) to 6 (Operational Posting Leaf / Gen 6)
   type         String             // ASSET | LIABILITY | EQUITY | REVENUE | EXPENSE
   isPosting    Boolean            @default(false) // False for Gen 1-4 & branched Gen 5, True for leaf Gen 5 & Gen 6
+  parentCode   String?            // Optional recursive parentCode for fast hierarchical lineage
   parentId     String?
   parent       Account?           @relation("AccountHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
   children     Account[]          @relation("AccountHierarchy")
@@ -106,6 +107,7 @@ model EnterpriseProfile {
   taxNumber              String?
   commercialReg          String?
   currencyCode           String   @default("YER")
+  isConfigured           Boolean  @default(false)
   address                String?
   phone                  String?
   email                  String?
@@ -682,22 +684,37 @@ enum Role {
 }
 
 model User {
-  id               String         @id @default(cuid())
-  username         String         @unique
-  name             String
-  fullName         String
-  email            String         @unique
-  passwordHash     String
-  role             Role           @default(FIELD_ACCOUNTANT)
-  department       String         @default("المالية والعمليات")
-  active           Boolean        @default(true)
-  avatarChar       String         @default("م")
-  assignedProjects String         @default("[]") // JSON array of project IDs for row-level access
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  id                    String         @id @default(cuid())
+  username              String         @unique
+  name                  String
+  fullName              String
+  displayName           String?        // Optional personal display name (defaults to empty so system displays title-only role)
+  phone                 String?        // Optional personal mobile phone
+  email                 String         @unique
+  passwordHash          String
+  role                  Role           @default(FIELD_ACCOUNTANT)
+  department            String         @default("المالية والعمليات")
+  active                Boolean        @default(true)
+  isActive              Boolean        @default(true)
+  avatarChar            String         @default("م")
+  avatarUrl             String?        // Profile photo URL
+  avatarColor           String         @default("#059669")
+  preferredLang         String         @default("ar")
+  preferredCurrency     String         @default("YER")
+  preferredTheme        String         @default("emerald")
+  defaultModule         String?        // Default home module tab id
+  lastLoginAt           DateTime?
+  useCustomPermissions  Boolean        @default(false)
+  customAllowedGroups   String         @default("[]") // JSON array of allowed ErpGroupId strings
+  customPermissionsJson String         @default("{}") // JSON object of granular overrides
+  mustChangePassword    Boolean        @default(false)
+  passwordUpdatedAt     DateTime?
+  assignedProjects      String         @default("[]") // JSON array of project IDs for row-level access
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
 
-  journalEntries   JournalEntry[]
-  auditLogs        AuditLog[]
+  journalEntries        JournalEntry[]
+  auditLogs             AuditLog[]
 }
 
 model AuditLog {

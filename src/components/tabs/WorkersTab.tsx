@@ -6,6 +6,10 @@ import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { computeWorkerWageTotals, fmtNum } from "@/lib/formulas";
 import type { UasProject, UasWorkerWage } from "@/types/uas";
+import {
+  AccountingDirectionSelector,
+  type AccountingDirectionValue,
+} from "@/components/AccountingDirectionSelector";
 
 type WorkerPayload = {
   projectId: string;
@@ -17,6 +21,9 @@ type WorkerPayload = {
   credit: number;
   date: string;
   notes: string;
+  expenseAccountId?: string | null;
+  expenseAccountCode?: string | null;
+  customAccount?: { nameAr: string; nameEn?: string; parentCode: string; code?: string } | null;
 };
 
 interface WorkersTabProps {
@@ -61,6 +68,10 @@ export function WorkersTab({
   const [filterWorker, setFilterWorker] = useState("ALL");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [accountingDir, setAccountingDir] = useState<AccountingDirectionValue>({
+    accountCode: "511101",
+    isCustom: false,
+  });
 
   const preview = computeWorkerWageTotals(
     Number(dailyWage),
@@ -101,6 +112,7 @@ export function WorkersTab({
     setCredit("10000");
     setDate(new Date().toISOString().slice(0, 10));
     setNotes("");
+    setAccountingDir({ accountCode: "511101", isCustom: false });
     setDrawerOpen(true);
   }
 
@@ -135,8 +147,11 @@ export function WorkersTab({
       dailyWage: Number(dailyWage) || 0,
       days: Number(days) || 1,
       credit: Number(credit) || 0,
-      date: date || "2026-11-10",
+      date: date || new Date().toISOString().slice(0, 10),
       notes: notes.trim(),
+      expenseAccountId: accountingDir.accountId,
+      expenseAccountCode: accountingDir.accountCode || "511101",
+      customAccount: accountingDir.isCustom ? accountingDir.customAccount : undefined,
     };
     const ok =
       editingId && onEditWorker
@@ -304,6 +319,15 @@ export function WorkersTab({
               />
             </div>
           </div>
+
+          <AccountingDirectionSelector
+            label="التوجيه المحاسبي لمصروف الأجر (الطرف المدين)"
+            defaultParentCode="5111"
+            allowedTypes={["EXPENSE"]}
+            value={accountingDir}
+            onChange={setAccountingDir}
+          />
+
           <button type="submit" className="w-full py-2.5 rounded-xl accent-bg font-bold shadow-sm">
             {editingId ? "حفظ تعديلات سجل العامل" : "+ إضافة سجل أجر العامل"}
           </button>

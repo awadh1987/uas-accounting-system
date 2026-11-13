@@ -67,6 +67,39 @@ interface QuickMasterCreateModalProps {
   onToast: (msg: string) => void;
 }
 
+function computeSuggestedChildCode(pid: string, parents: CoaParentOption[]): string {
+  if (!pid || pid === "__GEN1_ROOT__") return "";
+  const parent = parents.find((p) => p.id === pid);
+  if (!parent) return "";
+  const siblings = parents.filter((a) => a.parentId === parent.id);
+  if (parent.level === 5) {
+    if (siblings.length === 0) return `${parent.code}01`;
+    let maxSuffix = 0;
+    for (const s of siblings) {
+      if (s.code.startsWith(parent.code)) {
+        const suf = parseInt(s.code.slice(parent.code.length), 10);
+        if (Number.isFinite(suf) && suf > maxSuffix) maxSuffix = suf;
+      }
+    }
+    return `${parent.code}${String(maxSuffix + 1).padStart(2, "0")}`;
+  }
+  if (parent.level === 4) {
+    if (siblings.length === 0) {
+      if (parent.code.endsWith("00") && parent.code.length === 6) {
+        return `${parent.code.slice(0, 4)}01`;
+      }
+      return `${parent.code}01`;
+    }
+    let maxVal = 0;
+    for (const s of siblings) {
+      const val = parseInt(s.code, 10);
+      if (Number.isFinite(val) && val > maxVal) maxVal = val;
+    }
+    return String(maxVal + 1);
+  }
+  return `${parent.code}${siblings.length + 1}`;
+}
+
 export function QuickMasterCreateModal({
   open,
   mode,
@@ -109,14 +142,24 @@ export function QuickMasterCreateModal({
           (defaultParentCode && eligibleParents.find((a) => a.code === defaultParentCode)) ||
           eligibleParents.find((a) => a.level === 4) ||
           eligibleParents[0];
-        if (preferred) setParentId(preferred.id);
-        else setParentId("__GEN1_ROOT__");
+        if (preferred) {
+          setParentId(preferred.id);
+          setCoaCode(computeSuggestedChildCode(preferred.id, eligibleParents));
+        } else {
+          setParentId("__GEN1_ROOT__");
+          setCoaCode("");
+        }
       })
       .catch(() => null);
     return () => {
       active = false;
     };
   }, [open, mode, defaultParentCode]);
+
+  function handleParentChange(newPid: string) {
+    setParentId(newPid);
+    setCoaCode(computeSuggestedChildCode(newPid, coaParents));
+  }
 
   if (!open) return null;
 
@@ -281,17 +324,23 @@ export function QuickMasterCreateModal({
                 </label>
                 <select
                   value={parentId}
-                  onChange={(e) => setParentId(e.target.value)}
+                  onChange={(e) => handleParentChange(e.target.value)}
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-medium"
                 >
                   <option value="__GEN1_ROOT__">
                     -- إنشاء فئة رئيسية جديدة (الجيل 1 / Main Class Root) --
                   </option>
-                  {coaParents.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      [الجيل {p.level}] {p.code} — {p.nameAr} ({p.type})
-                    </option>
-                  ))}
+                  {coaParents.map((p) => {
+                    const lineage =
+                      p.lineageChain && p.lineageChain.length > 1
+                        ? ` (${p.lineageChain.map((l) => l.nameAr).join(" > ")})`
+                        : "";
+                    return (
+                      <option key={p.id} value={p.id}>
+                        [الجيل {p.level}] {p.code} — {p.nameAr}{lineage}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 

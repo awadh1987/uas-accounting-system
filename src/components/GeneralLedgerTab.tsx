@@ -6,6 +6,7 @@ import { fmtNum } from "@/lib/formulas";
 import type { UasProject, UasUser } from "@/types/uas";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { EmptyState } from "@/components/EmptyState";
+import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
 
 interface AccountOption {
   id: string;
@@ -106,6 +107,7 @@ export function GeneralLedgerTab({
   const [headerProjectId, setHeaderProjectId] = useState(projects[0]?.id || "");
   const [headerSubProjectId, setHeaderSubProjectId] = useState("");
   const [attachmentName, setAttachmentName] = useState("");
+  const [quickCoaOpen, setQuickCoaOpen] = useState(false);
   const [draftLines, setDraftLines] = useState<DraftLine[]>([
     { accountId: "", debit: "10000", credit: "0", currency: "YER", memo: "", projectId: projects[0]?.id || "", subProjectId: "" },
     { accountId: "", debit: "0", credit: "10000", currency: "YER", memo: "", projectId: projects[0]?.id || "", subProjectId: "" },
@@ -149,13 +151,13 @@ export function GeneralLedgerTab({
         setSummary(res.jData.summary || { count: 0, totalDebitBase: 0, totalCreditBase: 0, isLedgerBalanced: true });
       }
       if (res.cData) {
-        const tier5 = (res.cData.flat || []).filter((a) => a.isPosting && a.level === 5);
-        setPostingAccounts(tier5);
+        const posting = (res.cData.flat || []).filter((a) => a.isPosting);
+        setPostingAccounts(posting);
         setDraftLines((prev) =>
           prev.map((l, idx) =>
             l.accountId
               ? l
-              : { ...l, accountId: tier5[idx === 0 ? 0 : Math.min(1, tier5.length - 1)]?.id || "" }
+              : { ...l, accountId: posting[idx === 0 ? 0 : Math.min(1, posting.length - 1)]?.id || "" }
           )
         );
       }
@@ -665,6 +667,14 @@ export function GeneralLedgerTab({
                 >
                   + إضافة سطر
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickCoaOpen(true)}
+                  className="px-3 py-1.5 rounded-xl border border-dashed border-emerald-500 text-emerald-700 dark:text-emerald-300 font-bold hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ حساب جديد بالدليل</span>
+                </button>
                 <input
                   type="text"
                   value={attachmentName}
@@ -693,6 +703,18 @@ export function GeneralLedgerTab({
             </div>
           </form>
         </SlideOverDrawer>
+
+        <QuickMasterCreateModal
+          open={quickCoaOpen}
+          mode="coa"
+          currentUser={currentUser}
+          onClose={() => setQuickCoaOpen(false)}
+          onCreatedCoa={(acc) => {
+            void loadData();
+            onToast(`✅ تم إنشاء الحساب [${acc.code}] ${acc.nameAr}`);
+          }}
+          onToast={onToast}
+        />
 
         {/* Filter Bar */}
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">

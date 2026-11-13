@@ -42,6 +42,9 @@ async function handleWorkerByIdUpdate(
       creditAmount: body.credit !== undefined ? Number(body.credit) : undefined,
       date: body.date ? String(body.date) : undefined,
       notes: body.notes !== undefined ? String(body.notes) : undefined,
+      expenseAccountId: body.expenseAccountId ? String(body.expenseAccountId).trim() : undefined,
+      expenseAccountCode: body.expenseAccountCode ? String(body.expenseAccountCode).trim() : undefined,
+      customAccount: body.customAccount as { nameAr: string; nameEn?: string; parentCode: string; code?: string } | null | undefined,
       createdById: auth.actor.userId ?? undefined,
     });
 

@@ -13,7 +13,8 @@ import {
   normalizeRole,
   type ModuleIdentifier,
 } from "@/lib/permissions";
-import type { UserRole } from "@/types/uas";
+import { parseAssignedProjects } from "@/lib/serverBootstrap";
+import type { UasUser, UserRole } from "@/types/uas";
 
 export interface ActorPayload {
   userId?: string | null;
@@ -25,6 +26,7 @@ export interface ResolvedActor {
   userId: string | null;
   userDisplay: string;
   userRole: UserRole;
+  user?: UasUser | null;
 }
 
 export function extractActor(
@@ -55,14 +57,71 @@ export async function resolveVerifiedActor(
   if (actor.userId) {
     const dbUser = await prisma.user.findUnique({
       where: { id: actor.userId },
-      select: { id: true, name: true, role: true },
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        fullName: true,
+        displayName: true,
+        role: true,
+        active: true,
+        isActive: true,
+        department: true,
+        avatarChar: true,
+        avatarColor: true,
+        useCustomPermissions: true,
+        customAllowedGroups: true,
+        customPermissionsJson: true,
+        assignedProjects: true,
+      },
     });
     if (dbUser) {
       const role = normalizeRole(dbUser.role);
+      let customAllowedGroups: string[] = [];
+      try {
+        if (dbUser.customAllowedGroups) {
+          const parsed = JSON.parse(dbUser.customAllowedGroups);
+          if (Array.isArray(parsed)) customAllowedGroups = parsed.map(String);
+        }
+      } catch {
+        customAllowedGroups = [];
+      }
+
+      let customPermissionsJson: Record<string, boolean> = {};
+      try {
+        if (dbUser.customPermissionsJson) {
+          const parsed = JSON.parse(dbUser.customPermissionsJson);
+          if (parsed && typeof parsed === "object") customPermissionsJson = parsed;
+        }
+      } catch {
+        customPermissionsJson = {};
+      }
+
+      const uasUser: UasUser = {
+        id: dbUser.id,
+        username: dbUser.username,
+        name: dbUser.name,
+        fullName: dbUser.fullName,
+        displayName: dbUser.displayName ?? "",
+        phone: "",
+        email: "",
+        role,
+        department: dbUser.department,
+        active: dbUser.active && (dbUser.isActive ?? true),
+        isActive: dbUser.isActive ?? dbUser.active,
+        avatarChar: dbUser.avatarChar,
+        avatarColor: dbUser.avatarColor ?? "#059669",
+        useCustomPermissions: Boolean(dbUser.useCustomPermissions),
+        customAllowedGroups,
+        customPermissionsJson,
+        assignedProjects: parseAssignedProjects(dbUser.assignedProjects),
+      };
+
       return {
         userId: dbUser.id,
-        userDisplay: actor.userDisplay || `${dbUser.name} (${role})`,
+        userDisplay: actor.userDisplay || `${dbUser.displayName || dbUser.name} (${role})`,
         userRole: role,
+        user: uasUser,
       };
     }
   }
@@ -84,57 +143,64 @@ export async function authorizeApiAction(
   | { ok: false; response: NextResponse }
 > {
   const actor = await resolveVerifiedActor(body, req);
-  const role = actor.userRole;
+  const target = actor.user || actor.userRole;
 
-  if (isReadOnly(role)) {
+  if (actor.user && (actor.user.active === false || actor.user.isActive === false)) {
+    return {
+      ok: false,
+      response: forbiddenError("🔒 الحساب موقوف — لا يمكن تنفيذ الإجراء المطلوب"),
+    };
+  }
+
+  if (isReadOnly(target)) {
     return {
       ok: false,
       response: forbiddenError("🔒 حساب المدقق المالي للقراءة فقط — لا يمكن إجراء تعديلات أو إضافات"),
     };
   }
-  if (check.dateChanged && !canEditDate(role)) {
+  if (check.dateChanged && !canEditDate(target)) {
     return {
       ok: false,
       response: forbiddenError("⛔ صلاحية تعديل تواريخ المعاملات محصورة بمدير النظام، مدير المشاريع، ورئيس الحسابات"),
     };
   }
-  if (check.action === "create" && !canCreate(role, check.moduleId)) {
+  if (check.action === "create" && !canCreate(target, check.moduleId)) {
     return {
       ok: false,
       response: forbiddenError("⛔ ليس لديك صلاحية الإضافة في هذا القسم"),
     };
   }
-  if (check.action === "edit" && !canEdit(role, check.moduleId)) {
+  if (check.action === "edit" && !canEdit(target, check.moduleId)) {
     return {
       ok: false,
       response: forbiddenError("⛔ ليس لديك صلاحية التعديل في هذا القسم"),
     };
   }
-  if (check.action === "delete" && !canDeleteVoid(role)) {
+  if (check.action === "delete" && !canDeleteVoid(target)) {
     return {
       ok: false,
       response: forbiddenError("⛔ صلاحية الحذف أو العكس محصورة بالإدارة العليا ورئيس الحسابات"),
     };
   }
-  if (check.action === "approve" && !canApprove(role)) {
+  if (check.action === "approve" && !canApprove(target)) {
     return {
       ok: false,
       response: forbiddenError("⛔ ليس لديك صلاحية الاعتماد المالي"),
     };
   }
-  if (check.action === "post" && !canPostLedger(role)) {
+  if (check.action === "post" && !canPostLedger(target)) {
     return {
       ok: false,
       response: forbiddenError("⛔ ترحيل وتعديل القيود المحاسبية محصور بمدير النظام ورئيس الحسابات"),
     };
   }
-  if (check.action === "treasury" && !canManageTreasury(role)) {
+  if (check.action === "treasury" && !canManageTreasury(target)) {
     return {
       ok: false,
       response: forbiddenError("⛔ إدارة الخزائن والبنوك والمحافظ والتحويلات محصورة بالإدارة المالية"),
     };
   }
-  if (check.action === "cms" && !canManageLandingCms(role)) {
+  if (check.action === "cms" && !canManageLandingCms(target)) {
     return {
       ok: false,
       response: forbiddenError("⛔ تعديل الهوية البصرية وبوابة CMS محصور بمدير النظام العام"),

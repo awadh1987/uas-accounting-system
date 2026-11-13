@@ -13,6 +13,7 @@ import { ProcurementTab } from "@/components/ProcurementTab";
 import { ProjectsManagerTab } from "@/components/ProjectsManagerTab";
 import { SidebarNav } from "@/components/SidebarNav";
 import { TopCommandBar } from "@/components/TopCommandBar";
+import { UserProfileDrawer } from "@/components/UserProfileDrawer";
 import { VoucherModal } from "@/components/VoucherModal";
 import { AuditTab } from "@/components/tabs/AuditTab";
 import { CustomersTab } from "@/components/tabs/CustomersTab";
@@ -89,6 +90,7 @@ export function UasAppShell() {
   const [selectedHarvest, setSelectedHarvest] = useState("ALL");
 
   const [currentUser, setCurrentUser] = useState<UasUser>(INITIAL_FALLBACK_STATE.users[0]);
+  const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
   const [quickSheetOpen, setQuickSheetOpen] = useState(false);
   const [voucherModal, setVoucherModal] = useState<VoucherModalPayload | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -666,6 +668,7 @@ export function UasAppShell() {
               }}
               onOpenLogin={() => setViewMode("login")}
               onOpenLanding={() => setViewMode("landing")}
+              onOpenProfileDrawer={() => setProfileDrawerOpen(true)}
             />
 
             <main className="max-w-7xl w-full mx-auto flex-1 p-4 md:p-6 pb-24 md:pb-8 space-y-5">
@@ -1013,6 +1016,8 @@ export function UasAppShell() {
                   theme={theme}
                   currentUser={currentUser}
                   users={state.users}
+                  projects={state.projects}
+                  onRefreshState={refreshFromServer}
                   readOnly={userReadOnly}
                   canManageUsers={userCanManageUsers}
                   canManageCms={canManageLandingCms(currentUser)}
@@ -1265,6 +1270,48 @@ export function UasAppShell() {
             onCloseQuickSheet={() => setQuickSheetOpen(false)}
             onQuickJump={handleQuickJump}
             onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
+          />
+
+          <UserProfileDrawer
+            open={profileDrawerOpen}
+            onClose={() => setProfileDrawerOpen(false)}
+            currentUser={currentUser}
+            lang={lang}
+            theme={theme}
+            currency={currency}
+            projects={state.projects}
+            onUserUpdated={(updatedUser) => {
+              setCurrentUser(updatedUser);
+              setState((prev) => ({
+                ...prev,
+                users: prev.users.map((u) => (u.id === updatedUser.id ? updatedUser : u)),
+              }));
+            }}
+            onChangeLang={(next) => {
+              setLang(next);
+              runMutation(
+                "/api/system/settings",
+                "PATCH",
+                { defaultLang: next },
+                "Language change",
+                next === "ar" ? "تم التبديل إلى اللغة العربية" : "Switched to English"
+              );
+            }}
+            onChangeTheme={(next) => {
+              setTheme(next);
+              runMutation(
+                "/api/system/settings",
+                "PATCH",
+                { defaultTheme: next },
+                "Theme change",
+                `تم تغيير المظهر إلى: ${next}`
+              );
+            }}
+            onChangeCurrency={(next) => {
+              setCurrency(next);
+              showToast(`تم تغيير عملة العرض إلى: ${next}`);
+            }}
+            onToast={showToast}
           />
         </div>
       )}

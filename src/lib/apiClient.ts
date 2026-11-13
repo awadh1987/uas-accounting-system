@@ -215,11 +215,23 @@ function applyLocalOptimistic(
     const price = Number(payload.price) || 0;
     const credit = Number(payload.credit) || 0;
     const { totalAmount, debitReceivable } = computeSaleTotals(bundles, price, credit);
+    const seq = String(
+      payload.sequenceNumber ||
+        payload.batch ||
+        `SO-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`
+    );
     next.sales.push({
       id: "s" + Date.now(),
       projectId,
+      subProjectId: payload.subProjectId ? String(payload.subProjectId) : undefined,
       harvest,
-      batch: String(payload.batch || "عملية بيع 1"),
+      batch: String(payload.batch || seq),
+      sequenceNumber: seq,
+      dailyBatchLabel: String(payload.dailyBatchLabel || "وردية مفتوحة"),
+      salesOfficerId: payload.salesOfficerId ? String(payload.salesOfficerId) : undefined,
+      salesOfficerTitle: payload.salesOfficerTitle ? String(payload.salesOfficerTitle) : undefined,
+      revenueAccountCode: String(payload.revenueAccountCode || "411101"),
+      treasuryAccountId: payload.treasuryAccountId ? String(payload.treasuryAccountId) : undefined,
       customer: String(payload.customer || ""),
       phone: String(payload.phone || "783118231"),
       grade: String(payload.grade || "رقم 1"),

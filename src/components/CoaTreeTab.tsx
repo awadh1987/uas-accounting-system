@@ -19,6 +19,17 @@ export interface CoaNodeItem {
   rollupDebit: number;
   rollupCredit: number;
   balance: number;
+  rolledUpDebit?: number;
+  rolledUpCredit?: number;
+  rolledUpBalance?: number;
+  childrenCount?: number;
+  lineageChain?: Array<{
+    id: string;
+    code: string;
+    nameAr: string;
+    nameEn: string;
+    level: number;
+  }>;
   children: CoaNodeItem[];
 }
 
@@ -204,6 +215,44 @@ export function CoaTreeTab({
     return node.children.some(matchesSearch);
   }
 
+  function getSuggestedChildCode(parent: CoaNodeItem): string {
+    const siblings = flat.filter((a) => a.parentId === parent.id);
+    if (parent.level === 5) {
+      if (siblings.length === 0) return `${parent.code}01`;
+      let maxSuffix = 0;
+      for (const s of siblings) {
+        if (s.code.startsWith(parent.code)) {
+          const suf = parseInt(s.code.slice(parent.code.length), 10);
+          if (Number.isFinite(suf) && suf > maxSuffix) maxSuffix = suf;
+        }
+      }
+      return `${parent.code}${String(maxSuffix + 1).padStart(2, "0")}`;
+    }
+    if (parent.level === 4) {
+      if (siblings.length === 0) {
+        if (parent.code.endsWith("00") && parent.code.length === 6) {
+          return `${parent.code.slice(0, 4)}01`;
+        }
+        return `${parent.code}01`;
+      }
+      let maxVal = 0;
+      for (const s of siblings) {
+        const val = parseInt(s.code, 10);
+        if (Number.isFinite(val) && val > maxVal) maxVal = val;
+      }
+      return String(maxVal + 1);
+    }
+    if (siblings.length === 0) return `${parent.code}1`;
+    let maxSuffix = 0;
+    for (const s of siblings) {
+      if (s.code.startsWith(parent.code)) {
+        const suf = parseInt(s.code.slice(parent.code.length), 10);
+        if (Number.isFinite(suf) && suf > maxSuffix) maxSuffix = suf;
+      }
+    }
+    return `${parent.code}${maxSuffix + 1}`;
+  }
+
   function renderNode(node: CoaNodeItem): React.ReactNode {
     if (!matchesSearch(node)) return null;
     const hasChildren = node.children.length > 0;
@@ -239,13 +288,33 @@ export function CoaTreeTab({
             <span className="font-mono text-xs font-extrabold px-2 py-0.5 rounded-md bg-slate-200/70 dark:bg-slate-700">
               {node.code}
             </span>
-            <div className="truncate">
-              <span className={`text-xs ${node.level <= 2 ? "font-black" : "font-bold"}`}>
-                {node.nameAr}
-              </span>
-              <span className="text-[11px] text-slate-400 mr-2 hidden sm:inline">
-                ({node.nameEn})
-              </span>
+            <div className="truncate min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className={`text-xs ${node.level <= 2 ? "font-black" : "font-bold"}`}>
+                  {node.nameAr}
+                </span>
+                <span className="text-[11px] text-slate-400 mr-2 hidden sm:inline">
+                  ({node.nameEn})
+                </span>
+              </div>
+              {node.lineageChain && node.lineageChain.length > 1 && (
+                <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-0.5 font-mono truncate">
+                  {node.lineageChain.map((item, idx) => (
+                    <React.Fragment key={item.id}>
+                      {idx > 0 && <span className="text-slate-300 dark:text-slate-600">›</span>}
+                      <span
+                        className={
+                          idx === node.lineageChain!.length - 1
+                            ? "font-bold text-slate-600 dark:text-slate-300"
+                            : "opacity-80"
+                        }
+                      >
+                        {item.code} {item.nameAr}
+                      </span>
+                    </React.Fragment>
+                  ))}
+                </div>
+              )}
             </div>
             {(() => {
               const genMeta = GENERATION_BADGES[node.level] || GENERATION_BADGES[6];
@@ -269,9 +338,14 @@ export function CoaTreeTab({
           </div>
 
           <div className="flex items-center gap-3 text-xs">
-            <div className="text-left">
+            <div className="text-left font-mono">
+              {(node.isPosting || node.directDebit > 0 || node.directCredit > 0) && (
+                <div className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold">
+                  مباشر: مدين {fmtNum(node.directDebit)} | دائن {fmtNum(node.directCredit)}
+                </div>
+              )}
               <div className="text-[10px] text-slate-400">
-                مدين: {fmtNum(node.rollupDebit)} | دائن: {fmtNum(node.rollupCredit)}
+                تراكمي: مدين {fmtNum(node.rollupDebit)} | دائن {fmtNum(node.rollupCredit)}
               </div>
               <div
                 className={`font-extrabold ${
@@ -292,7 +366,7 @@ export function CoaTreeTab({
                       setEditingNode(null);
                       setNewNameAr("");
                       setNewNameEn("");
-                      setNewCode("");
+                      setNewCode(getSuggestedChildCode(node));
                     }}
                     className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 text-[11px] font-bold flex items-center gap-1 border border-emerald-200 dark:border-emerald-800 transition"
                     title={`إضافة جيل فرعي (الجيل ${node.level + 1}) تحت ${node.nameAr}`}
@@ -382,7 +456,7 @@ export function CoaTreeTab({
                 className="px-3.5 py-1.5 rounded-xl accent-bg text-xs font-extrabold flex items-center gap-1 shadow-sm"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>حساب مستوى 5 جديد</span>
+                <span>+ حساب جديد (الأجيال 1-6)</span>
               </button>
             )}
           </div>

@@ -34,6 +34,9 @@ export async function POST(req: NextRequest) {
     const creditAmount = Number(body.credit) || 0;
     const workDate = String(body.date || new Date().toISOString().slice(0, 10));
     const notes = String(body.notes || "").trim();
+    const expenseAccountId = body.expenseAccountId ? String(body.expenseAccountId).trim() : null;
+    const expenseAccountCode = body.expenseAccountCode ? String(body.expenseAccountCode).trim() : null;
+    const customAccount = body.customAccount as { nameAr: string; nameEn?: string; parentCode: string; code?: string } | null | undefined;
 
     if (!name || !projectId || !harvestName) {
       return jsonError("يرجى إدخال اسم العامل والمشروع والقطفة", 400);
@@ -82,6 +85,9 @@ export async function POST(req: NextRequest) {
           totalWage,
           creditAmount,
           date: workDate,
+          expenseAccountId,
+          expenseAccountCode,
+          customAccount,
           createdById: actor.userId ?? undefined,
         });
         if (je) {

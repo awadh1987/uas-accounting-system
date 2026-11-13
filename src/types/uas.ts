@@ -43,16 +43,47 @@ export type TabId =
   | "mobile"
   | "prompt";
 
+export interface UasUserCustomOverrides {
+  allowedGroups?: ErpGroupId[];
+  canCreate?: boolean;
+  canEdit?: boolean;
+  canEditDate?: boolean;
+  canDeleteVoid?: boolean;
+  canApprove?: boolean;
+  canPostLedger?: boolean;
+  canLockPeriod?: boolean;
+  canManageTreasury?: boolean;
+  canManageLandingCms?: boolean;
+  canManageUsers?: boolean;
+  [key: string]: boolean | ErpGroupId[] | undefined;
+}
+
 export interface UasUser {
   id: string;
   username?: string;
   name: string;
   fullName?: string;
+  displayName?: string;
+  phone?: string;
   email: string;
   role: UserRole | string;
   department?: string;
   active: boolean;
+  isActive?: boolean;
   avatarChar: string;
+  avatarUrl?: string;
+  avatarColor?: string;
+  preferredLang?: string;
+  preferredCurrency?: string;
+  preferredTheme?: string;
+  defaultModule?: string;
+  lastLoginAt?: string | null;
+  useCustomPermissions?: boolean;
+  customAllowedGroups?: ErpGroupId[] | string[] | string;
+  customPermissionsJson?: Record<string, boolean> | string;
+  customOverrides?: UasUserCustomOverrides;
+  mustChangePassword?: boolean;
+  passwordUpdatedAt?: string | null;
   assignedProjects?: string[];
 }
 
@@ -63,6 +94,7 @@ export interface UasEnterpriseProfile {
   taxNumber?: string | null;
   commercialReg?: string | null;
   currencyCode: string;
+  isConfigured?: boolean;
   address?: string | null;
   phone?: string | null;
   email?: string | null;
@@ -109,6 +141,7 @@ export interface UasCoaAccount {
   level: CoaGenerationLevel | number;
   type: string;
   isPosting: boolean;
+  parentCode?: string | null;
   parentId: string | null;
   directDebit: number;
   directCredit: number;

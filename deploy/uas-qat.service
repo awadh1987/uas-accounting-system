@@ -1,0 +1,28 @@
+[Unit]
+Description=Unified Accounting System (UAS) Enterprise Service
+After=network.target
+
+[Service]
+Type=simple
+User=uas
+WorkingDirectory=/var/www/uas-accounting-system
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=DATABASE_URL="file:/var/www/uas-accounting-system/prisma/dev.db"
+Environment=NEXTAUTH_URL="https://qat.world"
+Environment=APP_URL="https://qat.world"
+
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=uas-erp
+
+# Security sandboxing
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+

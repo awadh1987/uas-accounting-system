@@ -133,6 +133,7 @@ function mapEnterpriseProfile(
     taxNumber: row?.taxNumber ?? "30049811200003",
     commercialReg: row?.commercialReg ?? "CR-YE-2026-8841",
     currencyCode: row?.currencyCode || "YER",
+    isConfigured: row?.isConfigured ?? false,
     address: row?.address ?? "الجمهورية اليمنية - مزارع الجبري الإنتاجية",
     phone: row?.phone ?? "783118231",
     email: row?.email ?? "finance@aljabri-agri.com",
@@ -433,11 +434,26 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
         username: true,
         name: true,
         fullName: true,
+        displayName: true,
+        phone: true,
         email: true,
         role: true,
         department: true,
         active: true,
+        isActive: true,
         avatarChar: true,
+        avatarUrl: true,
+        avatarColor: true,
+        preferredLang: true,
+        preferredCurrency: true,
+        preferredTheme: true,
+        defaultModule: true,
+        lastLoginAt: true,
+        useCustomPermissions: true,
+        customAllowedGroups: true,
+        customPermissionsJson: true,
+        mustChangePassword: true,
+        passwordUpdatedAt: true,
         assignedProjects: true,
       },
     }),
@@ -479,18 +495,57 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
     inventoryBatches: mapInventory(inventoryBatches),
     lockedPeriods,
     auditLogs: mapAuditLogs(auditLogs),
-    users: users.map((u) => ({
-      id: u.id,
-      username: u.username,
-      name: u.name,
-      fullName: u.fullName,
-      email: u.email,
-      role: u.role,
-      department: u.department,
-      active: u.active,
-      avatarChar: u.avatarChar,
-      assignedProjects: parseAssignedProjects(u.assignedProjects),
-    })),
+    users: users.map((u) => {
+      let customAllowedGroups: string[] = [];
+      try {
+        if (u.customAllowedGroups) {
+          const parsed = JSON.parse(u.customAllowedGroups);
+          if (Array.isArray(parsed)) customAllowedGroups = parsed.map(String);
+        }
+      } catch {
+        customAllowedGroups = [];
+      }
+
+      let customPermissionsJson: Record<string, boolean> = {};
+      try {
+        if (u.customPermissionsJson) {
+          const parsed = JSON.parse(u.customPermissionsJson);
+          if (parsed && typeof parsed === "object") customPermissionsJson = parsed;
+        }
+      } catch {
+        customPermissionsJson = {};
+      }
+
+      const activeState = u.active && (u.isActive ?? true);
+
+      return {
+        id: u.id,
+        username: u.username,
+        name: u.name,
+        fullName: u.fullName,
+        displayName: u.displayName ?? "",
+        phone: u.phone ?? "",
+        email: u.email,
+        role: u.role,
+        department: u.department,
+        active: activeState,
+        isActive: u.isActive ?? u.active,
+        avatarChar: u.avatarChar,
+        avatarUrl: u.avatarUrl ?? "",
+        avatarColor: u.avatarColor ?? "#059669",
+        preferredLang: u.preferredLang ?? "ar",
+        preferredCurrency: u.preferredCurrency ?? "YER",
+        preferredTheme: u.preferredTheme ?? "emerald",
+        defaultModule: u.defaultModule ?? "",
+        lastLoginAt: u.lastLoginAt ? u.lastLoginAt.toISOString() : null,
+        useCustomPermissions: Boolean(u.useCustomPermissions),
+        customAllowedGroups,
+        customPermissionsJson,
+        mustChangePassword: Boolean(u.mustChangePassword),
+        passwordUpdatedAt: u.passwordUpdatedAt ? u.passwordUpdatedAt.toISOString() : null,
+        assignedProjects: parseAssignedProjects(u.assignedProjects),
+      };
+    }),
     projects: mappedProjects,
     expenses: mapExpenses(expenses),
     workers: mapWorkers(workers),

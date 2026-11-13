@@ -240,6 +240,8 @@ async function resolvePostingAccount(
   return account;
 }
 
+export const resolveOrProvisionPostingAccountTx = resolveOrCreatePostingAccountTx;
+
 export async function resolveOrCreatePostingAccountTx(
   tx: Prisma.TransactionClient,
   input: {
@@ -1209,9 +1211,21 @@ export async function postWorkerWageJournalTx(
     creditAmount: number;
     date: string;
     createdById?: string;
+    expenseAccountId?: string | null;
+    expenseAccountCode?: string | null;
+    customAccount?: CustomAccountInput | null;
   }
 ) {
   if (input.totalWage <= 0) return null;
+
+  const expenseAccount = await resolveOrCreatePostingAccountTx(tx, {
+    accountId: input.expenseAccountId,
+    accountCode: input.expenseAccountCode,
+    customAccount: input.customAccount,
+    fallbackDefaultCode: "511101",
+    userId: input.createdById,
+  });
+
   const accrual = await postJournalEntry({
     tx,
     date: new Date(`${input.date}T10:00:00Z`),
@@ -1225,7 +1239,8 @@ export async function postWorkerWageJournalTx(
     createdById: input.createdById,
     lines: [
       {
-        accountCode: "511101",
+        accountId: expenseAccount.id,
+        accountCode: expenseAccount.code,
         debit: input.totalWage,
         projectId: input.projectId,
         subProjectId: input.subProjectId ?? null,
@@ -1643,6 +1658,7 @@ export async function createHierarchicalAccount(
         level,
         type,
         isPosting,
+        parentCode: parent ? parent.code : input.parentCode ?? null,
         parentId: parent ? parent.id : null,
       },
     });
@@ -2895,6 +2911,9 @@ export async function updateWorkerWageAtomic(input: {
   creditAmount?: number;
   date?: string;
   notes?: string;
+  expenseAccountId?: string | null;
+  expenseAccountCode?: string | null;
+  customAccount?: CustomAccountInput | null;
   createdById?: string;
 }) {
   return prisma.$transaction(async (tx) => {
@@ -2972,6 +2991,9 @@ export async function updateWorkerWageAtomic(input: {
           totalWage: nextTotal,
           creditAmount: nextCredit,
           date: nextDate,
+          expenseAccountId: input.expenseAccountId,
+          expenseAccountCode: input.expenseAccountCode,
+          customAccount: input.customAccount,
           createdById: input.createdById,
         });
         nextJournalEntryId = newAccrual?.id ?? null;

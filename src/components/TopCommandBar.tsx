@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Search,
   Smartphone,
+  User,
   UserCheck,
   Wifi,
   WifiOff,
@@ -63,6 +64,7 @@ interface TopCommandBarProps {
   onToggleLanguage: () => void;
   onOpenLogin: () => void;
   onOpenLanding: () => void;
+  onOpenProfileDrawer?: () => void;
 }
 
 export function TopCommandBar({
@@ -97,6 +99,7 @@ export function TopCommandBar({
   onToggleLanguage,
   onOpenLogin,
   onOpenLanding,
+  onOpenProfileDrawer,
 }: TopCommandBarProps) {
   const isAr = lang === "ar";
   const dict = getDict(lang);
@@ -313,8 +316,10 @@ export function TopCommandBar({
             className="flex items-center gap-2 px-2 py-1 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
           >
             <SvgAvatar char={currentUser.avatarChar} size={28} />
-            <div className="hidden md:block text-start leading-tight max-w-[115px]">
-              <div className="text-[11px] font-extrabold truncate">{currentUser.name}</div>
+            <div className="hidden md:block text-start leading-tight max-w-[125px]">
+              <div className="text-[11px] font-extrabold truncate">
+                {currentUser.displayName || currentUser.name}
+              </div>
               <div className="text-[9px] text-slate-500 truncate">
                 {isAr ? roleMeta.labelAr : roleMeta.shortEn}
               </div>
@@ -329,7 +334,9 @@ export function TopCommandBar({
               } mt-2 w-64 rounded-2xl card-surface shadow-2xl border border-slate-200 dark:border-slate-700 p-2 z-50 space-y-1`}
             >
               <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800 space-y-1">
-                <div className="text-xs font-black">{currentUser.fullName || currentUser.name}</div>
+                <div className="text-xs font-black truncate">
+                  {currentUser.displayName || currentUser.fullName || currentUser.name}
+                </div>
                 <div className="text-[11px] text-slate-500 font-mono truncate">
                   {currentUser.email}
                 </div>
@@ -342,8 +349,31 @@ export function TopCommandBar({
                       {isAr ? "قراءة فقط" : "Read-Only"}
                     </span>
                   )}
+                  {currentUser.mustChangePassword && (
+                    <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px] font-bold">
+                      {isAr ? "يلزم تغيير كلمة المرور" : "Change Pass Required"}
+                    </span>
+                  )}
                 </div>
               </div>
+
+              {/* Self-Service Profile & Preferences Trigger */}
+              <button
+                type="button"
+                onClick={() => {
+                  setProfileOpen(false);
+                  onOpenProfileDrawer?.();
+                }}
+                className="w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 transition"
+              >
+                <User className="w-4 h-4 text-emerald-600 shrink-0" />
+                <div className="text-start leading-tight flex-1">
+                  <div>{isAr ? "الملف الشخصي وتفضيلات العمل" : "Profile & Preferences"}</div>
+                  <div className="text-[10px] text-emerald-600/70 font-normal">
+                    {isAr ? "الاسم، الهاتف، كلمة المرور، المظهر" : "Name, Phone, Pass, Theme"}
+                  </div>
+                </div>
+              </button>
 
               {/* Project Filter inside dropdown for narrow viewports */}
               <div className="xl:hidden px-2 py-1.5 space-y-1.5 border-b border-slate-100 dark:border-slate-800">

@@ -20,12 +20,16 @@ import {
   updateTreasuryAccount,
 } from "../src/lib/accounting/ledgerService";
 import {
+  canAccessModule,
   canEdit,
   canEditDate,
   canManageLandingCms,
   canManageTreasury,
+  canPostLedger,
   isReadOnly,
+  isUserActive,
 } from "../src/lib/permissions";
+import type { UasUser } from "../src/types/uas";
 
 describe("Enterprise Double-Entry General Ledger & Accounting Assertions", () => {
   after(async () => {
@@ -52,7 +56,10 @@ describe("Enterprise Double-Entry General Ledger & Accounting Assertions", () =>
         true,
         `Account ${line.account.code} on ${line.journalEntry.entryNumber} must be Tier-5 posting`
       );
-      assert.equal(line.account.level, 5);
+      assert.ok(
+        line.account.level === 5 || line.account.level === 6,
+        `Posting account ${line.account.code} must be Gen 5 or Gen 6`
+      );
       sumAllDebits += Number(line.debitBase);
       sumAllCredits += Number(line.creditBase);
     }
@@ -577,6 +584,106 @@ describe("Enterprise Double-Entry General Ledger & Accounting Assertions", () =>
             gen1Expense.rolledUpDebit > 0,
             "Gen 1 Expense rolled up balance must include Gen 6 posting lines"
           );
+
+          throw new Error(SENTINEL);
+        }),
+      new RegExp(SENTINEL)
+    );
+  });
+
+  it("verifies User Profile self-service preferences, dynamic RBAC overrides, and admin security controls", async () => {
+    const SENTINEL = "ROLLBACK_RBAC_PROFILE";
+    await assert.rejects(
+      () =>
+        prisma.$transaction(async (tx) => {
+          // 1. Create a standard field accountant user
+          const testUser = await tx.user.create({
+            data: {
+              username: "test_field_officer",
+              name: "محاسب ميداني تجريبي",
+              fullName: "محاسب ميداني تجريبي بن صالح",
+              email: "field_officer_test@qat.world",
+              passwordHash: "hash_test_12345",
+              role: "FIELD_ACCOUNTANT",
+              department: "الحسابات الميدانية",
+              preferredLang: "ar",
+              preferredCurrency: "YER",
+              preferredTheme: "emerald",
+              isActive: true,
+            },
+          });
+
+          // Test default role permissions: Field accountant cannot manage treasury or post ledger by default
+          assert.equal(canManageTreasury(testUser as unknown as UasUser), false);
+          assert.equal(canPostLedger(testUser as unknown as UasUser), false);
+          assert.equal(canAccessModule(testUser as unknown as UasUser, "admin"), false);
+
+          // 2. Self-Service Profile Update: update personal display name, contact, and preferences
+          const updatedProfile = await tx.user.update({
+            where: { id: testUser.id },
+            data: {
+              displayName: "أبو أحمد المحاسب",
+              phone: "+967771234567",
+              email: "accountant@qat.world",
+              avatarColor: "#0284c7",
+              preferredLang: "en",
+              preferredCurrency: "SAR",
+              preferredTheme: "royal",
+              defaultModule: "sales",
+            },
+          });
+
+          assert.equal(updatedProfile.displayName, "أبو أحمد المحاسب");
+          assert.equal(updatedProfile.phone, "+967771234567");
+          assert.equal(updatedProfile.preferredCurrency, "SAR");
+          assert.equal(updatedProfile.preferredTheme, "royal");
+
+          // 3. Super Admin grants Custom Dynamic RBAC Overrides
+          const updatedWithOverrides = await tx.user.update({
+            where: { id: testUser.id },
+            data: {
+              useCustomPermissions: true,
+              customAllowedGroups: JSON.stringify(["admin", "finance", "commercial"]),
+              customPermissionsJson: JSON.stringify({
+                canManageTreasury: true,
+                canPostLedger: true,
+                canManageLandingCms: true,
+              }),
+            },
+          });
+
+          // Verify overrides take effect dynamically
+          assert.equal(canManageTreasury(updatedWithOverrides as unknown as UasUser), true);
+          assert.equal(canPostLedger(updatedWithOverrides as unknown as UasUser), true);
+          assert.equal(canManageLandingCms(updatedWithOverrides as unknown as UasUser), true);
+          assert.equal(canAccessModule(updatedWithOverrides as unknown as UasUser, "admin"), true);
+          assert.equal(canAccessModule(updatedWithOverrides as unknown as UasUser, "finance"), true);
+
+          // 4. Admin Security Control: Suspend Account (isActive: false)
+          const suspendedUser = await tx.user.update({
+            where: { id: testUser.id },
+            data: { isActive: false },
+          });
+
+          assert.equal(isUserActive(suspendedUser as unknown as UasUser), false);
+          // When inactive, all permissions evaluate to false regardless of overrides
+          assert.equal(canManageTreasury(suspendedUser as unknown as UasUser), false);
+          assert.equal(canPostLedger(suspendedUser as unknown as UasUser), false);
+
+          // 5. Admin Password Reset with force password change
+          const resetUser = await tx.user.update({
+            where: { id: testUser.id },
+            data: {
+              isActive: true,
+              passwordHash: "new_admin_reset_hash_999",
+              mustChangePassword: true,
+              passwordUpdatedAt: new Date(),
+            },
+          });
+
+          assert.equal(resetUser.mustChangePassword, true);
+          assert.ok(resetUser.passwordUpdatedAt);
+          assert.equal(resetUser.passwordHash, "new_admin_reset_hash_999");
 
           throw new Error(SENTINEL);
         }),

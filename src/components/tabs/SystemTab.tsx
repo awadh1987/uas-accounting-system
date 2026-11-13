@@ -20,9 +20,19 @@ import {
   Sparkles,
   Save,
   Eye,
+  KeyRound,
+  Shield,
+  Sliders,
+  RefreshCw,
+  Copy,
+  Check,
+  UserCheck,
+  X,
 } from "lucide-react";
+import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import {
   ALL_USER_ROLES,
+  ROLE_DEFAULT_PERMISSIONS,
   ROLE_DEFINITIONS,
   canApprove,
   canLockPeriod,
@@ -30,14 +40,131 @@ import {
   getAccessibleGroups,
   getRoleMeta,
   isReadOnly as checkIsReadOnly,
+  normalizeRole,
+  type GranularActionPermissions,
 } from "@/lib/permissions";
 import type {
+  ErpGroupId,
   LanguageCode,
   ThemeName,
   UasEnterpriseProfile,
+  UasProject,
   UasSystemSettings,
   UasUser,
 } from "@/types/uas";
+
+const ERP_DOMAINS: { id: ErpGroupId; labelAr: string; labelEn: string; descAr: string }[] = [
+  {
+    id: "public",
+    labelAr: "البوابة العامة والمؤشرات",
+    labelEn: "Public Portal & KPIs",
+    descAr: "لوحة المعلومات العامة وصفحة الترحيب",
+  },
+  {
+    id: "projects",
+    labelAr: "المشاريع والمواسم الزراعية",
+    labelEn: "Projects & Harvests",
+    descAr: "المشاريع والمواسم والقطفات والمشاريع الفرعية",
+  },
+  {
+    id: "commercial",
+    labelAr: "المشتريات والمبيعات والمخزون",
+    labelEn: "Commercial & Supply Chain",
+    descAr: "المشتريات، المبيعات المتعددة، العملاء، والمخازن",
+  },
+  {
+    id: "operations",
+    labelAr: "المصروفات التشغيلية والعمالة",
+    labelEn: "Operations & Labor",
+    descAr: "مصاريف التشغيل والمحروقات وأجور العمالة",
+  },
+  {
+    id: "finance",
+    labelAr: "الخزينة والأستاذ العام والحسابات",
+    labelEn: "Finance & General Ledger",
+    descAr: "الصناديق والبنوك، شجرة الحسابات الستة، والقيود",
+  },
+  {
+    id: "intelligence",
+    labelAr: "التقارير وسجل التدقيق",
+    labelEn: "Intelligence & Audit",
+    descAr: "القوائم المالية التحليلية وسجل التدقيق المؤسسي",
+  },
+  {
+    id: "admin",
+    labelAr: "إدارة النظام والمستخدمين",
+    labelEn: "System Admin & Users",
+    descAr: "إعدادات النظام، الهوية المؤسسية، والتحكم بالصلاحيات",
+  },
+];
+
+const ACTION_PERM_DEFINITIONS: {
+  key: keyof GranularActionPermissions;
+  labelAr: string;
+  labelEn: string;
+  descAr: string;
+}[] = [
+  {
+    key: "canCreate",
+    labelAr: "إنشاء القيود والمعاملات",
+    labelEn: "Create Transactions",
+    descAr: "إدخال فواتير وسندات ومصروفات جديدة",
+  },
+  {
+    key: "canEdit",
+    labelAr: "تعديل المعاملات غير المقفلة",
+    labelEn: "Edit Transactions",
+    descAr: "تعديل القيود والفواتير المفتوحة قبل اعتمادها",
+  },
+  {
+    key: "canEditDate",
+    labelAr: "تعديل التواريخ بأثر رجعي",
+    labelEn: "Edit Transaction Dates",
+    descAr: "تغيير تاريخ المعاملات وسندات الصرف والقبض",
+  },
+  {
+    key: "canDeleteVoid",
+    labelAr: "حذف وإلغاء القيود",
+    labelEn: "Delete / Void Vouchers",
+    descAr: "إلغاء أو حذف المعاملات والسندات المفتوحة",
+  },
+  {
+    key: "canApprove",
+    labelAr: "الاعتماد المالي والتشغيلي",
+    labelEn: "Financial Approval",
+    descAr: "اعتماد أوامر الشراء وفواتير الموردين والرواتب",
+  },
+  {
+    key: "canPostLedger",
+    labelAr: "الترحيل للأستاذ العام (GL)",
+    labelEn: "Post to General Ledger",
+    descAr: "ترحيل السندات المعتمدة ودفتر اليومية",
+  },
+  {
+    key: "canLockPeriod",
+    labelAr: "إقفال القطفات والدورات",
+    labelEn: "Lock Periods & Cycles",
+    descAr: "تجميد الفترات المحاسبية وإقفال القطفات",
+  },
+  {
+    key: "canManageTreasury",
+    labelAr: "إدارة الخزينة والتحويلات",
+    labelEn: "Manage Treasury",
+    descAr: "تحويل الأموال بين الصناديق والحسابات البنكية",
+  },
+  {
+    key: "canManageLandingCms",
+    labelAr: "إدارة الهوية والصفحة العامة",
+    labelEn: "Manage CMS & Branding",
+    descAr: "تخصيص الشعار ومحتوى البوابة العامة",
+  },
+  {
+    key: "canManageUsers",
+    labelAr: "إدارة المستخدمين والأمان",
+    labelEn: "Manage Users & Security",
+    descAr: "إضافة المستخدمين، ضبط الصلاحيات، وإعادة تعيين كلمات المرور",
+  },
+];
 
 interface SystemTabProps {
   settings: UasSystemSettings;
@@ -46,6 +173,7 @@ interface SystemTabProps {
   theme: ThemeName;
   currentUser: UasUser;
   users: UasUser[];
+  projects?: UasProject[];
   readOnly?: boolean;
   canManageUsers?: boolean;
   canManageCms?: boolean;
@@ -61,6 +189,7 @@ interface SystemTabProps {
   }) => Promise<void>;
   onAddUser: (payload: { name: string; email: string; role: string }) => Promise<boolean>;
   onToggleUserStatus: (uid: string) => Promise<void>;
+  onRefreshState?: () => Promise<void>;
   onOpenLogin: () => void;
   onToast: (msg: string) => void;
 }
@@ -103,6 +232,7 @@ export function SystemTab({
   theme,
   currentUser,
   users,
+  projects = [],
   readOnly = false,
   canManageUsers = true,
   canManageCms = false,
@@ -113,6 +243,7 @@ export function SystemTab({
   onUpdateProfile,
   onAddUser,
   onToggleUserStatus,
+  onRefreshState,
   onOpenLogin,
   onToast,
 }: SystemTabProps) {
@@ -129,6 +260,189 @@ export function SystemTab({
 
   const [cmsOverrides, setCmsOverrides] = useState<Partial<UasEnterpriseProfile> | null>(null);
   const [savingCms, setSavingCms] = useState(false);
+
+  // User Permissions Drawer State
+  const [permDrawerUser, setPermDrawerUser] = useState<UasUser | null>(null);
+  const [permUseCustom, setPermUseCustom] = useState(false);
+  const [permAllowedGroups, setPermAllowedGroups] = useState<ErpGroupId[]>([]);
+  const [permActions, setPermActions] = useState<GranularActionPermissions>({
+    canCreate: false,
+    canEdit: false,
+    canEditDate: false,
+    canDeleteVoid: false,
+    canApprove: false,
+    canPostLedger: false,
+    canLockPeriod: false,
+    canManageTreasury: false,
+    canManageLandingCms: false,
+    canManageUsers: false,
+  });
+  const [permAssignedProjects, setPermAssignedProjects] = useState<string[]>([]);
+  const [permIsActive, setPermIsActive] = useState(true);
+  const [savingPerms, setSavingPerms] = useState(false);
+
+  // Admin Password Reset Modal State
+  const [resetModalUser, setResetModalUser] = useState<UasUser | null>(null);
+  const [resetNewPass, setResetNewPass] = useState("");
+  const [resetMustChange, setResetMustChange] = useState(true);
+  const [resetCopied, setResetCopied] = useState(false);
+  const [resettingPass, setResettingPass] = useState(false);
+
+  function openPermissionsDrawer(u: UasUser) {
+    setPermDrawerUser(u);
+    const useCustom = Boolean(u.useCustomPermissions);
+    setPermUseCustom(useCustom);
+
+    const normRole = normalizeRole(u.role);
+    const roleDefaults = ROLE_DEFAULT_PERMISSIONS[normRole] || ROLE_DEFAULT_PERMISSIONS.FIELD_ACCOUNTANT;
+    const defaultGroups = getAccessibleGroups(normRole);
+
+    if (useCustom && u.customOverrides) {
+      setPermAllowedGroups(u.customOverrides.allowedGroups || defaultGroups);
+      setPermActions({
+        canCreate: u.customOverrides.canCreate ?? roleDefaults.canCreate,
+        canEdit: u.customOverrides.canEdit ?? roleDefaults.canEdit,
+        canEditDate: u.customOverrides.canEditDate ?? roleDefaults.canEditDate,
+        canDeleteVoid: u.customOverrides.canDeleteVoid ?? roleDefaults.canDeleteVoid,
+        canApprove: u.customOverrides.canApprove ?? roleDefaults.canApprove,
+        canPostLedger: u.customOverrides.canPostLedger ?? roleDefaults.canPostLedger,
+        canLockPeriod: u.customOverrides.canLockPeriod ?? roleDefaults.canLockPeriod,
+        canManageTreasury: u.customOverrides.canManageTreasury ?? roleDefaults.canManageTreasury,
+        canManageLandingCms: u.customOverrides.canManageLandingCms ?? roleDefaults.canManageLandingCms,
+        canManageUsers: u.customOverrides.canManageUsers ?? roleDefaults.canManageUsers,
+      });
+    } else {
+      setPermAllowedGroups([...defaultGroups]);
+      setPermActions({ ...roleDefaults });
+    }
+
+    setPermAssignedProjects(u.assignedProjects ? [...u.assignedProjects] : []);
+    setPermIsActive(u.active && (u.isActive ?? true));
+  }
+
+  function handleResetToRoleDefaults() {
+    if (!permDrawerUser) return;
+    const normRole = normalizeRole(permDrawerUser.role);
+    const roleDefaults = ROLE_DEFAULT_PERMISSIONS[normRole] || ROLE_DEFAULT_PERMISSIONS.FIELD_ACCOUNTANT;
+    const defaultGroups = getAccessibleGroups(normRole);
+
+    setPermAllowedGroups([...defaultGroups]);
+    setPermActions({ ...roleDefaults });
+    onToast(isAr ? "تم استعادة الصلاحيات الافتراضية للدور الوظيفي" : "Restored role default permissions");
+  }
+
+  async function handleSavePermissions(e: React.FormEvent) {
+    e.preventDefault();
+    if (!permDrawerUser) return;
+    setSavingPerms(true);
+    try {
+      const res = await fetch(`/api/users/${permDrawerUser.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          useCustomPermissions: permUseCustom,
+          customAllowedGroups: permAllowedGroups,
+          customPermissionsJson: JSON.stringify(permActions),
+          assignedProjects: permAssignedProjects,
+          isActive: permIsActive,
+          actor: {
+            userId: currentUser.id,
+            userDisplay: currentUser.name,
+            userRole: currentUser.role,
+          },
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to update permissions");
+      }
+
+      onToast(
+        isAr
+          ? `تم تحديث صلاحيات وأمان المستخدم (${permDrawerUser.name}) بنجاح`
+          : `Updated permissions for ${permDrawerUser.name}`
+      );
+      setPermDrawerUser(null);
+      if (onRefreshState) {
+        await onRefreshState();
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onToast(msg);
+    } finally {
+      setSavingPerms(false);
+    }
+  }
+
+  function generateRandomPass() {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let randomPart = "";
+    for (let i = 0; i < 4; i++) {
+      randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    const num = Math.floor(1000 + Math.random() * 9000);
+    return `UAS-${num}-${randomPart}!`;
+  }
+
+  function openResetPasswordModal(u: UasUser) {
+    setResetModalUser(u);
+    setResetNewPass(generateRandomPass());
+    setResetMustChange(true);
+    setResetCopied(false);
+  }
+
+  async function copyPassword() {
+    if (!resetNewPass) return;
+    try {
+      await navigator.clipboard.writeText(resetNewPass);
+      setResetCopied(true);
+      setTimeout(() => setResetCopied(false), 2000);
+      onToast(isAr ? "تم نسخ كلمة المرور إلى الحافظة" : "Password copied to clipboard");
+    } catch {
+      onToast(isAr ? "تعذر النسخ التلقائي" : "Could not copy");
+    }
+  }
+
+  async function handleExecutePasswordReset(e: React.FormEvent) {
+    e.preventDefault();
+    if (!resetModalUser || !resetNewPass) return;
+    setResettingPass(true);
+    try {
+      const res = await fetch(`/api/users/${resetModalUser.id}/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          newPassword: resetNewPass,
+          mustChangePassword: resetMustChange,
+          actor: {
+            userId: currentUser.id,
+            userDisplay: currentUser.name,
+            userRole: currentUser.role,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to reset password");
+      }
+      onToast(
+        isAr
+          ? `تمت إعادة تعيين كلمة المرور للمستخدم (${resetModalUser.name}) بنجاح`
+          : `Password reset successfully for ${resetModalUser.name}`
+      );
+      setResetModalUser(null);
+      setResetNewPass("");
+      if (onRefreshState) {
+        await onRefreshState();
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onToast(msg);
+    } finally {
+      setResettingPass(false);
+    }
+  }
 
   const cmsDraft: Partial<UasEnterpriseProfile> = {
     ...DEFAULT_PROFILE_DRAFT,
@@ -390,58 +704,128 @@ export function SystemTab({
           <table className="w-full text-xs text-right border-collapse">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-800/60">
-                <th className="p-2.5">الصورة</th>
-                <th className="p-2.5">اسم المستخدم</th>
-                <th className="p-2.5">القسم / المعرف</th>
-                <th className="p-2.5">الدور والصلاحية (User Role)</th>
+                <th className="p-2.5">المستخدم</th>
+                <th className="p-2.5">الدور المؤسسي</th>
+                <th className="p-2.5">نظام الصلاحيات</th>
+                <th className="p-2.5">نطاق المشاريع</th>
                 <th className="p-2.5">الحالة</th>
-                <th className="p-2.5">إجراءات</th>
+                <th className="p-2.5 text-center">إجراءات الأمان والتحكم</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
               {users.map((u) => {
                 const roleMeta = getRoleMeta(u.role);
+                const isUserActive = u.active && (u.isActive ?? true);
+                const hasCustom = Boolean(u.useCustomPermissions);
+
                 return (
-                  <tr key={u.id}>
+                  <tr key={u.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
                     <td className="p-2.5">
-                      <SvgAvatar char={u.avatarChar} size={32} />
-                    </td>
-                    <td className="p-2.5">
-                      <div className="font-bold">{u.name}</div>
-                      <div className="text-[11px] text-slate-400 font-mono">
-                        {u.assignedProjects?.length ? `${u.assignedProjects.length} مشاريع مسندة` : "جميع المشاريع"}
+                      <div className="flex items-center gap-2.5">
+                        <SvgAvatar char={u.avatarChar} size={32} />
+                        <div>
+                          <div className="font-bold flex items-center gap-1.5">
+                            <span>{u.displayName ? `${u.displayName} (${u.name})` : u.name}</span>
+                            {u.id === currentUser.id && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 font-extrabold">
+                                أنت
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-400 font-mono flex items-center gap-2">
+                            <span>{u.email}</span>
+                            {u.phone && <span>• {u.phone}</span>}
+                          </div>
+                        </div>
                       </div>
                     </td>
                     <td className="p-2.5">
-                      <div className="text-slate-600 dark:text-slate-300 font-semibold">
-                        {u.department || roleMeta.departmentAr}
+                      <div className="flex flex-col gap-1">
+                        <span className={`px-2 py-0.5 rounded-lg font-bold inline-block w-fit ${roleMeta.badgeClass}`}>
+                          {roleMeta.labelAr}
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-medium">
+                          {u.department || roleMeta.departmentAr}
+                        </span>
                       </div>
-                      <div className="text-[11px] text-slate-400 font-mono">{u.email}</div>
                     </td>
                     <td className="p-2.5">
-                      <span className={`px-2.5 py-1 rounded-lg font-bold inline-block ${roleMeta.badgeClass}`}>
-                        {roleMeta.labelAr}
+                      {hasCustom ? (
+                        <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-300 inline-flex items-center gap-1">
+                          <Sliders className="w-3 h-3" />
+                          <span>صلاحيات مخصصة</span>
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 inline-flex items-center gap-1">
+                          <Shield className="w-3 h-3" />
+                          <span>دور افتراضي</span>
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-2.5">
+                      <span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">
+                        {u.assignedProjects?.length
+                          ? `${u.assignedProjects.length} مشاريع مسندة`
+                          : "جميع المشاريع (غير مقيد)"}
                       </span>
                     </td>
                     <td className="p-2.5">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                          u.active
-                            ? "bg-emerald-100 text-emerald-700"
-                            : "bg-rose-100 text-rose-700"
-                        }`}
-                      >
-                        {u.active ? "نشط (Active)" : "موقوف (Suspended)"}
-                      </span>
+                      <div className="flex flex-col gap-1 items-start">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                            isUserActive
+                              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+                              : "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300"
+                          }`}
+                        >
+                          {isUserActive ? "نشط (Active)" : "موقوف (Suspended)"}
+                        </span>
+                        {u.mustChangePassword && (
+                          <span className="text-[9px] font-extrabold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-1 py-0.5 rounded">
+                            مطلوب تغيير المرور
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="p-2.5">
-                      <button
-                        onClick={() => onToggleUserStatus(u.id)}
-                        disabled={readOnly || !canManageUsers}
-                        className="text-xs font-bold text-indigo-600 hover:underline disabled:opacity-40"
-                      >
-                        تغيير الحالة
-                      </button>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => openPermissionsDrawer(u)}
+                          disabled={readOnly || !canManageUsers}
+                          title="إدارة الصلاحيات والمحددات"
+                          className="px-2 py-1 rounded-lg border border-purple-300 dark:border-purple-800 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/40 text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40"
+                        >
+                          <Sliders className="w-3.5 h-3.5" />
+                          <span>الصلاحيات</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => openResetPasswordModal(u)}
+                          disabled={readOnly || !canManageUsers}
+                          title="إعادة تعيين كلمة المرور"
+                          className="px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40"
+                        >
+                          <KeyRound className="w-3.5 h-3.5" />
+                          <span>كلمة المرور</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => onToggleUserStatus(u.id)}
+                          disabled={readOnly || !canManageUsers || u.id === currentUser.id}
+                          title={isUserActive ? "إيقاف الحساب" : "تفعيل الحساب"}
+                          className={`px-2 py-1 rounded-lg border text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40 ${
+                            isUserActive
+                              ? "border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                              : "border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
+                          }`}
+                        >
+                          <UserCheck className="w-3.5 h-3.5" />
+                          <span>{isUserActive ? "إيقاف" : "تفعيل"}</span>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -1004,6 +1388,441 @@ export function SystemTab({
           </tbody>
         </table>
       </div>
+
+      {/* Dynamic RBAC Permissions SlideOverDrawer */}
+      <SlideOverDrawer
+        open={permDrawerUser !== null}
+        onClose={() => setPermDrawerUser(null)}
+        title={
+          permDrawerUser
+            ? `إدارة صلاحيات: ${permDrawerUser.displayName || permDrawerUser.name}`
+            : "إدارة الصلاحيات"
+        }
+        subtitle={
+          permDrawerUser
+            ? `${ROLE_DEFINITIONS[normalizeRole(permDrawerUser.role)].labelAr} • ${permDrawerUser.email}`
+            : ""
+        }
+        size="xl"
+      >
+        {permDrawerUser && (
+          <form onSubmit={handleSavePermissions} className="space-y-6 text-xs p-1">
+            {/* User Banner */}
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <SvgAvatar char={permDrawerUser.avatarChar} size={40} />
+                <div>
+                  <div className="font-extrabold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                    <span>{permDrawerUser.displayName || permDrawerUser.name}</span>
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-lg font-bold ${
+                        ROLE_DEFINITIONS[normalizeRole(permDrawerUser.role)].badgeClass
+                      }`}
+                    >
+                      {ROLE_DEFINITIONS[normalizeRole(permDrawerUser.role)].labelAr}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                    {permDrawerUser.email} {permDrawerUser.phone && `• ${permDrawerUser.phone}`}
+                  </div>
+                </div>
+              </div>
+              <div className="text-left font-mono text-[10px] text-slate-400">
+                <div>ID: {permDrawerUser.id.substring(0, 8)}...</div>
+                <div>{permDrawerUser.department || ROLE_DEFINITIONS[normalizeRole(permDrawerUser.role)].departmentAr}</div>
+              </div>
+            </div>
+
+            {/* Mode Selector */}
+            <div className="space-y-2">
+              <label className="font-extrabold text-xs block text-slate-700 dark:text-slate-300">
+                نمط احتساب الصلاحيات (Permission Calculation Mode):
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPermUseCustom(false)}
+                  className={`p-3 rounded-xl border text-right transition ${
+                    !permUseCustom
+                      ? "border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 ring-2 ring-emerald-500/20"
+                      : "border-slate-200 dark:border-slate-700 hover:border-slate-300 text-slate-600 dark:text-slate-400"
+                  }`}
+                >
+                  <div className="font-extrabold flex items-center gap-1.5 mb-1">
+                    <Shield className="w-4 h-4 text-emerald-600" />
+                    <span>صلاحيات الدور الافتراضية</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    يرث المستخدم جميع صلاحيات دوره ({ROLE_DEFINITIONS[normalizeRole(permDrawerUser.role)].labelAr}) تلقائياً.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPermUseCustom(true)}
+                  className={`p-3 rounded-xl border text-right transition ${
+                    permUseCustom
+                      ? "border-purple-500 bg-purple-50/70 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200 ring-2 ring-purple-500/20"
+                      : "border-slate-200 dark:border-slate-700 hover:border-slate-300 text-slate-600 dark:text-slate-400"
+                  }`}
+                >
+                  <div className="font-extrabold flex items-center gap-1.5 mb-1">
+                    <Sliders className="w-4 h-4 text-purple-600" />
+                    <span>صلاحيات مخصصة للمستخدم</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    تجاوز صلاحيات الدور ومنح/سحب وصول مخصص لأي قسم أو صلاحية مستقلة.
+                  </p>
+                </button>
+              </div>
+            </div>
+
+            {/* Custom Mode Configuration */}
+            {permUseCustom ? (
+              <div className="space-y-5 pt-2 border-t border-slate-200 dark:border-slate-700">
+                <div className="flex items-center justify-between">
+                  <div className="font-extrabold text-xs text-purple-700 dark:text-purple-400 flex items-center gap-1.5">
+                    <Sliders className="w-4 h-4" />
+                    <span>تخصيص الصلاحيات والأقسام التفصيلية</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleResetToRoleDefaults}
+                    className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-600 text-[11px] font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition inline-flex items-center gap-1"
+                  >
+                    <RefreshCw className="w-3 h-3 text-slate-500" />
+                    <span>استعادة الافتراضي للدور</span>
+                  </button>
+                </div>
+
+                {/* Domain Access */}
+                <div className="space-y-2">
+                  <label className="font-extrabold text-xs block text-slate-800 dark:text-slate-200">
+                    ١. الأقسام والمجالات المصرح بالدخول إليها (Domain Access):
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {ERP_DOMAINS.map((domain) => {
+                      const isAllowed = permAllowedGroups.includes(domain.id);
+                      return (
+                        <label
+                          key={domain.id}
+                          className={`p-2.5 rounded-xl border flex items-start gap-2.5 cursor-pointer transition ${
+                            isAllowed
+                              ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-950 dark:text-emerald-200"
+                              : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:border-slate-300"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isAllowed}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setPermAllowedGroups((prev) => [...prev, domain.id]);
+                              } else {
+                                setPermAllowedGroups((prev) => prev.filter((id) => id !== domain.id));
+                              }
+                            }}
+                            className="rounded border-slate-300 text-emerald-600 w-4 h-4 mt-0.5"
+                          />
+                          <div>
+                            <div className="font-bold text-xs">{domain.labelAr}</div>
+                            <div className="text-[10px] text-slate-400 font-medium leading-tight mt-0.5">
+                              {domain.descAr}
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Granular Action Rights */}
+                <div className="space-y-2">
+                  <label className="font-extrabold text-xs block text-slate-800 dark:text-slate-200">
+                    ٢. حقوق العمليات التفصيلية (Granular Action Rights):
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {ACTION_PERM_DEFINITIONS.map((perm) => {
+                      const isChecked = Boolean(permActions[perm.key]);
+                      return (
+                        <label
+                          key={perm.key}
+                          className={`p-2.5 rounded-xl border flex items-start gap-2.5 cursor-pointer transition ${
+                            isChecked
+                              ? "border-purple-500 bg-purple-50/50 dark:bg-purple-950/20 text-purple-950 dark:text-purple-200"
+                              : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:border-slate-300"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setPermActions((prev) => ({
+                                ...prev,
+                                [perm.key]: checked,
+                              }));
+                            }}
+                            className="rounded border-slate-300 text-purple-600 w-4 h-4 mt-0.5"
+                          />
+                          <div>
+                            <div className="font-bold text-xs">{perm.labelAr}</div>
+                            <div className="text-[10px] text-slate-400 font-medium leading-tight mt-0.5">
+                              {perm.descAr}
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30 text-slate-600 dark:text-slate-400 space-y-2">
+                <div className="font-bold text-xs flex items-center gap-1.5 text-slate-800 dark:text-slate-200">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                  <span>الصلاحيات الافتراضية النشطة لهذا الدور:</span>
+                </div>
+                <div className="text-[11px] leading-relaxed">
+                  الأقسام المصرح بها: <span className="font-mono font-bold text-slate-800 dark:text-slate-200">{getAccessibleGroups(normalizeRole(permDrawerUser.role)).join(" • ")}</span>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  للتحكم الدقيق وتعديل أي من هذه الصلاحيات، اختر خيار &ldquo;صلاحيات مخصصة للمستخدم&rdquo; أعلاه.
+                </p>
+              </div>
+            )}
+
+            {/* Project Scope Assignment */}
+            <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+              <div className="flex items-center justify-between">
+                <label className="font-extrabold text-xs text-slate-800 dark:text-slate-200">
+                  ٣. نطاق المشاريع المسندة (Project Scope):
+                </label>
+                <div className="flex items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setPermAssignedProjects([])}
+                    className={`px-2 py-0.5 rounded font-bold transition ${
+                      permAssignedProjects.length === 0
+                        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
+                        : "text-slate-500 hover:underline"
+                    }`}
+                  >
+                    جميع المشاريع (غير مقيد)
+                  </button>
+                  {projects.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setPermAssignedProjects(projects.map((p) => p.id))}
+                      className="text-slate-500 hover:underline text-[11px]"
+                    >
+                      تحديد الكل
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {projects.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30">
+                  {projects.map((p) => {
+                    const checked = permAssignedProjects.includes(p.id);
+                    return (
+                      <label
+                        key={p.id}
+                        className={`p-2 rounded-lg border text-xs font-semibold flex items-center gap-2 cursor-pointer transition ${
+                          checked
+                            ? "border-emerald-500 bg-emerald-50/60 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200"
+                            : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-300"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setPermAssignedProjects((prev) => [...prev, p.id]);
+                            } else {
+                              setPermAssignedProjects((prev) => prev.filter((id) => id !== p.id));
+                            }
+                          }}
+                          className="rounded border-slate-300 text-emerald-600 w-4 h-4"
+                        />
+                        <span className="font-bold truncate">{p.name}</span>
+                        {p.code && <span className="text-[10px] font-mono text-slate-400">({p.code})</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-xs text-slate-400 p-2">لا توجد مشاريع مسجلة حالياً</div>
+              )}
+            </div>
+
+            {/* Account Status */}
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30 flex items-center justify-between">
+              <div>
+                <div className="font-bold text-xs text-slate-900 dark:text-slate-100">
+                  حالة تفعيل الحساب (Account Activation)
+                </div>
+                <div className="text-[11px] text-slate-500">
+                  تعطيل الحساب يمنع المستخدم من تسجيل الدخول فوراً
+                </div>
+              </div>
+              <label className="inline-flex items-center gap-2 cursor-pointer font-bold">
+                <input
+                  type="checkbox"
+                  checked={permIsActive}
+                  onChange={(e) => setPermIsActive(e.target.checked)}
+                  disabled={permDrawerUser.id === currentUser.id}
+                  className="rounded border-slate-300 text-emerald-600 w-4 h-4"
+                />
+                <span className={permIsActive ? "text-emerald-700 font-extrabold" : "text-rose-600 font-extrabold"}>
+                  {permIsActive ? "مفعّل (Active)" : "موقوف (Suspended)"}
+                </span>
+              </label>
+            </div>
+
+            {/* Footer Buttons */}
+            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => setPermDrawerUser(null)}
+                className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                disabled={savingPerms}
+                className="px-5 py-2 rounded-xl accent-bg font-extrabold shadow-sm disabled:opacity-50 inline-flex items-center gap-2"
+              >
+                {savingPerms && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>{savingPerms ? "جاري الحفظ..." : "حفظ التعديلات"}</span>
+              </button>
+            </div>
+          </form>
+        )}
+      </SlideOverDrawer>
+
+      {/* Admin Password Reset Modal */}
+      {resetModalUser && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="card-surface rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-700 space-y-4 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 flex items-center justify-center">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-slate-900 dark:text-slate-100">
+                    إعادة تعيين كلمة المرور
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    تعيين كلمة مرور جديدة للمستخدم من قبل الإدارة
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setResetModalUser(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Target User Info */}
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-center gap-3">
+              <SvgAvatar char={resetModalUser.avatarChar} size={36} />
+              <div>
+                <div className="font-bold text-slate-900 dark:text-slate-100">
+                  {resetModalUser.displayName || resetModalUser.name}
+                </div>
+                <div className="text-[11px] text-slate-500 font-mono">
+                  {resetModalUser.email} • {ROLE_DEFINITIONS[normalizeRole(resetModalUser.role)].labelAr}
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handleExecutePasswordReset} className="space-y-4">
+              <div>
+                <label className="block font-extrabold text-xs mb-1.5 text-slate-700 dark:text-slate-300">
+                  كلمة المرور الجديدة (New Password):
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={resetNewPass}
+                    onChange={(e) => setResetNewPass(e.target.value)}
+                    required
+                    placeholder="أدخل كلمة مرور قوية..."
+                    className="flex-1 rounded-xl border border-slate-300 dark:border-slate-600 bg-transparent px-3 py-2 font-mono text-xs font-bold"
+                  />
+                  <button
+                    type="button"
+                    onClick={copyPassword}
+                    title="نسخ إلى الحافظة"
+                    className="px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 font-bold inline-flex items-center gap-1 transition"
+                  >
+                    {resetCopied ? (
+                      <Check className="w-4 h-4 text-emerald-600" />
+                    ) : (
+                      <Copy className="w-4 h-4 text-slate-500" />
+                    )}
+                    <span>{resetCopied ? "تم النسخ" : "نسخ"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setResetNewPass(generateRandomPass())}
+                    title="توليد كلمة مرور عشوائية"
+                    className="px-2.5 py-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 font-bold inline-flex items-center gap-1 transition"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    <span>توليد</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Force Password Change Checkbox */}
+              <label className="flex items-start gap-2.5 p-3 rounded-xl border border-amber-200 dark:border-amber-800/40 bg-amber-50/60 dark:bg-amber-950/20 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={resetMustChange}
+                  onChange={(e) => setResetMustChange(e.target.checked)}
+                  className="rounded border-amber-400 text-amber-600 w-4 h-4 mt-0.5"
+                />
+                <div>
+                  <div className="font-extrabold text-xs text-amber-900 dark:text-amber-200">
+                    إلزام المستخدم بتغيير كلمة المرور فور تسجيل الدخول القادم
+                  </div>
+                  <div className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5">
+                    يُنصح بإبقائها مفعلة لتأكيد خصوصية الحساب عند تسليم كلمة المرور المؤقتة
+                  </div>
+                </div>
+              </label>
+
+              {/* Modal Actions */}
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setResetModalUser(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={resettingPass || !resetNewPass.trim()}
+                  className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold shadow-sm disabled:opacity-50 inline-flex items-center gap-2"
+                >
+                  {resettingPass && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{resettingPass ? "جاري التعيين..." : "تأكيد التعيين"}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

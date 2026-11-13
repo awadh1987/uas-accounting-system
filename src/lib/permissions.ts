@@ -1,4 +1,4 @@
-import type { ErpGroupId, TabId, UasProject, UasUser, UserRole } from "@/types/uas";
+import type { ErpGroupId, TabId, UasProject, UasUser, UasUserCustomOverrides, UserRole } from "@/types/uas";
 
 export const ALL_USER_ROLES: UserRole[] = [
   "SUPER_ADMIN",
@@ -224,6 +224,106 @@ const ROLE_TAB_ACCESS: Record<UserRole, TabId[]> = {
   ],
 };
 
+export interface GranularActionPermissions {
+  canCreate: boolean;
+  canEdit: boolean;
+  canEditDate: boolean;
+  canDeleteVoid: boolean;
+  canApprove: boolean;
+  canPostLedger: boolean;
+  canLockPeriod: boolean;
+  canManageTreasury: boolean;
+  canManageLandingCms: boolean;
+  canManageUsers: boolean;
+}
+
+export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermissions> = {
+  SUPER_ADMIN: {
+    canCreate: true,
+    canEdit: true,
+    canEditDate: true,
+    canDeleteVoid: true,
+    canApprove: true,
+    canPostLedger: true,
+    canLockPeriod: true,
+    canManageTreasury: true,
+    canManageLandingCms: true,
+    canManageUsers: true,
+  },
+  PROJECT_MANAGER: {
+    canCreate: true,
+    canEdit: true,
+    canEditDate: true,
+    canDeleteVoid: false,
+    canApprove: true,
+    canPostLedger: false,
+    canLockPeriod: true,
+    canManageTreasury: false,
+    canManageLandingCms: false,
+    canManageUsers: false,
+  },
+  CHIEF_ACCOUNTANT: {
+    canCreate: true,
+    canEdit: true,
+    canEditDate: true,
+    canDeleteVoid: true,
+    canApprove: true,
+    canPostLedger: true,
+    canLockPeriod: true,
+    canManageTreasury: true,
+    canManageLandingCms: false,
+    canManageUsers: false,
+  },
+  PROCUREMENT_OFFICER: {
+    canCreate: true,
+    canEdit: true,
+    canEditDate: false,
+    canDeleteVoid: false,
+    canApprove: false,
+    canPostLedger: false,
+    canLockPeriod: false,
+    canManageTreasury: false,
+    canManageLandingCms: false,
+    canManageUsers: false,
+  },
+  SALES_COLLECTOR: {
+    canCreate: true,
+    canEdit: true,
+    canEditDate: false,
+    canDeleteVoid: false,
+    canApprove: false,
+    canPostLedger: false,
+    canLockPeriod: false,
+    canManageTreasury: false,
+    canManageLandingCms: false,
+    canManageUsers: false,
+  },
+  FIELD_ACCOUNTANT: {
+    canCreate: true,
+    canEdit: true,
+    canEditDate: false,
+    canDeleteVoid: false,
+    canApprove: false,
+    canPostLedger: false,
+    canLockPeriod: false,
+    canManageTreasury: false,
+    canManageLandingCms: false,
+    canManageUsers: false,
+  },
+  EXTERNAL_AUDITOR: {
+    canCreate: false,
+    canEdit: false,
+    canEditDate: false,
+    canDeleteVoid: false,
+    canApprove: false,
+    canPostLedger: false,
+    canLockPeriod: false,
+    canManageTreasury: false,
+    canManageLandingCms: false,
+    canManageUsers: false,
+  },
+};
+
 function extractRoleString(userOrRole?: UasUser | string | null): string {
   if (!userOrRole) return "FIELD_ACCOUNTANT";
   if (typeof userOrRole === "string") return userOrRole;
@@ -246,6 +346,78 @@ export function normalizeRole(userOrRole?: UasUser | string | null): UserRole {
   return "FIELD_ACCOUNTANT";
 }
 
+export function isSuperAdmin(userOrRole?: UasUser | string | null): boolean {
+  return normalizeRole(userOrRole) === "SUPER_ADMIN";
+}
+
+export function isUserActive(userOrRole?: UasUser | string | null): boolean {
+  if (!userOrRole || typeof userOrRole === "string") return true;
+  if (userOrRole.active === false || userOrRole.isActive === false) return false;
+  return true;
+}
+
+export function resolveCustomOverrides(user: UasUser): UasUserCustomOverrides {
+  if (user.customOverrides) return user.customOverrides;
+
+  let allowedGroups: ErpGroupId[] = [];
+  if (Array.isArray(user.customAllowedGroups)) {
+    allowedGroups = user.customAllowedGroups as ErpGroupId[];
+  } else if (typeof user.customAllowedGroups === "string" && user.customAllowedGroups.trim()) {
+    try {
+      const parsed = JSON.parse(user.customAllowedGroups);
+      if (Array.isArray(parsed)) allowedGroups = parsed as ErpGroupId[];
+    } catch {
+      allowedGroups = [];
+    }
+  }
+
+  let actions: Record<string, boolean> = {};
+  if (user.customPermissionsJson && typeof user.customPermissionsJson === "object") {
+    actions = user.customPermissionsJson as Record<string, boolean>;
+  } else if (typeof user.customPermissionsJson === "string" && user.customPermissionsJson.trim()) {
+    try {
+      const parsed = JSON.parse(user.customPermissionsJson);
+      if (typeof parsed === "object" && parsed !== null) actions = parsed;
+    } catch {
+      actions = {};
+    }
+  }
+
+  return {
+    allowedGroups,
+    canCreate: actions.canCreate,
+    canEdit: actions.canEdit,
+    canEditDate: actions.canEditDate,
+    canDeleteVoid: actions.canDeleteVoid,
+    canApprove: actions.canApprove,
+    canPostLedger: actions.canPostLedger,
+    canLockPeriod: actions.canLockPeriod,
+    canManageTreasury: actions.canManageTreasury,
+    canManageLandingCms: actions.canManageLandingCms,
+    canManageUsers: actions.canManageUsers,
+    ...actions,
+  };
+}
+
+function evaluateActionRight(
+  userOrRole: UasUser | string | null | undefined,
+  actionKey: keyof GranularActionPermissions,
+  superAdminEmergencyRecovery = false
+): boolean {
+  if (!isUserActive(userOrRole)) return false;
+  const role = normalizeRole(userOrRole);
+  if (role === "SUPER_ADMIN" && superAdminEmergencyRecovery) return true;
+
+  if (userOrRole && typeof userOrRole === "object" && userOrRole.useCustomPermissions) {
+    const overrides = resolveCustomOverrides(userOrRole);
+    if (typeof overrides[actionKey] === "boolean") {
+      return Boolean(overrides[actionKey]);
+    }
+  }
+
+  return ROLE_DEFAULT_PERMISSIONS[role][actionKey];
+}
+
 export function getRoleMeta(userOrRole?: UasUser | string | null): RoleDefinition {
   return ROLE_DEFINITIONS[normalizeRole(userOrRole)];
 }
@@ -258,7 +430,26 @@ export function canAccessModule(
   userOrRole: UasUser | string | null | undefined,
   moduleId: ModuleIdentifier
 ): boolean {
+  if (!isUserActive(userOrRole)) return false;
   const role = normalizeRole(userOrRole);
+
+  // Administrative recovery access: SUPER_ADMIN can ALWAYS access admin & system modules
+  if (role === "SUPER_ADMIN" && (moduleId === "admin" || moduleId === "system")) {
+    return true;
+  }
+
+  if (userOrRole && typeof userOrRole === "object" && userOrRole.useCustomPermissions) {
+    const overrides = resolveCustomOverrides(userOrRole);
+    const allowed = overrides.allowedGroups || [];
+    if (moduleId in MODULE_TO_GROUP) {
+      const group = MODULE_TO_GROUP[moduleId as TabId] || "public";
+      if (group === "public") return true;
+      return allowed.includes(group) || (role === "SUPER_ADMIN" && group === "admin");
+    }
+    if (moduleId === "public") return true;
+    return allowed.includes(moduleId as ErpGroupId) || (role === "SUPER_ADMIN" && moduleId === "admin");
+  }
+
   if (moduleId in MODULE_TO_GROUP) {
     return ROLE_TAB_ACCESS[role].includes(moduleId as TabId);
   }
@@ -266,14 +457,44 @@ export function canAccessModule(
 }
 
 export function getAccessibleTabs(userOrRole?: UasUser | string | null): TabId[] {
-  return ROLE_TAB_ACCESS[normalizeRole(userOrRole)];
+  if (!isUserActive(userOrRole)) return ["dashboard"];
+  const role = normalizeRole(userOrRole);
+
+  if (userOrRole && typeof userOrRole === "object" && userOrRole.useCustomPermissions) {
+    const allowedGroups = new Set(getAccessibleGroups(userOrRole));
+    const tabs = (Object.keys(MODULE_TO_GROUP) as TabId[]).filter((tab) =>
+      allowedGroups.has(MODULE_TO_GROUP[tab])
+    );
+    if (!tabs.includes("dashboard")) tabs.unshift("dashboard");
+    if (role === "SUPER_ADMIN" && !tabs.includes("system")) tabs.push("system");
+    return tabs;
+  }
+
+  return ROLE_TAB_ACCESS[role];
 }
 
 export function getAccessibleGroups(userOrRole?: UasUser | string | null): ErpGroupId[] {
-  return ROLE_GROUP_ACCESS[normalizeRole(userOrRole)];
+  if (!isUserActive(userOrRole)) return ["public"];
+  const role = normalizeRole(userOrRole);
+
+  if (userOrRole && typeof userOrRole === "object" && userOrRole.useCustomPermissions) {
+    const overrides = resolveCustomOverrides(userOrRole);
+    const list = new Set<ErpGroupId>(overrides.allowedGroups || []);
+    list.add("public");
+    if (role === "SUPER_ADMIN") list.add("admin");
+    return Array.from(list);
+  }
+
+  return ROLE_GROUP_ACCESS[role];
 }
 
 export function isReadOnly(userOrRole?: UasUser | string | null): boolean {
+  if (!isUserActive(userOrRole)) return true;
+  if (userOrRole && typeof userOrRole === "object" && userOrRole.useCustomPermissions) {
+    const overrides = resolveCustomOverrides(userOrRole);
+    if (overrides.canCreate === false && overrides.canEdit === false) return true;
+    if (overrides.canCreate === true || overrides.canEdit === true) return false;
+  }
   return normalizeRole(userOrRole) === "EXTERNAL_AUDITOR";
 }
 
@@ -281,56 +502,49 @@ export function canCreate(
   userOrRole?: UasUser | string | null,
   moduleId?: ModuleIdentifier
 ): boolean {
-  if (isReadOnly(userOrRole)) return false;
-  if (moduleId) return canAccessModule(userOrRole, moduleId);
-  return true;
+  if (moduleId && !canAccessModule(userOrRole, moduleId)) return false;
+  return evaluateActionRight(userOrRole, "canCreate", true);
 }
 
 export function canEdit(
   userOrRole?: UasUser | string | null,
   moduleId?: ModuleIdentifier
 ): boolean {
-  if (isReadOnly(userOrRole)) return false;
-  if (moduleId) return canAccessModule(userOrRole, moduleId);
-  return true;
+  if (moduleId && !canAccessModule(userOrRole, moduleId)) return false;
+  return evaluateActionRight(userOrRole, "canEdit", true);
 }
 
 export function canEditDate(userOrRole?: UasUser | string | null): boolean {
-  const role = normalizeRole(userOrRole);
-  return role === "SUPER_ADMIN" || role === "CHIEF_ACCOUNTANT" || role === "PROJECT_MANAGER";
+  return evaluateActionRight(userOrRole, "canEditDate", true);
 }
 
 export function canDeleteVoid(userOrRole?: UasUser | string | null): boolean {
-  const role = normalizeRole(userOrRole);
-  return role === "SUPER_ADMIN" || role === "CHIEF_ACCOUNTANT";
+  return evaluateActionRight(userOrRole, "canDeleteVoid", true);
 }
 
 export function canApprove(userOrRole?: UasUser | string | null): boolean {
-  const role = normalizeRole(userOrRole);
-  return role === "SUPER_ADMIN" || role === "PROJECT_MANAGER" || role === "CHIEF_ACCOUNTANT";
+  return evaluateActionRight(userOrRole, "canApprove", true);
 }
 
 export function canPostLedger(userOrRole?: UasUser | string | null): boolean {
-  const role = normalizeRole(userOrRole);
-  return role === "SUPER_ADMIN" || role === "CHIEF_ACCOUNTANT";
+  return evaluateActionRight(userOrRole, "canPostLedger", true);
 }
 
 export function canManageTreasury(userOrRole?: UasUser | string | null): boolean {
-  const role = normalizeRole(userOrRole);
-  return role === "SUPER_ADMIN" || role === "CHIEF_ACCOUNTANT";
+  return evaluateActionRight(userOrRole, "canManageTreasury", true);
 }
 
 export function canManageLandingCms(userOrRole?: UasUser | string | null): boolean {
-  return normalizeRole(userOrRole) === "SUPER_ADMIN";
+  return evaluateActionRight(userOrRole, "canManageLandingCms", true);
 }
 
 export function canLockPeriod(userOrRole?: UasUser | string | null): boolean {
-  const role = normalizeRole(userOrRole);
-  return role === "SUPER_ADMIN" || role === "CHIEF_ACCOUNTANT" || role === "PROJECT_MANAGER";
+  return evaluateActionRight(userOrRole, "canLockPeriod", true);
 }
 
 export function canManageUsers(userOrRole?: UasUser | string | null): boolean {
-  return normalizeRole(userOrRole) === "SUPER_ADMIN";
+  // SUPER_ADMIN always retains recovery access to user management
+  return evaluateActionRight(userOrRole, "canManageUsers", true);
 }
 
 export function canAccessProject(user: UasUser | null | undefined, projectId: string): boolean {
