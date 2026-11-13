@@ -13,3 +13,6 @@ ios/App/Pods/
 next-env.d.ts
 
 
+
+android/keystore/
+android/keystore.properties
