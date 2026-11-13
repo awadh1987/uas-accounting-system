@@ -2,10 +2,14 @@
 
 import React, { useEffect, useState } from "react";
 import {
+  ArrowLeft,
+  ArrowRight,
+  BarChart3,
   Building2,
   CheckCircle2,
-  FileCheck2,
+  Coins,
   Globe2,
+  Layers,
   Lock,
   MapPin,
   MessageCircle,
@@ -13,7 +17,6 @@ import {
   QrCode,
   Search,
   ShieldCheck,
-  Sprout,
   TrendingUp,
   Users,
 } from "lucide-react";
@@ -64,7 +67,8 @@ export function LandingPage({
   onToggleLang,
 }: LandingPageProps) {
   const profile = state.enterpriseProfile;
-  const [query, setQuery] = useState("RV-001");
+  const isAr = lang === "ar";
+  const [query, setQuery] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [publicMetrics, setPublicMetrics] = useState<PublicSummary | null>(null);
@@ -98,7 +102,7 @@ export function LandingPage({
     } catch {
       setVerifyResult({
         verified: false,
-        message: "تعذر الاتصال بخدمة التحقق حالياً",
+        message: isAr ? "تعذر الاتصال بخدمة التحقق حالياً" : "Unable to reach verification service",
       });
     } finally {
       setVerifying(false);
@@ -110,14 +114,18 @@ export function LandingPage({
     await runVerifyLookup(query);
   }
 
-  const isAr = lang === "ar";
+  const legalName = isAr
+    ? profile?.legalNameAr?.trim() || "منظومة تخطيط الموارد المحاسبية"
+    : profile?.legalNameEn?.trim() || "Enterprise Resource Planning";
+
+  const ArrowIcon = isAr ? ArrowLeft : ArrowRight;
   const totalSalesFallback = state.sales.reduce((s, x) => s + Number(x.total || 0), 0);
 
   return (
-    <div className="min-h-screen flex flex-col">
-      {/* Top Corporate Bar */}
-      <header className="card-surface sticky top-0 z-30 border-b px-4 sm:px-8 py-3.5 shadow-sm">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
+    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+      {/* Top Corporate Navigation Bar */}
+      <header className="card-surface sticky top-0 z-30 border-b border-slate-200 dark:border-slate-800 px-4 sm:px-8 py-3.5 shadow-sm backdrop-blur-md bg-white/90 dark:bg-slate-900/90">
+        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <DualLogoBadge
               profile={profile}
@@ -125,58 +133,57 @@ export function LandingPage({
               size="md"
             />
             <div>
-              <h1 className="font-extrabold text-sm sm:text-base leading-tight">
-                {isAr
-                  ? profile?.legalNameAr?.trim() || "اسم المنشأة"
-                  : profile?.legalNameEn?.trim() || "Enterprise Name"}
+              <h1 className="font-black text-sm sm:text-base leading-tight">
+                {legalName}
               </h1>
-              <p className="text-[11px] text-slate-500 flex items-center gap-2">
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-2">
                 {[
-                  profile?.commercialReg ? <span>{profile.commercialReg}</span> : null,
+                  profile?.commercialReg
+                    ? `${isAr ? "سجل تجاري:" : "CR:"} ${profile.commercialReg}`
+                    : null,
                   profile?.taxNumber
-                    ? <span>{isAr ? "الرقم الضريبي:" : "Tax ID:"} {profile.taxNumber}</span>
+                    ? `${isAr ? "الرقم الضريبي:" : "Tax ID:"} ${profile.taxNumber}`
                     : null,
                 ]
                   .filter(Boolean)
                   .map((el, i) => (
                     <React.Fragment key={i}>
                       {i > 0 && <span>•</span>}
-                      {el}
+                      <span>{el}</span>
                     </React.Fragment>
                   ))}
-                {!profile?.commercialReg && !profile?.taxNumber && <span>—</span>}
+                {!profile?.commercialReg && !profile?.taxNumber && (
+                  <span>{isAr ? "منظومة مالية ومحاسبية مؤسسية" : "Enterprise Accounting Platform"}</span>
+                )}
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          {/* Top Actions: Language Switcher + Single Sign In Button */}
+          <div className="flex items-center gap-2.5">
             <button
+              type="button"
               onClick={onToggleLang}
-              className="px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800"
+              className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 transition text-slate-700 dark:text-slate-300"
             >
               <Globe2 className="w-3.5 h-3.5" />
               <span>{isAr ? "English" : "العربية"}</span>
             </button>
+
             <button
-              onClick={onOpenLogin}
-              className="px-4 py-2 rounded-xl border border-emerald-600 text-emerald-700 dark:text-emerald-300 text-xs font-bold flex items-center gap-1.5 hover:bg-emerald-50"
+              type="button"
+              onClick={currentUser ? () => onEnterErp("dashboard") : onOpenLogin}
+              className="px-4 py-2 rounded-xl accent-bg text-xs font-extrabold shadow-sm flex items-center gap-2 hover:opacity-95 transition"
             >
               <Lock className="w-3.5 h-3.5" />
-              <span>{isAr ? "تسجيل الدخول" : "System Login"}</span>
-            </button>
-            <button
-              onClick={() => onEnterErp("dashboard")}
-              className="px-4 py-2 rounded-xl accent-bg text-xs font-extrabold shadow-sm flex items-center gap-1.5"
-            >
-              <Building2 className="w-4 h-4" />
               <span>
                 {currentUser
                   ? isAr
-                    ? `دخول النظام المحاسبي (${currentUser.name})`
-                    : `Enter Accounting ERP (${currentUser.name})`
+                    ? `دخول مساحة العمل (${currentUser.name})`
+                    : `Enter Workspace (${currentUser.name})`
                   : isAr
-                  ? "دخول النظام المحاسبي"
-                  : "Enter Accounting ERP"}
+                  ? "تسجيل الدخول"
+                  : "Sign In"}
               </span>
             </button>
           </div>
@@ -184,302 +191,337 @@ export function LandingPage({
       </header>
 
       <main className="flex-1">
-        {/* Hero Section */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-8 py-10 sm:py-14 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-          <div className={`${profile?.showPublicVerify !== false ? "lg:col-span-7" : "lg:col-span-12 max-w-4xl"} space-y-5`}>
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full accent-badge text-xs font-extrabold">
+        {/* Focused Hero Section */}
+        <section className="max-w-7xl mx-auto px-4 sm:px-8 py-12 sm:py-16 grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
+          <div className={`${profile?.showPublicVerify !== false ? "lg:col-span-7" : "lg:col-span-12 max-w-4xl"} space-y-6`}>
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full accent-badge text-xs font-black">
               <ShieldCheck className="w-4 h-4" />
               <span>
                 {isAr
-                  ? profile?.heroBadgeAr || "منظومة محاسبة القيد المزدوج الموحدة (5-Tier COA)"
-                  : profile?.heroBadgeEn || "Immutable Double-Entry ERP & 5-Tier Chart of Accounts"}
+                  ? profile?.heroBadgeAr || "منظومة تخطيط الموارد المحاسبية الموحدة (UAS Enterprise)"
+                  : profile?.heroBadgeEn || "Unified Accounting System (UAS Enterprise ERP)"}
               </span>
             </div>
 
-            <h2 className="text-2xl sm:text-4xl font-black leading-snug">
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black leading-tight tracking-tight">
               {isAr
-                ? profile?.heroTitleAr || "إدارة مالية ومحاسبية متكاملة للمشاريع وسلاسل الإمداد الزراعية"
-                : profile?.heroTitleEn || "Enterprise Agricultural Accounting, Procurement & Project Ledger Platform"}
+                ? profile?.heroTitleAr || "إدارة محاسبية ومالية شاملة للمشاريع وسلاسل الإمداد"
+                : profile?.heroTitleEn || "Comprehensive Enterprise Accounting & Supply Chain Platform"}
             </h2>
 
             <p className="text-sm sm:text-base text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl">
               {isAr
                 ? profile?.heroSubtitleAr ||
-                  "نظام محاسبي مؤسسي يربط المشاريع والقطفات والمشتريات والموردين والعملاء والمخزون بمحرك قيد مزدوج غير قابل للتعديل مع تقارير مالية فورية وتوثيق QR إلكتروني."
+                  "نظام مؤسسي متكامل يربط شجرة الحسابات خماسية المستويات بالعمليات والعملاء والموردين بدفتر أستاذ محكم وتقارير فورية وتوثيق إلكتروني."
                 : profile?.heroSubtitleEn ||
-                  "Every procurement bill, harvest sale, payroll accrual, and treasury settlement posts atomically to a balanced double-entry general ledger with live financial statements and QR voucher verification."}
+                  "Integrated double-entry general ledger connecting projects, supply chains, treasury, and partners with immutable audit trails and real-time financial statements."}
             </p>
 
-            <div className="flex flex-wrap gap-3 pt-2">
+            <div className="pt-2 flex flex-wrap gap-3">
               <button
-                onClick={() => onEnterErp("dashboard")}
-                className="px-5 py-3 rounded-2xl accent-bg text-sm font-extrabold shadow-lg flex items-center gap-2"
+                type="button"
+                onClick={currentUser ? () => onEnterErp("dashboard") : onOpenLogin}
+                className="px-6 py-3.5 rounded-2xl accent-bg text-sm font-black shadow-lg hover:shadow-xl flex items-center gap-2.5 transition"
               >
-                <TrendingUp className="w-4 h-4" />
+                <ArrowIcon className="w-4 h-4" />
                 <span>
-                  {isAr
-                    ? profile?.ctaPrimaryTextAr || "استعراض لوحة التحكم والتقارير"
-                    : profile?.ctaPrimaryTextEn || "Launch Executive ERP"}
+                  {currentUser
+                    ? isAr
+                      ? "الانتقال إلى لوحة العمليات"
+                      : "Go to ERP Workspace"
+                    : isAr
+                    ? "تسجيل الدخول إلى مساحة العمل"
+                    : "Sign In to Workspace"}
                 </span>
               </button>
-              <button
-                onClick={() => onEnterErp("procurement")}
-                className="px-5 py-3 rounded-2xl card-surface text-sm font-bold hover:border-emerald-500 flex items-center gap-2"
-              >
-                <FileCheck2 className="w-4 h-4 text-emerald-600" />
-                <span>{isAr ? "بوابة المشتريات والموردين" : "Procurement & Vendors Portal"}</span>
-              </button>
-              <button
-                onClick={() => onEnterErp("reports")}
-                className="px-5 py-3 rounded-2xl card-surface text-sm font-bold hover:border-indigo-500 flex items-center gap-2"
-              >
-                <Sprout className="w-4 h-4 text-indigo-600" />
-                <span>{isAr ? "القوائم المالية وميزان المراجعة" : "Live Financial Statements"}</span>
-              </button>
             </div>
           </div>
 
-          {/* Live Public Voucher QR Verification Card */}
+          {/* Clean Public Voucher QR Verification Box */}
           {profile?.showPublicVerify !== false && (
-          <div className="lg:col-span-5">
-            <div className="card-surface rounded-3xl p-6 shadow-xl space-y-4 border-2 border-emerald-500/20">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-2xl bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 flex items-center justify-center">
-                  <QrCode className="w-6 h-6" />
+            <div className="lg:col-span-5">
+              <div className="card-surface rounded-3xl p-6 sm:p-7 shadow-xl border border-slate-200 dark:border-slate-800 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                    <QrCode className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-base">
+                      {isAr ? "التحقق العام من السندات والفواتير" : "Public Document Verification"}
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      {isAr
+                        ? "تحقق فوري من السندات والفواتير الصادرة برمز QR"
+                        : "Verify authenticity of issued vouchers & invoices"}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="font-extrabold text-base">
-                    {isAr ? "التحقق الفوري من السندات والفواتير" : "Public Voucher QR Verification"}
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    {isAr
-                      ? "أدخل رقم السند أو الفاتورة أو رمز QR (مثال: RV-001، PV-2026-0001، BILL-2026-0001)"
-                      : "Enter voucher, invoice, bill, or journal code (e.g. RV-001, PV-2026-0001)"}
-                  </p>
-                </div>
-              </div>
 
-              <form onSubmit={handleVerify} className="flex gap-2">
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  type="text"
-                  placeholder="RV-001 / PV-2026-0001 / BILL-2026-0001"
-                  className="flex-1 rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 text-xs font-mono font-bold"
-                />
-                <button
-                  type="submit"
-                  disabled={verifying}
-                  className="px-4 py-2.5 rounded-xl accent-bg text-xs font-extrabold flex items-center gap-1.5 shrink-0"
-                >
-                  <Search className="w-3.5 h-3.5" />
-                  <span>{verifying ? "..." : isAr ? "تحقق" : "Verify"}</span>
-                </button>
-              </form>
-
-              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                <span className="text-slate-400">{isAr ? "أمثلة سريعة:" : "Try:"}</span>
-                {["RV-001", "PV-2026-0001", "BILL-2026-0001", "JV-2026-0001"].map((sample) => (
+                <form onSubmit={handleVerify} className="flex gap-2">
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    type="text"
+                    placeholder={isAr ? "أدخل رقم السند أو الفاتورة..." : "Enter voucher or invoice code..."}
+                    className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50 px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                  />
                   <button
-                    key={sample}
-                    type="button"
-                    onClick={() => {
-                      setQuery(sample);
-                      void runVerifyLookup(sample);
-                    }}
-                    className="px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700 font-mono hover:border-emerald-500"
+                    type="submit"
+                    disabled={verifying || !query.trim()}
+                    className="px-4 py-2.5 rounded-xl accent-bg text-xs font-extrabold flex items-center gap-1.5 shrink-0 disabled:opacity-50 transition"
                   >
-                    {sample}
+                    <Search className="w-3.5 h-3.5" />
+                    <span>{verifying ? "..." : isAr ? "تحقق" : "Verify"}</span>
                   </button>
-                ))}
-              </div>
+                </form>
 
-              {verifyResult && (
-                <div
-                  className={`p-4 rounded-2xl border text-xs space-y-1.5 ${
-                    verifyResult.verified
-                      ? "bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-300"
-                      : "bg-rose-50/70 dark:bg-rose-950/30 border-rose-300"
-                  }`}
-                >
-                  {verifyResult.verified ? (
-                    <>
-                      <div className="flex items-center justify-between font-extrabold text-emerald-700 dark:text-emerald-300">
-                        <span className="flex items-center gap-1.5">
-                          <CheckCircle2 className="w-4 h-4" />
-                          {verifyResult.documentType}
-                        </span>
-                        <span className="font-mono">{verifyResult.reference}</span>
-                      </div>
-                      <div>
-                        <strong>{isAr ? "الطرف / البيان:" : "Party:"}</strong> {verifyResult.party}
-                      </div>
-                      <div className="flex justify-between">
-                        <span>
-                          <strong>{isAr ? "المبلغ:" : "Amount:"}</strong>{" "}
-                          {fmtNum(verifyResult.amount)} {verifyResult.currency}
-                        </span>
-                        <span>
-                          <strong>{isAr ? "التاريخ:" : "Date:"}</strong> {verifyResult.date}
-                        </span>
-                      </div>
-                      {verifyResult.hash && (
-                        <div className="font-mono text-[11px] text-slate-500">
-                          Hash: {verifyResult.hash} • Status: {verifyResult.status}
+                {verifyResult && (
+                  <div
+                    className={`p-4 rounded-2xl border text-xs space-y-2 ${
+                      verifyResult.verified
+                        ? "bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800"
+                        : "bg-rose-50/70 dark:bg-rose-950/30 border-rose-300 dark:border-rose-800"
+                    }`}
+                  >
+                    {verifyResult.verified ? (
+                      <>
+                        <div className="flex items-center justify-between font-extrabold text-emerald-700 dark:text-emerald-300">
+                          <span className="flex items-center gap-1.5">
+                            <CheckCircle2 className="w-4 h-4 shrink-0" />
+                            {verifyResult.documentType}
+                          </span>
+                          <span className="font-mono">{verifyResult.reference}</span>
                         </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="font-bold text-rose-700">{verifyResult.message}</div>
-                  )}
-                </div>
-              )}
+                        <div>
+                          <strong className="text-slate-700 dark:text-slate-300">
+                            {isAr ? "الطرف / البيان:" : "Party:"}
+                          </strong>{" "}
+                          {verifyResult.party}
+                        </div>
+                        <div className="flex justify-between">
+                          <span>
+                            <strong className="text-slate-700 dark:text-slate-300">
+                              {isAr ? "المبلغ:" : "Amount:"}
+                            </strong>{" "}
+                            {fmtNum(verifyResult.amount)} {verifyResult.currency}
+                          </span>
+                          <span>
+                            <strong className="text-slate-700 dark:text-slate-300">
+                              {isAr ? "التاريخ:" : "Date:"}
+                            </strong>{" "}
+                            {verifyResult.date}
+                          </span>
+                        </div>
+                        {verifyResult.hash && (
+                          <div className="font-mono text-[10px] text-slate-500 break-all pt-1 border-t border-emerald-200 dark:border-emerald-800/60">
+                            Hash: {verifyResult.hash}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="font-bold text-rose-700 dark:text-rose-300">
+                        {verifyResult.message}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
           )}
         </section>
 
-        {/* Live Enterprise Track Record Metrics */}
-        {profile?.showPublicMetrics !== false && (
-        <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-10">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="card-surface rounded-2xl p-5 space-y-1">
-              <div className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
-                <Sprout className="w-4 h-4 text-emerald-600" />
-                {isAr ? "المشاريع الإنتاجية النشطة" : "Active Projects"}
-              </div>
-              <div className="text-2xl font-black text-emerald-600">
-                {publicMetrics?.projects ?? state.projects.length}
-              </div>
-              <div className="text-[11px] text-slate-400 truncate">
-                {state.projects
-                  .slice(0, 3)
-                  .map((p) => (isAr ? p.nameAr || p.name : p.nameEn || p.name))
-                  .join(" • ") || (isAr ? "مشاريع استثمارية نشطة" : "Active portfolio projects")}
-              </div>
-            </div>
-
-            <div className="card-surface rounded-2xl p-5 space-y-1">
-              <div className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
-                <TrendingUp className="w-4 h-4 text-indigo-600" />
-                {isAr ? "إجمالي الأصول المسجلة" : "Total Ledger Assets"}
-              </div>
-              <div className="text-2xl font-black text-indigo-600">
-                {fmtNum(publicMetrics?.totalAssets ?? 0)} YER
-              </div>
-              <div className="text-[11px] text-slate-400">
-                {isAr ? "مدققة بميزانية متزنة 100%" : "100% Balance-Sheet Verified"}
-              </div>
-            </div>
-
-            <div className="card-surface rounded-2xl p-5 space-y-1">
-              <div className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
-                <Users className="w-4 h-4 text-amber-600" />
-                {isAr ? "الموردون والعملاء المربوطون" : "Linked Vendors & Clients"}
-              </div>
-              <div className="text-2xl font-black text-amber-600">
-                {(publicMetrics?.vendors ?? 0) + (publicMetrics?.customers ?? 0)}
-              </div>
-              <div className="text-[11px] text-slate-400">
-                {isAr ? "حسابات تفصيلية من المستوى 5" : "Tier-5 Subledger Accounts"}
-              </div>
-            </div>
-
-            <div className="card-surface rounded-2xl p-5 space-y-1">
-              <div className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
-                <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                {isAr ? "حالة توازن دفتر الأستاذ" : "GL Balance Integrity"}
-              </div>
-              <div className="text-2xl font-black text-emerald-600">
-                {publicMetrics?.isLedgerBalanced === false ? "CHECK" : "Σ DR = Σ CR"}
-              </div>
-              <div className="text-[11px] text-slate-400">
-                {fmtNum(publicMetrics?.totalRevenue ?? totalSalesFallback)} YER {isAr ? "مبيعات موثقة" : "Revenue"}
-              </div>
-            </div>
-          </div>
-        </section>
-        )}
-
-        {/* Projects & Supply Chain Showcase */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-12">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-extrabold">
-              {isAr ? "مشاريع المؤسسة والقطاعات الزراعية" : "Enterprise Projects & Agricultural Sectors"}
+        {/* Feature Pillars Grid (Global SaaS Standard) */}
+        <section className="max-w-7xl mx-auto px-4 sm:px-8 py-8 sm:py-12 border-t border-slate-200/80 dark:border-slate-800">
+          <div className="text-center max-w-2xl mx-auto mb-10 space-y-2">
+            <h3 className="text-xl sm:text-2xl font-black">
+              {isAr ? "ركائز النظام المحاسبي الموحد" : "Enterprise Core Architecture"}
             </h3>
-            <button
-              onClick={() => onEnterErp("projects")}
-              className="text-xs font-extrabold text-emerald-600 hover:underline"
-            >
-              {isAr ? "إدارة المشاريع والموازنات ←" : "Manage Projects →"}
-            </button>
+            <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+              {isAr
+                ? "بنية تحتية مالية متكاملة مصممة وفق أحدث المعايير المحاسبية الدولية"
+                : "Institutional-grade financial infrastructure built on international accounting standards"}
+            </p>
           </div>
-          {state.projects.length === 0 ? (
-            <div className="card-surface rounded-2xl p-6 text-center space-y-2 border border-dashed border-emerald-500/40">
-              <div className="text-sm font-extrabold text-emerald-700 dark:text-emerald-300">
-                {isAr
-                  ? "النظام مهيأ بوضع البداية الصفرية (Clean Zero-State) وجاهز للعمل الفوري"
-                  : "System initialized in Clean Zero-State and ready for live operations"}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+            {/* Pillar 1 */}
+            <div className="card-surface rounded-2xl p-6 space-y-3 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/50 transition">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                <ShieldCheck className="w-5 h-5" />
               </div>
-              <p className="text-xs text-slate-500">
+              <h4 className="font-black text-sm">
+                {isAr ? "دفتر الأستاذ العام والقيد المزدوج" : "Double-Entry General Ledger"}
+              </h4>
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
                 {isAr
-                  ? "يمكنك تسجيل الدخول وإضافة مشاريعك الزراعية وقطفاتك وحسابات الخزينة من لوحة التحكم."
-                  : "Sign in to add your agricultural projects, harvest cycles, and treasury accounts from the ERP console."}
+                  ? "ترحيل ذري متوازن 100% مع شجرة حسابات قياسية من 5 مستويات وسجل تدقيق غير قابل للتعديل."
+                  : "Atomic balanced journal entries with 5-tier Chart of Accounts and immutable audit trail."}
               </p>
             </div>
-          ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {state.projects.slice(0, 3).map((proj) => (
-              <div key={proj.id} className="card-surface rounded-2xl p-5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-xs px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 font-bold">
-                    {proj.code || proj.id.toUpperCase()}
-                  </span>
-                  <span className="accent-badge px-2.5 py-1 rounded-lg text-[11px] font-bold">
-                    {proj.status || "ACTIVE"}
-                  </span>
+
+            {/* Pillar 2 */}
+            <div className="card-surface rounded-2xl p-6 space-y-3 border border-slate-200 dark:border-slate-800 hover:border-indigo-500/50 transition">
+              <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                <Layers className="w-5 h-5" />
+              </div>
+              <h4 className="font-black text-sm">
+                {isAr ? "إدارة المشاريع والمخزون" : "Projects & Inventory Control"}
+              </h4>
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                {isAr
+                  ? "تتبع دقيق لدورات الإنتاج والمشاريع والقطفات الزراعية مع مراقبة المستودعات وحركات التوريد."
+                  : "Multi-project tracking, harvest production cycles, inventory batches, and supply chain control."}
+              </p>
+            </div>
+
+            {/* Pillar 3 */}
+            <div className="card-surface rounded-2xl p-6 space-y-3 border border-slate-200 dark:border-slate-800 hover:border-amber-500/50 transition">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center">
+                <Coins className="w-5 h-5" />
+              </div>
+              <h4 className="font-black text-sm">
+                {isAr ? "الخزينة والعملات المتعددة" : "Treasury & Multi-Currency"}
+              </h4>
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                {isAr
+                  ? "مراقبة الصناديق النقدية والحسابات البنكية مع فروق أسعار الصرف وإصدار السندات والتحصيلات."
+                  : "Multi-currency bank & vault management (YER, SAR, USD) with real-time settlement vouchers."}
+              </p>
+            </div>
+
+            {/* Pillar 4 */}
+            <div className="card-surface rounded-2xl p-6 space-y-3 border border-slate-200 dark:border-slate-800 hover:border-cyan-500/50 transition">
+              <div className="w-10 h-10 rounded-xl bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 flex items-center justify-center">
+                <BarChart3 className="w-5 h-5" />
+              </div>
+              <h4 className="font-black text-sm">
+                {isAr ? "التقارير والقوائم المالية اللحظية" : "Live Financial Statements"}
+              </h4>
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                {isAr
+                  ? "ميزان مراجعة فوري، قائمة الدخل، وقائمة المركز المالي مع إمكانية التصدير إلى Excel و PDF."
+                  : "Instant trial balance, income statement, and balance sheet with one-click Excel & PDF export."}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* Live Enterprise Track Record (Optional) */}
+        {profile?.showPublicMetrics !== false && (
+          <section className="max-w-7xl mx-auto px-4 sm:px-8 py-8">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="card-surface rounded-2xl p-5 space-y-1 border border-slate-200 dark:border-slate-800">
+                <div className="text-xs font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                  <Building2 className="w-4 h-4 text-emerald-600" />
+                  {isAr ? "المشاريع النشطة" : "Active Projects"}
                 </div>
-                <div>
-                  <h4 className="font-extrabold text-base">{proj.nameAr || proj.name}</h4>
-                  <p className="text-xs text-slate-500">{proj.notes}</p>
+                <div className="text-2xl font-black text-emerald-600">
+                  {publicMetrics?.projects ?? state.projects.length}
                 </div>
-                <div className="flex justify-between text-xs pt-2 border-t border-slate-100 dark:border-slate-800">
-                  <span>{isAr ? "الموازنة التقديرية:" : "Budget:"}</span>
-                  <span className="font-extrabold text-emerald-600">
-                    {fmtNum(proj.budgetTotal ?? proj.estimatedValue)} YER
-                  </span>
+                <div className="text-[11px] text-slate-400 truncate">
+                  {isAr ? "مشاريع استثمارية وإنتاجية" : "Operational portfolios"}
+                </div>
+              </div>
+
+              <div className="card-surface rounded-2xl p-5 space-y-1 border border-slate-200 dark:border-slate-800">
+                <div className="text-xs font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                  <TrendingUp className="w-4 h-4 text-indigo-600" />
+                  {isAr ? "إجمالي الأصول المسجلة" : "Ledger Assets"}
+                </div>
+                <div className="text-2xl font-black text-indigo-600">
+                  {fmtNum(publicMetrics?.totalAssets ?? 0)} YER
                 </div>
                 <div className="text-[11px] text-slate-400">
-                  {isAr ? "القطفات:" : "Cycles:"} {(proj.harvests || []).join(" • ")}
+                  {isAr ? "مطابقة لميزانية متزنة" : "100% Balanced Ledger"}
                 </div>
               </div>
-            ))}
-          </div>
-          )}
-        </section>
-        {/* About & Public Contact CMS Section */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-12">
-          <div className="card-surface rounded-3xl p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
-            <div className="lg:col-span-7 space-y-2.5">
-              <div className="text-xs font-extrabold text-emerald-600 uppercase tracking-wide">
-                {isAr ? "عن المؤسسة والمنهج المحاسبي" : "Enterprise Mission & Governance"}
+
+              <div className="card-surface rounded-2xl p-5 space-y-1 border border-slate-200 dark:border-slate-800">
+                <div className="text-xs font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                  <Users className="w-4 h-4 text-amber-600" />
+                  {isAr ? "الموردون والعملاء" : "Partners & Clients"}
+                </div>
+                <div className="text-2xl font-black text-amber-600">
+                  {(publicMetrics?.vendors ?? 0) + (publicMetrics?.customers ?? 0)}
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  {isAr ? "حسابات تفصيلية معتمدة" : "Subledger Accounts"}
+                </div>
               </div>
-              <h3 className="text-lg sm:text-xl font-black">
-                {isAr
-                  ? profile?.legalNameAr?.trim() || "اسم المنشأة"
-                  : profile?.legalNameEn?.trim() || "Enterprise Name"}
+
+              <div className="card-surface rounded-2xl p-5 space-y-1 border border-slate-200 dark:border-slate-800">
+                <div className="text-xs font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                  {isAr ? "توازن دفتر الأستاذ" : "GL Balance Integrity"}
+                </div>
+                <div className="text-2xl font-black text-emerald-600">
+                  {publicMetrics?.isLedgerBalanced === false ? "CHECK" : "Σ DR = Σ CR"}
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  {fmtNum(publicMetrics?.totalRevenue ?? totalSalesFallback)} YER {isAr ? "إيرادات" : "Revenue"}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* Active Projects Showcase (rendered only when projects actually exist) */}
+        {state.projects.length > 0 && (
+          <section className="max-w-7xl mx-auto px-4 sm:px-8 py-8 border-t border-slate-200/80 dark:border-slate-800">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-black">
+                {isAr ? "مشاريع المؤسسة الإنتاجية" : "Enterprise Portfolio"}
+              </h3>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+              {state.projects.slice(0, 3).map((proj) => (
+                <div key={proj.id} className="card-surface rounded-2xl p-5 space-y-3 border border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 font-bold">
+                      {proj.code || proj.id.toUpperCase()}
+                    </span>
+                    <span className="accent-badge px-2.5 py-1 rounded-lg text-[11px] font-bold">
+                      {proj.status || "ACTIVE"}
+                    </span>
+                  </div>
+                  <div>
+                    <h4 className="font-extrabold text-base">{proj.nameAr || proj.name}</h4>
+                    {proj.notes && <p className="text-xs text-slate-500 mt-1">{proj.notes}</p>}
+                  </div>
+                  <div className="flex justify-between text-xs pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <span className="text-slate-500">{isAr ? "الموازنة:" : "Budget:"}</span>
+                    <span className="font-extrabold text-emerald-600">
+                      {fmtNum(proj.budgetTotal ?? proj.estimatedValue)} YER
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Corporate Information Section */}
+        <section className="max-w-7xl mx-auto px-4 sm:px-8 py-10 border-t border-slate-200/80 dark:border-slate-800">
+          <div className="card-surface rounded-3xl p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center border border-slate-200 dark:border-slate-800">
+            <div className="lg:col-span-7 space-y-2.5">
+              <div className="text-xs font-black text-emerald-600 uppercase tracking-wider">
+                {isAr ? "عن المؤسسة والمنهج المالي" : "Governance & Enterprise Standards"}
+              </div>
+              <h3 className="text-xl font-black">
+                {legalName}
               </h3>
               <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
                 {isAr
                   ? profile?.aboutMissionAr ||
-                    "منصة محاسبية مؤسسية مصممة لإدارة دورات الإنتاج الزراعي والمشاريع الاستثمارية بشفافية مالية ورقابة مزدوجة."
+                    "منظومة محاسبية وتخطيط موارد مؤسسية متقدمة تلتزم بأعلى معايير الرقابة والشفافية وتكامل العمليات المالية."
                   : profile?.aboutMissionEn ||
-                    "Enterprise ERP built for agricultural production cycles and capital projects with strict double-entry auditability."}
+                    "Enterprise Resource Planning platform dedicated to rigorous financial governance, transparency, and operational excellence."}
               </p>
             </div>
+
             <div className="lg:col-span-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2.5 text-xs">
               {(profile?.contactPhone || profile?.phone) && (
-                <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-slate-100/70 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
                   <Phone className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span className="font-bold font-mono" dir="ltr">
                     {profile?.contactPhone || profile?.phone}
@@ -491,16 +533,16 @@ export function LandingPage({
                   href={`https://wa.me/${profile.contactWhatsApp.replace(/[^0-9]/g, "")}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/50 text-emerald-800 dark:text-emerald-300 font-bold hover:border-emerald-500 transition"
+                  className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 font-bold hover:bg-emerald-500/20 transition"
                 >
                   <MessageCircle className="w-4 h-4 shrink-0" />
-                  <span>{isAr ? "تواصل عبر واتساب المؤسسة" : "Contact via WhatsApp"}</span>
+                  <span>{isAr ? "واتساب المؤسسة" : "Enterprise WhatsApp"}</span>
                 </a>
               )}
               {(profile?.contactAddress || profile?.address) && (
-                <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-slate-100/70 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
                   <MapPin className="w-4 h-4 text-indigo-600 shrink-0" />
-                  <span className="font-semibold">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">
                     {profile?.contactAddress || profile?.address}
                   </span>
                 </div>
@@ -510,15 +552,26 @@ export function LandingPage({
         </section>
       </main>
 
-      <footer className="border-t border-slate-200 dark:border-slate-800 py-5 px-4 text-center text-xs text-slate-500">
-        {(isAr
-          ? profile?.legalNameAr?.trim() || "اسم المنشأة"
-          : profile?.legalNameEn?.trim() || "Enterprise Name")}{" "}
-        — Unified Accounting System (UAS)
-        {(profile?.contactAddress || profile?.address) ? ` • ${profile?.contactAddress || profile?.address}` : ""}
-        {profile?.email ? ` • ${profile.email}` : ""}
+      {/* Corporate Footer */}
+      <footer className="border-t border-slate-200 dark:border-slate-800 py-6 px-4 text-center text-xs text-slate-500 dark:text-slate-400 space-y-1">
+        <p>
+          {legalName} — Unified Accounting System (UAS Enterprise ERP)
+          {(profile?.contactAddress || profile?.address) ? ` • ${profile?.contactAddress || profile?.address}` : ""}
+          {profile?.email ? ` • ${profile.email}` : ""}
+        </p>
+        <p className="text-[11px] text-slate-400">
+          {[
+            profile?.commercialReg
+              ? `${isAr ? "سجل تجاري رقم:" : "Commercial Registration:"} ${profile.commercialReg}`
+              : null,
+            profile?.taxNumber
+              ? `${isAr ? "الرقم الضريبي:" : "Tax Number:"} ${profile.taxNumber}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" • ")}
+        </p>
       </footer>
     </div>
   );
 }
-

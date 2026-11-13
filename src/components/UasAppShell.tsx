@@ -201,7 +201,24 @@ export function UasAppShell() {
         }
       } else {
         setCurrentUser(null);
-        setViewMode(savedViewMode === "login" ? "login" : "landing");
+        const rawHash = typeof window !== "undefined" ? window.location.hash.replace(/^#\/?/, "") : "";
+        const unauthView = savedViewMode === "login" || rawHash === "login" ? "login" : "landing";
+        setViewMode(unauthView);
+        if (typeof window !== "undefined") {
+          if (unauthView === "login") {
+            if (window.location.hash !== "#/login") {
+              window.location.hash = "#/login";
+            }
+          } else {
+            if (window.location.hash) {
+              if (typeof window.history.replaceState === "function") {
+                window.history.replaceState(null, "", window.location.pathname + window.location.search);
+              } else {
+                window.location.hash = "";
+              }
+            }
+          }
+        }
       }
 
       if (res.fromOfflineCache) {
@@ -242,6 +259,18 @@ export function UasAppShell() {
       if (window.location.hash !== expectedHash) {
         window.location.hash = expectedHash;
       }
+    } else if (viewMode === "login") {
+      if (window.location.hash !== "#/login") {
+        window.location.hash = "#/login";
+      }
+    } else if (viewMode === "landing") {
+      if (window.location.hash && window.location.hash !== "#/") {
+        if (typeof window.history.replaceState === "function") {
+          window.history.replaceState(null, "", window.location.pathname + window.location.search);
+        } else {
+          window.location.hash = "";
+        }
+      }
     }
   }, [activeTab, salesViewMode, viewMode]);
 
@@ -250,8 +279,23 @@ export function UasAppShell() {
     if (typeof window === "undefined") return;
 
     const handleHashChange = () => {
-      if (viewMode !== "erp" || !currentUser) return;
       const rawHash = window.location.hash.replace(/^#\/?/, "");
+      if (viewMode !== "erp" || !currentUser) {
+        if (rawHash === "login") {
+          setViewMode("login");
+        } else if (!rawHash) {
+          setViewMode("landing");
+        } else {
+          // Clean up internal module hashes when unauthenticated
+          if (typeof window.history.replaceState === "function") {
+            window.history.replaceState(null, "", window.location.pathname + window.location.search);
+          } else {
+            window.location.hash = "";
+          }
+          setViewMode("landing");
+        }
+        return;
+      }
       if (!rawHash) return;
       const [hTab, hSub] = rawHash.split("/");
       if (hTab === "customers") {

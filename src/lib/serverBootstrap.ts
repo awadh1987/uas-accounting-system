@@ -450,7 +450,7 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
     prisma.immutableAuditLog.findMany({ orderBy: { createdAt: "desc" } }),
   ]);
 
-  const [users, projects, expenses, workers, sales] = await Promise.all([
+  const [usersQuery, projects, expenses, workers, sales] = await Promise.all([
     prisma.user.findMany({
       orderBy: { createdAt: "asc" },
       select: {
@@ -507,6 +507,72 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
     prisma.workerWageEntry.findMany({ orderBy: { createdAt: "asc" } }),
     prisma.saleTransaction.findMany({ orderBy: { createdAt: "asc" } }),
   ]);
+
+  let users = usersQuery;
+  // If no users exist at all in PostgreSQL, create a single initial Administrator account.
+  // Existing real users are never deleted or overwritten.
+  if (users.length === 0) {
+    try {
+      await prisma.user.create({
+        data: {
+          id: "u1",
+          username: "system_owner",
+          name: "مدير النظام العام",
+          fullName: "مدير النظام العام / System Owner",
+          displayName: "",
+          phone: "",
+          email: "admin@uas-ye.com",
+          passwordHash: hashPassword("123456"),
+          role: "SUPER_ADMIN",
+          department: "الإدارة العليا وتقنية المعلومات",
+          active: true,
+          isActive: true,
+          avatarChar: "م",
+          avatarColor: "#059669",
+          preferredLang: "ar",
+          preferredCurrency: "YER",
+          preferredTheme: "emerald",
+          useCustomPermissions: false,
+          customAllowedGroups: "[]",
+          customPermissionsJson: "{}",
+          mustChangePassword: false,
+          assignedProjects: "[]",
+        },
+      });
+      users = await prisma.user.findMany({
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          username: true,
+          name: true,
+          fullName: true,
+          displayName: true,
+          phone: true,
+          email: true,
+          role: true,
+          department: true,
+          active: true,
+          isActive: true,
+          avatarChar: true,
+          avatarUrl: true,
+          avatarColor: true,
+          preferredLang: true,
+          preferredCurrency: true,
+          preferredTheme: true,
+          defaultModule: true,
+          lastLoginAt: true,
+          useCustomPermissions: true,
+          customAllowedGroups: true,
+          customPermissionsJson: true,
+          mustChangePassword: true,
+          passwordUpdatedAt: true,
+          assignedProjects: true,
+        },
+      });
+    } catch (e) {
+      console.warn("Initial admin bootstrap fallback error:", e);
+    }
+  }
 
   const { mappedProjects, lockedPeriods } = mapProjects(projects);
 

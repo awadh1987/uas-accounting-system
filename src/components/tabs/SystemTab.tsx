@@ -27,8 +27,10 @@ import {
   Copy,
   Check,
   UserCheck,
+  Wifi,
   X,
 } from "lucide-react";
+import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl } from "@/lib/apiClient";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import {
   ALL_USER_ROLES,
@@ -298,6 +300,49 @@ export function SystemTab({
   const [profileNameDraft, setProfileNameDraft] = useState<string | null>(null);
   const [profileAvatarDraft, setProfileAvatarDraft] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState("");
+
+  const [serverUrlDraft, setServerUrlDraft] = useState(() => getApiBaseUrl());
+  const [testingServer, setTestingServer] = useState(false);
+
+  async function handleSaveServerUrl(targetUrl: string) {
+    const cleaned = targetUrl.trim().replace(/\/+$/, "");
+    setServerUrlDraft(cleaned);
+    setApiBaseUrl(cleaned);
+    if (!cleaned) {
+      resetApiBaseUrl();
+      onToast(
+        isAr
+          ? "تمت استعادة الاتصال بالخادم المحلي الافتراضي"
+          : "Restored default local server connection"
+      );
+      return;
+    }
+    setTestingServer(true);
+    try {
+      const res = await fetch(`${cleaned}/api/bootstrap`, { cache: "no-store" });
+      if (res.ok) {
+        onToast(
+          isAr
+            ? `✅ تم الاتصال بالخادم بنجاح: ${cleaned}`
+            : `✅ Connected to server: ${cleaned}`
+        );
+      } else {
+        onToast(
+          isAr
+            ? `⚠️ تم حفظ العنوان (${cleaned}) لكن الخادم أعاد رمز ${res.status}`
+            : `⚠️ Saved (${cleaned}) but server returned ${res.status}`
+        );
+      }
+    } catch {
+      onToast(
+        isAr
+          ? `⚠️ تم حفظ العنوان (${cleaned}) — تأكد من تشغيل خادم الشبكة المحلية على الكمبيوتر`
+          : `⚠️ Saved (${cleaned}) — verify the Office LAN server is running`
+      );
+    } finally {
+      setTestingServer(false);
+    }
+  }
 
   const [newUserName, setNewUserName] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
@@ -603,7 +648,7 @@ export function SystemTab({
           }`}
         >
           <Sliders className="w-4 h-4" />
-          <span>{isAr ? "إعدادات النظام والأمان (Settings & Security)" : "System Settings & Security"}</span>
+          <span>{isAr ? "إعدادات النظام والأمان والربط (Settings & Connectivity)" : "System Settings & Connectivity"}</span>
         </button>
       </div>
 
@@ -726,6 +771,101 @@ export function SystemTab({
               تحديث الملف الشخصي وكلمة المرور
             </button>
           </div>
+
+          {/* Office LAN & Cloud Server Connection (LAN & Mobile APK) — Restricted to Administrators */}
+          {(canManageUsers || currentUser.role === "SUPER_ADMIN") && (
+            <div className="card-surface rounded-2xl p-5 space-y-4 text-xs lg:col-span-2 border border-slate-200 dark:border-slate-800 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
+                    <Wifi className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-sm">
+                      {isAr
+                        ? "إعدادات الاتصال بالخادم والشبكة المحلية (Office LAN & Cloud Connection)"
+                        : "Office LAN / Cloud Server Connection (API Base URL)"}
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {isAr
+                        ? "تكوين عنوان الخادم للشبكة المحلية (LAN & Wi-Fi) والسحابة وتطبيقات الأندرويد (Mobile APK)"
+                        : "Configure server endpoint for Office LAN Wi-Fi, Cloud deployment, and Android APK synchronization"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 font-mono text-[11px]">
+                  <span className="text-slate-500">{isAr ? "الخادم النشط:" : "Active Endpoint:"}</span>
+                  <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                    {serverUrlDraft || (isAr ? "محلي افتراضي (Same-Origin)" : "Default Origin")}
+                  </span>
+                </div>
+              </div>
+
+              <p className="text-slate-600 dark:text-slate-300 leading-relaxed text-xs">
+                {isAr
+                  ? "عند تشغيل النظام داخل شبكة المكتب المحلية (Office Wi-Fi) أو ربط تطبيق الأندرويد أو أجهزة الكاشير والمحاسبين، أدخل عنوان الخادم المخصص أو اختر السحابة الإنتاجية (https://qat.world)."
+                  : "When operating inside the office local network or connecting Android APK tablets and remote workstations, configure your custom server address or connect to production cloud (https://qat.world)."}
+              </p>
+
+              <div className="flex flex-wrap gap-2.5" dir="ltr">
+                <input
+                  type="url"
+                  value={serverUrlDraft}
+                  onChange={(e) => setServerUrlDraft(e.target.value)}
+                  placeholder="https://qat.world or http://192.168.1.100:3000"
+                  className="flex-1 min-w-[260px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3.5 py-2.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                />
+                <button
+                  type="button"
+                  disabled={testingServer || readOnly}
+                  onClick={() => void handleSaveServerUrl(serverUrlDraft)}
+                  className="px-4 py-2.5 rounded-xl accent-bg font-extrabold flex items-center gap-1.5 shadow-sm disabled:opacity-50 transition"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>
+                    {testingServer
+                      ? isAr
+                        ? "جاري التحقق والاتصال..."
+                        : "Verifying connection..."
+                      : isAr
+                      ? "حفظ واختبار الاتصال"
+                      : "Save & Test Connection"}
+                  </span>
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+                <span className="text-[11px] font-bold text-slate-500">
+                  {isAr ? "الإعدادات السريعة الجاهزة:" : "Quick Presets:"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveServerUrl("https://qat.world")}
+                  className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-mono text-[11px] hover:border-emerald-500 hover:text-emerald-600 transition flex items-center gap-1.5"
+                >
+                  <Globe className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Cloud: https://qat.world</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveServerUrl("http://192.168.1.100:3000")}
+                  className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-mono text-[11px] hover:border-emerald-500 hover:text-emerald-600 transition flex items-center gap-1.5"
+                >
+                  <Wifi className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>LAN: http://192.168.1.100:3000</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveServerUrl("")}
+                  className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-[11px] hover:border-rose-500 hover:text-rose-600 transition flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+                  <span>{isAr ? "استعادة المحلي الافتراضي" : "Reset Default Origin"}</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

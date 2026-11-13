@@ -40,6 +40,11 @@ export function setApiBaseUrl(url: string): void {
   }
 }
 
+export function resetApiBaseUrl(): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(SERVER_URL_STORAGE_KEY);
+}
+
 let fetchInterceptorInstalled = false;
 
 export function installGlobalApiFetchInterceptor(): void {
