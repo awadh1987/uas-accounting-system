@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { SvgAvatar } from "@/components/SvgAvatar";
 import { DualLogoBadge } from "@/components/DualLogoBadge";
+import { getApiBaseUrl, setApiBaseUrl } from "@/lib/apiClient";
 import { getRoleMeta, normalizeRole } from "@/lib/permissions";
 import type { LanguageCode, ThemeName, UasEnterpriseProfile, UasUser } from "@/types/uas";
 
@@ -68,8 +69,46 @@ export function LoginView({
   const [showPassword, setShowPassword] = useState(false);
   const [rememberDevice, setRememberDevice] = useState(true);
   const [demoDrawerOpen, setDemoDrawerOpen] = useState(true);
+  const [serverConfigOpen, setServerConfigOpen] = useState(false);
+  const [serverUrlDraft, setServerUrlDraft] = useState(() => getApiBaseUrl());
+  const [testingServer, setTestingServer] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  async function handleSaveServerUrl(targetUrl: string) {
+    const cleaned = targetUrl.trim().replace(/\/+$/, "");
+    setServerUrlDraft(cleaned);
+    setApiBaseUrl(cleaned);
+    if (!cleaned) {
+      onToast(isAr ? "تمت استعادة الاتصال بالخادم المحلي الافتراضي" : "Restored default local server connection");
+      return;
+    }
+    setTestingServer(true);
+    try {
+      const res = await fetch(`${cleaned}/api/bootstrap`, { cache: "no-store" });
+      if (res.ok) {
+        onToast(
+          isAr
+            ? `✅ تم الاتصال بالخادم بنجاح: ${cleaned}`
+            : `✅ Connected to server: ${cleaned}`
+        );
+      } else {
+        onToast(
+          isAr
+            ? `⚠️ تم حفظ العنوان (${cleaned}) لكن الخادم أعاد رمز ${res.status}`
+            : `⚠️ Saved (${cleaned}) but server returned ${res.status}`
+        );
+      }
+    } catch {
+      onToast(
+        isAr
+          ? `⚠️ تم حفظ العنوان (${cleaned}) — تأكد من تشغيل خادم الشبكة المحلية على الكمبيوتر`
+          : `⚠️ Saved (${cleaned}) — verify the Office LAN server is running`
+      );
+    } finally {
+      setTestingServer(false);
+    }
+  }
 
   const brandGradient =
     theme === "royal"
@@ -107,7 +146,7 @@ export function LoginView({
 
     setSubmitting(true);
     try {
-      const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -444,6 +483,76 @@ export function LoginView({
                     </button>
                   );
                 })}
+              </div>
+            )}
+          </div>
+
+          {/* Office LAN & Cloud Server Connection Switcher (Android APK & Multi-Device LAN) */}
+          <div className="card-surface rounded-3xl overflow-hidden shadow-sm">
+            <button
+              type="button"
+              onClick={() => setServerConfigOpen((prev) => !prev)}
+              className="w-full px-5 py-3 flex items-center justify-between text-xs font-extrabold bg-slate-50/80 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+            >
+              <span className="flex items-center gap-2">
+                <Wifi className="w-4 h-4 text-indigo-600" />
+                <span>
+                  {isAr
+                    ? "إعدادات الاتصال بخادم الشبكة المحلية / السحابة (LAN & Mobile APK)"
+                    : "Office LAN / Cloud Server Connection (Android APK)"}
+                </span>
+              </span>
+              <span className="text-[10px] font-mono text-emerald-600">
+                {serverUrlDraft || (isAr ? "محلي افتراضي (Local)" : "Default Origin")}
+              </span>
+            </button>
+            {serverConfigOpen && (
+              <div className="p-4 space-y-3 text-xs border-t border-slate-200 dark:border-slate-700">
+                <p className="text-slate-500">
+                  {isAr
+                    ? "عند استخدام تطبيق الأندرويد داخل المكتب، أدخل عنوان خادم الشبكة المحلية الظاهر في نافذة تشغيل الكمبيوتر (مثال: http://192.168.1.100:3000) أو السحابة (https://qat.world)."
+                    : "When using the Android app on Office Wi-Fi, enter the LAN Server URL shown in the PC launcher window (e.g. http://192.168.1.100:3000) or https://qat.world."}
+                </p>
+                <div className="flex flex-wrap gap-2" dir="ltr">
+                  <input
+                    type="url"
+                    value={serverUrlDraft}
+                    onChange={(e) => setServerUrlDraft(e.target.value)}
+                    placeholder="http://192.168.1.100:3000"
+                    className="flex-1 min-w-[200px] rounded-xl border border-slate-300 dark:border-slate-600 bg-transparent px-3 py-2 font-mono text-xs"
+                  />
+                  <button
+                    type="button"
+                    disabled={testingServer}
+                    onClick={() => void handleSaveServerUrl(serverUrlDraft)}
+                    className="px-3.5 py-2 rounded-xl accent-bg font-bold"
+                  >
+                    {testingServer ? "..." : isAr ? "حفظ واتصال" : "Save & Connect"}
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveServerUrl("http://192.168.1.100:3000")}
+                    className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 font-mono text-[11px] hover:border-emerald-500"
+                  >
+                    LAN: http://192.168.1.100:3000
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveServerUrl("https://qat.world")}
+                    className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 font-mono text-[11px] hover:border-emerald-500"
+                  >
+                    Cloud: https://qat.world
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveServerUrl("")}
+                    className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 text-[11px] hover:border-emerald-500"
+                  >
+                    {isAr ? "استعادة المحلي الافتراضي" : "Reset Default"}
+                  </button>
+                </div>
               </div>
             )}
           </div>

@@ -64,9 +64,8 @@ export const STANDARD_COA_NODES: CoaSeedNode[] = [
   { code: "111204", nameAr: "محفظة جيب", nameEn: "Jeeb Electronic Wallet", level: 5, type: "ASSET", isPosting: true, parentCode: "111200" },
 
   { code: "112000", nameAr: "العملاء والمدينون", nameEn: "Trade Receivables & Clients", level: 3, type: "ASSET", isPosting: false, parentCode: "110000" },
-  { code: "112100", nameAr: "مدينو المشاريع", nameEn: "Project Commercial Debtors", level: 4, type: "ASSET", isPosting: false, parentCode: "112000" },
-  { code: "112101", nameAr: "فواز الجابري", nameEn: "Fawaz Al-Jabri", level: 5, type: "ASSET", isPosting: true, parentCode: "112100" },
-  { code: "112102", nameAr: "يوسف الجابري", nameEn: "Youssef Al-Jabri", level: 5, type: "ASSET", isPosting: true, parentCode: "112100" },
+  { code: "112100", nameAr: "مدينو المشاريع والعملاء", nameEn: "Project Commercial Debtors", level: 4, type: "ASSET", isPosting: false, parentCode: "112000" },
+  { code: "112101", nameAr: "حساب العملاء التجاريين العام", nameEn: "General Trade Receivables", level: 5, type: "ASSET", isPosting: true, parentCode: "112100" },
 
   { code: "113000", nameAr: "المخزون والأصول الحيوية", nameEn: "Inventories & Biological Stock", level: 3, type: "ASSET", isPosting: false, parentCode: "110000" },
   { code: "113100", nameAr: "مخزون المحاصيل والعلاقيات", nameEn: "Agricultural Goods & Harvest Lots", level: 4, type: "ASSET", isPosting: false, parentCode: "113000" },
@@ -87,7 +86,7 @@ export const STANDARD_COA_NODES: CoaSeedNode[] = [
   { code: "120000", nameAr: "الأصول غير المتداولة", nameEn: "Non-Current Assets", level: 2, type: "ASSET", isPosting: false, parentCode: "100000" },
   { code: "121000", nameAr: "الأراضي، الآبار، والآلات", nameEn: "Property, Land, Wells & Equipment", level: 3, type: "ASSET", isPosting: false, parentCode: "120000" },
   { code: "121100", nameAr: "الأراضي والمزارع", nameEn: "Farms & Landed Estates", level: 4, type: "ASSET", isPosting: false, parentCode: "121000" },
-  { code: "121101", nameAr: "أراضي ومزارع مشاريع الجبري", nameEn: "Al-Jabri Agricultural Estates", level: 5, type: "ASSET", isPosting: true, parentCode: "121100" },
+  { code: "121101", nameAr: "الأراضي والمزارع الإنتاجية", nameEn: "Agricultural Estates & Farms", level: 5, type: "ASSET", isPosting: true, parentCode: "121100" },
   { code: "121200", nameAr: "الآبار ومنظومات الطاقة الشمسية", nameEn: "Wells, Pumps & Solar Irrigation", level: 4, type: "ASSET", isPosting: false, parentCode: "121000" },
   { code: "121201", nameAr: "منظومات الضخ الشمسي والآبار", nameEn: "Solar Pumping & Borehole Systems", level: 5, type: "ASSET", isPosting: true, parentCode: "121200" },
 
@@ -96,17 +95,13 @@ export const STANDARD_COA_NODES: CoaSeedNode[] = [
   // =========================================================================
   { code: "200000", nameAr: "الالتزامات", nameEn: "LIABILITIES", level: 1, type: "LIABILITY", isPosting: false, parentCode: null },
   { code: "210000", nameAr: "الالتزامات المتداولة", nameEn: "Current Liabilities", level: 2, type: "LIABILITY", isPosting: false, parentCode: "200000" },
-  { code: "211000", nameAr: "الموردون والتجاريون", nameEn: "Trade Payables & Vendors", level: 3, type: "LIABILITY", isPosting: false, parentCode: "210000" },
+  { code: "211000", nameAr: "الموردون والدائنون التجاريون", nameEn: "Trade Payables & Vendors", level: 3, type: "LIABILITY", isPosting: false, parentCode: "210000" },
   { code: "211100", nameAr: "ذمم موردي المشتريات", nameEn: "Procurement Vendors Payable", level: 4, type: "LIABILITY", isPosting: false, parentCode: "211000" },
-  { code: "211101", nameAr: "شركة التوريدات الزراعية", nameEn: "General Agricultural Supplies Co.", level: 5, type: "LIABILITY", isPosting: true, parentCode: "211100" },
-  { code: "211102", nameAr: "محطة الوقود والطاقة المركزية", nameEn: "Fuel & Energy Station Vendor", level: 5, type: "LIABILITY", isPosting: true, parentCode: "211100" },
-  { code: "211103", nameAr: "مورد قطع الغيار والصيانة", nameEn: "Equipment Spare Parts Vendor", level: 5, type: "LIABILITY", isPosting: true, parentCode: "211100" },
+  { code: "211101", nameAr: "حساب الموردين التجاريين العام", nameEn: "General Trade Vendors Payable", level: 5, type: "LIABILITY", isPosting: true, parentCode: "211100" },
 
   { code: "212000", nameAr: "أجور العمال المستحقة", nameEn: "Accrued Worker Wages & Benefits", level: 3, type: "LIABILITY", isPosting: false, parentCode: "210000" },
   { code: "212100", nameAr: "مستحقات عمال الأجر اليومي والقطفات", nameEn: "Harvest & Daily Labor Payables", level: 4, type: "LIABILITY", isPosting: false, parentCode: "212000" },
-  { code: "212101", nameAr: "مستحقات العامل بلال", nameEn: "Bilal Labor Payable", level: 5, type: "LIABILITY", isPosting: true, parentCode: "212100" },
-  { code: "212102", nameAr: "مستحقات العامل معاذ", nameEn: "Moath Labor Payable", level: 5, type: "LIABILITY", isPosting: true, parentCode: "212100" },
-  { code: "212103", nameAr: "مستحقات العامل فواز", nameEn: "Fawaz Labor Payable", level: 5, type: "LIABILITY", isPosting: true, parentCode: "212100" },
+  { code: "212101", nameAr: "حساب مستحقات العمالة اليومية العام", nameEn: "General Daily Labor Payables", level: 5, type: "LIABILITY", isPosting: true, parentCode: "212100" },
 
   { code: "213000", nameAr: "تأمينات ومقدمات العملاء", nameEn: "Unearned Revenue & Customer Deposits", level: 3, type: "LIABILITY", isPosting: false, parentCode: "210000" },
   { code: "213100", nameAr: "دفعات مقدمة من العملاء", nameEn: "Client Advances & Pre-orders", level: 4, type: "LIABILITY", isPosting: false, parentCode: "213000" },
@@ -119,7 +114,7 @@ export const STANDARD_COA_NODES: CoaSeedNode[] = [
   { code: "310000", nameAr: "رأس المال والاحتياطيات", nameEn: "Capital & Retained Reserves", level: 2, type: "EQUITY", isPosting: false, parentCode: "300000" },
   { code: "311000", nameAr: "رأس مال الملاك والشركاء", nameEn: "Owner Capital Accounts", level: 3, type: "EQUITY", isPosting: false, parentCode: "310000" },
   { code: "311100", nameAr: "رأس المال المدفوع", nameEn: "Paid-In Capital", level: 4, type: "EQUITY", isPosting: false, parentCode: "311000" },
-  { code: "311101", nameAr: "رأس المال المدفوع - الجبري", nameEn: "Paid-In Enterprise Capital", level: 5, type: "EQUITY", isPosting: true, parentCode: "311100" },
+  { code: "311101", nameAr: "رأس المال المدفوع للمؤسسة", nameEn: "Paid-In Enterprise Capital", level: 5, type: "EQUITY", isPosting: true, parentCode: "311100" },
 
   { code: "312000", nameAr: "الأرباح المبقاة / المحتجزة", nameEn: "Retained Earnings", level: 3, type: "EQUITY", isPosting: false, parentCode: "310000" },
   { code: "312100", nameAr: "الأرباح المحتجزة المرحلة", nameEn: "Accumulated Retained Earnings", level: 4, type: "EQUITY", isPosting: false, parentCode: "312000" },
@@ -135,12 +130,12 @@ export const STANDARD_COA_NODES: CoaSeedNode[] = [
   { code: "400000", nameAr: "الإيرادات", nameEn: "REVENUE", level: 1, type: "REVENUE", isPosting: false, parentCode: null },
   { code: "410000", nameAr: "إيرادات النشاط والمبيعات", nameEn: "Operating Revenue & Sales", level: 2, type: "REVENUE", isPosting: false, parentCode: "400000" },
   { code: "411000", nameAr: "مبيعات محاصيل المشاريع", nameEn: "Project Harvest Sales", level: 3, type: "REVENUE", isPosting: false, parentCode: "410000" },
-  { code: "411100", nameAr: "مبيعات الجبري العليا", nameEn: "Upper Jabri Sales", level: 4, type: "REVENUE", isPosting: false, parentCode: "411000" },
-  { code: "411101", nameAr: "إيراد مبيعات قطفات الجبري العليا", nameEn: "Upper Jabri Harvest Sales", level: 5, type: "REVENUE", isPosting: true, parentCode: "411100" },
-  { code: "411200", nameAr: "مبيعات الجبري الوسطى", nameEn: "Middle Jabri Sales", level: 4, type: "REVENUE", isPosting: false, parentCode: "411000" },
-  { code: "411201", nameAr: "إيراد مبيعات قطفات الجبري الوسطى", nameEn: "Middle Jabri Harvest Sales", level: 5, type: "REVENUE", isPosting: true, parentCode: "411200" },
-  { code: "411300", nameAr: "مبيعات الجبري السفلى", nameEn: "Lower Jabri Sales", level: 4, type: "REVENUE", isPosting: false, parentCode: "411000" },
-  { code: "411301", nameAr: "إيراد مبيعات قطفات الجبري السفلى", nameEn: "Lower Jabri Harvest Sales", level: 5, type: "REVENUE", isPosting: true, parentCode: "411300" },
+  { code: "411100", nameAr: "إيرادات مبيعات المشاريع الرئيسية", nameEn: "Primary Project Sales", level: 4, type: "REVENUE", isPosting: false, parentCode: "411000" },
+  { code: "411101", nameAr: "إيراد مبيعات المحاصيل الرئيسية", nameEn: "Primary Harvest Sales Revenue", level: 5, type: "REVENUE", isPosting: true, parentCode: "411100" },
+  { code: "411200", nameAr: "إيرادات مبيعات القطاعات الفرعية", nameEn: "Sub-Sector Harvest Sales", level: 4, type: "REVENUE", isPosting: false, parentCode: "411000" },
+  { code: "411201", nameAr: "إيراد مبيعات المحاصيل الفرعية", nameEn: "Sub-Sector Harvest Sales Revenue", level: 5, type: "REVENUE", isPosting: true, parentCode: "411200" },
+  { code: "411300", nameAr: "إيرادات مبيعات المواسم الاستثمارية", nameEn: "Investment Cycle Sales", level: 4, type: "REVENUE", isPosting: false, parentCode: "411000" },
+  { code: "411301", nameAr: "إيراد مبيعات المواسم الاستثمارية", nameEn: "Investment Cycle Sales Revenue", level: 5, type: "REVENUE", isPosting: true, parentCode: "411300" },
 
   { code: "412000", nameAr: "إيرادات خدمات زراعية ومشتقات", nameEn: "By-Products & Agricultural Services", level: 3, type: "REVENUE", isPosting: false, parentCode: "410000" },
   { code: "412100", nameAr: "مشتقات وخدمات زراعية", nameEn: "Agricultural By-Products", level: 4, type: "REVENUE", isPosting: false, parentCode: "412000" },
@@ -180,6 +175,8 @@ export const STANDARD_COA_NODES: CoaSeedNode[] = [
   { code: "531000", nameAr: "مصروفات إدارية ومراجعة", nameEn: "Office, Audit & Governance Expenses", level: 3, type: "EXPENSE", isPosting: false, parentCode: "530000" },
   { code: "531100", nameAr: "مصروفات إدارية عامة", nameEn: "General Admin Expenses", level: 4, type: "EXPENSE", isPosting: false, parentCode: "531000" },
   { code: "531101", nameAr: "مصروفات إدارية وعمومية", nameEn: "General & Administrative Expense", level: 5, type: "EXPENSE", isPosting: true, parentCode: "531100" },
+  { code: "531102", nameAr: "مصاريف التأسيس والتراخيص الحكومية", nameEn: "Licensing & Regulatory Setup Expenses", level: 5, type: "EXPENSE", isPosting: false, parentCode: "531100" },
+  { code: "53110201", nameAr: "رسوم السجل التجاري والتراخيص السنوية", nameEn: "Commercial Registration & Annual License Fees", level: 6, type: "EXPENSE", isPosting: true, parentCode: "531102" },
   { code: "531200", nameAr: "عمولات ورسوم البنوك والمحافظ", nameEn: "Bank & Wallet Transfer Fees", level: 4, type: "EXPENSE", isPosting: false, parentCode: "531000" },
   { code: "531201", nameAr: "رسوم التحويلات البنكية والإلكترونية", nameEn: "Remittance & Wallet Transfer Fees", level: 5, type: "EXPENSE", isPosting: true, parentCode: "531200" },
 ];

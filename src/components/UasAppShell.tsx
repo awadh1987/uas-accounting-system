@@ -29,6 +29,8 @@ import { WorkersTab } from "@/components/tabs/WorkersTab";
 import {
   executeMutation,
   fetchBootstrapState,
+  getApiBaseUrl,
+  installGlobalApiFetchInterceptor,
   syncQueuedOfflineMutations,
 } from "@/lib/apiClient";
 import { resolveEffectiveTab, resolveGroupForTab } from "@/lib/erpNavigation";
@@ -109,6 +111,7 @@ export function UasAppShell() {
 
   // Initial database bootstrap + offline IndexedDB cache fallback
   useEffect(() => {
+    installGlobalApiFetchInterceptor();
     let active = true;
     (async () => {
       const res = await fetchBootstrapState();
@@ -495,7 +498,7 @@ export function UasAppShell() {
     const actorId = currentUser?.id;
     const actorRole = currentUser?.role;
     try {
-      const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
+      const apiBase = getApiBaseUrl();
       await fetch(`${apiBase}/api/auth/logout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

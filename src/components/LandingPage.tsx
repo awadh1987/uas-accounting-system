@@ -18,6 +18,7 @@ import {
   Users,
 } from "lucide-react";
 import { DualLogoBadge } from "@/components/DualLogoBadge";
+import { getApiBaseUrl } from "@/lib/apiClient";
 import { fmtNum } from "@/lib/formulas";
 import type { LanguageCode, TabId, UasBootstrapState, UasUser } from "@/types/uas";
 
@@ -88,7 +89,7 @@ export function LandingPage({
     if (!trimmed) return;
     setVerifying(true);
     try {
-      const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/api/public/verify?q=${encodeURIComponent(trimmed)}`, {
         cache: "no-store",
       });
@@ -353,7 +354,7 @@ export function LandingPage({
                 {isAr ? "إجمالي الأصول المسجلة" : "Total Ledger Assets"}
               </div>
               <div className="text-2xl font-black text-indigo-600">
-                {fmtNum(publicMetrics?.totalAssets ?? 3412500)} YER
+                {fmtNum(publicMetrics?.totalAssets ?? 0)} YER
               </div>
               <div className="text-[11px] text-slate-400">
                 {isAr ? "مدققة بميزانية متزنة 100%" : "100% Balance-Sheet Verified"}
@@ -366,7 +367,7 @@ export function LandingPage({
                 {isAr ? "الموردون والعملاء المربوطون" : "Linked Vendors & Clients"}
               </div>
               <div className="text-2xl font-black text-amber-600">
-                {(publicMetrics?.vendors ?? 3) + (publicMetrics?.customers ?? 2)}
+                {(publicMetrics?.vendors ?? 0) + (publicMetrics?.customers ?? 0)}
               </div>
               <div className="text-[11px] text-slate-400">
                 {isAr ? "حسابات تفصيلية من المستوى 5" : "Tier-5 Subledger Accounts"}
@@ -402,6 +403,20 @@ export function LandingPage({
               {isAr ? "إدارة المشاريع والموازنات ←" : "Manage Projects →"}
             </button>
           </div>
+          {state.projects.length === 0 ? (
+            <div className="card-surface rounded-2xl p-6 text-center space-y-2 border border-dashed border-emerald-500/40">
+              <div className="text-sm font-extrabold text-emerald-700 dark:text-emerald-300">
+                {isAr
+                  ? "النظام مهيأ بوضع البداية الصفرية (Clean Zero-State) وجاهز للعمل الفوري"
+                  : "System initialized in Clean Zero-State and ready for live operations"}
+              </div>
+              <p className="text-xs text-slate-500">
+                {isAr
+                  ? "يمكنك تسجيل الدخول وإضافة مشاريعك الزراعية وقطفاتك وحسابات الخزينة من لوحة التحكم."
+                  : "Sign in to add your agricultural projects, harvest cycles, and treasury accounts from the ERP console."}
+              </p>
+            </div>
+          ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
             {state.projects.slice(0, 3).map((proj) => (
               <div key={proj.id} className="card-surface rounded-2xl p-5 space-y-3">
@@ -429,6 +444,7 @@ export function LandingPage({
               </div>
             ))}
           </div>
+          )}
         </section>
         {/* About & Public Contact CMS Section */}
         <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-12">

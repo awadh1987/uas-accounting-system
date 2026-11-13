@@ -127,16 +127,16 @@ function mapEnterpriseProfile(
 ): UasEnterpriseProfile {
   return {
     id: row?.id || "default",
-    legalNameAr: row?.legalNameAr || "شركة الجبري الزراعية للتنمية والاستثمار",
+    legalNameAr: row?.legalNameAr || "المؤسسة الزراعية الموحدة للاستثمار",
     legalNameEn:
-      row?.legalNameEn || "Al-Jabri Agricultural Development & Investment Co.",
-    taxNumber: row?.taxNumber ?? "30049811200003",
-    commercialReg: row?.commercialReg ?? "CR-YE-2026-8841",
+      row?.legalNameEn || "Unified Agricultural Investment Enterprise",
+    taxNumber: row?.taxNumber ?? "30000000000000",
+    commercialReg: row?.commercialReg ?? "CR-YE-2026-0001",
     currencyCode: row?.currencyCode || "YER",
     isConfigured: row?.isConfigured ?? false,
-    address: row?.address ?? "الجمهورية اليمنية - مزارع الجبري الإنتاجية",
-    phone: row?.phone ?? "783118231",
-    email: row?.email ?? "finance@aljabri-agri.com",
+    address: row?.address ?? "الجمهورية اليمنية - صنعاء",
+    phone: row?.phone ?? "",
+    email: row?.email ?? "admin@uas-ye.com",
     logoUrl: row?.logoUrl ?? "/icons/icon.svg",
     brandColor: row?.brandColor || "#059669",
     showUasLogo: row?.showUasLogo ?? true,
@@ -166,8 +166,8 @@ function mapEnterpriseProfile(
     aboutMissionEn:
       row?.aboutMissionEn ||
       "Delivering institutional financial transparency and double-entry precision across agricultural ventures.",
-    contactPhone: row?.contactPhone || "783118231",
-    contactWhatsApp: row?.contactWhatsApp || "967783118231",
+    contactPhone: row?.contactPhone || "",
+    contactWhatsApp: row?.contactWhatsApp || "",
     contactAddress: row?.contactAddress || "الجمهورية اليمنية - صنعاء",
     showPublicMetrics: row?.showPublicMetrics ?? true,
     showPublicVerify: row?.showPublicVerify ?? true,
@@ -179,7 +179,7 @@ function mapEnterpriseProfile(
 function mapSettings(settingsRow: SystemSettings | null): UasSystemSettings {
   return {
     orgName:
-      settingsRow?.orgName || "شركة الجبري الزراعية للتنمية والاستثمار | UAS",
+      settingsRow?.orgName || "النظام المحاسبي الموحد (UAS Enterprise)",
     logoText: settingsRow?.logoText || "UAS",
     defaultLang: settingsRow?.defaultLang === "en" ? "en" : "ar",
     defaultTheme:

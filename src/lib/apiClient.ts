@@ -18,6 +18,43 @@ import {
 import { INITIAL_FALLBACK_STATE } from "@/lib/seedFallback";
 import type { UasBootstrapState, UasUser } from "@/types/uas";
 
+export const SERVER_URL_STORAGE_KEY = "uas_server_url";
+
+export function getApiBaseUrl(): string {
+  if (typeof window !== "undefined") {
+    const saved = window.localStorage.getItem(SERVER_URL_STORAGE_KEY);
+    if (saved && saved.trim()) {
+      return saved.trim().replace(/\/+$/, "");
+    }
+  }
+  return (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
+}
+
+export function setApiBaseUrl(url: string): void {
+  if (typeof window === "undefined") return;
+  const cleaned = url.trim().replace(/\/+$/, "");
+  if (!cleaned) {
+    window.localStorage.removeItem(SERVER_URL_STORAGE_KEY);
+  } else {
+    window.localStorage.setItem(SERVER_URL_STORAGE_KEY, cleaned);
+  }
+}
+
+let fetchInterceptorInstalled = false;
+
+export function installGlobalApiFetchInterceptor(): void {
+  if (typeof window === "undefined" || fetchInterceptorInstalled) return;
+  fetchInterceptorInstalled = true;
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    const base = getApiBaseUrl();
+    if (base && typeof input === "string" && input.startsWith("/api/")) {
+      return originalFetch(`${base}${input}`, init);
+    }
+    return originalFetch(input, init);
+  };
+}
+
 export const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
 
 export interface ApiMutationResult {
@@ -46,7 +83,8 @@ export async function fetchBootstrapState(): Promise<{
 }> {
   const queueCount = await getOfflineQueueCount();
   try {
-    const res = await fetch(`${API_BASE}/api/bootstrap`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/bootstrap`, {
       cache: "no-store",
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -457,7 +495,8 @@ export async function executeMutation(opts: {
   }
 
   try {
-    const res = await fetch(`${API_BASE}${opts.endpoint}`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}${opts.endpoint}`, {
       method: opts.method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(bodyWithActor),
@@ -532,9 +571,10 @@ export async function syncQueuedOfflineMutations(currentUser: UasUser): Promise<
   let syncedCount = 0;
   let failedCount = 0;
 
+  const base = getApiBaseUrl();
   for (const item of items) {
     try {
-      const res = await fetch(`${API_BASE}${item.endpoint}`, {
+      const res = await fetch(`${base}${item.endpoint}`, {
         method: item.method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(item.payload),
@@ -552,7 +592,7 @@ export async function syncQueuedOfflineMutations(currentUser: UasUser): Promise<
   }
 
   if (syncedCount > 0) {
-    await fetch(`${API_BASE}/api/audit/log`, {
+    await fetch(`${base}/api/audit/log`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
