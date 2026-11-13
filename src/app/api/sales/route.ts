@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     const harvestName = String(body.harvest || "").trim();
     const productGrade = String(body.grade || "رقم 1").trim();
     const customerName = String(body.customer || "").trim();
-    const customerPhone = String(body.phone || "783118231").trim();
+    const customerPhone = String(body.phone || "").trim();
     const bundlesCount = Math.max(0, Math.round(Number(body.bundles) || 0));
     const unitPrice = Number(body.price) || 0;
     const creditPaid = Number(body.credit) || 0;

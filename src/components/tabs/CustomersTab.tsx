@@ -121,7 +121,7 @@ export function CustomersTab({
           id: editingCustomer.id,
           nameAr: editNameAr.trim(),
           nameEn: editNameEn.trim() || undefined,
-          phone: editPhone.trim() || "777000000",
+          phone: editPhone.trim() || undefined,
           address: editAddress.trim() || null,
           creditLimit: Number(editCreditLimit) || 0,
           actor: currentUser

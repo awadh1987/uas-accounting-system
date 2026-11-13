@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
       if (!treasury) return { status: "TREASURY_NOT_FOUND" as const };
 
       let targetName = "";
-      let phone = "783118231";
+      let phone = "";
       let saleTransactionId: string | null = null;
       let workerWageEntryId: string | null = null;
       let journalEntryId: string | null = null;
@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
         });
         journalEntryId = je.id;
         targetName = `${sale.customerName} (${sale.saleBatchLabel})`;
-        phone = sale.customerPhone || "783118231";
+        phone = sale.customerPhone || "";
         saleTransactionId = sale.id;
       } else {
         const workerEntry = await tx.workerWageEntry.findUnique({

@@ -444,7 +444,7 @@ function UserProfileDrawerContent({
                   type="text"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  placeholder="783118231"
+                  placeholder={isAr ? "رقم الهاتف" : "Phone number"}
                   className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-mono font-semibold focus:outline-none focus:border-emerald-500"
                 />
               </div>

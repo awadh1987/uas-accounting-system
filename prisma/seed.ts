@@ -57,38 +57,45 @@ async function main() {
     prisma.account.deleteMany(),
     prisma.currencyRate.deleteMany(),
     prisma.user.deleteMany(),
-    prisma.systemSettings.deleteMany(),
-    prisma.enterpriseProfile.deleteMany(),
   ]);
 
-  // 2. Enterprise Profile & System Settings (Zero-State Enterprise Baseline)
-  await prisma.enterpriseProfile.create({
-    data: {
-      id: "default",
-      legalNameAr: "المؤسسة الزراعية الموحدة للاستثمار",
-      legalNameEn: "Unified Agricultural Investment Enterprise",
-      taxNumber: "30000000000000",
-      commercialReg: "CR-YE-2026-0001",
-      currencyCode: "YER",
-      isConfigured: false,
-      address: "الجمهورية اليمنية - صنعاء",
-      phone: "",
-      email: "admin@uas-ye.com",
-      logoUrl: "/icons/icon.svg",
-      brandColor: "#059669",
-    },
-  });
+  // 2. Enterprise Profile & System Settings (Zero-State Baseline - Preserve existing configuration)
+  const existingProfile = await prisma.enterpriseProfile.findUnique({ where: { id: "default" } });
+  if (!existingProfile) {
+    await prisma.enterpriseProfile.create({
+      data: {
+        id: "default",
+        legalNameAr: "اسم المنشأة",
+        legalNameEn: "Enterprise Name",
+        taxNumber: "",
+        commercialReg: "",
+        currencyCode: "YER",
+        isConfigured: false,
+        address: "",
+        phone: "",
+        email: "",
+        logoUrl: "/icons/icon.svg",
+        brandColor: "#059669",
+        contactPhone: "",
+        contactWhatsApp: "",
+        contactAddress: "",
+      },
+    });
+  }
 
-  await prisma.systemSettings.create({
-    data: {
-      id: "default",
-      orgName: "النظام المحاسبي الموحد (UAS Enterprise)",
-      logoText: "UAS",
-      defaultLang: "ar",
-      defaultTheme: "emerald",
-      defaultCurrency: "YER",
-    },
-  });
+  const existingSettings = await prisma.systemSettings.findUnique({ where: { id: "default" } });
+  if (!existingSettings) {
+    await prisma.systemSettings.create({
+      data: {
+        id: "default",
+        orgName: "النظام المحاسبي الموحد (UAS Enterprise)",
+        logoText: "UAS",
+        defaultLang: "ar",
+        defaultTheme: "emerald",
+        defaultCurrency: "YER",
+      },
+    });
+  }
 
   // 3. Default Exchange Rates (Base = YER)
   await prisma.currencyRate.createMany({

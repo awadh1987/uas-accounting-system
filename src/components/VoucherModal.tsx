@@ -2,7 +2,7 @@
 
 import { fmtNum, formatCurrencyVal, type CurrencyCode } from "@/lib/formulas";
 import { getDict } from "@/lib/i18n";
-import type { LanguageCode, VoucherModalPayload } from "@/types/uas";
+import type { LanguageCode, UasEnterpriseProfile, VoucherModalPayload } from "@/types/uas";
 import { QrVerificationBlock } from "./QrVerificationBlock";
 
 interface VoucherModalProps {
@@ -11,6 +11,7 @@ interface VoucherModalProps {
   currency: CurrencyCode;
   exchangeRates: Record<string, number>;
   logoText: string;
+  enterpriseProfile?: UasEnterpriseProfile | null;
   onClose: () => void;
   onSendWhatsApp: (voucher: VoucherModalPayload) => void;
 }
@@ -21,6 +22,7 @@ export function VoucherModal({
   currency,
   exchangeRates,
   logoText,
+  enterpriseProfile,
   onClose,
   onSendWhatsApp,
 }: VoucherModalProps) {
@@ -38,7 +40,14 @@ export function VoucherModal({
             <div>
               <h3 className="font-bold text-base">{voucher.title}</h3>
               <p className="text-xs text-slate-500">
-                {voucher.subtitle || "النظام المحاسبي الموحد UAS"}
+                {voucher.subtitle ||
+                  (lang === "ar"
+                    ? enterpriseProfile?.legalNameAr || "اسم المنشأة"
+                    : enterpriseProfile?.legalNameEn || "Enterprise Name")}
+                {enterpriseProfile?.commercialReg ? ` • ${enterpriseProfile.commercialReg}` : ""}
+                {enterpriseProfile?.taxNumber
+                  ? ` • ${lang === "ar" ? "الرقم الضريبي:" : "Tax ID:"} ${enterpriseProfile.taxNumber}`
+                  : ""}
               </p>
             </div>
           </div>

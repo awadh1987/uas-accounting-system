@@ -127,13 +127,24 @@ export function LandingPage({
             <div>
               <h1 className="font-extrabold text-sm sm:text-base leading-tight">
                 {isAr
-                  ? profile?.legalNameAr || "المؤسسة الزراعية الموحدة للاستثمار"
-                  : profile?.legalNameEn || "Unified Agricultural Investment Enterprise"}
+                  ? profile?.legalNameAr?.trim() || "اسم المنشأة"
+                  : profile?.legalNameEn?.trim() || "Enterprise Name"}
               </h1>
               <p className="text-[11px] text-slate-500 flex items-center gap-2">
-                <span>{isAr ? "الرقم الضريبي:" : "Tax ID:"} {profile?.taxNumber || "30049811200003"}</span>
-                <span>•</span>
-                <span>{profile?.commercialReg || "CR-YE-2026-8841"}</span>
+                {[
+                  profile?.commercialReg ? <span>{profile.commercialReg}</span> : null,
+                  profile?.taxNumber
+                    ? <span>{isAr ? "الرقم الضريبي:" : "Tax ID:"} {profile.taxNumber}</span>
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .map((el, i) => (
+                    <React.Fragment key={i}>
+                      {i > 0 && <span>•</span>}
+                      {el}
+                    </React.Fragment>
+                  ))}
+                {!profile?.commercialReg && !profile?.taxNumber && <span>—</span>}
               </p>
             </div>
           </div>
@@ -455,8 +466,8 @@ export function LandingPage({
               </div>
               <h3 className="text-lg sm:text-xl font-black">
                 {isAr
-                  ? profile?.legalNameAr || "المؤسسة الزراعية الموحدة للاستثمار"
-                  : profile?.legalNameEn || "Unified Agricultural Investment Enterprise"}
+                  ? profile?.legalNameAr?.trim() || "اسم المنشأة"
+                  : profile?.legalNameEn?.trim() || "Enterprise Name"}
               </h3>
               <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
                 {isAr
@@ -501,11 +512,11 @@ export function LandingPage({
 
       <footer className="border-t border-slate-200 dark:border-slate-800 py-5 px-4 text-center text-xs text-slate-500">
         {(isAr
-          ? profile?.legalNameAr || "المؤسسة الزراعية الموحدة للاستثمار"
-          : profile?.legalNameEn || "Unified Agricultural Investment Enterprise")}{" "}
-        — Unified Accounting System (UAS) •{" "}
-        {profile?.contactAddress || profile?.address || "صنعاء - الجمهورية اليمنية"} •{" "}
-        {profile?.email || "finance@uas-ye.com"}
+          ? profile?.legalNameAr?.trim() || "اسم المنشأة"
+          : profile?.legalNameEn?.trim() || "Enterprise Name")}{" "}
+        — Unified Accounting System (UAS)
+        {(profile?.contactAddress || profile?.address) ? ` • ${profile?.contactAddress || profile?.address}` : ""}
+        {profile?.email ? ` • ${profile.email}` : ""}
       </footer>
     </div>
   );

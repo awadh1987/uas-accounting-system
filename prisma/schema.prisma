@@ -131,8 +131,8 @@ model EnterpriseProfile {
   heroSubtitleEn         String   @default("Double-entry General Ledger, 5-tier COA, procurement & 3-way matching, and multi-currency vaults, banks & digital wallets.")
   aboutMissionAr         String   @default("تمكين المؤسسات الزراعية والتجارية من إدارة مشاريعها وقطفاتها ومستحقات الموردين والعملاء بشفافية مالية كاملة وتقارير فورية.")
   aboutMissionEn         String   @default("Empowering agricultural enterprises with full financial transparency, harvest-cycle control, and audit-ready reporting.")
-  contactPhone           String   @default("783118231")
-  contactWhatsApp        String   @default("967783118231")
+  contactPhone           String   @default("")
+  contactWhatsApp        String   @default("")
   contactAddress         String   @default("الجمهورية اليمنية - صنعاء")
   showPublicMetrics      Boolean  @default(true)
   showPublicVerify       Boolean  @default(true)
@@ -421,7 +421,7 @@ model Customer {
   name        String            @unique
   nameAr      String
   nameEn      String?
-  phone       String            @default("783118231")
+  phone       String            @default("")
   address     String?
   creditLimit Decimal           @default(0)
 
@@ -585,7 +585,7 @@ model OperatingExpense {
 model Worker {
   id               String            @id @default(cuid())
   name             String            @unique
-  phone            String            @default("783118231")
+  phone            String            @default("")
   defaultDailyWage Float             @default(0)
   accountId        String?
   account          Account?          @relation(fields: [accountId], references: [id], onDelete: SetNull)
@@ -662,7 +662,7 @@ model InstallmentVoucher {
   workerWageEntryId  String?
   workerWageEntry    WorkerWageEntry? @relation(fields: [workerWageEntryId], references: [id], onDelete: SetNull)
   targetName         String
-  phone              String           @default("783118231")
+  phone              String           @default("")
   treasuryAccountId  String
   treasuryAccount    TreasuryAccount  @relation(fields: [treasuryAccountId], references: [id], onDelete: Restrict)
   amountYER          Float

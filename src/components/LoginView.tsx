@@ -267,8 +267,8 @@ export function LoginView({
               </div>
               <h1 className="text-xl sm:text-2xl font-black leading-tight">
                 {isAr
-                  ? enterpriseProfile?.legalNameAr || "المؤسسة الزراعية الموحدة للاستثمار"
-                  : enterpriseProfile?.legalNameEn || "Unified Agricultural Investment Enterprise"}
+                  ? enterpriseProfile?.legalNameAr?.trim() || "اسم المنشأة"
+                  : enterpriseProfile?.legalNameEn?.trim() || "Enterprise Name"}
               </h1>
             </div>
           </div>
@@ -314,8 +314,14 @@ export function LoginView({
         {/* Footer Metadata */}
         <div className="relative z-10 flex flex-wrap items-center justify-between gap-2 text-[11px] text-white/70 border-t border-white/15 pt-4">
           <span>
-            {enterpriseProfile?.commercialReg || "CR-YE-2026-8841"} •{" "}
-            {isAr ? "الرقم الضريبي:" : "Tax ID:"} {enterpriseProfile?.taxNumber || "30049811200003"}
+            {[
+              enterpriseProfile?.commercialReg,
+              enterpriseProfile?.taxNumber
+                ? `${isAr ? "الرقم الضريبي:" : "Tax ID:"} ${enterpriseProfile.taxNumber}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" • ") || "—"}
           </span>
           <span>Unified Accounting System v2.0</span>
         </div>

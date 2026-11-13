@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
 
     const nameAr = String(body.nameAr || "").trim();
     const nameEn = body.nameEn ? String(body.nameEn).trim() : undefined;
-    const phone = String(body.phone || "777000000").trim();
+    const phone = String(body.phone || "").trim();
     const email = body.email ? String(body.email).trim() : undefined;
     const taxRegistration = body.taxRegistration ? String(body.taxRegistration).trim() : undefined;
     const address = body.address ? String(body.address).trim() : undefined;

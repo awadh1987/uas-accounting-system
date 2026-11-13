@@ -65,7 +65,14 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const res = NextResponse.json({ ok: true });
+  const res = NextResponse.json(
+    { ok: true },
+    {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+      },
+    }
+  );
   for (const cookieName of AUTH_COOKIE_NAMES) {
     res.cookies.set(cookieName, "", {
       maxAge: 0,

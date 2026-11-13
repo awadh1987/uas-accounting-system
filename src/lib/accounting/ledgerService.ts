@@ -349,7 +349,7 @@ export async function ensureCustomerWithAccountTx(
       name: cleanName,
       nameAr: cleanName,
       nameEn: input.nameEn || cleanName,
-      phone: input.phone || "783118231",
+      phone: input.phone || "",
       address: input.address || null,
       accountId,
     },
@@ -391,7 +391,7 @@ export async function ensureWorkerWithAccountTx(
   return tx.worker.create({
     data: {
       name: cleanName,
-      phone: input.phone || "783118231",
+      phone: input.phone || "",
       defaultDailyWage: input.defaultDailyWage ?? 0,
       accountId,
     },

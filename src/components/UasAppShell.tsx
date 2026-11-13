@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Eye, Lock, Receipt, Users } from "lucide-react";
 import { CoaTreeTab } from "@/components/CoaTreeTab";
 import { CommandSearchModal } from "@/components/CommandSearchModal";
@@ -91,13 +91,15 @@ export function UasAppShell() {
   const [selectedSubProjectId, setSelectedSubProjectId] = useState("ALL");
   const [selectedHarvest, setSelectedHarvest] = useState("ALL");
 
-  const [currentUser, setCurrentUser] = useState<UasUser | null>(INITIAL_FALLBACK_STATE.users[0]);
+  const [currentUser, setCurrentUser] = useState<UasUser | null>(null);
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
   const [quickSheetOpen, setQuickSheetOpen] = useState(false);
   const [voucherModal, setVoucherModal] = useState<VoucherModalPayload | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [deferredInstallPrompt, setDeferredInstallPrompt] =
     useState<BeforeInstallPromptEvent | null>(null);
+
+  const hydratedRef = useRef(false);
 
   const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
@@ -109,7 +111,7 @@ export function UasAppShell() {
     return () => clearTimeout(timer);
   }, [toastMsg]);
 
-  // Initial database bootstrap + offline IndexedDB cache fallback
+  // Initial database bootstrap + restore session, user & tab across refreshes
   useEffect(() => {
     installGlobalApiFetchInterceptor();
     let active = true;
@@ -121,18 +123,183 @@ export function UasAppShell() {
       setTheme(res.state.settings.defaultTheme);
       setCurrency(res.state.settings.defaultCurrency);
       setOfflineQueueCount(res.queueCount);
-      if (res.state.users.length > 0) {
-        setCurrentUser(res.state.users[0]);
+
+      let savedUserId: string | null = null;
+      let savedViewMode: string | null = null;
+      let targetTab: TabId | null = null;
+      let targetSubTab: string | null = null;
+      let targetSalesView: "sales" | "customers" = "sales";
+
+      if (typeof window !== "undefined") {
+        savedUserId = window.localStorage.getItem("uas_user");
+        savedViewMode = window.localStorage.getItem("uas_view_mode");
+
+        const rawHash = window.location.hash.replace(/^#\/?/, "");
+        if (rawHash) {
+          const parts = rawHash.split("/");
+          if (parts[0]) {
+            targetTab = parts[0] as TabId;
+            targetSubTab = parts[1] || null;
+          }
+        }
+        if (!targetTab) {
+          const storedTab = window.sessionStorage.getItem("uas_active_tab");
+          if (storedTab) targetTab = storedTab as TabId;
+        }
+
+        const storedSalesView = window.sessionStorage.getItem("uas_sales_view_mode");
+        if (storedSalesView === "customers" || targetTab === "customers") {
+          targetSalesView = "customers";
+        }
       }
+
+      const matchedUser = savedUserId
+        ? res.state.users.find(
+            (u) => u.id === savedUserId && u.active && (u.isActive ?? true)
+          )
+        : null;
+
+      if (matchedUser) {
+        setCurrentUser(matchedUser);
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem("uas_user", matchedUser.id);
+        }
+
+        const finalViewMode =
+          savedViewMode === "landing" || savedViewMode === "login" ? savedViewMode : "erp";
+        setViewMode(finalViewMode);
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem("uas_view_mode", finalViewMode);
+        }
+
+        const finalTab = targetTab || (matchedUser.defaultModule as TabId) || "dashboard";
+        if (finalTab === "customers") {
+          if (canAccessModule(matchedUser, "customers")) {
+            setActiveTab("customers");
+            setSalesViewMode("customers");
+          } else {
+            const fallback = getAccessibleTabs(matchedUser)[0] || "dashboard";
+            setActiveTab(fallback);
+          }
+        } else {
+          const resolved = resolveEffectiveTab(finalTab, matchedUser);
+          if (canAccessModule(matchedUser, resolved)) {
+            setActiveTab(resolved);
+            if (resolved === "sales") {
+              setSalesViewMode(targetSalesView);
+            }
+          } else {
+            const fallback = getAccessibleTabs(matchedUser)[0] || "dashboard";
+            setActiveTab(fallback);
+          }
+        }
+
+        if (targetTab === "system" && targetSubTab) {
+          if (typeof window !== "undefined") {
+            window.sessionStorage.setItem("uas_system_subtab", targetSubTab);
+          }
+        }
+      } else {
+        setCurrentUser(null);
+        setViewMode(savedViewMode === "login" ? "login" : "landing");
+      }
+
       if (res.fromOfflineCache) {
         setOfflineMode(true);
       }
       setLoading(false);
+      hydratedRef.current = true;
     })();
     return () => {
       active = false;
     };
   }, []);
+
+  // Sync viewMode to localStorage after initial hydration
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("uas_view_mode", viewMode);
+    }
+  }, [viewMode]);
+
+  // Synchronize activeTab, salesViewMode and hash across tab changes
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    if (typeof window === "undefined") return;
+
+    window.sessionStorage.setItem("uas_active_tab", activeTab);
+    window.sessionStorage.setItem("uas_sales_view_mode", salesViewMode);
+
+    if (viewMode === "erp") {
+      let expectedHash = `#/${activeTab}`;
+      if (activeTab === "system") {
+        const currentSub = window.sessionStorage.getItem("uas_system_subtab") || "branding";
+        expectedHash = `#/system/${currentSub}`;
+      } else if (activeTab === "customers") {
+        expectedHash = "#/customers";
+      }
+      if (window.location.hash !== expectedHash) {
+        window.location.hash = expectedHash;
+      }
+    }
+  }, [activeTab, salesViewMode, viewMode]);
+
+  // Listen to browser hash navigation
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleHashChange = () => {
+      if (viewMode !== "erp" || !currentUser) return;
+      const rawHash = window.location.hash.replace(/^#\/?/, "");
+      if (!rawHash) return;
+      const [hTab, hSub] = rawHash.split("/");
+      if (hTab === "customers") {
+        if (canAccessModule(currentUser, "customers")) {
+          setActiveTab("customers");
+          setSalesViewMode("customers");
+        }
+        return;
+      }
+      const validTabs: TabId[] = [
+        "dashboard",
+        "commercial",
+        "operations",
+        "finance",
+        "accounting",
+        "coa",
+        "ledger",
+        "procurement",
+        "reports",
+        "projects",
+        "expenses",
+        "workers",
+        "sales",
+        "customers",
+        "system",
+        "treasury",
+        "inventory",
+        "audit",
+        "mobile",
+        "prompt",
+      ];
+      if (validTabs.includes(hTab as TabId)) {
+        const resolved = resolveEffectiveTab(hTab as TabId, currentUser);
+        if (canAccessModule(currentUser, resolved)) {
+          setActiveTab(resolved);
+          if (resolved === "sales") {
+            setSalesViewMode("sales");
+          }
+          if (hTab === "system" && hSub) {
+            window.sessionStorage.setItem("uas_system_subtab", hSub);
+          }
+        }
+      }
+    };
+
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, [currentUser, viewMode]);
 
   // Register Service Worker & PWA install prompt listener + online listener
   useEffect(() => {
@@ -368,7 +535,7 @@ export function UasAppShell() {
       date: w.date,
       partyLabel: "اسم العامل",
       partyName: w.name,
-      phone: "783118231",
+      phone: state.enterpriseProfile?.phone || "",
       projectHarvest: `${projName} — ${w.harvest}`,
       detailLineLabel: "الأجر اليومي × الأيام",
       detailLineValue: `${fmtNum(w.dailyWage)} × ${fmtNum(w.days)} يوم`,
@@ -394,7 +561,7 @@ export function UasAppShell() {
       date: inst.date,
       partyLabel: "الطرف المستفيد / الدافع",
       partyName: inst.targetName,
-      phone: inst.phone || "783118231",
+      phone: inst.phone || state.enterpriseProfile?.phone || "",
       projectHarvest: inst.voucherNo,
       detailLineLabel: "البيان",
       detailLineValue: inst.notes || "—",
@@ -406,7 +573,11 @@ export function UasAppShell() {
   }
 
   async function handleSendWhatsApp(voucher: VoucherModalPayload) {
-    const cleanPhone = String(voucher.phone || "783118231").replace(/[^0-9]/g, "");
+    const cleanPhone = String(voucher.phone || state.enterpriseProfile?.contactPhone || state.enterpriseProfile?.phone || "").replace(/[^0-9]/g, "");
+    if (!cleanPhone) {
+      showToast(lang === "ar" ? "يرجى تحديد رقم الهاتف لإرسال السند عبر واتساب" : "Please specify a phone number to send via WhatsApp");
+      return;
+    }
     const fullPhone = cleanPhone.startsWith("967") ? cleanPhone : `967${cleanPhone}`;
     const url = `https://wa.me/${fullPhone}?text=${encodeURIComponent(voucher.whatsappText)}`;
     window.open(url, "_blank", "noopener,noreferrer");
@@ -473,6 +644,10 @@ export function UasAppShell() {
 
   function handleLoginUser(u: UasUser) {
     setCurrentUser(u);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("uas_user", u.id);
+      window.localStorage.setItem("uas_view_mode", "erp");
+    }
     const allowedProjects = filterAssignedProjects(u, state.projects);
     if (
       selectedProjectId !== "ALL" &&
@@ -515,6 +690,10 @@ export function UasAppShell() {
         "uas_token",
         "uas_auth",
         "uas_user",
+        "uas_view_mode",
+        "uas_active_tab",
+        "uas_sales_view_mode",
+        "uas_system_subtab",
       ];
       for (const key of authKeys) {
         window.localStorage.removeItem(key);
@@ -569,6 +748,7 @@ export function UasAppShell() {
         currency={currency}
         exchangeRates={state.exchangeRates}
         logoText={state.settings.logoText}
+        enterpriseProfile={state.enterpriseProfile}
         onClose={() => setVoucherModal(null)}
         onSendWhatsApp={handleSendWhatsApp}
       />
@@ -867,6 +1047,7 @@ export function UasAppShell() {
                   projects={scopedProjects}
                   selectedProjectId={selectedProjectId}
                   selectedSubProjectId={selectedSubProjectId}
+                  enterpriseProfile={state.enterpriseProfile}
                   onToast={showToast}
                 />
               )}
@@ -1335,6 +1516,9 @@ export function UasAppShell() {
             projects={state.projects}
             onUserUpdated={(updatedUser) => {
               setCurrentUser(updatedUser);
+              if (typeof window !== "undefined") {
+                window.localStorage.setItem("uas_user", updatedUser.id);
+              }
               setState((prev) => ({
                 ...prev,
                 users: prev.users.map((u) => (u.id === updatedUser.id ? updatedUser : u)),

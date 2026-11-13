@@ -50,7 +50,7 @@ const GROUP_ICONS: Record<ErpGroupId, React.ComponentType<{ className?: string }
 };
 
 export function SidebarNav({
-  orgName,
+  orgName: _orgName,
   logoText,
   enterpriseProfile,
   lang,
@@ -103,8 +103,8 @@ export function SidebarNav({
               <div className="min-w-0">
                 <div className="text-xs font-black truncate leading-tight">
                   {(lang === "ar"
-                    ? enterpriseProfile?.legalNameAr
-                    : enterpriseProfile?.legalNameEn) || orgName.split("|")[0].trim()}
+                    ? enterpriseProfile?.legalNameAr?.trim() || "اسم المنشأة"
+                    : enterpriseProfile?.legalNameEn?.trim() || "Enterprise Name")}
                 </div>
                 <div className="text-[10px] text-slate-500 font-semibold flex items-center gap-1 mt-0.5">
                   <ShieldCheck className="w-3 h-3 text-emerald-600 shrink-0" />

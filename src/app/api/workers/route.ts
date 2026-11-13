@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
       const worker = await ensureWorkerWithAccountTx(tx, {
         name,
         defaultDailyWage: dailyWage,
-        phone: "783118231",
+        phone: body.phone ? String(body.phone).trim() : "",
       });
 
       const entry = await tx.workerWageEntry.create({

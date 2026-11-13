@@ -122,31 +122,38 @@ export async function POST(req: NextRequest) {
       assignedProjects: parseAssignedProjects(user.assignedProjects),
     };
 
-    return NextResponse.json({
-      user: uasUser,
-      preferences: {
-        preferredLang: uasUser.preferredLang,
-        preferredCurrency: uasUser.preferredCurrency,
-        preferredTheme: uasUser.preferredTheme,
-        defaultModule: uasUser.defaultModule,
+    return NextResponse.json(
+      {
+        user: uasUser,
+        preferences: {
+          preferredLang: uasUser.preferredLang,
+          preferredCurrency: uasUser.preferredCurrency,
+          preferredTheme: uasUser.preferredTheme,
+          defaultModule: uasUser.defaultModule,
+        },
+        mustChangePassword: uasUser.mustChangePassword,
+        permissions: {
+          allowedGroups: getAccessibleGroups(uasUser),
+          accessibleTabs: getAccessibleTabs(uasUser),
+          canCreate: canCreate(uasUser),
+          canEdit: canEdit(uasUser),
+          canEditDate: canEditDate(uasUser),
+          canDeleteVoid: canDeleteVoid(uasUser),
+          canApprove: canApprove(uasUser),
+          canPostLedger: canPostLedger(uasUser),
+          canManageTreasury: canManageTreasury(uasUser),
+          canManageLandingCms: canManageLandingCms(uasUser),
+          canLockPeriod: canLockPeriod(uasUser),
+          canManageUsers: canManageUsers(uasUser),
+          isReadOnly: isReadOnly(uasUser),
+        },
       },
-      mustChangePassword: uasUser.mustChangePassword,
-      permissions: {
-        allowedGroups: getAccessibleGroups(uasUser),
-        accessibleTabs: getAccessibleTabs(uasUser),
-        canCreate: canCreate(uasUser),
-        canEdit: canEdit(uasUser),
-        canEditDate: canEditDate(uasUser),
-        canDeleteVoid: canDeleteVoid(uasUser),
-        canApprove: canApprove(uasUser),
-        canPostLedger: canPostLedger(uasUser),
-        canManageTreasury: canManageTreasury(uasUser),
-        canManageLandingCms: canManageLandingCms(uasUser),
-        canLockPeriod: canLockPeriod(uasUser),
-        canManageUsers: canManageUsers(uasUser),
-        isReadOnly: isReadOnly(uasUser),
-      },
-    });
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+        },
+      }
+    );
   } catch (error) {
     console.error("POST /api/auth/login error:", error);
     return jsonError("تعذر تسجيل الدخول", 500);

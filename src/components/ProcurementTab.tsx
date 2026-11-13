@@ -273,7 +273,7 @@ export function ProcurementTab({
         ...(isEdit ? { id: editingVendorId } : {}),
         nameAr: vNameAr.trim(),
         nameEn: vNameEn.trim() || undefined,
-        phone: vPhone.trim() || "777000000",
+        phone: vPhone.trim() || undefined,
         taxRegistration: vTax.trim() || undefined,
         actor: actorPayload,
       }),

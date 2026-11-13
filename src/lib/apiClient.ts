@@ -271,7 +271,7 @@ function applyLocalOptimistic(
       revenueAccountCode: String(payload.revenueAccountCode || "411101"),
       treasuryAccountId: payload.treasuryAccountId ? String(payload.treasuryAccountId) : undefined,
       customer: String(payload.customer || ""),
-      phone: String(payload.phone || "783118231"),
+      phone: String(payload.phone || ""),
       grade: String(payload.grade || "رقم 1"),
       bundles,
       price,
@@ -311,7 +311,7 @@ function applyLocalOptimistic(
 
     const treas = next.treasuryAccounts.find((t) => t.id === treasuryId);
     let targetName = "";
-    let phone = "783118231";
+    let phone = "";
 
     if (type === "CUSTOMER_RECEIPT") {
       const sale = next.sales.find((s) => s.id === targetId);
@@ -322,7 +322,7 @@ function applyLocalOptimistic(
       sale.credit += amount;
       sale.debit = sale.total - sale.credit;
       targetName = `${sale.customer} (${sale.batch})`;
-      phone = sale.phone || "783118231";
+      phone = sale.phone || "";
       if (treas) treas.balanceYER += amount;
     } else {
       const worker = next.workers.find((w) => w.id === targetId);

@@ -127,16 +127,15 @@ function mapEnterpriseProfile(
 ): UasEnterpriseProfile {
   return {
     id: row?.id || "default",
-    legalNameAr: row?.legalNameAr || "المؤسسة الزراعية الموحدة للاستثمار",
-    legalNameEn:
-      row?.legalNameEn || "Unified Agricultural Investment Enterprise",
-    taxNumber: row?.taxNumber ?? "30000000000000",
-    commercialReg: row?.commercialReg ?? "CR-YE-2026-0001",
+    legalNameAr: row?.legalNameAr || "اسم المنشأة",
+    legalNameEn: row?.legalNameEn || "Enterprise Name",
+    taxNumber: row?.taxNumber || "",
+    commercialReg: row?.commercialReg || "",
     currencyCode: row?.currencyCode || "YER",
     isConfigured: row?.isConfigured ?? false,
-    address: row?.address ?? "الجمهورية اليمنية - صنعاء",
-    phone: row?.phone ?? "",
-    email: row?.email ?? "admin@uas-ye.com",
+    address: row?.address || "",
+    phone: row?.phone || "",
+    email: row?.email || "",
     logoUrl: row?.logoUrl ?? "/icons/icon.svg",
     brandColor: row?.brandColor || "#059669",
     showUasLogo: row?.showUasLogo ?? true,
@@ -150,25 +149,25 @@ function mapEnterpriseProfile(
       row?.heroBadgeEn || "Unified Accounting System (UAS Enterprise)",
     heroTitleAr:
       row?.heroTitleAr ||
-      "الإدارة المالية والمحاسبية المتكاملة للمشاريع الزراعية",
+      "نظام إدارة الحسابات وتخطيط موارد المؤسسات",
     heroTitleEn:
       row?.heroTitleEn ||
-      "Integrated Financial & Agricultural Enterprise Resource Planning",
+      "Enterprise Resource Planning & Financial Management",
     heroSubtitleAr:
       row?.heroSubtitleAr ||
-      "منظومة قيد مزدوج متكاملة، إدارة الخزينة والبنوك، المشتريات والمبيعات، وتتبع مواسم الحصاد بدقة مؤسسية.",
+      "منظومة قيد مزدوج متكاملة، إدارة الخزينة والبنوك، المشتريات والمبيعات، ومتابعة العمليات بدقة لحظية.",
     heroSubtitleEn:
       row?.heroSubtitleEn ||
-      "Complete double-entry GL engine, multi-currency treasury, procurement, sales, and harvest cycle analytics.",
+      "Complete double-entry GL engine, multi-currency treasury, procurement, sales, and supply chain analytics.",
     aboutMissionAr:
       row?.aboutMissionAr ||
-      "تحقيق أعلى مستويات الشفافية المالية والانضباط المحاسبي لجميع المشاريع الاستثمارية والزراعية.",
+      "تحقيق أعلى مستويات الشفافية المالية والانضباط المحاسبي لجميع المشاريع الاستثمارية والتجارية.",
     aboutMissionEn:
       row?.aboutMissionEn ||
-      "Delivering institutional financial transparency and double-entry precision across agricultural ventures.",
+      "Delivering institutional financial transparency and double-entry precision across business ventures.",
     contactPhone: row?.contactPhone || "",
     contactWhatsApp: row?.contactWhatsApp || "",
-    contactAddress: row?.contactAddress || "الجمهورية اليمنية - صنعاء",
+    contactAddress: row?.contactAddress || "",
     showPublicMetrics: row?.showPublicMetrics ?? true,
     showPublicVerify: row?.showPublicVerify ?? true,
     ctaPrimaryTextAr: row?.ctaPrimaryTextAr || "دخول النظام المالي",
@@ -408,8 +407,34 @@ function mapSales(sales: SaleTransaction[]): UasSaleTransaction[] {
 }
 
 export async function getBootstrapState(): Promise<UasBootstrapState> {
+  let enterpriseProfile = await prisma.enterpriseProfile.findUnique({ where: { id: "default" } });
+  if (!enterpriseProfile) {
+    try {
+      enterpriseProfile = await prisma.enterpriseProfile.create({
+        data: {
+          id: "default",
+          legalNameAr: "اسم المنشأة",
+          legalNameEn: "Enterprise Name",
+          taxNumber: "",
+          commercialReg: "",
+          currencyCode: "YER",
+          isConfigured: false,
+          address: "",
+          phone: "",
+          email: "",
+          logoUrl: "/icons/icon.svg",
+          brandColor: "#059669",
+          contactPhone: "",
+          contactWhatsApp: "",
+          contactAddress: "",
+        },
+      });
+    } catch {
+      enterpriseProfile = await prisma.enterpriseProfile.findUnique({ where: { id: "default" } });
+    }
+  }
+
   const [
-    enterpriseProfile,
     settingsRow,
     rates,
     treasuryAccounts,
@@ -417,7 +442,6 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
     inventoryBatches,
     auditLogs,
   ] = await Promise.all([
-    prisma.enterpriseProfile.findUnique({ where: { id: "default" } }),
     prisma.systemSettings.findUnique({ where: { id: "default" } }),
     prisma.currencyRate.findMany(),
     prisma.treasuryAccount.findMany({ orderBy: { id: "asc" } }),

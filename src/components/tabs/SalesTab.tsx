@@ -122,7 +122,7 @@ export function SalesTab({
   const [customGradeText, setCustomGradeText] = useState("");
 
   const [customer, setCustomer] = useState("");
-  const [phone, setPhone] = useState("783118231");
+  const [phone, setPhone] = useState("");
   const [bundles, setBundles] = useState("100");
   const [price, setPrice] = useState("2000");
   const [credit, setCredit] = useState("50000");
@@ -199,7 +199,7 @@ export function SalesTab({
     setSelectedGradePreset("رقم 1");
     setCustomGradeText("");
     setCustomer("");
-    setPhone("783118231");
+    setPhone("");
     setBundles("100");
     setPrice("2000");
     setCredit("50000");
@@ -232,7 +232,7 @@ export function SalesTab({
     }
 
     setCustomer(s.customer);
-    setPhone(s.phone || "783118231");
+    setPhone(s.phone || "");
     setBundles(String(s.bundles));
     setPrice(String(s.price));
     setCredit(String(s.credit));
@@ -271,7 +271,7 @@ export function SalesTab({
       customAccount: customRevenueAccount,
       grade: finalGrade,
       customer: customer.trim(),
-      phone: phone.trim() || "783118231",
+      phone: phone.trim(),
       bundles: Number(bundles) || 0,
       price: Number(price) || 0,
       credit: Number(credit) || 0,

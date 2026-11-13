@@ -14,7 +14,7 @@ import { Bar } from "react-chartjs-2";
 import { BarChart3, CheckCircle2, FileSpreadsheet, Printer, Scale, AlertTriangle } from "lucide-react";
 import { exportFinancialStatementsToExcel } from "@/lib/excelExport";
 import { fmtNum } from "@/lib/formulas";
-import type { UasProject } from "@/types/uas";
+import type { UasEnterpriseProfile, UasProject } from "@/types/uas";
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend);
 
@@ -109,6 +109,7 @@ interface FinancialReportsTabProps {
   projects: UasProject[];
   selectedProjectId: string;
   selectedSubProjectId?: string;
+  enterpriseProfile?: UasEnterpriseProfile | null;
   onToast: (msg: string) => void;
 }
 
@@ -116,6 +117,7 @@ export function FinancialReportsTab({
   projects,
   selectedProjectId,
   selectedSubProjectId = "ALL",
+  enterpriseProfile,
   onToast,
 }: FinancialReportsTabProps) {
   const [reportTab, setReportTab] = useState<"tb" | "pl" | "bs" | "budget">("tb");
@@ -211,6 +213,26 @@ export function FinancialReportsTab({
 
   return (
     <section className="space-y-5">
+      {/* Printable Enterprise Header */}
+      <div className="hidden print:flex flex-col items-center justify-center border-b pb-4 mb-4 text-center">
+        <h1 className="text-xl font-black">
+          {enterpriseProfile?.legalNameAr || "اسم المنشأة"}
+        </h1>
+        {enterpriseProfile?.legalNameEn && (
+          <div className="text-xs font-semibold text-slate-600">
+            {enterpriseProfile.legalNameEn}
+          </div>
+        )}
+        <div className="text-xs text-slate-500 flex items-center gap-2 mt-1">
+          {enterpriseProfile?.taxNumber && (
+            <span>الرقم الضريبي: {enterpriseProfile.taxNumber}</span>
+          )}
+          {enterpriseProfile?.commercialReg && (
+            <span>السجل التجاري: {enterpriseProfile.commercialReg}</span>
+          )}
+        </div>
+      </div>
+
       <div className="card-surface rounded-2xl p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">

@@ -35,6 +35,7 @@ async function handleUpdateBranding(req: NextRequest) {
       body[key] !== undefined ? Boolean(body[key]) : undefined;
 
     const updateData = {
+      isConfigured: true,
       ...(strOpt("legalNameAr") ? { legalNameAr: strOpt("legalNameAr") } : {}),
       ...(strOpt("legalNameEn") ? { legalNameEn: strOpt("legalNameEn") } : {}),
       ...(nullableStrOpt("taxNumber") !== undefined ? { taxNumber: nullableStrOpt("taxNumber") } : {}),
@@ -90,9 +91,9 @@ async function handleUpdateBranding(req: NextRequest) {
         update: updateData,
         create: {
           id: "default",
-          legalNameAr: strOpt("legalNameAr") || "شركة الجبري الزراعية للتنمية والاستثمار",
+          legalNameAr: strOpt("legalNameAr") || "اسم المنشأة",
           legalNameEn:
-            strOpt("legalNameEn") || "Al-Jabri Agricultural Development & Investment Co.",
+            strOpt("legalNameEn") || "Enterprise Name",
           currencyCode: strOpt("currencyCode") || "YER",
           brandColor: strOpt("brandColor") || "#059669",
           ...updateData,
