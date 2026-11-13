@@ -11,6 +11,7 @@ import {
   Globe,
   KeyRound,
   LayoutDashboard,
+  LogOut,
   Paintbrush,
   Save,
   Shield,
@@ -56,6 +57,7 @@ interface UserProfileDrawerProps {
   onChangeTheme?: (theme: ThemeName) => void;
   onChangeCurrency?: (curr: CurrencyCode) => void;
   onToast: (msg: string) => void;
+  onLogout?: () => void;
 }
 
 const AVATAR_COLOR_PALETTE = [
@@ -95,6 +97,7 @@ function UserProfileDrawerContent({
   onChangeTheme,
   onChangeCurrency,
   onToast,
+  onLogout,
 }: UserProfileDrawerProps) {
   const isAr = lang === "ar";
   const roleMeta = getRoleMeta(currentUser);
@@ -262,6 +265,26 @@ function UserProfileDrawerContent({
       }
       size="lg"
       lang={lang}
+      footer={
+        onLogout ? (
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[11px] text-slate-500">
+              {isAr ? "إنهاء الجلسة الحالية بأمان" : "End current session securely"}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onLogout();
+              }}
+              className="px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-950/60 border border-rose-200 dark:border-rose-800/60 transition"
+            >
+              <LogOut className="w-4 h-4 shrink-0" />
+              <span>{isAr ? "تسجيل الخروج من الحساب" : "Sign Out"}</span>
+            </button>
+          </div>
+        ) : undefined
+      }
     >
       <div className="space-y-5 text-xs">
         {/* Must change password warning banner */}

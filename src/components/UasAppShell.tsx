@@ -89,7 +89,7 @@ export function UasAppShell() {
   const [selectedSubProjectId, setSelectedSubProjectId] = useState("ALL");
   const [selectedHarvest, setSelectedHarvest] = useState("ALL");
 
-  const [currentUser, setCurrentUser] = useState<UasUser>(INITIAL_FALLBACK_STATE.users[0]);
+  const [currentUser, setCurrentUser] = useState<UasUser | null>(INITIAL_FALLBACK_STATE.users[0]);
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
   const [quickSheetOpen, setQuickSheetOpen] = useState(false);
   const [voucherModal, setVoucherModal] = useState<VoucherModalPayload | null>(null);
@@ -194,19 +194,20 @@ export function UasAppShell() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [viewMode]);
 
-  const userReadOnly = isReadOnly(currentUser);
-  const userCanApprove = canApprove(currentUser);
-  const userCanPost = canPostLedger(currentUser);
-  const userCanLock = canLockPeriod(currentUser);
-  const userCanManageUsers = canManageUsers(currentUser);
-  const userCanManageTreasury = canManageTreasury(currentUser);
-  const userCanEditDate = canEditDate(currentUser);
-  const roleMeta = getRoleMeta(currentUser);
+  const activeUser = currentUser ?? INITIAL_FALLBACK_STATE.users[0];
+  const userReadOnly = isReadOnly(activeUser);
+  const userCanApprove = canApprove(activeUser);
+  const userCanPost = canPostLedger(activeUser);
+  const userCanLock = canLockPeriod(activeUser);
+  const userCanManageUsers = canManageUsers(activeUser);
+  const userCanManageTreasury = canManageTreasury(activeUser);
+  const userCanEditDate = canEditDate(activeUser);
+  const roleMeta = getRoleMeta(activeUser);
   const dict = getDict(lang);
 
   const scopedProjects = useMemo(
-    () => filterAssignedProjects(currentUser, state.projects),
-    [currentUser, state.projects]
+    () => filterAssignedProjects(activeUser, state.projects),
+    [activeUser, state.projects]
   );
 
   const scopedProjectIdSet = useMemo(
@@ -286,7 +287,7 @@ export function UasAppShell() {
       payload,
       label,
       currentState: state,
-      currentUser,
+      currentUser: activeUser,
       offlineMode,
     });
     setOfflineQueueCount(res.queueCount);
@@ -314,7 +315,7 @@ export function UasAppShell() {
       showToast("لا يوجد اتصال بالإنترنت حالياً لتنفيذ المزامنة");
       return;
     }
-    const res = await syncQueuedOfflineMutations(currentUser);
+    const res = await syncQueuedOfflineMutations(activeUser);
     setState(res.state);
     setOfflineQueueCount(res.remainingQueue);
     setOfflineMode(false);
@@ -421,8 +422,8 @@ export function UasAppShell() {
   const navigateToTab = useCallback(
     (nextTab: TabId) => {
       if (nextTab === "customers") {
-        if (!canAccessModule(currentUser, "customers")) {
-          const fallback = getAccessibleTabs(currentUser)[0] || "dashboard";
+        if (!canAccessModule(activeUser, "customers")) {
+          const fallback = getAccessibleTabs(activeUser)[0] || "dashboard";
           setActiveTab(fallback);
           showToast(
             lang === "ar"
@@ -436,9 +437,9 @@ export function UasAppShell() {
         return;
       }
 
-      const resolved = resolveEffectiveTab(nextTab, currentUser);
-      if (!canAccessModule(currentUser, resolved)) {
-        const fallback = getAccessibleTabs(currentUser)[0] || "dashboard";
+      const resolved = resolveEffectiveTab(nextTab, activeUser);
+      if (!canAccessModule(activeUser, resolved)) {
+        const fallback = getAccessibleTabs(activeUser)[0] || "dashboard";
         setActiveTab(fallback);
         showToast(
           lang === "ar"
@@ -452,7 +453,7 @@ export function UasAppShell() {
       }
       setActiveTab(resolved);
     },
-    [currentUser, lang, showToast]
+    [activeUser, lang, showToast]
   );
 
   function handleQuickJump(tab: TabId, targetId: string) {
@@ -490,6 +491,44 @@ export function UasAppShell() {
     );
   }
 
+  async function handleLogout() {
+    const actorId = currentUser?.id;
+    const actorRole = currentUser?.role;
+    try {
+      const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
+      await fetch(`${apiBase}/api/auth/logout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actorId, actorRole }),
+      });
+    } catch (err) {
+      console.warn("Logout request failed (continuing local cleanup):", err);
+    }
+
+    if (typeof window !== "undefined") {
+      const authKeys = [
+        "uas_remembered_identifier",
+        "uas_session",
+        "uas_token",
+        "uas_auth",
+        "uas_user",
+      ];
+      for (const key of authKeys) {
+        window.localStorage.removeItem(key);
+        window.sessionStorage.removeItem(key);
+      }
+    }
+
+    setProfileDrawerOpen(false);
+    setMobileSidebarOpen(false);
+    setQuickSheetOpen(false);
+    setSearchModalOpen(false);
+    setVoucherModal(null);
+    setCurrentUser(null);
+    setViewMode("login");
+    showToast("تم تسجيل الخروج بنجاح / Logged out successfully");
+  }
+
   async function handleTriggerPwaInstall() {
     if (deferredInstallPrompt) {
       await deferredInstallPrompt.prompt();
@@ -507,7 +546,7 @@ export function UasAppShell() {
 
   const activeGroup = resolveGroupForTab(activeTab);
   const visibleSubTabs = activeGroup.subTabs.filter((sub) =>
-    canAccessModule(currentUser, sub.id)
+    canAccessModule(activeUser, sub.id)
   );
 
   return (
@@ -532,11 +571,11 @@ export function UasAppShell() {
       />
 
       <CommandSearchModal
-        open={searchModalOpen && viewMode === "erp"}
+        open={searchModalOpen && viewMode === "erp" && Boolean(currentUser)}
         onClose={() => setSearchModalOpen(false)}
         state={state}
         lang={lang}
-        currentUser={currentUser}
+        currentUser={activeUser}
         onNavigate={(tab) => navigateToTab(tab)}
         onSelectProject={(pid) => {
           handleProjectFilterChange(pid);
@@ -550,20 +589,24 @@ export function UasAppShell() {
           lang={lang}
           currentUser={currentUser}
           onEnterErp={(tab) => {
+            if (!currentUser) {
+              setViewMode("login");
+              return;
+            }
             if (tab) navigateToTab(tab);
             setViewMode("erp");
           }}
           onOpenLogin={() => setViewMode("login")}
           onToggleLang={() => setLang((prev) => (prev === "ar" ? "en" : "ar"))}
         />
-      ) : viewMode === "login" ? (
+      ) : viewMode === "login" || !currentUser ? (
         <LoginView
           users={state.users}
           logoText={state.settings.logoText}
           enterpriseProfile={state.enterpriseProfile}
           lang={lang}
           theme={theme}
-          currentUserId={currentUser.id}
+          currentUserId={currentUser?.id ?? ""}
           offlineMode={offlineMode}
           onBackToLanding={() => setViewMode("landing")}
           onToggleLang={() => setLang((prev) => (prev === "ar" ? "en" : "ar"))}
@@ -587,6 +630,7 @@ export function UasAppShell() {
             onSelectGroup={(_groupId, defaultTab) => navigateToTab(defaultTab)}
             onSelectSubTab={(tab) => navigateToTab(tab)}
             onOpenLogin={() => setViewMode("login")}
+            onLogout={handleLogout}
           />
 
           <div
@@ -669,6 +713,7 @@ export function UasAppShell() {
               onOpenLogin={() => setViewMode("login")}
               onOpenLanding={() => setViewMode("landing")}
               onOpenProfileDrawer={() => setProfileDrawerOpen(true)}
+              onLogout={handleLogout}
             />
 
             <main className="max-w-7xl w-full mx-auto flex-1 p-4 md:p-6 pb-24 md:pb-8 space-y-5">
@@ -1107,11 +1152,15 @@ export function UasAppShell() {
                       "تم تحديث الملف الشخصي وإعادة تعيين كلمة المرور بنجاح"
                     );
                     if (ok) {
-                      setCurrentUser((prev) => ({
-                        ...prev,
-                        name: payload.name || prev.name,
-                        avatarChar: payload.avatarChar || prev.avatarChar,
-                      }));
+                      setCurrentUser((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              name: payload.name || prev.name,
+                              avatarChar: payload.avatarChar || prev.avatarChar,
+                            }
+                          : prev
+                      );
                     }
                   }}
                   onAddUser={(payload) =>
@@ -1270,6 +1319,7 @@ export function UasAppShell() {
             onCloseQuickSheet={() => setQuickSheetOpen(false)}
             onQuickJump={handleQuickJump}
             onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
+            onLogout={handleLogout}
           />
 
           <UserProfileDrawer
@@ -1312,6 +1362,7 @@ export function UasAppShell() {
               showToast(`تم تغيير عملة العرض إلى: ${next}`);
             }}
             onToast={showToast}
+            onLogout={handleLogout}
           />
         </div>
       )}

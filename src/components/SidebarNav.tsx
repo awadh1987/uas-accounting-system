@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Landmark,
   LayoutDashboard,
+  LogOut,
   Settings2,
   ShieldCheck,
   ShoppingBag,
@@ -35,6 +36,7 @@ interface SidebarNavProps {
   onSelectGroup: (groupId: ErpGroupId, defaultTab: TabId) => void;
   onSelectSubTab: (tab: TabId) => void;
   onOpenLogin: () => void;
+  onLogout?: () => void;
 }
 
 const GROUP_ICONS: Record<ErpGroupId, React.ComponentType<{ className?: string }>> = {
@@ -62,6 +64,7 @@ export function SidebarNav({
   onSelectGroup,
   onSelectSubTab,
   onOpenLogin,
+  onLogout,
 }: SidebarNavProps) {
   const isAr = lang === "ar";
   const activeGroup = resolveGroupForTab(activeTab);
@@ -212,14 +215,27 @@ export function SidebarNav({
         {/* Sidebar Footer: Active User & Role Card */}
         <div className="p-2.5 border-t border-slate-200 dark:border-slate-700/80 shrink-0 space-y-2">
           {isIconRail ? (
-            <button
-              type="button"
-              onClick={onOpenLogin}
-              title={`${currentUser.name} — ${isAr ? roleMeta.labelAr : roleMeta.shortEn}`}
-              className="w-full flex justify-center py-1"
-            >
-              <SvgAvatar char={currentUser.avatarChar} size={36} />
-            </button>
+            <div className="flex flex-col items-center gap-1.5">
+              <button
+                type="button"
+                onClick={onOpenLogin}
+                title={`${currentUser.name} — ${isAr ? roleMeta.labelAr : roleMeta.shortEn}`}
+                className="w-full flex justify-center py-1"
+              >
+                <SvgAvatar char={currentUser.avatarChar} size={36} />
+              </button>
+              {onLogout && (
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  title={isAr ? "تسجيل الخروج" : "Logout"}
+                  aria-label={isAr ? "تسجيل الخروج" : "Logout"}
+                  className="p-2 rounded-xl text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-transparent hover:border-rose-200 dark:hover:border-rose-800/60 transition"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
+            </div>
           ) : (
             <div className="p-2.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/70 space-y-2">
               <div className="flex items-center gap-2.5">
@@ -241,6 +257,19 @@ export function SidebarNav({
                   </span>
                 )}
               </div>
+              {onLogout && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isMobileDrawer) onCloseMobile();
+                    onLogout();
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-xl text-[11px] font-extrabold flex items-center justify-center gap-1.5 text-rose-600 dark:text-rose-400 bg-rose-50/70 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-950/50 border border-rose-200/70 dark:border-rose-800/50 transition"
+                >
+                  <LogOut className="w-3.5 h-3.5 shrink-0" />
+                  <span>{isAr ? "تسجيل الخروج" : "Logout"}</span>
+                </button>
+              )}
             </div>
           )}
         </div>

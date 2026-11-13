@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, Home, Landmark, Menu, Plus, ShoppingBag, X } from "lucide-react";
+import { BarChart3, Home, Landmark, LogOut, Menu, Plus, ShoppingBag, X } from "lucide-react";
 import { getDict } from "@/lib/i18n";
 import { canAccessModule, isReadOnly } from "@/lib/permissions";
 import type { LanguageCode, TabId, UasUser } from "@/types/uas";
@@ -16,6 +16,7 @@ interface MobileBottomNavProps {
   onCloseQuickSheet: () => void;
   onQuickJump: (tab: TabId, targetElementId: string) => void;
   onOpenMobileSidebar: () => void;
+  onLogout?: () => void;
 }
 
 export function MobileBottomNav({
@@ -29,6 +30,7 @@ export function MobileBottomNav({
   onCloseQuickSheet,
   onQuickJump,
   onOpenMobileSidebar,
+  onLogout,
 }: MobileBottomNavProps) {
   const dict = getDict(lang);
   const isAr = lang === "ar";
@@ -154,6 +156,21 @@ export function MobileBottomNav({
                 </button>
               )}
             </div>
+            {onLogout && (
+              <div className="pt-2 border-t border-slate-200 dark:border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCloseQuickSheet();
+                    onLogout();
+                  }}
+                  className="w-full px-3 py-2.5 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-950/50 border border-rose-200 dark:border-rose-800/60 transition"
+                >
+                  <LogOut className="w-4 h-4 shrink-0" />
+                  <span>{isAr ? "تسجيل الخروج" : "Logout"}</span>
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

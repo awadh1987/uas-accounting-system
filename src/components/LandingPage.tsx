@@ -24,7 +24,7 @@ import type { LanguageCode, TabId, UasBootstrapState, UasUser } from "@/types/ua
 interface LandingPageProps {
   state: UasBootstrapState;
   lang: LanguageCode;
-  currentUser: UasUser;
+  currentUser?: UasUser | null;
   onEnterErp: (tab?: TabId) => void;
   onOpenLogin: () => void;
   onToggleLang: () => void;
@@ -158,9 +158,13 @@ export function LandingPage({
             >
               <Building2 className="w-4 h-4" />
               <span>
-                {isAr
-                  ? `دخول النظام المحاسبي (${currentUser.name})`
-                  : `Enter Accounting ERP (${currentUser.name})`}
+                {currentUser
+                  ? isAr
+                    ? `دخول النظام المحاسبي (${currentUser.name})`
+                    : `Enter Accounting ERP (${currentUser.name})`
+                  : isAr
+                  ? "دخول النظام المحاسبي"
+                  : "Enter Accounting ERP"}
               </span>
             </button>
           </div>

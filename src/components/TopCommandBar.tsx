@@ -65,6 +65,7 @@ interface TopCommandBarProps {
   onOpenLogin: () => void;
   onOpenLanding: () => void;
   onOpenProfileDrawer?: () => void;
+  onLogout?: () => void;
 }
 
 export function TopCommandBar({
@@ -100,6 +101,7 @@ export function TopCommandBar({
   onOpenLogin,
   onOpenLanding,
   onOpenProfileDrawer,
+  onLogout,
 }: TopCommandBarProps) {
   const isAr = lang === "ar";
   const dict = getDict(lang);
@@ -375,6 +377,20 @@ export function TopCommandBar({
                 </div>
               </button>
 
+              {onLogout && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileOpen(false);
+                    onLogout();
+                  }}
+                  className="w-full px-3 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-transparent hover:border-rose-200 dark:hover:border-rose-800/60 transition"
+                >
+                  <LogOut className="w-4 h-4 shrink-0" />
+                  <span>{isAr ? "تسجيل الخروج" : "Logout"}</span>
+                </button>
+              )}
+
               {/* Project Filter inside dropdown for narrow viewports */}
               <div className="xl:hidden px-2 py-1.5 space-y-1.5 border-b border-slate-100 dark:border-slate-800">
                 <select
@@ -454,13 +470,10 @@ export function TopCommandBar({
                   setProfileOpen(false);
                   onOpenLanding();
                 }}
-                className="w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition"
+                className="w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
               >
-                <LogOut className="w-4 h-4" />
-                <span>
-                  <Home className="w-3.5 h-3.5 inline me-1" />
-                  {isAr ? "الصفحة الرئيسية العامة" : "Public Landing Page"}
-                </span>
+                <Home className="w-4 h-4 text-slate-500" />
+                <span>{isAr ? "الصفحة الرئيسية العامة" : "Public Landing Page"}</span>
               </button>
             </div>
           )}
