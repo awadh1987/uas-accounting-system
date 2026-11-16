@@ -72,8 +72,8 @@ if ($hasLocalAndroidJar) {
     Set-Content -Path (Join-Path $RepoRoot "android\local.properties") -Value "sdk.dir=$escapedSdk" -Encoding UTF8
 
     Write-Host "`n[1/3] Building Next.js mobile bundle and syncing Capacitor..." -ForegroundColor Yellow
-    # Clean stale APKs from public, out, and assets to prevent bundle bloating
-    Get-ChildItem -Path (Join-Path $RepoRoot "public"), (Join-Path $RepoRoot "out"), (Join-Path $RepoRoot "android\app\src\main\assets\public") -Filter "*.apk" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
+    # Clean stale APKs from out and assets to prevent bundle bloating
+    Get-ChildItem -Path (Join-Path $RepoRoot "out"), (Join-Path $RepoRoot "android\app\src\main\assets\public") -Filter "*.apk" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
     npm run build:mobile
 
     Write-Host "`n[2/3] Compiling Android APK via Gradle..." -ForegroundColor Yellow
@@ -93,6 +93,24 @@ if ($hasLocalAndroidJar) {
     $fullApkPath = Join-Path $RepoRoot "android\$apkSource"
     Copy-Item -Path $fullApkPath -Destination $destApk -Force
     Write-Host "`n[3/3] APK built locally and copied to: $destApk" -ForegroundColor Green
+
+    # Mirror to public/downloads/ for direct browser & mobile hub downloads
+    $pubDownloads = Join-Path $RepoRoot "public\downloads"
+    if (-not (Test-Path $pubDownloads)) { New-Item -ItemType Directory -Path $pubDownloads -Force | Out-Null }
+    $destPubApk = Join-Path $pubDownloads "uas-latest.apk"
+    Copy-Item -Path $fullApkPath -Destination $destPubApk -Force
+    $apkItem = Get-Item $destPubApk
+    $versionMeta = @{
+        version = "1.0.0"
+        versionCode = 1
+        appName = "UAS Accounting"
+        fileName = "uas-latest.apk"
+        fileSize = $apkItem.Length
+        fileSizeFormatted = ("{0:N2} MB" -f ($apkItem.Length / 1MB))
+        updatedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+        downloadUrl = "/downloads/uas-latest.apk"
+    } | ConvertTo-Json -Depth 2
+    Set-Content -Path (Join-Path $pubDownloads "version.json") -Value $versionMeta -Encoding utf8
 } else {
     Write-Host "[INFO] Local Android SDK platform (android.jar) is not installed locally." -ForegroundColor Yellow
     Write-Host "[INFO] Downloading latest compiled APK from GitHub Actions cloud build..." -ForegroundColor Cyan
@@ -141,4 +159,22 @@ if ($hasLocalAndroidJar) {
     Copy-Item -Path $extractedApk.FullName -Destination $destApk -Force
     $sizeMb = [Math]::Round((Get-Item $destApk).Length / 1MB, 2)
     Write-Host "[OK] Downloaded compiled Android APK ($sizeMb MB) to: $destApk" -ForegroundColor Green
+
+    # Mirror to public/downloads/ for direct browser & mobile hub downloads
+    $pubDownloads = Join-Path $RepoRoot "public\downloads"
+    if (-not (Test-Path $pubDownloads)) { New-Item -ItemType Directory -Path $pubDownloads -Force | Out-Null }
+    $destPubApk = Join-Path $pubDownloads "uas-latest.apk"
+    Copy-Item -Path $extractedApk.FullName -Destination $destPubApk -Force
+    $apkItem = Get-Item $destPubApk
+    $versionMeta = @{
+        version = "1.0.0"
+        versionCode = 1
+        appName = "UAS Accounting"
+        fileName = "uas-latest.apk"
+        fileSize = $apkItem.Length
+        fileSizeFormatted = ("{0:N2} MB" -f ($apkItem.Length / 1MB))
+        updatedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+        downloadUrl = "/downloads/uas-latest.apk"
+    } | ConvertTo-Json -Depth 2
+    Set-Content -Path (Join-Path $pubDownloads "version.json") -Value $versionMeta -Encoding utf8
 }

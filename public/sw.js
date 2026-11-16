@@ -57,8 +57,9 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Never intercept other /api routes
+  // Never intercept other /api routes or direct binary /downloads/ routes
   if (url.pathname.startsWith("/api/")) return;
+  if (url.pathname.startsWith("/downloads/")) return;
 
   // Navigation requests: network-first, fallback to cached "/" then "/offline.html"
   if (request.mode === "navigate") {

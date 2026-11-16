@@ -5,6 +5,7 @@ import {
   AlertCircle,
   ArrowLeft,
   ArrowRight,
+  Download,
   Eye,
   EyeOff,
   Globe2,
@@ -297,6 +298,18 @@ export function LoginView({
             <div className="pt-2 text-center text-[11px] text-slate-400 flex items-center justify-center gap-1.5">
               <Lock className="w-3 h-3 text-emerald-600" />
               <span>{isAr ? "اتصال مشفر وآمن بمعايير المؤسسات" : "Encrypted Enterprise-Grade Authentication"}</span>
+            </div>
+
+            {/* Direct Android APK download button */}
+            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-center">
+              <a
+                href="/downloads/uas-latest.apk"
+                download="UAS-Mobile-Release.apk"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-emerald-500/40 hover:border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition shadow-xs"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-600" />
+                <span>{isAr ? "تحميل تطبيق Android APK الميداني" : "Download Android APK"}</span>
+              </a>
             </div>
           </div>
         </div>

@@ -8,6 +8,7 @@ import {
   Building2,
   CheckCircle2,
   Coins,
+  Download,
   Globe2,
   Layers,
   Lock,
@@ -165,8 +166,19 @@ export function LandingPage({
             </div>
           </div>
 
-          {/* Top Actions: Language Switcher + Single Sign In Button */}
+          {/* Top Actions: Language Switcher + Direct APK Download + Single Sign In Button */}
           <div className="flex items-center gap-2.5">
+            <a
+              href="/downloads/uas-latest.apk"
+              download="UAS-Mobile-Release.apk"
+              className="px-3 py-2 rounded-xl border border-emerald-500/40 hover:border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-xs font-bold flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300 transition"
+              title={isAr ? "تحميل تطبيق Android APK الميداني" : "Download Android APK"}
+            >
+              <Download className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="hidden sm:inline">{isAr ? "تحميل تطبيق Android APK" : "Android APK"}</span>
+              <span className="sm:hidden">APK</span>
+            </a>
+
             <button
               type="button"
               onClick={onToggleLang}
@@ -240,6 +252,15 @@ export function LandingPage({
                     : "Sign In to Workspace"}
                 </span>
               </button>
+
+              <a
+                href="/downloads/uas-latest.apk"
+                download="UAS-Mobile-Release.apk"
+                className="px-5 py-3.5 rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-bold shadow-xs flex items-center gap-2 text-slate-800 dark:text-slate-200 transition"
+              >
+                <Download className="w-4 h-4 text-emerald-600" />
+                <span>{isAr ? "تحميل تطبيق Android APK الميداني" : "Download Android APK"}</span>
+              </a>
             </div>
           </div>
 

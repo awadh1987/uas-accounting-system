@@ -1,8 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Download } from "lucide-react";
 import { getOfflineQueue, type OfflineMutationItem } from "@/lib/offlineDb";
 import type { TabId } from "@/types/uas";
+
+interface ApkVersionMeta {
+  version: string;
+  versionCode: number;
+  appName: string;
+  fileName: string;
+  fileSize?: number;
+  fileSizeFormatted?: string;
+  updatedAt?: string;
+  downloadUrl?: string;
+}
 
 interface MobileTabProps {
   canInstallPwa: boolean;
@@ -28,6 +40,20 @@ export function MobileTab({
   onToast,
 }: MobileTabProps) {
   const [queueItems, setQueueItems] = useState<OfflineMutationItem[]>([]);
+  const [apkMeta, setApkMeta] = useState<ApkVersionMeta | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/downloads/version.json", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: ApkVersionMeta | null) => {
+        if (active && data) setApkMeta(data);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -101,19 +127,42 @@ export function MobileTab({
             </button>
           </div>
 
-          <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
-            <div className="font-extrabold text-sm text-indigo-600">
-              2. حزمة أندرويد و iOS عبر Capacitor
+          <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-extrabold text-sm text-indigo-600">
+                2. حزمة أندرويد و iOS عبر Capacitor
+              </div>
+              {apkMeta?.version && (
+                <span className="text-[10px] font-mono font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded-full border border-indigo-200 dark:border-indigo-800">
+                  v{apkMeta.version}
+                </span>
+              )}
             </div>
             <p className="text-slate-500 leading-relaxed">
               تحويل نفس واجهة النظام إلى تطبيق أصلي (Native APK / AAB &amp; iOS IPA) مع وصول مباشر للكاميرا (مسح QR)، والطباعة الحرارية Bluetooth.
             </p>
-            <button
-              onClick={copyCapacitorConfig}
-              className="w-full py-2 rounded-lg border border-indigo-600 text-indigo-600 font-bold"
-            >
-              📋 نسخ إعدادات capacitor.config.ts
-            </button>
+            <div className="space-y-2 pt-1">
+              <a
+                href={apkMeta?.downloadUrl || "/downloads/uas-latest.apk"}
+                download={apkMeta?.fileName || "UAS-Mobile-Release.apk"}
+                className="w-full py-2.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs inline-flex items-center justify-center gap-2 transition shadow-sm"
+              >
+                <Download className="w-4 h-4 shrink-0" />
+                <span>تحميل تطبيق الأندرويد (APK)</span>
+                {apkMeta?.fileSizeFormatted && (
+                  <span className="text-[10px] font-mono bg-emerald-800/80 px-1.5 py-0.5 rounded">
+                    {apkMeta.fileSizeFormatted}
+                  </span>
+                )}
+              </a>
+              <button
+                type="button"
+                onClick={copyCapacitorConfig}
+                className="w-full py-2 rounded-lg border border-indigo-600 text-indigo-600 dark:text-indigo-400 font-bold text-xs hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition"
+              >
+                📋 نسخ إعدادات capacitor.config.ts
+              </button>
+            </div>
           </div>
 
           <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">

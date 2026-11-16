@@ -16,3 +16,9 @@ next-env.d.ts
 
 android/keystore/
 android/keystore.properties
+
+# Android APK builds and downloads
+*.apk
+public/downloads/*.apk
+out/downloads/*.apk
+!public/downloads/.gitkeep
