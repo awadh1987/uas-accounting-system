@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # UAS Enterprise Accounting System — Android APK Builder (`build-apk.ps1`)
 # ==============================================================================
 # Builds the Capacitor Android APK (Release if keystore.properties exists,
@@ -73,6 +73,8 @@ if ($hasLocalAndroidJar) {
     Set-Content -Path (Join-Path $RepoRoot "android\local.properties") -Value "sdk.dir=$escapedSdk" -Encoding UTF8
 
     Write-Host "`n[1/3] Building Next.js mobile bundle and syncing Capacitor..." -ForegroundColor Yellow
+    # Clean stale APKs from public, out, and assets to prevent bundle bloating
+    Get-ChildItem -Path (Join-Path $RepoRoot "public"), (Join-Path $RepoRoot "out"), (Join-Path $RepoRoot "android\app\src\main\assets\public") -Filter "*.apk" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
     npm run build:mobile
 
     Write-Host "`n[2/3] Compiling Android APK via Gradle..." -ForegroundColor Yellow

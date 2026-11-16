@@ -156,9 +156,19 @@ export function TopCommandBar({
           </button>
         )}
 
-        {/* Mobile Dual Logo Badge */}
-        <div className={mobileSimulatorActive ? "flex items-center" : "md:hidden flex items-center"}>
-          <DualLogoBadge profile={enterpriseProfile} logoText={logoText} size="sm" iconOnly />
+        {/* Main Navigation Brand Logo & Title */}
+        <div className="flex items-center gap-2 shrink-0">
+          <div className={mobileSimulatorActive || sidebarCollapsed ? "flex items-center gap-2" : "md:hidden flex items-center"}>
+            <DualLogoBadge profile={enterpriseProfile} logoText={logoText} size="sm" iconOnly />
+            {sidebarCollapsed && !mobileSimulatorActive && (
+              <span className="hidden md:inline-flex items-center gap-1.5 font-black text-xs tracking-tight text-slate-900 dark:text-white">
+                <span>{logoText || "UAS"}</span>
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono">
+                  ERP
+                </span>
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Dynamic Breadcrumb Trail + Domain Namespace */}

@@ -9,6 +9,7 @@ export interface LogoPresetOption {
 }
 
 export const UAS_LOGO_PRESETS: LogoPresetOption[] = [
+  { id: "official-brand", labelAr: "الشعار الرسمي المعتمد (UAS)", labelEn: "Official UAS Brand Logo" },
   { id: "emerald-shield", labelAr: "درع القيد المزدوج", labelEn: "Ledger Shield" },
   { id: "geometric", labelAr: "الشبكة الهندسية", labelEn: "Geometric Grid" },
   { id: "ledger-cube", labelAr: "مكعب الأستاذ العام", labelEn: "Ledger Cube" },
@@ -173,9 +174,15 @@ export function DualLogoBadge({
   const showUas = profile?.showUasLogo ?? true;
   const showEnterprise = profile?.showEnterpriseLogo ?? false;
 
-  const uasStyle = profile?.uasLogoStyle || "emerald-shield";
-  const uasUrl = profile?.uasLogoCustomUrl?.trim() || "";
-  const useCustomUas = Boolean(uasUrl && (uasStyle === "custom" || !UAS_LOGO_PRESETS.some((p) => p.id === uasStyle)));
+  const uasStyle = profile?.uasLogoStyle || "official-brand";
+  const uasUrl = profile?.uasLogoCustomUrl?.trim() || "/uas-logo.png";
+  const isOfficialBrand = uasStyle === "official-brand" || !profile?.uasLogoStyle;
+  const useCustomUas =
+    isOfficialBrand ||
+    Boolean(
+      uasUrl &&
+        (uasStyle === "custom" || !UAS_LOGO_PRESETS.some((p) => p.id === uasStyle && p.id !== "official-brand"))
+    );
 
   const entStyle = profile?.enterpriseLogoStyle || "agri-leaf";
   const entUrl = profile?.enterpriseLogoCustomUrl?.trim() || profile?.logoUrl?.trim() || "";
@@ -186,12 +193,14 @@ export function DualLogoBadge({
   const uasBadge = (
     <div
       className={`${s.box} ${s.text} flex items-center justify-center font-black shadow-sm shrink-0 overflow-hidden transition-transform ${
-        onDark
+        isOfficialBrand
+          ? "bg-[#0B1120] ring-1 ring-slate-800/20"
+          : onDark
           ? "bg-white text-emerald-800 shadow-lg"
           : "text-white shadow-sm"
       }`}
       style={
-        onDark
+        isOfficialBrand || onDark
           ? undefined
           : {
               background: `linear-gradient(135deg, ${brandColor}, #047857)`,
@@ -202,9 +211,9 @@ export function DualLogoBadge({
       {useCustomUas ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={uasUrl}
+          src={uasUrl || "/uas-logo.png"}
           alt="UAS System Logo"
-          className="w-full h-full object-contain p-1 bg-white"
+          className="w-full h-full object-contain p-0.5"
         />
       ) : (
         renderUasPresetSvg(uasStyle, s.svg, logoText)

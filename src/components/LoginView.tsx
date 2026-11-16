@@ -183,7 +183,12 @@ export function LoginView({
                 />
               </div>
               <div className="space-y-1">
-                <h1 className="text-xl sm:text-2xl font-black tracking-tight">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-black">
+                  <span>{logoText || "UAS"}</span>
+                  <span>•</span>
+                  <span>{isAr ? "النظام المحاسبي الموحد" : "Unified Accounting System"}</span>
+                </div>
+                <h1 className="text-xl sm:text-2xl font-black tracking-tight pt-1">
                   {legalName}
                 </h1>
                 <p className="text-xs text-slate-500 dark:text-slate-400">

@@ -26,7 +26,28 @@ function movePathSafe(src, dest) {
 let movedApi = false;
 let movedProxy = false;
 
+/**
+ * Recursively removes any .apk files from a directory to prevent APK bloating.
+ * @param {string} dir
+ */
+function cleanApkFiles(dir) {
+  if (!fs.existsSync(dir)) return;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      cleanApkFiles(full);
+    } else if (entry.name.toLowerCase().endsWith(".apk")) {
+      console.log(`[clean-apk] Removing stale APK file: ${full}`);
+      fs.rmSync(full, { force: true });
+    }
+  }
+}
+
 try {
+  // Exclude/clean stale APK files from public/ and out/ before building
+  cleanApkFiles(path.join(rootDir, "public"));
+  cleanApkFiles(path.join(rootDir, "out"));
+
   if (fs.existsSync(backupDir)) {
     fs.rmSync(backupDir, { recursive: true, force: true });
   }
@@ -43,6 +64,9 @@ try {
     stdio: "inherit",
     env: { ...process.env, CAPACITOR_EXPORT: "1" },
   });
+
+  // Ensure no stale or copied .apk exists in out/ before capacitor sync
+  cleanApkFiles(path.join(rootDir, "out"));
 } finally {
   if (movedApi && fs.existsSync(backupApiDir)) {
     movePathSafe(backupApiDir, apiDir);

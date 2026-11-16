@@ -101,10 +101,14 @@ export function SidebarNav({
             />
             {!isIconRail && (
               <div className="min-w-0">
-                <div className="text-xs font-black truncate leading-tight">
-                  {(lang === "ar"
-                    ? enterpriseProfile?.legalNameAr?.trim() || "اسم المنشأة"
-                    : enterpriseProfile?.legalNameEn?.trim() || "Enterprise Name")}
+                <div className="text-xs font-black truncate leading-tight flex items-center gap-1.5">
+                  <span className="text-emerald-600 dark:text-emerald-400 font-extrabold">{logoText || "UAS"}</span>
+                  <span className="text-slate-300 dark:text-slate-600">•</span>
+                  <span className="truncate">
+                    {(lang === "ar"
+                      ? enterpriseProfile?.legalNameAr?.trim() || "النظام المحاسبي الموحد"
+                      : enterpriseProfile?.legalNameEn?.trim() || "Accounting System")}
+                  </span>
                 </div>
                 <div className="text-[10px] text-slate-500 font-semibold flex items-center gap-1 mt-0.5">
                   <ShieldCheck className="w-3 h-3 text-emerald-600 shrink-0" />

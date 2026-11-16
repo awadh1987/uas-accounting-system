@@ -1,11 +1,13 @@
-const CACHE_NAME = "uas-pwa-cache-v2";
+const CACHE_NAME = "uas-pwa-cache-v3";
 const PRECACHE_URLS = [
   "/",
   "/manifest.webmanifest",
   "/offline.html",
+  "/uas-logo.png",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/icon-maskable-512.png",
+  "/icons/apple-touch-icon.png",
   "/icons/icon.svg",
 ];
 

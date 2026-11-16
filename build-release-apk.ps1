@@ -9,6 +9,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 java -version
 
 Write-Host "`n[2/5] Building Capacitor mobile bundle for https://qat.world..." -ForegroundColor Cyan
+Get-ChildItem -Path "E:\2026\uas-accounting-system\public", "E:\2026\uas-accounting-system\out", "E:\2026\uas-accounting-system\android\app\src\main\assets\public" -Filter "*.apk" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
 $env:NEXT_PUBLIC_API_BASE_URL = "https://qat.world"
 $env:CAPACITOR_SERVER_URL = "https://qat.world"
 npm run build:mobile

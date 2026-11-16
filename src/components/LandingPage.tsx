@@ -133,9 +133,15 @@ export function LandingPage({
               size="md"
             />
             <div>
-              <h1 className="font-black text-sm sm:text-base leading-tight">
-                {legalName}
-              </h1>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-black text-emerald-600 dark:text-emerald-400">
+                  {state.settings.logoText || "UAS"}
+                </span>
+                <span className="text-slate-300 dark:text-slate-600">•</span>
+                <h1 className="font-black text-sm sm:text-base leading-tight inline">
+                  {legalName}
+                </h1>
+              </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-2">
                 {[
                   profile?.commercialReg

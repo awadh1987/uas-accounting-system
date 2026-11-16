@@ -73,7 +73,7 @@ async function main() {
         address: "",
         phone: "",
         email: "",
-        logoUrl: "/icons/icon.svg",
+        logoUrl: "/uas-logo.png",
         brandColor: "#059669",
         contactPhone: "",
         contactWhatsApp: "",
