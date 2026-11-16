@@ -18,6 +18,7 @@ import type { LanguageCode, UasProject, UasTreasuryAccount, UasUser } from "@/ty
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { EmptyState } from "@/components/EmptyState";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
+import { SelectWithOther } from "@/components/SelectWithOther";
 
 interface OwnerVendorOption {
   id: string;
@@ -1085,14 +1086,17 @@ export function ProjectsManagerTab({
         subtitle={isAr ? "تعريف المشروع وربطه بمالكه وموازنته التقديرية" : "Define project, owner vendor & budget"}
       >
         <form onSubmit={handleCreateProject} className="space-y-3 text-xs">
-          <select
+          <SelectWithOther
             value={type}
-            onChange={(e) => setType(e.target.value)}
+            onChange={setType}
+            options={[
+              { value: "مشروع رئيسي", label: "مشروع رئيسي (Main Project)" },
+              { value: "مشروع فرعي", label: "مشروع فرعي (Sub Project)" },
+            ]}
+            otherOptionLabel="نوع مشروع مخصص"
+            customPlaceholder="أدخل نوع المشروع المخصص..."
             className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-          >
-            <option value="مشروع رئيسي">مشروع رئيسي (Main Project)</option>
-            <option value="مشروع فرعي">مشروع فرعي (Sub Project)</option>
-          </select>
+          />
           {type === "مشروع فرعي" && (
             <select
               value={parentProjectId}
@@ -1221,15 +1225,18 @@ export function ProjectsManagerTab({
             </div>
             <div>
               <label className="block font-bold mb-1">الحالة</label>
-              <select
+              <SelectWithOther
                 value={editProjStatus}
-                onChange={(e) => setEditProjStatus(e.target.value)}
+                onChange={setEditProjStatus}
+                options={[
+                  { value: "ACTIVE", label: "ACTIVE (نشط)" },
+                  { value: "PAUSED", label: "PAUSED (متوقف مؤقتاً)" },
+                  { value: "COMPLETED", label: "COMPLETED (مكتمل)" },
+                ]}
+                otherOptionLabel="حالة مخصصة"
+                customPlaceholder="أدخل حالة المشروع..."
                 className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-              >
-                <option value="ACTIVE">ACTIVE (نشط)</option>
-                <option value="PAUSED">PAUSED (متوقف مؤقتاً)</option>
-                <option value="COMPLETED">COMPLETED (مكتمل)</option>
-              </select>
+              />
             </div>
           </div>
           <input
@@ -1384,15 +1391,18 @@ export function ProjectsManagerTab({
           {editingAcqId && (
             <div>
               <label className="block font-bold mb-1">حالة العقد</label>
-              <select
+              <SelectWithOther
                 value={acqStatus}
-                onChange={(e) => setAcqStatus(e.target.value)}
+                onChange={setAcqStatus}
+                options={[
+                  { value: "ACTIVE", label: "ACTIVE (نشط)" },
+                  { value: "COMPLETED", label: "COMPLETED (منتهي)" },
+                  { value: "CANCELLED", label: "CANCELLED (ملغى)" },
+                ]}
+                otherOptionLabel="حالة عقد مخصصة"
+                customPlaceholder="أدخل حالة العقد..."
                 className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-              >
-                <option value="ACTIVE">ACTIVE (نشط)</option>
-                <option value="COMPLETED">COMPLETED (منتهي)</option>
-                <option value="CANCELLED">CANCELLED (ملغى)</option>
-              </select>
+              />
             </div>
           )}
 
@@ -1557,15 +1567,18 @@ export function ProjectsManagerTab({
             </div>
             <div>
               <label className="block font-bold mb-1">حالة القطاع</label>
-              <select
+              <SelectWithOther
                 value={subStatus}
-                onChange={(e) => setSubStatus(e.target.value)}
+                onChange={setSubStatus}
+                options={[
+                  { value: "ACTIVE", label: "نشط (ACTIVE)" },
+                  { value: "PAUSED", label: "موقوف مؤقتاً (PAUSED)" },
+                  { value: "COMPLETED", label: "مكتمل (COMPLETED)" },
+                ]}
+                otherOptionLabel="حالة قطاع مخصصة"
+                customPlaceholder="أدخل حالة القطاع..."
                 className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-              >
-                <option value="ACTIVE">نشط (ACTIVE)</option>
-                <option value="PAUSED">موقوف مؤقتاً (PAUSED)</option>
-                <option value="COMPLETED">مكتمل (COMPLETED)</option>
-              </select>
+              />
             </div>
           </div>
           <div>
@@ -1664,15 +1677,18 @@ export function ProjectsManagerTab({
             </div>
             <div>
               <label className="block font-bold mb-1">الحالة</label>
-              <select
+              <SelectWithOther
                 value={editSubStatus}
-                onChange={(e) => setEditSubStatus(e.target.value)}
+                onChange={setEditSubStatus}
+                options={[
+                  { value: "ACTIVE", label: "نشط (ACTIVE)" },
+                  { value: "PAUSED", label: "موقوف مؤقتاً (PAUSED)" },
+                  { value: "COMPLETED", label: "مكتمل (COMPLETED)" },
+                ]}
+                otherOptionLabel="حالة قطاع مخصصة"
+                customPlaceholder="أدخل حالة القطاع..."
                 className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-              >
-                <option value="ACTIVE">نشط (ACTIVE)</option>
-                <option value="PAUSED">موقوف مؤقتاً (PAUSED)</option>
-                <option value="COMPLETED">مكتمل (COMPLETED)</option>
-              </select>
+              />
             </div>
           </div>
           <div>

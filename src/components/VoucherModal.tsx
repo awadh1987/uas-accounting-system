@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { fmtNum, formatCurrencyVal, type CurrencyCode } from "@/lib/formulas";
 import { getDict } from "@/lib/i18n";
 import type { LanguageCode, UasEnterpriseProfile, VoucherModalPayload } from "@/types/uas";
@@ -26,12 +28,43 @@ export function VoucherModal({
   onClose,
   onSendWhatsApp,
 }: VoucherModalProps) {
-  if (!voucher) return null;
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!voucher) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKey, true);
+    return () => window.removeEventListener("keydown", handleKey, true);
+  }, [voucher, onClose]);
+
+  if (!voucher || !mounted) return null;
   const dict = getDict(lang);
 
-  return (
-    <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="card-surface rounded-2xl max-w-2xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+  return createPortal(
+    <div
+      className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm z-[70] flex items-center justify-center p-4 no-print"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClose();
+      }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className="relative z-[80] card-surface rounded-2xl max-w-2xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between border-b pb-3 mb-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl accent-bg flex items-center justify-center font-bold">
@@ -154,7 +187,8 @@ export function VoucherModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

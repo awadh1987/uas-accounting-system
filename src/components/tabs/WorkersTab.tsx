@@ -10,6 +10,7 @@ import {
   AccountingDirectionSelector,
   type AccountingDirectionValue,
 } from "@/components/AccountingDirectionSelector";
+import { SelectWithOther } from "@/components/SelectWithOther";
 
 type WorkerPayload = {
   projectId: string;
@@ -211,21 +212,14 @@ export function WorkersTab({
           </div>
           <div>
             <label className="block font-semibold mb-1">القطفة / المرشة</label>
-            <select
-              value={
-                activeProj?.harvests.includes(harvest)
-                  ? harvest
-                  : activeProj?.harvests[0] || ""
-              }
-              onChange={(e) => setHarvest(e.target.value)}
+            <SelectWithOther
+              value={harvest}
+              onChange={setHarvest}
+              options={activeProj?.harvests || []}
+              otherOptionLabel="قطفة / مرشة مخصصة"
+              customPlaceholder="أدخل اسم القطفة أو المرشة المخصصة..."
               className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-            >
-              {(activeProj?.harvests || []).map((h) => (
-                <option key={h} value={h}>
-                  {h}
-                </option>
-              ))}
-            </select>
+            />
           </div>
           <div>
             <label className="block font-semibold mb-1">اسم العامل</label>

@@ -710,6 +710,27 @@ export function GeneralLedgerTab({
           currentUser={currentUser}
           onClose={() => setQuickCoaOpen(false)}
           onCreatedCoa={(acc) => {
+            setPostingAccounts((prev) => [
+              ...prev,
+              {
+                id: acc.id,
+                code: acc.code,
+                nameAr: acc.nameAr,
+                nameEn: acc.nameEn,
+                level: acc.level,
+                type: acc.type,
+                isPosting: acc.isPosting,
+              },
+            ]);
+            setDraftLines((prev) => {
+              const emptyIdx = prev.findIndex((l) => !l.accountId);
+              if (emptyIdx >= 0) {
+                const next = [...prev];
+                next[emptyIdx] = { ...next[emptyIdx], accountId: acc.id };
+                return next;
+              }
+              return prev;
+            });
             void loadData();
             onToast(`✅ تم إنشاء الحساب [${acc.code}] ${acc.nameAr}`);
           }}

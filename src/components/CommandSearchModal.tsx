@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   BookOpen,
   Compass,
@@ -264,7 +265,12 @@ export function CommandSearchModal({
     return items.slice(0, 18);
   }, [query, state, currentUser, isAr, vendorItems, coaItems, onNavigate, onSelectProject, onClose]);
 
-  if (!open) return null;
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!open || !mounted) return null;
 
   const renderIcon = (kind: SearchResultItem["icon"]) => {
     switch (kind) {
@@ -283,15 +289,15 @@ export function CommandSearchModal({
     }
   };
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-start justify-center pt-[10vh] p-4 no-print"
+      className="fixed inset-0 z-[70] bg-slate-950/75 backdrop-blur-xs flex items-start justify-center pt-[10vh] p-4 no-print"
       onClick={handleClose}
       role="dialog"
       aria-modal="true"
     >
       <div
-        className="card-surface rounded-3xl max-w-2xl w-full shadow-2xl overflow-hidden border border-slate-200 dark:border-slate-700"
+        className="relative z-[80] card-surface rounded-3xl max-w-2xl w-full shadow-2xl overflow-hidden border border-slate-200 dark:border-slate-700"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Search Input */}
@@ -359,7 +365,8 @@ export function CommandSearchModal({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

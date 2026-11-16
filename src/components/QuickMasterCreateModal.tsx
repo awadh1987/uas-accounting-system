@@ -1,8 +1,10 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { BookOpen, Plus, Store, UserPlus, X } from "lucide-react";
 import type { UasUser } from "@/types/uas";
+import { SelectWithOther } from "@/components/SelectWithOther";
 
 export type MasterCreateMode = "vendor" | "customer" | "coa";
 
@@ -156,12 +158,32 @@ export function QuickMasterCreateModal({
     };
   }, [open, mode, defaultParentCode]);
 
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Trap Escape in capture phase to close ONLY this nested subform modal without triggering parent drawers
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        resetAndClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [open]);
+
   function handleParentChange(newPid: string) {
     setParentId(newPid);
     setCoaCode(computeSuggestedChildCode(newPid, coaParents));
   }
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
   const actor = currentUser
     ? {
@@ -281,13 +303,19 @@ export function QuickMasterCreateModal({
     coa: "اختر الحساب الرقابي الأب (T4) ليتم فتح حساب ترحيل (T5 Posting) فوري",
   };
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 no-print"
-      onClick={resetAndClose}
+      className="fixed inset-0 z-[70] bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4 no-print"
+      onClick={(e) => {
+        e.stopPropagation();
+        resetAndClose();
+      }}
+      role="dialog"
+      aria-modal="true"
+      aria-label={titleMap[mode]}
     >
       <div
-        className="card-surface rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 border border-slate-200 dark:border-slate-700"
+        className="relative z-[80] card-surface rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 border border-slate-200 dark:border-slate-700"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 dark:border-slate-700 pb-3">
@@ -308,7 +336,10 @@ export function QuickMasterCreateModal({
           </div>
           <button
             type="button"
-            onClick={resetAndClose}
+            onClick={(e) => {
+              e.stopPropagation();
+              resetAndClose();
+            }}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600"
           >
             <X className="w-4 h-4" />
@@ -347,17 +378,20 @@ export function QuickMasterCreateModal({
               {parentId === "__GEN1_ROOT__" && (
                 <div>
                   <label className="block font-bold mb-1">نوع الفئة المحاسبية *</label>
-                  <select
+                  <SelectWithOther
                     value={rootType}
-                    onChange={(e) => setRootType(e.target.value)}
+                    onChange={setRootType}
+                    options={[
+                      { value: "ASSET", label: "أصول (ASSET)" },
+                      { value: "LIABILITY", label: "خصوم / التزامات (LIABILITY)" },
+                      { value: "EQUITY", label: "حقوق ملكية (EQUITY)" },
+                      { value: "REVENUE", label: "إيرادات (REVENUE)" },
+                      { value: "EXPENSE", label: "مصروفات وتكاليف (EXPENSE)" },
+                    ]}
+                    otherOptionLabel="فئة محاسبية مخصصة / Custom Category"
+                    customPlaceholder="أدخل الفئة المحاسبية المخصصة..."
                     className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-bold"
-                  >
-                    <option value="ASSET">أصول (ASSET)</option>
-                    <option value="LIABILITY">خصوم / التزامات (LIABILITY)</option>
-                    <option value="EQUITY">حقوق ملكية (EQUITY)</option>
-                    <option value="REVENUE">إيرادات (REVENUE)</option>
-                    <option value="EXPENSE">مصروفات وتكاليف (EXPENSE)</option>
-                  </select>
+                  />
                 </div>
               )}
 
@@ -528,7 +562,8 @@ export function QuickMasterCreateModal({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

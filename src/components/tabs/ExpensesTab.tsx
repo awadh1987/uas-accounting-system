@@ -10,6 +10,7 @@ import {
   AccountingDirectionSelector,
   type CustomAccountPayload,
 } from "@/components/AccountingDirectionSelector";
+import { SelectWithOther } from "@/components/SelectWithOther";
 
 type ExpensePayload = {
   projectId: string;
@@ -222,35 +223,31 @@ export function ExpensesTab({
           </div>
           <div>
             <label className="block font-semibold mb-1">القطفة / المرشة</label>
-            <select
-              value={
-                activeProj?.harvests.includes(harvest)
-                  ? harvest
-                  : activeProj?.harvests[0] || ""
-              }
-              onChange={(e) => setHarvest(e.target.value)}
+            <SelectWithOther
+              value={harvest}
+              onChange={setHarvest}
+              options={activeProj?.harvests || []}
+              otherOptionLabel="قطفة / مرشة مخصصة"
+              customPlaceholder="أدخل اسم القطفة أو المرشة المخصصة..."
               className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-            >
-              {(activeProj?.harvests || []).map((h) => (
-                <option key={h} value={h}>
-                  {h}
-                </option>
-              ))}
-            </select>
+            />
           </div>
           <div>
             <label className="block font-semibold mb-1">نوع المصروف التشغيلي</label>
-            <select
+            <SelectWithOther
               value={category}
-              onChange={(e) => setCategory(e.target.value)}
+              onChange={setCategory}
+              options={[
+                { value: "وقود/محروقات", label: "وقود/محروقات (لتر × قيمة اللتر)" },
+                { value: "وجبات غذائية", label: "وجبات غذائية (فطور/غداء/أخرى)" },
+                { value: "مواد غذائية", label: "مواد غذائية (ماء/أكياس فارغة/بسكويت/عصير/أخرى)" },
+                { value: "أجور نقل", label: "أجور نقل (نقل عمال من/إلى)" },
+                { value: "أخرى", label: "أخرى (مصروفات عامة)" },
+              ]}
+              otherOptionLabel="تصنيف مصروف تشغيلي مخصص"
+              customPlaceholder="أدخل نوع/تصنيف المصروف المخصص..."
               className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-            >
-              <option value="وقود/محروقات">وقود/محروقات (لتر × قيمة اللتر)</option>
-              <option value="وجبات غذائية">وجبات غذائية (فطور/غداء/أخرى)</option>
-              <option value="مواد غذائية">مواد غذائية (ماء/أكياس فارغة/بسكويت/عصير/أخرى)</option>
-              <option value="أجور نقل">أجور نقل (نقل عمال من/إلى)</option>
-              <option value="أخرى">أخرى (مصروفات عامة)</option>
-            </select>
+            />
           </div>
           <AccountingDirectionSelector
             label="التوجيه المحاسبي لمصروف التشغيل"

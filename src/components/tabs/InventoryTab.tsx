@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { Pencil, Plus } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
+import { SelectWithOther } from "@/components/SelectWithOther";
 import { computeRemainingStock, fmtNum } from "@/lib/formulas";
 import type { UasInventoryBatch, UasProject, UasSaleTransaction } from "@/types/uas";
 
@@ -150,38 +151,35 @@ export function InventoryTab({
           </div>
           <div>
             <label className="block font-semibold mb-1">القطفة / المرشة</label>
-            <select
-              value={
-                activeProj?.harvests.includes(harvest)
-                  ? harvest
-                  : activeProj?.harvests[0] || ""
-              }
-              onChange={(e) => setHarvest(e.target.value)}
+            <SelectWithOther
+              value={harvest}
+              onChange={setHarvest}
+              options={activeProj?.harvests || []}
+              otherOptionLabel="قطفة / مرشة مخصصة"
+              customPlaceholder="أدخل اسم القطفة أو المرشة المخصصة..."
               className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-            >
-              {(activeProj?.harvests || []).map((h) => (
-                <option key={h} value={h}>
-                  {h}
-                </option>
-              ))}
-            </select>
+            />
           </div>
           <div>
             <label className="block font-semibold mb-1">الدرجة / النوع</label>
-            <select
+            <SelectWithOther
               value={grade}
-              onChange={(e) => setGrade(e.target.value)}
+              onChange={setGrade}
+              options={[
+                {
+                  value: "رقم 1/رقم 2/رقم 3/ روس/بزغة",
+                  label: "رقم 1/رقم 2/رقم 3/ روس/بزغة (مختلط)",
+                },
+                { value: "رقم 1", label: "رقم 1 (ممتاز)" },
+                { value: "رقم 2", label: "رقم 2 (درجة ثانية)" },
+                { value: "رقم 3", label: "رقم 3 (درجة ثالثة)" },
+                { value: "روس", label: "روس" },
+                { value: "بزغة", label: "بزغة" },
+              ]}
+              otherOptionLabel="درجة محصول مخصصة"
+              customPlaceholder="أدخل اسم درجة المحصول المخصصة..."
               className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-            >
-              <option value="رقم 1/رقم 2/رقم 3/ روس/بزغة">
-                رقم 1/رقم 2/رقم 3/ روس/بزغة (مختلط)
-              </option>
-              <option value="رقم 1">رقم 1 (ممتاز)</option>
-              <option value="رقم 2">رقم 2 (درجة ثانية)</option>
-              <option value="رقم 3">رقم 3 (درجة ثالثة)</option>
-              <option value="روس">روس</option>
-              <option value="بزغة">بزغة</option>
-            </select>
+            />
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>

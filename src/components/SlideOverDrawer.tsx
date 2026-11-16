@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import type { LanguageCode } from "@/types/uas";
 
@@ -30,18 +31,27 @@ export function SlideOverDrawer({
   children,
   footer,
 }: SlideOverDrawerProps) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      // If a nested modal already intercepted and prevented Escape, ignore it
+      if (e.key === "Escape" && !e.defaultPrevented) {
+        onClose();
+      }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex justify-end bg-slate-950/60 backdrop-blur-xs no-print"
       onClick={onClose}
@@ -81,7 +91,8 @@ export function SlideOverDrawer({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

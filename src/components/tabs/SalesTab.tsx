@@ -16,6 +16,7 @@ import {
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
+import { SelectWithOther } from "@/components/SelectWithOther";
 import {
   AccountingDirectionSelector,
   type CustomAccountPayload,
@@ -504,52 +505,46 @@ export function SalesTab({
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="block font-semibold mb-1">القطفة / المرشة</label>
-              <select
-                value={
-                  activeProj?.harvests.includes(harvest)
-                    ? harvest
-                    : activeProj?.harvests[0] || ""
-                }
-                onChange={(e) => setHarvest(e.target.value)}
+              <SelectWithOther
+                value={harvest}
+                onChange={setHarvest}
+                options={activeProj?.harvests || []}
+                otherOptionLabel="قطفة / مرشة مخصصة"
+                customPlaceholder="أدخل اسم القطفة أو المرشة المخصصة..."
                 className="w-full rounded-xl border border-slate-300 bg-transparent px-2.5 py-2"
-              >
-                {(activeProj?.harvests || []).map((h) => (
-                  <option key={h} value={h}>
-                    {h}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
             <div>
               <label className="block font-semibold mb-1">نوع المحصول / الدرجة</label>
-              <select
-                value={selectedGradePreset}
-                onChange={(e) => setSelectedGradePreset(e.target.value)}
+              <SelectWithOther
+                value={
+                  selectedGradePreset === "أخرى (تحديد مخصص)"
+                    ? customGradeText || "__other__"
+                    : selectedGradePreset
+                }
+                onChange={(val) => {
+                  if (["رقم 1", "رقم 2", "رقم 3", "روس", "بزغة", "ميكس (رقم 1/2/3)"].includes(val)) {
+                    setSelectedGradePreset(val);
+                    setCustomGradeText("");
+                  } else {
+                    setSelectedGradePreset("أخرى (تحديد مخصص)");
+                    setCustomGradeText(val === "__other__" ? "" : val);
+                  }
+                }}
+                options={[
+                  "رقم 1",
+                  "رقم 2",
+                  "رقم 3",
+                  "روس",
+                  "بزغة",
+                  "ميكس (رقم 1/2/3)",
+                ]}
+                otherOptionLabel="تحديد درجة مخصصة"
+                customPlaceholder="مثال: نخب أول قطفة صيفية، أو درجة دائرية خاصة..."
                 className="w-full rounded-xl border border-slate-300 bg-transparent px-2.5 py-2 font-bold"
-              >
-                {PRESET_GRADES.map((g) => (
-                  <option key={g} value={g}>
-                    {g}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {selectedGradePreset === "أخرى (تحديد مخصص)" && (
-            <div className="p-2.5 rounded-xl border border-amber-300 bg-amber-50/50 dark:bg-amber-950/20">
-              <label className="block font-bold text-amber-800 dark:text-amber-300 mb-1">
-                تسمية الدرجة / نوع المحصول المخصص
-              </label>
-              <input
-                type="text"
-                value={customGradeText}
-                onChange={(e) => setCustomGradeText(e.target.value)}
-                placeholder="مثال: نخب أول قطفة صيفية، أو درجة دائرية خاصة"
-                className="w-full rounded-xl border border-amber-300 bg-white dark:bg-slate-900 px-3 py-1.5"
               />
             </div>
-          )}
+          </div>
 
           {/* Customer Selection & Quick Creator */}
           <div className="space-y-2">

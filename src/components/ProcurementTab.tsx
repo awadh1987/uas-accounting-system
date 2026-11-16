@@ -18,6 +18,7 @@ import type { UasProject, UasTreasuryAccount, UasUser, VoucherModalPayload } fro
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { EmptyState } from "@/components/EmptyState";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
+import { SelectWithOther } from "@/components/SelectWithOther";
 import {
   AccountingDirectionSelector,
   type CustomAccountPayload,
@@ -1052,10 +1053,24 @@ export function ProcurementTab({
           <div className="grid grid-cols-3 gap-2">
             <div>
               <label className="block font-semibold mb-1">الوحدة</label>
-              <input
+              <SelectWithOther
                 value={poUnit}
-                onChange={(e) => setPoUnit(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 bg-transparent px-2 py-2"
+                onChange={setPoUnit}
+                options={[
+                  "كيس",
+                  "حبة",
+                  "كجم",
+                  "لتر",
+                  "طن",
+                  "درزن",
+                  "علاقية",
+                  "صندوق",
+                  "متر",
+                  "برميل",
+                ]}
+                otherOptionLabel="وحدة مخصصة"
+                customPlaceholder="أدخل وحدة القياس..."
+                className="w-full rounded-xl border border-slate-300 bg-transparent px-2 py-2 text-xs"
               />
             </div>
             <div>
@@ -1463,6 +1478,22 @@ export function ProcurementTab({
         currentUser={currentUser}
         onClose={() => setQuickVendorTarget(null)}
         onCreatedVendor={(created) => {
+          const newVendorItem: VendorItem = {
+            id: created.id,
+            code: created.code,
+            nameAr: created.nameAr,
+            nameEn: created.nameEn || null,
+            phone: created.phone,
+            email: null,
+            taxRegistration: null,
+            account: { id: created.accountId, code: "", nameAr: created.nameAr },
+            poCount: 0,
+            billCount: 0,
+            totalBilled: 0,
+            totalPaid: 0,
+            totalDue: 0,
+          };
+          setVendors((prev) => [...prev, newVendorItem]);
           if (quickVendorTarget === "po") setPoVendorId(created.id);
           else if (quickVendorTarget === "bill") setBillVendorId(created.id);
           else if (quickVendorTarget === "payment") setPayVendorId(created.id);

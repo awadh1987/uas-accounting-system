@@ -779,7 +779,7 @@ export function UasAppShell() {
     <div className="min-h-screen flex flex-col">
       {/* Top Notification Toast */}
       {toastMsg && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[70] no-print">
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] no-print">
           <div className="px-5 py-3 rounded-xl shadow-lg bg-emerald-700 text-white text-sm font-semibold flex items-center gap-2">
             <span>{toastMsg}</span>
           </div>

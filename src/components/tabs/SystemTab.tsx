@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { SvgAvatar } from "@/components/SvgAvatar";
 import {
   DualLogoBadge,
@@ -399,6 +400,20 @@ export function SystemTab({
   const [resetMustChange, setResetMustChange] = useState(true);
   const [resetCopied, setResetCopied] = useState(false);
   const [resettingPass, setResettingPass] = useState(false);
+
+  useEffect(() => {
+    if (!resetModalUser) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        setResetModalUser(null);
+      }
+    };
+    window.addEventListener("keydown", handleKey, true);
+    return () => window.removeEventListener("keydown", handleKey, true);
+  }, [resetModalUser]);
 
   function openPermissionsDrawer(u: UasUser) {
     setPermDrawerUser(u);
@@ -2061,9 +2076,22 @@ export function SystemTab({
       </SlideOverDrawer>
 
       {/* Admin Password Reset Modal */}
-      {resetModalUser && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="card-surface rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-700 space-y-4 text-xs">
+      {resetModalUser &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 no-print"
+            onClick={(e) => {
+              e.stopPropagation();
+              setResetModalUser(null);
+            }}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div
+              className="relative z-[80] card-surface rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-700 space-y-4 text-xs"
+              onClick={(e) => e.stopPropagation()}
+            >
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-3">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 flex items-center justify-center">
@@ -2177,7 +2205,8 @@ export function SystemTab({
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </section>
   );

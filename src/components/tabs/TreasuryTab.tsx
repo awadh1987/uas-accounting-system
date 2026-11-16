@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
+import { SelectWithOther } from "@/components/SelectWithOther";
 import { fmtNum, formatCurrencyVal, type CurrencyCode } from "@/lib/formulas";
 import type {
   UasInstallmentVoucher,
@@ -130,7 +131,7 @@ export function TreasuryTab({
   // Treasury Setup / Edit drawer state
   const [setupDrawerOpen, setSetupDrawerOpen] = useState(false);
   const [editingTreasuryId, setEditingTreasuryId] = useState<string | null>(null);
-  const [tType, setTType] = useState<"VAULT" | "BANK" | "WALLET">("BANK");
+  const [tType, setTType] = useState<string>("BANK");
   const [tNameAr, setTNameAr] = useState("");
   const [tNameEn, setTNameEn] = useState("");
   const [tCurrency, setTCurrency] = useState("YER");
@@ -582,15 +583,18 @@ export function TreasuryTab({
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="block font-bold mb-1">النوع *</label>
-              <select
+              <SelectWithOther
                 value={tType}
-                onChange={(e) => setTType(e.target.value as "VAULT" | "BANK" | "WALLET")}
+                onChange={setTType}
+                options={[
+                  { value: "VAULT", label: "صندوق نقدي (VAULT)" },
+                  { value: "BANK", label: "حساب بنكي (BANK)" },
+                  { value: "WALLET", label: "محفظة إلكترونية (WALLET)" },
+                ]}
+                otherOptionLabel="نوع حساب خزينة مخصص"
+                customPlaceholder="مثال: عهدة مؤقتة / حساب ائتمان..."
                 className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-              >
-                <option value="VAULT">صندوق نقدي (VAULT)</option>
-                <option value="BANK">حساب بنكي (BANK)</option>
-                <option value="WALLET">محفظة إلكترونية (WALLET)</option>
-              </select>
+              />
             </div>
             <div>
               <label className="block font-bold mb-1">العملة *</label>
