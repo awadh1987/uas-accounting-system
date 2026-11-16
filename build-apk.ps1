@@ -19,12 +19,11 @@ Write-Host "============================================================" -Foreg
 Write-Host "  UAS Android APK Build Automation" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 
-# 1. Auto-detect JAVA_HOME (JDK 17+)
+# 1. Auto-detect JAVA_HOME (JDK 21+)
 $jdkCandidates = @(
-    $env:JAVA_HOME,
-    "C:\Program Files\Android\Android Studio\jbr"
+    $env:JAVA_HOME
 )
-foreach ($pattern in @("C:\Program Files\Microsoft\jdk*", "C:\Program Files\Eclipse Adoptium\jdk*", "C:\Program Files\Java\jdk*")) {
+foreach ($pattern in @("C:\Program Files\Microsoft\jdk-21*", "C:\Program Files\Java\jdk-21*", "C:\Program Files\Eclipse Adoptium\jdk-21*", "C:\Program Files\Microsoft\jdk*", "C:\Program Files\Eclipse Adoptium\jdk*", "C:\Program Files\Java\jdk*", "C:\Program Files\Android\Android Studio\jbr")) {
     $found = Get-ChildItem -Path $pattern -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
     foreach ($d in $found) { $jdkCandidates += $d.FullName }
 }
@@ -37,7 +36,7 @@ foreach ($candidate in $jdkCandidates) {
 }
 
 if (-not $env:JAVA_HOME -or -not (Test-Path (Join-Path $env:JAVA_HOME "bin\java.exe"))) {
-    Write-Error "JDK 17+ not found. Please install Microsoft OpenJDK 17 or Android Studio."
+    Write-Error "JDK 21+ not found. Please install Microsoft OpenJDK 21 or configure JAVA_HOME."
     exit 1
 }
 Write-Host "[OK] Using JAVA_HOME: $env:JAVA_HOME" -ForegroundColor Green

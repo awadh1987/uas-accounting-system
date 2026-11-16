@@ -4,11 +4,16 @@ if (-not $RepoRoot) { $RepoRoot = "E:\2026\uas-accounting-system" }
 Set-Location $RepoRoot
 
 Write-Host "`n[1/5] Activating JDK 21 for Gradle..." -ForegroundColor Cyan
-$jdk21 = (Get-ChildItem "C:\Program Files\Microsoft\jdk-21*", "C:\Program Files\Java\jdk-21*" -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1).FullName
-if (-not $jdk21) { throw "JDK 21 not found. Install Microsoft.OpenJDK.21 first." }
+$jdk21 = (Get-ChildItem "C:\Program Files\Microsoft\jdk-21*", "C:\Program Files\Java\jdk-21*", "C:\Program Files\Eclipse Adoptium\jdk-21*" -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1).FullName
+if (-not $jdk21) {
+    if ($env:JAVA_HOME -and (Test-Path (Join-Path $env:JAVA_HOME "bin\java.exe"))) {
+        $jdk21 = $env:JAVA_HOME
+    }
+}
+if (-not $jdk21) { throw "JDK 21 not found. Please install Microsoft OpenJDK 21 first." }
 $env:JAVA_HOME = $jdk21
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
-java -version
+cmd /c "java -version"
 
 Write-Host "`n[2/5] Building Capacitor mobile bundle for https://qat.world..." -ForegroundColor Cyan
 Get-ChildItem -Path (Join-Path $RepoRoot "public"), (Join-Path $RepoRoot "out"), (Join-Path $RepoRoot "android\app\src\main\assets\public") -Filter "*.apk" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
