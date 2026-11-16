@@ -55,7 +55,7 @@ export function LoginView({
       const saved = window.localStorage.getItem(REMEMBER_KEY);
       if (saved) return saved;
     }
-    return currentUser?.email || "admin@uas-ye.com";
+    return currentUser?.email || "";
   });
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -231,7 +231,7 @@ export function LoginView({
                   type="text"
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
-                  placeholder="admin@uas-ye.com"
+                  placeholder="name@company.com"
                   autoComplete="username"
                   required
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50 px-3.5 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500 transition"

@@ -70,7 +70,7 @@ export const INITIAL_FALLBACK_STATE: UasBootstrapState = {
       fullName: "مدير النظام العام / System Owner",
       displayName: "",
       phone: "",
-      email: "admin@uas-ye.com",
+      email: process.env.INITIAL_ADMIN_EMAIL || "",
       role: "SUPER_ADMIN",
       department: "الإدارة العليا وتقنية المعلومات",
       active: true,

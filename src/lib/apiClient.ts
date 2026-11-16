@@ -430,7 +430,7 @@ function applyLocalOptimistic(
     next.users.push({
       id: "u" + Date.now(),
       name,
-      email: String(payload.email || "user@uas-ye.com"),
+      email: String(payload.email || ""),
       role: String(payload.role || "محاسب رئيسي (Accountant)"),
       active: true,
       avatarChar: name.charAt(0) || "م",
