@@ -63,12 +63,12 @@ def generate_icons(repo_root):
     raw_logo = Image.open(src_path)
     seamless_logo = create_seamless_logo(raw_logo)
     
-    # 1. Save standard clean public/uas-logo.png (RGB PNG on #0B1120)
+    # 1. Save standard clean scripts/assets/uas-logo-master.png (RGB PNG on #0B1120)
     pub_logo_path = os.path.join(repo_root, "public", "uas-logo.png")
     seamless_logo.convert("RGB").save(pub_logo_path, format="PNG", optimize=True)
     # Also overwrite public/icons/uas-logo.png as proper PNG
     seamless_logo.convert("RGB").save(os.path.join(repo_root, "public", "icons", "uas-logo.png"), format="PNG", optimize=True)
-    print("Saved public/uas-logo.png")
+    print("Saved scripts/assets/uas-logo-master.png")
 
     # 2. Web & PWA Icons
     web_icons = {
