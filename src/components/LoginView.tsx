@@ -55,7 +55,7 @@ export function LoginView({
       const saved = window.localStorage.getItem(REMEMBER_KEY);
       if (saved) return saved;
     }
-    return currentUser?.email || "";
+    return "";
   });
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
