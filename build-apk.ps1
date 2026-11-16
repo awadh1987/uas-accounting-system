@@ -1,4 +1,4 @@
-﻿# ==============================================================================
+# ==============================================================================
 # UAS Enterprise Accounting System — Android APK Builder (`build-apk.ps1`)
 # ==============================================================================
 # Builds the Capacitor Android APK (Release if keystore.properties exists,
