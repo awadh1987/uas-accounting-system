@@ -22,3 +22,5 @@ android/keystore.properties
 public/downloads/*.apk
 out/downloads/*.apk
 !public/downloads/.gitkeep
+
+public/downloads/version.json
