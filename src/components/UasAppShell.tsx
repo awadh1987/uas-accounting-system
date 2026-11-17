@@ -7,6 +7,7 @@ import { CommandSearchModal } from "@/components/CommandSearchModal";
 import { FinancialReportsTab } from "@/components/FinancialReportsTab";
 import { GeneralLedgerTab } from "@/components/GeneralLedgerTab";
 import { LandingPage } from "@/components/LandingPage";
+import { LicenseActivationModal, type LicenseStatusData } from "@/components/LicenseActivationModal";
 import { LoginView } from "@/components/LoginView";
 import { MobileBottomNav } from "@/components/MobileBottomNav";
 import { ProcurementTab } from "@/components/ProcurementTab";
@@ -93,6 +94,8 @@ export function UasAppShell() {
 
   const [currentUser, setCurrentUser] = useState<UasUser | null>(null);
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
+  const [licenseStatus, setLicenseStatus] = useState<LicenseStatusData | null>(null);
+  const [licenseModalOpen, setLicenseModalOpen] = useState(false);
   const [quickSheetOpen, setQuickSheetOpen] = useState(false);
   const [voucherModal, setVoucherModal] = useState<VoucherModalPayload | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -105,6 +108,21 @@ export function UasAppShell() {
     setToastMsg(msg);
   }, []);
 
+  const checkLicensingStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/licensing/status");
+      if (res.ok) {
+        const data = (await res.json()) as LicenseStatusData;
+        setLicenseStatus(data);
+        if (!data.is_valid) {
+          setLicenseModalOpen(true);
+        }
+      }
+    } catch {
+      // Offline fallback
+    }
+  }, []);
+
   useEffect(() => {
     if (!toastMsg) return;
     const timer = setTimeout(() => setToastMsg(null), 3000);
@@ -114,6 +132,7 @@ export function UasAppShell() {
   // Initial database bootstrap + restore session, user & tab across refreshes
   useEffect(() => {
     installGlobalApiFetchInterceptor();
+    checkLicensingStatus();
     let active = true;
     (async () => {
       const res = await fetchBootstrapState();
@@ -507,6 +526,17 @@ export function UasAppShell() {
     setOfflineQueueCount(res.queueCount);
     if (res.error) {
       showToast(res.error);
+      if (
+        res.error.includes("ترخيص") ||
+        res.error.includes("ساعة") ||
+        res.error.includes("License") ||
+        res.error.includes("clock") ||
+        res.error.includes("أجهزة") ||
+        res.error.includes("seats")
+      ) {
+        checkLicensingStatus();
+        setLicenseModalOpen(true);
+      }
       return false;
     }
     setState(res.state);
@@ -1597,6 +1627,15 @@ export function UasAppShell() {
           />
         </div>
       )}
+
+      <LicenseActivationModal
+        open={licenseModalOpen}
+        statusData={licenseStatus}
+        lang={lang}
+        onClose={() => setLicenseModalOpen(false)}
+        onRefreshStatus={checkLicensingStatus}
+        onToast={showToast}
+      />
     </div>
   );
 }

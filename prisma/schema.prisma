@@ -755,3 +755,16 @@ model AdjustmentEntry {
   journalEntryId String?
   createdAt      DateTime      @default(now())
 }
+
+model LicenseState {
+  id               String    @id @default("active")
+  licenseId        String?   @map("license_id")
+  customerName     String?   @map("customer_name")
+  hwidHash         String?   @map("hwid_hash")
+  lastVerifiedUtc  DateTime  @default(now()) @map("last_verified_utc")
+  status           String    @default("UNLICENSED") // UNLICENSED | ACTIVE | EXPIRED | HWID_MISMATCH | CLOCK_TAMPER
+  seatRegistryJson String    @default("[]") @map("seat_registry_json")
+  licenseDataJson  String?   @map("license_data_json")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}

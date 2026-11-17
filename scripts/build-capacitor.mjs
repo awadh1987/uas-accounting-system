@@ -39,7 +39,7 @@ function stashPublicApks() {
   const list = [];
   fs.mkdirSync(apkStashDir, { recursive: true });
   for (const entry of fs.readdirSync(publicDownloadsDir, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.toLowerCase().endsWith(".apk")) {
+    if (entry.isFile() && (entry.name.toLowerCase().endsWith(".apk") || entry.name.toLowerCase().endsWith(".exe"))) {
       const src = path.join(publicDownloadsDir, entry.name);
       const dest = path.join(apkStashDir, entry.name);
       fs.cpSync(src, dest);
@@ -78,7 +78,7 @@ function cleanApkFiles(dir) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       cleanApkFiles(full);
-    } else if (entry.name.toLowerCase().endsWith(".apk")) {
+    } else if ((entry.name.toLowerCase().endsWith(".apk") || entry.name.toLowerCase().endsWith(".exe"))) {
       console.log(`[clean-apk] Removing stale APK file: ${full}`);
       fs.rmSync(full, { force: true });
     }
@@ -137,3 +137,4 @@ if (fs.existsSync(path.join(rootDir, "android")) || fs.existsSync(path.join(root
   execSync("npx cap sync", { stdio: "inherit" });
   cleanApkFiles(androidAssetsPublicDir);
 }
+

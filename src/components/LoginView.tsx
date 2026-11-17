@@ -5,16 +5,23 @@ import {
   AlertCircle,
   ArrowLeft,
   ArrowRight,
-  Download,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Eye,
   EyeOff,
   Globe2,
+  HardDrive,
   KeyRound,
   Lock,
+  Monitor,
+  Network,
+  RefreshCw,
+  Smartphone,
   WifiOff,
 } from "lucide-react";
 import { DualLogoBadge } from "@/components/DualLogoBadge";
-import { getApiBaseUrl } from "@/lib/apiClient";
+import { getApiBaseUrl, resetApiBaseUrl, setApiBaseUrl } from "@/lib/apiClient";
 import type { LanguageCode, ThemeName, UasEnterpriseProfile, UasUser } from "@/types/uas";
 
 interface LoginViewProps {
@@ -39,7 +46,7 @@ export function LoginView({
   enterpriseProfile,
   lang,
   theme: _theme,
-  currentUserId,
+  currentUserId: _currentUserId,
   offlineMode,
   onBackToLanding,
   onToggleLang,
@@ -48,7 +55,6 @@ export function LoginView({
 }: LoginViewProps) {
   const isAr = lang === "ar";
   const activeUsers = users.filter((u) => u.active);
-  const currentUser = activeUsers.find((u) => u.id === currentUserId) || activeUsers[0];
 
   const [identifier, setIdentifier] = useState(() => {
     if (typeof window !== "undefined") {
@@ -63,7 +69,48 @@ export function LoginView({
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Server Connection Switcher (LAN / Cloud)
+  const [serverDrawerOpen, setServerDrawerOpen] = useState(false);
+  const [customServerUrl, setCustomServerUrl] = useState(() => getApiBaseUrl());
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<"idle" | "ok" | "fail">("idle");
+
   const BackArrow = isAr ? ArrowRight : ArrowLeft;
+
+  async function testServerConnection(urlToTest: string) {
+    const clean = urlToTest.trim().replace(/\/+$/, "");
+    setTestingConnection(true);
+    setConnectionStatus("idle");
+    try {
+      const testEndpoint = clean ? `${clean}/api/public/verify` : "/api/public/verify";
+      const res = await fetch(testEndpoint, { signal: AbortSignal.timeout(4000) });
+      if (res.ok) {
+        setConnectionStatus("ok");
+        onToast(isAr ? "تم الاتصال بالخادم بنجاح!" : "Connected to server successfully!");
+      } else {
+        setConnectionStatus("fail");
+        onToast(isAr ? `فشل الاتصال: HTTP ${res.status}` : `Connection failed: HTTP ${res.status}`);
+      }
+    } catch {
+      setConnectionStatus("fail");
+      onToast(isAr ? "تعذر الوصول إلى عنوان الخادم" : "Server unreachable");
+    } finally {
+      setTestingConnection(false);
+    }
+  }
+
+  function handleApplyServerUrl(urlToApply: string) {
+    const clean = urlToApply.trim().replace(/\/+$/, "");
+    if (!clean) {
+      resetApiBaseUrl();
+      setCustomServerUrl("");
+      onToast(isAr ? "تم استعادة العنوان الافتراضي" : "Reset to default endpoint");
+    } else {
+      setApiBaseUrl(clean);
+      setCustomServerUrl(clean);
+      onToast(isAr ? `تم حفظ عنوان الخادم: ${clean}` : `Server endpoint set: ${clean}`);
+    }
+  }
 
   async function authenticate(params: { identifierInput: string; passInput: string }) {
     setErrorMsg(null);
@@ -121,8 +168,8 @@ export function LoginView({
       } else {
         setErrorMsg(
           isAr
-            ? "تعذر الاتصال بخادم المصادقة، تأكد من اتصال الشبكة"
-            : "Unable to reach authentication server"
+            ? "تعذر الاتصال بخادم المصادقة، تأكد من اتصال الشبكة أو عنوان الخادم"
+            : "Unable to reach authentication server. Check network connection or server endpoint."
         );
       }
     } finally {
@@ -160,18 +207,20 @@ export function LoginView({
           <span>{isAr ? "العودة للرئيسية" : "Back to Home"}</span>
         </button>
 
-        <button
-          type="button"
-          onClick={onToggleLang}
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/60 dark:hover:bg-slate-800 transition"
-        >
-          <Globe2 className="w-4 h-4" />
-          <span>{isAr ? "English" : "العربية"}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onToggleLang}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/60 dark:hover:bg-slate-800 transition"
+          >
+            <Globe2 className="w-4 h-4" />
+            <span>{isAr ? "English" : "العربية"}</span>
+          </button>
+        </div>
       </header>
 
       {/* Centered Enterprise Authentication Card */}
-      <main className="w-full flex items-center justify-center my-auto py-8">
+      <main className="w-full flex items-center justify-center my-auto py-6">
         <div className="w-full max-w-md mx-auto">
           <div className="card-surface rounded-3xl p-7 sm:p-9 shadow-xl border border-slate-200 dark:border-slate-800 space-y-6">
             {/* Enterprise Identity Header */}
@@ -295,21 +344,137 @@ export function LoginView({
               </button>
             </form>
 
-            <div className="pt-2 text-center text-[11px] text-slate-400 flex items-center justify-center gap-1.5">
+            {/* Collapsible Server Connection Selector (LAN / Cloud Switcher) */}
+            <div className="border-t border-slate-200 dark:border-slate-800 pt-3">
+              <button
+                type="button"
+                onClick={() => setServerDrawerOpen((prev) => !prev)}
+                className="w-full flex items-center justify-between py-1.5 text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition"
+              >
+                <div className="flex items-center gap-1.5">
+                  <Network className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>
+                    {isAr
+                      ? "وضع الاتصال بالخادم (LAN / Cloud)"
+                      : "Server Connection (LAN / Cloud)"}
+                  </span>
+                </div>
+                {serverDrawerOpen ? (
+                  <ChevronUp className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                )}
+              </button>
+
+              {serverDrawerOpen && (
+                <div className="mt-3 p-3.5 rounded-2xl bg-slate-100/80 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 space-y-3 text-xs">
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleApplyServerUrl("")}
+                      className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold transition flex items-center gap-1 ${
+                        !customServerUrl
+                          ? "bg-emerald-600 text-white border-emerald-600"
+                          : "border-slate-300 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-800"
+                      }`}
+                    >
+                      <HardDrive className="w-3 h-3" />
+                      <span>{isAr ? "افتراضي / محلي" : "Default / Local"}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleApplyServerUrl("https://qat.world")}
+                      className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold transition flex items-center gap-1 ${
+                        customServerUrl === "https://qat.world"
+                          ? "bg-emerald-600 text-white border-emerald-600"
+                          : "border-slate-300 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-800"
+                      }`}
+                    >
+                      <Globe2 className="w-3 h-3" />
+                      <span>qat.world (Cloud)</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-slate-500">
+                      {isAr
+                        ? "عنوان خادم المكتب بالشبكة المحلية (LAN IP) أو دومين السحابة:"
+                        : "Office LAN IP (e.g. http://192.168.1.50:3000) or Cloud URL:"}
+                    </label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={customServerUrl}
+                        onChange={(e) => setCustomServerUrl(e.target.value)}
+                        placeholder="http://192.168.1.x:3000"
+                        className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-mono font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => testServerConnection(customServerUrl)}
+                        disabled={testingConnection}
+                        className="px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-800 text-[11px] font-bold transition flex items-center gap-1 shrink-0"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${testingConnection ? "animate-spin" : ""}`} />
+                        <span>{isAr ? "فحص" : "Test"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleApplyServerUrl(customServerUrl)}
+                        className="px-2.5 py-1.5 rounded-xl accent-bg text-[11px] font-bold shrink-0"
+                      >
+                        <span>{isAr ? "حفظ" : "Save"}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {connectionStatus === "ok" && (
+                    <div className="text-[11px] font-bold text-emerald-600 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" />
+                      <span>{isAr ? "تم الاتصال بنجاح بالخادم" : "Server connection verified"}</span>
+                    </div>
+                  )}
+                  {connectionStatus === "fail" && (
+                    <div className="text-[11px] font-bold text-rose-600 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      <span>{isAr ? "تعذر الاتصال بالخادم، تأكد من عنوان IP" : "Connection failed. Check LAN IP"}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="pt-1 text-center text-[11px] text-slate-400 flex items-center justify-center gap-1.5">
               <Lock className="w-3 h-3 text-emerald-600" />
               <span>{isAr ? "اتصال مشفر وآمن بمعايير المؤسسات" : "Encrypted Enterprise-Grade Authentication"}</span>
             </div>
 
-            {/* Direct Android APK download button */}
-            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-center">
-              <a
-                href="/downloads/uas-latest.apk"
-                download="UAS-Mobile-Release.apk"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-emerald-500/40 hover:border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition shadow-xs"
-              >
-                <Download className="w-3.5 h-3.5 text-emerald-600" />
-                <span>{isAr ? "تحميل تطبيق Android APK الميداني" : "Download Android APK"}</span>
-              </a>
+            {/* Direct Commercial Downloads: Windows Desktop / LAN + Android Mobile App */}
+            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+              <div className="text-center text-[11px] font-bold text-slate-400">
+                {isAr ? "التحميل المباشر للأنظمة الميدانية والمكتبية:" : "Direct System Downloads:"}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <a
+                  href="/downloads/UAS-Setup-Win64.exe"
+                  download="UAS-Setup-Win64.exe"
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-indigo-500/40 hover:border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 text-xs font-bold transition shadow-xs"
+                >
+                  <Monitor className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                  <span className="truncate">{isAr ? "ويندوز (Desktop / LAN)" : "Windows (Win64 .exe)"}</span>
+                </a>
+
+                <a
+                  href="/downloads/uas-latest.apk"
+                  download="UAS-Accounting.apk"
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-emerald-500/40 hover:border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition shadow-xs"
+                >
+                  <Smartphone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span className="truncate">{isAr ? "تطبيق أندرويد (APK)" : "Android (Mobile APK)"}</span>
+                </a>
+              </div>
             </div>
           </div>
         </div>

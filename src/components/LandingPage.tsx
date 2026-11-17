@@ -14,6 +14,7 @@ import {
   Lock,
   MapPin,
   MessageCircle,
+  Monitor,
   Phone,
   QrCode,
   Search,
@@ -166,16 +167,27 @@ export function LandingPage({
             </div>
           </div>
 
-          {/* Top Actions: Language Switcher + Direct APK Download + Single Sign In Button */}
-          <div className="flex items-center gap-2.5">
+          {/* Top Actions: Downloads + Language Switcher + Sign In Button */}
+          <div className="flex items-center gap-2">
+            <a
+              href="/downloads/UAS-Setup-Win64.exe"
+              download="UAS-Setup-Win64.exe"
+              className="px-3 py-2 rounded-xl border border-indigo-500/40 hover:border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30 text-xs font-bold flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300 transition"
+              title={isAr ? "تحميل نسخة ويندوز المكتبية والشبكية (UAS-Setup-Win64.exe)" : "Download Windows Desktop / LAN Edition"}
+            >
+              <Monitor className="w-3.5 h-3.5 text-indigo-600" />
+              <span className="hidden sm:inline">{isAr ? "ويندوز (Desktop / LAN)" : "Windows"}</span>
+              <span className="sm:hidden">.EXE</span>
+            </a>
+
             <a
               href="/downloads/uas-latest.apk"
-              download="UAS-Mobile-Release.apk"
+              download="UAS-Accounting.apk"
               className="px-3 py-2 rounded-xl border border-emerald-500/40 hover:border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-xs font-bold flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300 transition"
               title={isAr ? "تحميل تطبيق Android APK الميداني" : "Download Android APK"}
             >
               <Download className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="hidden sm:inline">{isAr ? "تحميل تطبيق Android APK" : "Android APK"}</span>
+              <span className="hidden sm:inline">{isAr ? "تطبيق أندرويد" : "Android"}</span>
               <span className="sm:hidden">APK</span>
             </a>
 
@@ -254,8 +266,17 @@ export function LandingPage({
               </button>
 
               <a
+                href="/downloads/UAS-Setup-Win64.exe"
+                download="UAS-Setup-Win64.exe"
+                className="px-5 py-3.5 rounded-2xl border border-indigo-500/40 bg-indigo-50/50 dark:bg-indigo-950/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 text-sm font-bold shadow-xs flex items-center gap-2 text-indigo-700 dark:text-indigo-300 transition"
+              >
+                <Monitor className="w-4 h-4 text-indigo-600" />
+                <span>{isAr ? "تحميل نسخة ويندوز (Desktop / LAN)" : "Download Windows Setup"}</span>
+              </a>
+
+              <a
                 href="/downloads/uas-latest.apk"
-                download="UAS-Mobile-Release.apk"
+                download="UAS-Accounting.apk"
                 className="px-5 py-3.5 rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-bold shadow-xs flex items-center gap-2 text-slate-800 dark:text-slate-200 transition"
               >
                 <Download className="w-4 h-4 text-emerald-600" />

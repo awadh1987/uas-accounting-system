@@ -17,10 +17,19 @@ next-env.d.ts
 android/keystore/
 android/keystore.properties
 
-# Android APK builds and downloads
+# Build and distribution artifacts
 *.apk
+*.exe
 public/downloads/*.apk
+public/downloads/*.exe
 out/downloads/*.apk
+out/downloads/*.exe
 !public/downloads/.gitkeep
+
+# Cryptographic licensing private keys & release bundles
+keys/
+release/
+uas.runtime.json
+license.uas
 
 public/downloads/version.json

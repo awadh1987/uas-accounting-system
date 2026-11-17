@@ -42,6 +42,7 @@ ALTER TABLE "InstallmentVoucher" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "HarvestInventoryBatch" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "ImmutableAuditLog" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "AdjustmentEntry" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "LicenseState" ENABLE ROW LEVEL SECURITY;
 
 -- 3. Helper Function: Check if a HarvestCycle is unlocked
 CREATE OR REPLACE FUNCTION public.is_harvest_unlocked(p_harvest_cycle_id TEXT)
@@ -165,5 +166,15 @@ CREATE POLICY "auth_read_audit"
 DROP POLICY IF EXISTS "auth_insert_audit" ON "ImmutableAuditLog";
 CREATE POLICY "auth_insert_audit"
   ON "ImmutableAuditLog" FOR INSERT TO authenticated WITH CHECK (true);
+
+-- 11. Hardware-Bound License State (Read for all, mutations by authenticated admin/service)
+DROP POLICY IF EXISTS "allow_read_license_state" ON "LicenseState";
+CREATE POLICY "allow_read_license_state"
+  ON "LicenseState" FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "auth_manage_license_state" ON "LicenseState";
+CREATE POLICY "auth_manage_license_state"
+  ON "LicenseState" FOR ALL TO authenticated
+  USING (true) WITH CHECK (true);
 
 COMMIT;

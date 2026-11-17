@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import {
-  canApprove,
+import { canApprove,
   canCreate,
   canDeleteVoid,
   canEdit,
@@ -14,6 +13,8 @@ import {
   type ModuleIdentifier,
 } from "@/lib/permissions";
 import { parseAssignedProjects } from "@/lib/serverBootstrap";
+import { checkLicenseAndClock } from "@/lib/licensing/guard";
+import { getRuntimeConfig } from "@/lib/runtimeMode";
 import type { UasUser, UserRole } from "@/types/uas";
 
 export interface ActorPayload {
@@ -142,6 +143,32 @@ export async function authorizeApiAction(
   | { ok: true; actor: ResolvedActor }
   | { ok: false; response: NextResponse }
 > {
+  // Licensing & Monotonic Clock & LAN Seat check on mutations
+  if (req && ["POST", "PUT", "PATCH", "DELETE"].includes(req.method.toUpperCase())) {
+    try {
+      const runtimeConfig = getRuntimeConfig();
+      const seatToken = req.headers.get("x-uas-seat-token") || undefined;
+      const clientIp = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "127.0.0.1";
+      const deviceName = req.headers.get("x-uas-device-name") || undefined;
+      const guard = await checkLicenseAndClock(runtimeConfig.mode, seatToken, clientIp, deviceName);
+      if (!guard.allowed) {
+        return {
+          ok: false,
+          response: NextResponse.json(
+            {
+              error: guard.error,
+              code: guard.code || `LICENSE_${guard.status}`,
+              status: guard.status,
+            },
+            { status: 402 } // Payment Required / License Tamper Lock
+          ),
+        };
+      }
+    } catch (e) {
+      console.error("[Licensing Check in authorizeApiAction Warning]:", e);
+    }
+  }
+
   const actor = await resolveVerifiedActor(body, req);
   const target = actor.user || actor.userRole;
 
