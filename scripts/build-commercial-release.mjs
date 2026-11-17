@@ -1,4 +1,4 @@
-import fs from "node:fs";
+﻿import fs from "node:fs";
 import path from "node:path";
 import { execFileSync, execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -749,53 +749,76 @@ fs.writeFileSync(csTempPath, csharpInstallerSource, "utf8");
 
 const exeReleasePath = path.join(releaseRoot, "UAS-Setup-Win64.exe");
 const exeDownloadsPath = path.join(projectRoot, "public", "downloads", "UAS-Setup-Win64.exe");
+const issScriptPath = path.join(projectRoot, "deploy", "windows", "uas-installer.iss");
+
+const isccCandidates = [
+  process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Programs", "Inno Setup 6", "ISCC.exe") : "",
+  process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Inno Setup 6", "ISCC.exe") : "",
+  process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Inno Setup 6", "ISCC.exe") : "",
+].filter(Boolean);
+
+const isccExe = isccCandidates.find((p) => fs.existsSync(p));
 
 try {
-  execSync(
-    `powershell -NoProfile -Command "Add-Type -TypeDefinition (Get-Content '${csTempPath}' -Raw) -OutputAssembly '${exeReleasePath}' -OutputType ConsoleApplication"`,
-    { stdio: "inherit" }
-  );
   fs.mkdirSync(path.dirname(exeDownloadsPath), { recursive: true });
-  fs.copyFileSync(exeReleasePath, exeDownloadsPath);
-  console.log(`[OK] Native 64-bit installer compiled: ${exeReleasePath}`);
-  console.log(`[OK] Copied installer to web downloads: ${exeDownloadsPath}`);
+
+  if (isccExe && fs.existsSync(issScriptPath)) {
+    console.log(`[INFO] Found Inno Setup 6 compiler: ${isccExe}`);
+    execSync(`"${isccExe}" "${issScriptPath}"`, { stdio: "inherit" });
+    if (fs.existsSync(exeDownloadsPath)) {
+      fs.copyFileSync(exeDownloadsPath, exeReleasePath);
+    } else if (fs.existsSync(exeReleasePath)) {
+      fs.copyFileSync(exeReleasePath, exeDownloadsPath);
+    }
+    console.log(`[OK] Full Inno Setup self-extracting installer compiled: ${exeDownloadsPath}`);
+    console.log(`[OK] Synced full installer to release bundle: ${exeReleasePath}`);
+  } else {
+    console.warn("[WARN] Inno Setup 6 (ISCC.exe) not found; falling back to lightweight C# stub installer.");
+    execSync(
+      `powershell -NoProfile -Command "Add-Type -TypeDefinition (Get-Content '${csTempPath}' -Raw) -OutputAssembly '${exeReleasePath}' -OutputType ConsoleApplication"`,
+      { stdio: "inherit" }
+    );
+    fs.copyFileSync(exeReleasePath, exeDownloadsPath);
+    console.log(`[OK] Native 64-bit stub installer compiled: ${exeReleasePath}`);
+    console.log(`[OK] Copied installer to web downloads: ${exeDownloadsPath}`);
+  }
 } finally {
   if (fs.existsSync(csTempPath)) fs.unlinkSync(csTempPath);
 }
 
 // Write updated bilingual QUICK-START-AR-EN.md
-const quickStartMd = `# دليل البدء والتشغيل التجاري لمنظومة UAS المحاسبية
+const quickStartMd = `# ط¯ظ„ظٹظ„ ط§ظ„ط¨ط¯ط، ظˆط§ظ„طھط´ط؛ظٹظ„ ط§ظ„طھط¬ط§ط±ظٹ ظ„ظ…ظ†ط¸ظˆظ…ط© UAS ط§ظ„ظ…ط­ط§ط³ط¨ظٹط©
 # UAS Commercial Distribution & Quick Start Guide (Arabic & English)
 
-مرحباً بك في **منظومة الحسابات الموحدة (UAS Enterprise ERP)**.
-هذا الإصدار التجاري يعمل **بشكل مستقل 100% دون الحاجة لتثبيت Node.js أو أي أوامر برمجية أو اتصال بالإنترنت**.
+ظ…ط±ط­ط¨ط§ظ‹ ط¨ظƒ ظپظٹ **ظ…ظ†ط¸ظˆظ…ط© ط§ظ„ط­ط³ط§ط¨ط§طھ ط§ظ„ظ…ظˆط­ط¯ط© (UAS Enterprise ERP)**.
+ظ‡ط°ط§ ط§ظ„ط¥طµط¯ط§ط± ط§ظ„طھط¬ط§ط±ظٹ ظٹط¹ظ…ظ„ **ط¨ط´ظƒظ„ ظ…ط³طھظ‚ظ„ 100% ط¯ظˆظ† ط§ظ„ط­ط§ط¬ط© ظ„طھط«ط¨ظٹطھ Node.js ط£ظˆ ط£ظٹ ط£ظˆط§ظ…ط± ط¨ط±ظ…ط¬ظٹط© ط£ظˆ ط§طھطµط§ظ„ ط¨ط§ظ„ط¥ظ†طھط±ظ†طھ**.
 
 ---
 
-## أولاً: التثبيت السريع على ويندوز (Zero-Config Windows Setup)
+## ط£ظˆظ„ط§ظ‹: ط§ظ„طھط«ط¨ظٹطھ ط§ظ„ط³ط±ظٹط¹ ط¹ظ„ظ‰ ظˆظٹظ†ط¯ظˆط² (Zero-Config Windows Setup)
 
-1. اضغط مرتين على **\`UAS-Setup-Win64.exe\`** (أو **\`UAS-Setup.bat\`**).
-2. يقوم المثبت تلقائياً بـ:
-   - نسخ المحرك المستقل المدمج (\`UAS.exe\` + \`runtime/node.exe\` + محرك Prisma 6.19.3) إلى **\`C:\\UAS\\app\`**.
-   - تهيئة قاعدة البيانات الجاهزة مسبقاً (\`template.db\`) في **\`C:\\UAS-Data\\uas-enterprise.db\`** دون المساس ببياناتك السابقة عند التحديث.
-   - فتح المنفذ **3000** في جدار حماية ويندوز للشبكة المحلية.
-   - إنشاء اختصارات التشغيل المباشر لـ **\`UAS.exe\`** على سطح المكتب وقائمة ابدأ.
-3. حتى في حال حذف ملف قاعدة البيانات، تقوم المنظومة تلقائياً بالتهيئة الذاتية (Self-Healing SQLite Bootstrap) عند التشغيل بدون أي أخطاء \`P2021\`.
-
----
-
-## ثانياً: أوضاع التشغيل الثلاثة (3 Runtime Modes)
-
-- **الجهاز المستقل (Local Standalone):** شغل **\`UAS Accounting System\`** (أو \`UAS.exe --local\`) → يعمل على \`http://localhost:3000\`.
-- **خادم الشبكة المكتبية (Office LAN Server):** شغل **\`UAS Office LAN Server\`** (أو \`UAS.exe --lan\`) → يتيح الاتصال من جميع أجهزة الموظفين والهواتف الميدانية عبر \`http://<LAN-IP>:3000\`.
-- **السحابي (Cloud):** اتصل مباشرة بـ \`https://qat.world\` أو نطاق شركتك المخصص.
+1. ط§ط¶ط؛ط· ظ…ط±طھظٹظ† ط¹ظ„ظ‰ **\`UAS-Setup-Win64.exe\`** (ط£ظˆ **\`UAS-Setup.bat\`**).
+2. ظٹظ‚ظˆظ… ط§ظ„ظ…ط«ط¨طھ طھظ„ظ‚ط§ط¦ظٹط§ظ‹ ط¨ظ€:
+   - ظ†ط³ط® ط§ظ„ظ…ط­ط±ظƒ ط§ظ„ظ…ط³طھظ‚ظ„ ط§ظ„ظ…ط¯ظ…ط¬ (\`UAS.exe\` + \`runtime/node.exe\` + ظ…ط­ط±ظƒ Prisma 6.19.3) ط¥ظ„ظ‰ **\`C:\\UAS\\app\`**.
+   - طھظ‡ظٹط¦ط© ظ‚ط§ط¹ط¯ط© ط§ظ„ط¨ظٹط§ظ†ط§طھ ط§ظ„ط¬ط§ظ‡ط²ط© ظ…ط³ط¨ظ‚ط§ظ‹ (\`template.db\`) ظپظٹ **\`C:\\UAS-Data\\uas-enterprise.db\`** ط¯ظˆظ† ط§ظ„ظ…ط³ط§ط³ ط¨ط¨ظٹط§ظ†ط§طھظƒ ط§ظ„ط³ط§ط¨ظ‚ط© ط¹ظ†ط¯ ط§ظ„طھط­ط¯ظٹط«.
+   - ظپطھط­ ط§ظ„ظ…ظ†ظپط° **3000** ظپظٹ ط¬ط¯ط§ط± ط­ظ…ط§ظٹط© ظˆظٹظ†ط¯ظˆط² ظ„ظ„ط´ط¨ظƒط© ط§ظ„ظ…ط­ظ„ظٹط©.
+   - ط¥ظ†ط´ط§ط، ط§ط®طھطµط§ط±ط§طھ ط§ظ„طھط´ط؛ظٹظ„ ط§ظ„ظ…ط¨ط§ط´ط± ظ„ظ€ **\`UAS.exe\`** ط¹ظ„ظ‰ ط³ط·ط­ ط§ظ„ظ…ظƒطھط¨ ظˆظ‚ط§ط¦ظ…ط© ط§ط¨ط¯ط£.
+3. ط­طھظ‰ ظپظٹ ط­ط§ظ„ ط­ط°ظپ ظ…ظ„ظپ ظ‚ط§ط¹ط¯ط© ط§ظ„ط¨ظٹط§ظ†ط§طھطŒ طھظ‚ظˆظ… ط§ظ„ظ…ظ†ط¸ظˆظ…ط© طھظ„ظ‚ط§ط¦ظٹط§ظ‹ ط¨ط§ظ„طھظ‡ظٹط¦ط© ط§ظ„ط°ط§طھظٹط© (Self-Healing SQLite Bootstrap) ط¹ظ†ط¯ ط§ظ„طھط´ط؛ظٹظ„ ط¨ط¯ظˆظ† ط£ظٹ ط£ط®ط·ط§ط، \`P2021\`.
 
 ---
 
-## ثالثاً: تفعيل الترخيص المشفر (Ed25519 Activation)
+## ط«ط§ظ†ظٹط§ظ‹: ط£ظˆط¶ط§ط¹ ط§ظ„طھط´ط؛ظٹظ„ ط§ظ„ط«ظ„ط§ط«ط© (3 Runtime Modes)
 
-1. عند فتح النظام، انسخ **رمز طلب الترخيص (Machine Request Code)**: \`REQ-XXXX-XXXX-XXXX-XXXX\`.
-2. ارفع ملف **\`license.uas\`** مباشرة (تفعيل 100% دون إنترنت) أو أدخل المفتاح التسلسلي \`UASKEY-...\`.
+- **ط§ظ„ط¬ظ‡ط§ط² ط§ظ„ظ…ط³طھظ‚ظ„ (Local Standalone):** ط´ط؛ظ„ **\`UAS Accounting System\`** (ط£ظˆ \`UAS.exe --local\`) â†’ ظٹط¹ظ…ظ„ ط¹ظ„ظ‰ \`http://localhost:3000\`.
+- **ط®ط§ط¯ظ… ط§ظ„ط´ط¨ظƒط© ط§ظ„ظ…ظƒطھط¨ظٹط© (Office LAN Server):** ط´ط؛ظ„ **\`UAS Office LAN Server\`** (ط£ظˆ \`UAS.exe --lan\`) â†’ ظٹطھظٹط­ ط§ظ„ط§طھطµط§ظ„ ظ…ظ† ط¬ظ…ظٹط¹ ط£ط¬ظ‡ط²ط© ط§ظ„ظ…ظˆط¸ظپظٹظ† ظˆط§ظ„ظ‡ظˆط§طھظپ ط§ظ„ظ…ظٹط¯ط§ظ†ظٹط© ط¹ط¨ط± \`http://<LAN-IP>:3000\`.
+- **ط§ظ„ط³ط­ط§ط¨ظٹ (Cloud):** ط§طھطµظ„ ظ…ط¨ط§ط´ط±ط© ط¨ظ€ \`https://qat.world\` ط£ظˆ ظ†ط·ط§ظ‚ ط´ط±ظƒطھظƒ ط§ظ„ظ…ط®طµطµ.
+
+---
+
+## ط«ط§ظ„ط«ط§ظ‹: طھظپط¹ظٹظ„ ط§ظ„طھط±ط®ظٹطµ ط§ظ„ظ…ط´ظپط± (Ed25519 Activation)
+
+1. ط¹ظ†ط¯ ظپطھط­ ط§ظ„ظ†ط¸ط§ظ…طŒ ط§ظ†ط³ط® **ط±ظ…ط² ط·ظ„ط¨ ط§ظ„طھط±ط®ظٹطµ (Machine Request Code)**: \`REQ-XXXX-XXXX-XXXX-XXXX\`.
+2. ط§ط±ظپط¹ ظ…ظ„ظپ **\`license.uas\`** ظ…ط¨ط§ط´ط±ط© (طھظپط¹ظٹظ„ 100% ط¯ظˆظ† ط¥ظ†طھط±ظ†طھ) ط£ظˆ ط£ط¯ط®ظ„ ط§ظ„ظ…ظپطھط§ط­ ط§ظ„طھط³ظ„ط³ظ„ظٹ \`UASKEY-...\`.
 
 ---
 
