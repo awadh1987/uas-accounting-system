@@ -1,0 +1,15 @@
+{
+  "license_id": "UAS-2026-8257",
+  "customer_name": "UAS Cloud Production (qat.world)",
+  "hwid": "3B3F07D04E0B4E3D233E8F6BDD396B499ED860258AB817958EF2B5E6DCC29E99",
+  "allowed_modes": [
+    "cloud",
+    "lan",
+    "local"
+  ],
+  "max_branches": 99,
+  "max_lan_seats": 999,
+  "expires_at": "2036-11-14T16:49:45.558Z",
+  "issued_at": "2026-11-17T16:49:45.556Z",
+  "signature": "361iQRd6nSIgzze3hjflwSNCDibgwp+Xj6jfPAytYbTk9Ky3z5Uw62Eq7OCMUrF4gD/ytuKctsgb7DrhA1nwCA=="
+}

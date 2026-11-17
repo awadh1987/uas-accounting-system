@@ -1,0 +1,14 @@
+{
+  "license_id": "UAS-2026-4412",
+  "customer_name": "Al-Jabri For Qat.",
+  "hwid": "3B3F07D04E0B4E3D233E8F6BDD396B499ED860258AB817958EF2B5E6DCC29E99",
+  "allowed_modes": [
+    "lan",
+    "local"
+  ],
+  "max_branches": 3,
+  "max_lan_seats": 15,
+  "expires_at": "2027-11-17T17:27:01.126Z",
+  "issued_at": "2026-11-17T17:27:01.124Z",
+  "signature": "6unmfvfa/OYDtbdCbszpCCxykk2WPXp5pE3RNFDomnULsC7RUhorJpEd51IMezAGCekcD12R9P1NzCYnWHmvAg=="
+}
