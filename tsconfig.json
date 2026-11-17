@@ -45,6 +45,8 @@
     "node_modules",
     "android",
     "ios",
-    "out"
+    "out",
+    "dist",
+    "release"
   ]
 }

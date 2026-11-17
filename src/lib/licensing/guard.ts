@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { loadInstalledLicense, verifyLicense } from "./verifier";
 import { getMachineHwid } from "./hwid";
 import type { RuntimeMode, UasSignedLicense } from "./licenseSchema";
@@ -29,6 +30,7 @@ export async function checkLicenseAndClock(
   clientIp?: string,
   deviceName?: string
 ): Promise<LicenseGuardCheck> {
+  await ensureSqliteDatabaseReady();
   const currentHwid = getMachineHwid();
   const { license } = loadInstalledLicense();
 

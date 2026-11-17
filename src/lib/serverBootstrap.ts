@@ -16,6 +16,7 @@ import type {
 } from "@prisma/client";
 import { formatAuditTimestamp, type CurrencyCode } from "@/lib/formulas";
 import { prisma } from "@/lib/prisma";
+import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import type {
   UasAuditLog,
   UasBootstrapState,
@@ -407,6 +408,8 @@ function mapSales(sales: SaleTransaction[]): UasSaleTransaction[] {
 }
 
 export async function getBootstrapState(): Promise<UasBootstrapState> {
+  await ensureSqliteDatabaseReady();
+
   let enterpriseProfile = await prisma.enterpriseProfile.findUnique({ where: { id: "default" } });
   if (!enterpriseProfile) {
     try {

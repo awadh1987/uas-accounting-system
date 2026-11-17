@@ -15,6 +15,7 @@
     "db:generate": "prisma generate",
     "db:postgres": "node scripts/switch-db.mjs postgresql && prisma generate",
     "db:sqlite": "node scripts/switch-db.mjs sqlite && prisma generate",
+    "db:gen-sqlite-migration": "node scripts/generate-sqlite-migration.mjs",
     "license:keygen": "node scripts/licensing/keygen.mjs",
     "license:issue": "node scripts/licensing/issue-license.mjs",
     "release:build": "node scripts/build-commercial-release.mjs",
@@ -28,7 +29,7 @@
   },
   "dependencies": {
     "@capacitor/core": "^8.0.0",
-    "@prisma/client": "^6.19.3",
+    "@prisma/client": "6.19.3",
     "chart.js": "^4.6.1",
     "dexie": "^4.4.7",
     "lucide-react": "^1.71.0",
@@ -49,7 +50,7 @@
     "eslint": "^9.0.0",
     "eslint-config-next": "^16.4.6",
     "postcss": "^8.4.49",
-    "prisma": "^6.19.3",
+    "prisma": "6.19.3",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

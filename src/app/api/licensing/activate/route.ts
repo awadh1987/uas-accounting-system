@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { validateLicenseStructure, type UasSignedLicense } from "@/lib/licensing/licenseSchema";
 import { verifyLicense, saveInstalledLicense } from "@/lib/licensing/verifier";
 import { getMachineHwid } from "@/lib/licensing/hwid";
@@ -9,6 +10,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
+    await ensureSqliteDatabaseReady();
     let licenseObj: UasSignedLicense | null = null;
     const contentType = req.headers.get("content-type") || "";
 

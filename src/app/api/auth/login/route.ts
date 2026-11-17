@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { appendAuditLogTx, hashPassword, parseAssignedProjects } from "@/lib/serverBootstrap";
 import { jsonError } from "@/lib/apiHelpers";
 import {
@@ -22,6 +23,7 @@ import type { UasUser } from "@/types/uas";
 
 export async function POST(req: NextRequest) {
   try {
+    await ensureSqliteDatabaseReady();
     const body = (await req.json()) as Record<string, unknown>;
     const userId = String(body.userId || "").trim();
     const identifier = String(body.identifier || body.email || body.username || "").trim();

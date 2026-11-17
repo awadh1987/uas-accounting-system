@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { generateFinancialReports } from "@/lib/accounting/ledgerService";
 import { jsonError } from "@/lib/apiHelpers";
 
@@ -7,6 +8,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   try {
+    await ensureSqliteDatabaseReady();
     const { searchParams } = new URL(req.url);
     const q = searchParams.get("q")?.trim();
 
