@@ -254,7 +254,7 @@ execFileSync(
 // ---------------------------------------------------------------------------
 // STEP 5: Compile Native Self-Contained Launcher UAS.exe (Zero CLI / Zero npx)
 // ---------------------------------------------------------------------------
-console.log("\n[Step 5/7] Compiling Native Self-Contained Launcher (app/UAS.exe)...");
+console.log("\n[Step 5/7] Compiling Native Self-Contained Launcher (UAS.exe)...");
 const uasLauncherCs = `
 using System;
 using System.Diagnostics;
@@ -270,11 +270,14 @@ public class UasLauncher
 
     public static int Main(string[] args)
     {
-        string appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\\\');
+        string baseDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\\\');
+        string appDir = (Directory.Exists(Path.Combine(baseDir, "app")) && File.Exists(Path.Combine(baseDir, "app", "server.js")))
+            ? Path.Combine(baseDir, "app")
+            : baseDir;
         string dataDir = @"C:\\UAS-Data";
-        if (!appDir.StartsWith(@"C:\\UAS", StringComparison.OrdinalIgnoreCase) && !Directory.Exists(dataDir))
+        if (!baseDir.StartsWith(@"C:\\UAS", StringComparison.OrdinalIgnoreCase) && !Directory.Exists(dataDir))
         {
-            string parentDir = Directory.GetParent(appDir) != null ? Directory.GetParent(appDir).FullName : appDir;
+            string parentDir = Directory.GetParent(baseDir) != null ? Directory.GetParent(baseDir).FullName : baseDir;
             dataDir = Path.Combine(parentDir, "UAS-Data");
         }
 
@@ -492,7 +495,11 @@ public class UasLauncher
 }
 `;
 const uasLauncherCsPath = path.join(projectRoot, "scripts", ".tmp-UasLauncher.cs");
-const uasExePath = path.join(appDestDir, "UAS.exe");
+const uasExePath = path.join(releaseRoot, "UAS.exe");
+const legacyAppExePath = path.join(appDestDir, "UAS.exe");
+if (fs.existsSync(legacyAppExePath)) {
+  try { fs.unlinkSync(legacyAppExePath); } catch {}
+}
 fs.writeFileSync(uasLauncherCsPath, uasLauncherCs, "utf8");
 
 const iconWinPath = path.join(projectRoot, "public", "uas-app.ico");
@@ -525,21 +532,41 @@ try {
 // ---------------------------------------------------------------------------
 console.log("\n[Step 7/8] Generating zero-CLI batch launchers (zero npx)...");
 
+// Root launchers pointing to UAS.exe at release root (C:\UAS\UAS.exe)
 fs.writeFileSync(
-  path.join(appDestDir, "Start-UAS.bat"),
+  path.join(releaseRoot, "Start-UAS.bat"),
   `@echo off\r\ncd /d "%~dp0"\r\n"%~dp0UAS.exe" %*\r\n`,
   "utf8"
 );
 
 fs.writeFileSync(
-  path.join(appDestDir, "Start-UAS-Local.bat"),
+  path.join(releaseRoot, "Start-UAS-Local.bat"),
   `@echo off\r\ncd /d "%~dp0"\r\n"%~dp0UAS.exe" --local %*\r\n`,
   "utf8"
 );
 
 fs.writeFileSync(
-  path.join(appDestDir, "Start-UAS-LAN.bat"),
+  path.join(releaseRoot, "Start-UAS-LAN.bat"),
   `@echo off\r\ncd /d "%~dp0"\r\n"%~dp0UAS.exe" --lan %*\r\n`,
+  "utf8"
+);
+
+// Fallback launchers inside app\ subfolder
+fs.writeFileSync(
+  path.join(appDestDir, "Start-UAS.bat"),
+  `@echo off\r\ncd /d "%~dp0"\r\nif exist "%~dp0..\\UAS.exe" ("%~dp0..\\UAS.exe" %*) else ("%~dp0UAS.exe" %*)\r\n`,
+  "utf8"
+);
+
+fs.writeFileSync(
+  path.join(appDestDir, "Start-UAS-Local.bat"),
+  `@echo off\r\ncd /d "%~dp0"\r\nif exist "%~dp0..\\UAS.exe" ("%~dp0..\\UAS.exe" --local %*) else ("%~dp0UAS.exe" --local %*)\r\n`,
+  "utf8"
+);
+
+fs.writeFileSync(
+  path.join(appDestDir, "Start-UAS-LAN.bat"),
+  `@echo off\r\ncd /d "%~dp0"\r\nif exist "%~dp0..\\UAS.exe" ("%~dp0..\\UAS.exe" --lan %*) else ("%~dp0UAS.exe" --lan %*)\r\n`,
   "utf8"
 );
 
@@ -551,7 +578,7 @@ echo ===========================================================================
 echo    UNIFIED ACCOUNTING SYSTEM (UAS ERP) - ZERO-CONFIG INSTALLER
 echo ============================================================================
 echo.
-echo Installing self-contained runtime to : C:\\UAS\\app
+echo Installing self-contained runtime to : C:\\UAS
 echo Initializing persistent data dir     : C:\\UAS-Data
 echo (100%% Offline-Capable - No Node.js, No Prisma CLI, No npx required)
 echo.
@@ -563,14 +590,29 @@ if errorlevel 1 (
     exit /b 0
 )
 
+echo [INFO] Terminating any running UAS processes before upgrade...
+taskkill /F /IM UAS.exe >nul 2>nul
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '*\\UAS\\*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>nul
+
+if not exist "C:\\UAS" mkdir "C:\\UAS"
 if not exist "C:\\UAS\\app" mkdir "C:\\UAS\\app"
 if not exist "C:\\UAS-Data" mkdir "C:\\UAS-Data"
 
-echo [1/5] Copying self-contained runtime to C:\\UAS\\app...
+echo [1/5] Copying self-contained runtime and UAS.exe to C:\\UAS...
+if exist "%~dp0UAS.exe" (
+    copy "%~dp0UAS.exe" "C:\\UAS\\UAS.exe" /Y >nul
+)
+if exist "C:\\UAS\\app\\UAS.exe" (
+    del /f /q "C:\\UAS\\app\\UAS.exe" >nul 2>nul
+)
+
 xcopy "%~dp0app\\*" "C:\\UAS\\app\\" /E /I /Y /Q >nul
 
 if exist "%~dp0QUICK-START-AR-EN.md" (
     copy "%~dp0QUICK-START-AR-EN.md" "C:\\UAS\\" /Y >nul
+)
+if exist "%~dp0Start-UAS.bat" (
+    copy "%~dp0Start-UAS*.bat" "C:\\UAS\\" /Y >nul
 )
 
 echo [2/5] Preparing clean pre-migrated SQLite database...
@@ -591,19 +633,19 @@ if exist "%~dp0license.uas" (
 echo [3/5] Configuring Windows Defender Firewall rule (TCP Port 3000)...
 powershell -NoProfile -Command "if (!(Get-NetFirewallRule -DisplayName 'UAS Accounting LAN' -ErrorAction SilentlyContinue)) { New-NetFirewallRule -DisplayName 'UAS Accounting LAN' -Direction Inbound -LocalPort 3000 -Protocol TCP -Action Allow -Profile Any | Out-Null }"
 
-echo [4/5] Creating Desktop & Start Menu shortcuts pointing to UAS.exe...
-powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $d = [System.Environment]::GetFolderPath('CommonDesktopDirectory'); $s = $ws.CreateShortcut(\\"$d\\UAS Accounting System.lnk\\"); $s.TargetPath = 'C:\\UAS\\app\\UAS.exe'; $s.WorkingDirectory = 'C:\\UAS\\app'; $s.Save()"
-powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $p = [System.Environment]::GetFolderPath('CommonPrograms'); $dir = \\"$p\\UAS Accounting\\"; if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }; $s = $ws.CreateShortcut(\\"$dir\\UAS Accounting System.lnk\\"); $s.TargetPath = 'C:\\UAS\\app\\UAS.exe'; $s.WorkingDirectory = 'C:\\UAS\\app'; $s.Save(); $s2 = $ws.CreateShortcut(\\"$dir\\UAS Local Standalone.lnk\\"); $s2.TargetPath = 'C:\\UAS\\app\\UAS.exe'; $s2.Arguments = '--local'; $s2.WorkingDirectory = 'C:\\UAS\\app'; $s2.Save(); $s3 = $ws.CreateShortcut(\\"$dir\\UAS Office LAN Server.lnk\\"); $s3.TargetPath = 'C:\\UAS\\app\\UAS.exe'; $s3.Arguments = '--lan'; $s3.WorkingDirectory = 'C:\\UAS\\app'; $s3.Save()"
+echo [4/5] Creating Desktop & Start Menu shortcuts pointing to C:\\UAS\\UAS.exe...
+powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $d = [System.Environment]::GetFolderPath('CommonDesktopDirectory'); $s = $ws.CreateShortcut(\\"$d\\UAS Accounting System.lnk\\"); $s.TargetPath = 'C:\\UAS\\UAS.exe'; $s.WorkingDirectory = 'C:\\UAS'; $s.Save()"
+powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $p = [System.Environment]::GetFolderPath('CommonPrograms'); $dir = \\"$p\\UAS Accounting\\"; if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }; $s = $ws.CreateShortcut(\\"$dir\\UAS Accounting System.lnk\\"); $s.TargetPath = 'C:\\UAS\\UAS.exe'; $s.WorkingDirectory = 'C:\\UAS'; $s.Save(); $s2 = $ws.CreateShortcut(\\"$dir\\UAS Local Standalone.lnk\\"); $s2.TargetPath = 'C:\\UAS\\UAS.exe'; $s2.Arguments = '--local'; $s2.WorkingDirectory = 'C:\\UAS'; $s2.Save(); $s3 = $ws.CreateShortcut(\\"$dir\\UAS Office LAN Server.lnk\\"); $s3.TargetPath = 'C:\\UAS\\UAS.exe'; $s3.Arguments = '--lan'; $s3.WorkingDirectory = 'C:\\UAS'; $s3.Save()"
 
 echo.
 echo ============================================================================
 echo   [5/5] INSTALLATION COMPLETED SUCCESSFULLY!
-echo   Double-click "UAS Accounting System" on your Desktop to start.
+echo   Double-click \"UAS Accounting System\" on your Desktop to start.
 echo ============================================================================
 echo.
 set /p launchNow="Launch UAS Accounting System now? (Y/N): "
 if /i "%launchNow%"=="Y" (
-    start "" "C:\\UAS\\app\\UAS.exe"
+    start "" "C:\\UAS\\UAS.exe"
 )
 exit /b 0
 `;
@@ -624,10 +666,10 @@ const quickStartMd = `# دليل البدء والتشغيل التجاري لم
 
 1. اضغط مرتين على **\`UAS-Setup-Win64.exe\`** (أو **\`UAS-Setup.bat\`**).
 2. يقوم المثبت تلقائياً بـ:
-   - نسخ المحرك المستقل المدمج (\`UAS.exe\` + \`runtime/node.exe\` + محرك Prisma 6.19.3) إلى **\`C:\\UAS\\app\`**.
+   - نسخ المحرك المستقل ومشغل الواجهة المباشر إلى **\`C:\\UAS\\UAS.exe\`** ومحرك التشغيل إلى **\`C:\\UAS\\app\`**.
    - تهيئة قاعدة البيانات الجاهزة مسبقاً (\`template.db\`) في **\`C:\\UAS-Data\\uas-enterprise.db\`** دون المساس ببياناتك السابقة عند التحديث.
    - فتح المنفذ **3000** في جدار حماية ويندوز للشبكة المحلية.
-   - إنشاء اختصارات التشغيل المباشر لـ **\`UAS.exe\`** على سطح المكتب وقائمة ابدأ.
+   - إنشاء اختصارات التشغيل المباشر لـ **\`C:\\UAS\\UAS.exe\`** على سطح المكتب وقائمة ابدأ.
 3. حتى في حال حذف ملف قاعدة البيانات، تقوم المنظومة تلقائياً بالتهيئة الذاتية (Self-Healing SQLite Bootstrap) عند التشغيل بدون أي أخطاء \`P2021\`.
 
 ---
@@ -651,7 +693,7 @@ const quickStartMd = `# دليل البدء والتشغيل التجاري لم
 
 1. **Zero-Config Install:** Double-click \`UAS-Setup-Win64.exe\` (or \`UAS-Setup.bat\`). No Node.js, no Prisma CLI, no \`npx\`, and no internet required.
 2. **Pre-Initialized & Self-Healing DB:** A clean, pre-migrated SQLite database (\`template.db\`) is installed to \`C:\\UAS-Data\\uas-enterprise.db\` on first launch. If deleted, the runtime automatically recreates all tables and baseline records on startup with zero \`P2021\` errors.
-3. **Launch:** Double-click \`UAS Accounting System\` on the Desktop (\`C:\\UAS\\app\\UAS.exe\`). The standalone desktop window opens directly to Login & Activation.
+3. **Launch:** Double-click \`UAS Accounting System\` on the Desktop (\`C:\\UAS\\UAS.exe\`). The standalone desktop window opens directly to Login & Activation.
 `;
 fs.writeFileSync(path.join(releaseRoot, "QUICK-START-AR-EN.md"), quickStartMd, "utf8");
 
@@ -696,11 +738,27 @@ public class UasSetup
             if (!Directory.Exists(targetAppDir)) Directory.CreateDirectory(targetAppDir);
             if (!Directory.Exists(targetDataDir)) Directory.CreateDirectory(targetDataDir);
 
+            // Cleanly terminate running UAS.exe or background processes before copying
+            RunPowerShell("Stop-Process -Name 'UAS' -Force -ErrorAction SilentlyContinue");
+            RunPowerShell("Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '*\\\\UAS\\\\*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }");
+
             string appSourceDir = Path.Combine(currentDir, "app");
             if (Directory.Exists(appSourceDir))
             {
                 Console.WriteLine("[2/5] Installing self-contained runtime, Node engine, and Prisma DB engine...");
                 CopyDirectory(appSourceDir, Path.Combine(targetAppDir, "app"));
+            }
+
+            // Copy root UAS.exe to C:\\UAS\\UAS.exe and remove legacy C:\\UAS\\app\\UAS.exe
+            string rootUasExe = Path.Combine(currentDir, "UAS.exe");
+            if (File.Exists(rootUasExe))
+            {
+                File.Copy(rootUasExe, Path.Combine(targetAppDir, "UAS.exe"), true);
+            }
+            string legacyAppUasExe = Path.Combine(targetAppDir, "app", "UAS.exe");
+            if (File.Exists(legacyAppUasExe))
+            {
+                try { File.Delete(legacyAppUasExe); } catch { }
             }
 
             // Copy pre-initialized template.db into C:\\UAS-Data\\uas-enterprise.db on fresh install
@@ -726,7 +784,7 @@ public class UasSetup
             Console.WriteLine("[3/5] Configuring Windows Defender Firewall inbound rule (Port 3000)...");
             RunPowerShell("if (!(Get-NetFirewallRule -DisplayName 'UAS Accounting LAN' -ErrorAction SilentlyContinue)) { New-NetFirewallRule -DisplayName 'UAS Accounting LAN' -Direction Inbound -LocalPort 3000 -Protocol TCP -Action Allow -Profile Any | Out-Null }");
 
-            Console.WriteLine("[4/5] Creating Desktop and Start Menu shortcuts for UAS.exe...");
+            Console.WriteLine("[4/5] Creating Desktop and Start Menu shortcuts for C:\\\\UAS\\\\UAS.exe...");
             CreateShortcuts();
 
             Console.ForegroundColor = ConsoleColor.Cyan;
@@ -740,10 +798,11 @@ public class UasSetup
             string key = Console.ReadLine();
             if (key != null && key.Trim().Equals("Y", StringComparison.OrdinalIgnoreCase))
             {
-                string launcher = Path.Combine(targetAppDir, "app", "UAS.exe");
+                string launcher = Path.Combine(targetAppDir, "UAS.exe");
+                if (!File.Exists(launcher)) launcher = Path.Combine(targetAppDir, "app", "UAS.exe");
                 if (File.Exists(launcher))
                 {
-                    Process.Start(new ProcessStartInfo(launcher) { WorkingDirectory = Path.Combine(targetAppDir, "app"), UseShellExecute = true });
+                    Process.Start(new ProcessStartInfo(launcher) { WorkingDirectory = targetAppDir, UseShellExecute = true });
                 }
             }
         }
@@ -793,25 +852,25 @@ public class UasSetup
             "$ws = New-Object -ComObject WScript.Shell; " +
             "$desktop = [System.Environment]::GetFolderPath('CommonDesktopDirectory'); " +
             "$s = $ws.CreateShortcut($desktop + '\\\\UAS Accounting System.lnk'); " +
-            "$s.TargetPath = 'C:\\\\UAS\\\\app\\\\UAS.exe'; " +
-            "$s.WorkingDirectory = 'C:\\\\UAS\\\\app'; " +
+            "$s.TargetPath = 'C:\\\\UAS\\\\UAS.exe'; " +
+            "$s.WorkingDirectory = 'C:\\\\UAS'; " +
             "$s.Save(); " +
             "$programs = [System.Environment]::GetFolderPath('CommonPrograms'); " +
             "$dir = $programs + '\\\\UAS Accounting'; " +
             "if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }; " +
             "$s1 = $ws.CreateShortcut($dir + '\\\\UAS Accounting System.lnk'); " +
-            "$s1.TargetPath = 'C:\\\\UAS\\\\app\\\\UAS.exe'; " +
-            "$s1.WorkingDirectory = 'C:\\\\UAS\\\\app'; " +
+            "$s1.TargetPath = 'C:\\\\UAS\\\\UAS.exe'; " +
+            "$s1.WorkingDirectory = 'C:\\\\UAS'; " +
             "$s1.Save(); " +
             "$s2 = $ws.CreateShortcut($dir + '\\\\UAS Local Standalone.lnk'); " +
-            "$s2.TargetPath = 'C:\\\\UAS\\\\app\\\\UAS.exe'; " +
+            "$s2.TargetPath = 'C:\\\\UAS\\\\UAS.exe'; " +
             "$s2.Arguments = '--local'; " +
-            "$s2.WorkingDirectory = 'C:\\\\UAS\\\\app'; " +
+            "$s2.WorkingDirectory = 'C:\\\\UAS'; " +
             "$s2.Save(); " +
             "$s3 = $ws.CreateShortcut($dir + '\\\\UAS Office LAN Server.lnk'); " +
-            "$s3.TargetPath = 'C:\\\\UAS\\\\app\\\\UAS.exe'; " +
+            "$s3.TargetPath = 'C:\\\\UAS\\\\UAS.exe'; " +
             "$s3.Arguments = '--lan'; " +
-            "$s3.WorkingDirectory = 'C:\\\\UAS\\\\app'; " +
+            "$s3.WorkingDirectory = 'C:\\\\UAS'; " +
             "$s3.Save();";
         RunPowerShell(ps);
     }
@@ -863,7 +922,7 @@ try {
 console.log("\n=================================================================");
 console.log("   SELF-CONTAINED WINDOWS DESKTOP BUNDLE READY IN:");
 console.log(`   ${releaseRoot}`);
-console.log("   - app/UAS.exe (Silent GUI native launcher)");
+console.log("   - UAS.exe (Silent GUI native launcher at root)");
 console.log("   - app/.next/static (Verified CSS & JS chunks)");
 console.log("   - app/runtime/node.exe (Bundled Node.js engine)");
 console.log("   - app/prisma/template.db (Pre-migrated & seeded SQLite DB)");

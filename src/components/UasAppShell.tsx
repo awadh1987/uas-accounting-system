@@ -83,7 +83,9 @@ interface BeforeInstallPromptEvent extends Event {
 export function UasAppShell() {
   const [state, setState] = useState<UasBootstrapState>(INITIAL_FALLBACK_STATE);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"landing" | "login" | "erp">("landing");
+  const [viewMode, setViewMode] = useState<"landing" | "login" | "erp">(() => {
+    return isInstalledClientApp() ? "login" : "landing";
+  });
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
   const [salesViewMode, setSalesViewMode] = useState<"sales" | "customers">("sales");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -148,20 +150,10 @@ export function UasAppShell() {
     return () => clearTimeout(timer);
   }, [toastMsg]);
 
-  // Auto-open activation modal in the same window whenever license is invalid
-  useEffect(() => {
-    if (licenseStatus && !licenseStatus.is_valid) {
-      setLicenseModalOpen(true);
-    }
-  }, [licenseStatus]);
-
   // Initial database bootstrap + restore session, user & tab across refreshes
   useEffect(() => {
     installGlobalApiFetchInterceptor();
     const isClientApp = isInstalledClientApp();
-    if (isClientApp) {
-      setViewMode("login");
-    }
     checkLicensingStatus();
     let active = true;
     (async () => {
@@ -280,7 +272,7 @@ export function UasAppShell() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [checkLicensingStatus]);
 
   // Sync viewMode to localStorage after initial hydration
   useEffect(() => {

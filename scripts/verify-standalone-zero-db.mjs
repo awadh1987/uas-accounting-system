@@ -206,9 +206,13 @@ async function main() {
     if (fs.existsSync(f)) fs.unlinkSync(f);
   }
 
+  const uasExeCandidate = fs.existsSync(path.join(projectRoot, "release", "UAS-Commercial-Dist", "UAS.exe"))
+    ? path.join(projectRoot, "release", "UAS-Commercial-Dist", "UAS.exe")
+    : path.join(appDir, "UAS.exe");
+
   await runScenario(
     "TEST B: Native UAS.exe First-Launch -> template.db Copy + Clean Boot (http://localhost:3000)",
-    path.join(appDir, "UAS.exe"),
+    uasExeCandidate,
     ["--local", "--no-browser", "--port", "3000"],
     {},
     dbPathB,

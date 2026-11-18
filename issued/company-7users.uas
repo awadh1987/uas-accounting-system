@@ -1,0 +1,21 @@
+{
+  "license_id": "UAS-2026-5248",
+  "customer_name": "شركة الجابري للتجارة",
+  "company_name": "شركة الجابري للتجارة",
+  "hwid": "*",
+  "allowed_modes": [
+    "cloud",
+    "lan",
+    "local"
+  ],
+  "max_branches": 3,
+  "max_lan_seats": 10,
+  "max_users": 7,
+  "per_user_devices": {
+    "windows": 1,
+    "android": 1
+  },
+  "expires_at": "2027-11-18T21:19:44.281Z",
+  "issued_at": "2026-11-18T21:19:44.280Z",
+  "signature": "BQ+qPk2z/B7enRXsJBQzq705/hRcx0KmH75+akzIogGZCIHarelP2FZrIgE4sre/0D2YBr8UL8YL2aOKa/TzCQ=="
+}

@@ -159,6 +159,7 @@ body.mobile-simulator-active #erpAppFrame {
   body.uas-printing-voucher-modal .uas-voucher-modal-backdrop {
     position: static !important;
     background: transparent !important;
+    -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
     padding: 0 !important;
   }
