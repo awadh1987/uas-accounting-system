@@ -3,7 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { loadInstalledLicense, verifyLicense } from "./verifier";
 import { getMachineHwid } from "./hwid";
-import type { RuntimeMode, UasSignedLicense } from "./licenseSchema";
+import { isCompanyLockedPayload, type RuntimeMode, type UasSignedLicense } from "./licenseSchema";
+import { evaluateCompanyLock } from "./companyLock";
+import { createPrismaProfileRepo } from "./companyLockServer";
 
 export interface ActiveSeatRecord {
   token: string;
@@ -14,7 +16,7 @@ export interface ActiveSeatRecord {
 
 export interface LicenseGuardCheck {
   allowed: boolean;
-  status: "ACTIVE" | "UNLICENSED" | "EXPIRED" | "HWID_MISMATCH" | "CLOCK_TAMPER" | "SEAT_LIMIT_REACHED" | "MODE_NOT_ALLOWED";
+  status: "ACTIVE" | "UNLICENSED" | "EXPIRED" | "HWID_MISMATCH" | "CLOCK_TAMPER" | "SEAT_LIMIT_REACHED" | "MODE_NOT_ALLOWED" | "COMPANY_MISMATCH";
   code?: string;
   error?: string;
   license?: UasSignedLicense | null;
@@ -54,6 +56,25 @@ export async function checkLicenseAndClock(
       error: verification.error,
       license,
     };
+  }
+
+  // 2b. Company-name lock check against EnterpriseProfile (v2 company-locked licenses)
+  if (isCompanyLockedPayload(license) && license.company_name) {
+    try {
+      const profile = await createPrismaProfileRepo().get();
+      const lockEval = evaluateCompanyLock(license.company_name, profile);
+      if (lockEval.outcome === "MISMATCH") {
+        return {
+          allowed: false,
+          status: "COMPANY_MISMATCH",
+          code: "COMPANY_MISMATCH",
+          error: lockEval.error,
+          license,
+        };
+      }
+    } catch (err) {
+      console.error("[Licensing Guard] Company lock check warning:", err);
+    }
   }
 
   // 3. Database State & Anti-Clock-Rollback Monotonic Verification

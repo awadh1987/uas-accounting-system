@@ -161,6 +161,9 @@ export function LoginView({
       });
       const data = (await res.json().catch(() => ({}))) as { user?: UasUser; error?: string };
       if (!res.ok || !data.user) {
+        if ((res.status === 404 || res.status === 405) && !data.error && localMatch) {
+          throw new Error("STATIC_EXPORT_OFFLINE_LOGIN");
+        }
         const msg =
           data.error ||
           (isAr ? "بيانات الدخول غير صحيحة، يرجى التحقق والمحاولة مجدداً" : "Invalid credentials");

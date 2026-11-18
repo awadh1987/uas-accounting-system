@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { recordAuditDiffTx } from "@/lib/accounting/ledgerService";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
+import { checkProfileUpdateAgainstLock } from "@/lib/licensing/companyLock";
+import { loadActiveLockedLicense } from "@/lib/licensing/companyLockServer";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +35,22 @@ async function handleUpdateBranding(req: NextRequest) {
       body[key] !== undefined ? (body[key] ? String(body[key]).trim() : null) : undefined;
     const boolOpt = (key: string) =>
       body[key] !== undefined ? Boolean(body[key]) : undefined;
+
+    // Company-name lock: legalNameAr / legalNameEn may not be changed to a name that violates the
+    // active company-locked license (signed company_name).
+    const lockedLicense = loadActiveLockedLicense();
+    if (lockedLicense) {
+      const check = checkProfileUpdateAgainstLock(
+        lockedLicense.company_name as string,
+        existing
+          ? { legalNameAr: existing.legalNameAr, legalNameEn: existing.legalNameEn, isConfigured: existing.isConfigured }
+          : null,
+        { legalNameAr: strOpt("legalNameAr"), legalNameEn: strOpt("legalNameEn") }
+      );
+      if (!check.ok) {
+        return NextResponse.json({ error: check.error, code: "COMPANY_NAME_LOCKED" }, { status: 403 });
+      }
+    }
 
     const updateData = {
       isConfigured: true,

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { fmtNum, formatCurrencyVal, type CurrencyCode } from "@/lib/formulas";
 import { getDict } from "@/lib/i18n";
+import { triggerNativePrint } from "@/lib/nativeBridge";
 import type { LanguageCode, UasEnterpriseProfile, VoucherModalPayload } from "@/types/uas";
 import { QrVerificationBlock } from "./QrVerificationBlock";
 
@@ -36,6 +37,7 @@ export function VoucherModal({
 
   useEffect(() => {
     if (!voucher) return;
+    document.body.classList.add("uas-printing-voucher-modal");
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -45,7 +47,10 @@ export function VoucherModal({
       }
     };
     window.addEventListener("keydown", handleKey, true);
-    return () => window.removeEventListener("keydown", handleKey, true);
+    return () => {
+      document.body.classList.remove("uas-printing-voucher-modal");
+      window.removeEventListener("keydown", handleKey, true);
+    };
   }, [voucher, onClose]);
 
   if (!voucher || !mounted) return null;
@@ -53,7 +58,7 @@ export function VoucherModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm z-[70] flex items-center justify-center p-4 no-print"
+      className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm z-[70] flex items-center justify-center p-4 uas-voucher-modal-backdrop"
       onClick={(e) => {
         e.stopPropagation();
         onClose();
@@ -62,7 +67,7 @@ export function VoucherModal({
       aria-modal="true"
     >
       <div
-        className="relative z-[80] card-surface rounded-2xl max-w-2xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto"
+        className="relative z-[80] card-surface rounded-2xl max-w-2xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto uas-voucher-modal-card"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b pb-3 mb-4">
@@ -174,7 +179,11 @@ export function VoucherModal({
             {dict.whatsappBtn}
           </button>
           <button
-            onClick={() => window.print()}
+            onClick={() =>
+              void triggerNativePrint({
+                title: `${voucher.title}-${voucher.voucherNo || "Voucher"}`,
+              })
+            }
             className="px-4 py-2 rounded-lg accent-bg text-xs font-bold"
           >
             {dict.printPdfBtn}

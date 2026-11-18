@@ -153,4 +153,19 @@ body.mobile-simulator-active #erpAppFrame {
     border: 1px solid #ccc !important;
     box-shadow: none !important;
   }
+  body.uas-printing-voucher-modal #erpAppFrame {
+    display: none !important;
+  }
+  body.uas-printing-voucher-modal .uas-voucher-modal-backdrop {
+    position: static !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+    padding: 0 !important;
+  }
+  body.uas-printing-voucher-modal .uas-voucher-modal-card {
+    max-height: none !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    border: 1px solid #94a3b8 !important;
+  }
 }

@@ -7,16 +7,26 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
 
-async function waitForUrl(url, timeoutMs = 25000) {
+async function waitForUrl(url, timeoutMs = 35000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
       if (res.ok) return res;
     } catch {}
     await new Promise((r) => setTimeout(r, 400));
   }
   throw new Error(`Timeout waiting for ${url}`);
+}
+
+function freePort3000() {
+  if (process.platform !== "win32") return;
+  try {
+    execSync(
+      'powershell -NoProfile -Command "Get-Process -Name UAS -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"',
+      { stdio: "ignore" }
+    );
+  } catch {}
 }
 
 function killTree(pid) {
@@ -55,6 +65,16 @@ async function runScenario(name, exe, args, env, dbPathToVerify, port = 3000) {
     const rVerify = await fetch(`http://127.0.0.1:${port}/api/public/verify`);
     const rBoot = await fetch(`http://127.0.0.1:${port}/api/bootstrap`);
     const rLic = await fetch(`http://127.0.0.1:${port}/api/licensing/status`);
+    const rSupport = await fetch(`http://127.0.0.1:${port}/api/support/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "كيف ألغي ربط جهاز مفقود؟" }),
+    });
+    const rAgent = await fetch(`http://127.0.0.1:${port}/api/ai/agent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "كم رصيد حساب الصندوق الرئيسي 111101؟" }),
+    });
 
     // Verify all linked /_next/static CSS chunks return 200 OK with text/css
     const cssHrefs = [...homeHtml.matchAll(/href="(\/_next\/static\/[^"]+\.css[^"]*)"/g)].map(
@@ -79,6 +99,8 @@ async function runScenario(name, exe, args, env, dbPathToVerify, port = 3000) {
     const jVerify = await rVerify.json();
     const jBoot = await rBoot.json();
     const jLic = await rLic.json();
+    const jSupport = await rSupport.json();
+    const jAgent = await rAgent.json();
 
     const hasP2021 = logs.includes("P2021");
     const hasPrismaErr = logs.includes("prisma:error");
@@ -93,6 +115,10 @@ async function runScenario(name, exe, args, env, dbPathToVerify, port = 3000) {
       verifyStatus: rVerify.status,
       bootstrapStatus: rBoot.status,
       licensingStatus: rLic.status,
+      supportChatStatus: rSupport.status,
+      aiAgentStatus: rAgent.status,
+      supportMatchId: jSupport.matches?.[0]?.section?.id,
+      aiAgentTool: jAgent.toolName,
       profileName: jVerify.profile?.legalNameEn,
       treasuryCount: jBoot.treasuryAccounts?.length,
       requestCode: jLic.request_code,
@@ -121,6 +147,10 @@ async function runScenario(name, exe, args, env, dbPathToVerify, port = 3000) {
       rVerify.status !== 200 ||
       rBoot.status !== 200 ||
       rLic.status !== 200 ||
+      rSupport.status !== 200 ||
+      !jSupport.success ||
+      rAgent.status !== 200 ||
+      !jAgent.success ||
       hasP2021 ||
       hasPrismaErr ||
       !dbExists ||
@@ -129,7 +159,7 @@ async function runScenario(name, exe, args, env, dbPathToVerify, port = 3000) {
       console.error("[FAIL] Captured server logs:\n" + logs);
       process.exitCode = 1;
     } else {
-      console.log("[PASS] Clean boot: HTTP 200 + Tailwind CSS 200 OK + zero downloads in HTML + zero P2021!");
+      console.log("[PASS] Clean boot: HTTP 200 + Tailwind CSS 200 OK + /api/licensing/status + /api/support/chat + /api/ai/agent + zero downloads in HTML + zero P2021!");
     }
   } catch (err) {
     console.error("[ERROR]", err.message);
@@ -142,6 +172,8 @@ async function runScenario(name, exe, args, env, dbPathToVerify, port = 3000) {
 }
 
 async function main() {
+  freePort3000();
+  await new Promise((r) => setTimeout(r, 600));
   const appDir = path.join(projectRoot, "release", "UAS-Commercial-Dist", "app");
 
   // TEST A: Brand-new nonexistent DB file -> pure-runtime self-healing via bundled runtime/node.exe

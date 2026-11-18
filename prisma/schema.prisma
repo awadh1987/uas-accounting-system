@@ -768,3 +768,20 @@ model LicenseState {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 }
+
+// Company-locked multi-seat licensing: one row per (license, user, platform) device seat.
+// Enforces max_users per license and 1 Windows + 1 Android device per user.
+model LicenseDeviceBinding {
+  id          String   @id @default(cuid())
+  licenseId   String
+  userEmail   String // stored lower-cased / trimmed by the seat service
+  platform    String // "windows" | "android"
+  hwid        String
+  deviceName  String   @default("")
+  activatedAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  active      Boolean  @default(true)
+
+  @@unique([licenseId, userEmail, platform])
+  @@index([licenseId])
+}

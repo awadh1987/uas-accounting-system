@@ -644,6 +644,19 @@ CREATE TABLE "LicenseState" (
     "updatedAt" DATETIME NOT NULL
 );
 
+-- CreateTable
+CREATE TABLE "LicenseDeviceBinding" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "licenseId" TEXT NOT NULL,
+    "userEmail" TEXT NOT NULL,
+    "platform" TEXT NOT NULL,
+    "hwid" TEXT NOT NULL,
+    "deviceName" TEXT NOT NULL DEFAULT '',
+    "activatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "lastSeenAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "active" BOOLEAN NOT NULL DEFAULT true
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "Account_code_key" ON "Account"("code");
 
@@ -712,3 +725,9 @@ CREATE UNIQUE INDEX "User_username_key" ON "User"("username");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
+
+-- CreateIndex
+CREATE INDEX "LicenseDeviceBinding_licenseId_idx" ON "LicenseDeviceBinding"("licenseId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "LicenseDeviceBinding_licenseId_userEmail_platform_key" ON "LicenseDeviceBinding"("licenseId", "userEmail", "platform");

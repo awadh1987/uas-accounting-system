@@ -3,6 +3,11 @@ import { getMachineHwid, getMachineRequestCode } from "@/lib/licensing/hwid";
 import { loadInstalledLicense } from "@/lib/licensing/verifier";
 import { checkLicenseAndClock } from "@/lib/licensing/guard";
 import { getRuntimeConfig, getServerLanIps, getLanServerUrl } from "@/lib/runtimeMode";
+import { getLicenseSeatPolicy } from "@/lib/licensing/licenseSchema";
+import { createPrismaSeatStore } from "@/lib/licensing/prismaSeatStore";
+import { createPrismaProfileRepo } from "@/lib/licensing/companyLockServer";
+import { evaluateCompanyLock } from "@/lib/licensing/companyLock";
+import { getSeatUsage, seatPolicyFromLicense } from "@/lib/licensing/seatService";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +30,26 @@ export async function GET(req: NextRequest) {
     remainingDays = Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
   }
 
+  // Company lock + seat usage (company-locked v2 licenses only; counts only — no emails/devices)
+  const seatPolicy = license ? getLicenseSeatPolicy(license) : null;
+  let seats: { used_users: number; max_users: number; windows_bound: number; android_bound: number } | null = null;
+  let companyMatches: boolean | null = null;
+  if (license && seatPolicy?.companyLocked) {
+    try {
+      const usage = await getSeatUsage(createPrismaSeatStore(), license.license_id, seatPolicyFromLicense(license));
+      seats = {
+        used_users: usage.usedUsers,
+        max_users: usage.maxUsers,
+        windows_bound: usage.windowsBound,
+        android_bound: usage.androidBound,
+      };
+      const evaluation = evaluateCompanyLock(seatPolicy.companyName as string, await createPrismaProfileRepo().get());
+      companyMatches = evaluation.outcome !== "MISMATCH";
+    } catch (e) {
+      console.error("[Licensing Status] seat usage unavailable:", e);
+    }
+  }
+
   return NextResponse.json({
     request_code: requestCode,
     hwid,
@@ -33,6 +58,13 @@ export async function GET(req: NextRequest) {
     is_valid: guardResult.allowed,
     error: guardResult.error || null,
     customer_name: license?.customer_name || null,
+    company_name: seatPolicy?.companyName ?? null,
+    company_locked: Boolean(seatPolicy?.companyLocked),
+    company_matches: companyMatches,
+    seat_managed: Boolean(seatPolicy?.companyLocked),
+    max_users: seatPolicy?.companyLocked ? seatPolicy.maxUsers : null,
+    per_user_devices: seatPolicy?.companyLocked ? seatPolicy.perUserDevices : null,
+    seats,
     license_id: license?.license_id || null,
     allowed_modes: license?.allowed_modes || ["local"],
     max_branches: license?.max_branches || 1,

@@ -14,6 +14,7 @@ import { ProcurementTab } from "@/components/ProcurementTab";
 import { ProjectsManagerTab } from "@/components/ProjectsManagerTab";
 import { SidebarNav } from "@/components/SidebarNav";
 import { TopCommandBar } from "@/components/TopCommandBar";
+import { UasAiCopilot } from "@/components/UasAiCopilot";
 import { UserProfileDrawer } from "@/components/UserProfileDrawer";
 import { VoucherModal } from "@/components/VoucherModal";
 import { AuditTab } from "@/components/tabs/AuditTab";
@@ -54,6 +55,12 @@ import {
   isReadOnly,
 } from "@/lib/permissions";
 import { isInstalledClientApp } from "@/lib/runtimePlatform";
+import {
+  buildOfflineClientLicenseStatus,
+  detectClientPlatform,
+  getClientDeviceHwid,
+} from "@/lib/licensing";
+import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
 import { INITIAL_FALLBACK_STATE } from "@/lib/seedFallback";
 import type {
   LanguageCode,
@@ -112,15 +119,26 @@ export function UasAppShell() {
   const checkLicensingStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/licensing/status");
-      if (res.ok) {
+      const isJson = (res.headers.get("content-type") || "").includes("application/json");
+      if (res.ok && isJson) {
         const data = (await res.json()) as LicenseStatusData;
         setLicenseStatus(data);
         if (!data.is_valid) {
           setLicenseModalOpen(true);
         }
+        return;
       }
     } catch {
-      // Offline fallback
+      // Fall through to offline client license evaluator
+    }
+    try {
+      const offlineStatus = (await buildOfflineClientLicenseStatus()) as LicenseStatusData;
+      setLicenseStatus(offlineStatus);
+      if (!offlineStatus.is_valid) {
+        setLicenseModalOpen(true);
+      }
+    } catch {
+      // ignore
     }
   }, []);
 
@@ -660,20 +678,31 @@ export function UasAppShell() {
   }
 
   async function handleSendWhatsApp(voucher: VoucherModalPayload) {
-    const cleanPhone = String(voucher.phone || state.enterpriseProfile?.contactPhone || state.enterpriseProfile?.phone || "").replace(/[^0-9]/g, "");
-    if (!cleanPhone) {
-      showToast(lang === "ar" ? "يرجى تحديد رقم الهاتف لإرسال السند عبر واتساب" : "Please specify a phone number to send via WhatsApp");
+    const rawPhone = String(
+      voucher.phone ||
+        state.enterpriseProfile?.contactWhatsApp ||
+        state.enterpriseProfile?.contactPhone ||
+        state.enterpriseProfile?.phone ||
+        ""
+    ).trim();
+    if (!rawPhone.replace(/[^0-9]/g, "")) {
+      showToast(
+        lang === "ar"
+          ? "يرجى تحديد رقم الهاتف لإرسال السند عبر واتساب"
+          : "Please specify a phone number to send via WhatsApp"
+      );
       return;
     }
-    const fullPhone = cleanPhone.startsWith("967") ? cleanPhone : `967${cleanPhone}`;
-    const url = `https://wa.me/${fullPhone}?text=${encodeURIComponent(voucher.whatsappText)}`;
-    window.open(url, "_blank", "noopener,noreferrer");
+    const launched = openExternalOrWhatsApp({
+      phone: rawPhone,
+      text: voucher.whatsappText,
+    });
     await runMutation(
       "/api/audit/log",
       "POST",
       {
         action: "إرسال سند عبر واتساب",
-        details: `إلى الرقم ${fullPhone} (${voucher.voucherNo})`,
+        details: `إلى الرابط ${launched.url} (${voucher.voucherNo})`,
       },
       "WhatsApp dispatch",
       "تم فتح واتساب لإرسال السند للعميل/العامل"
@@ -734,6 +763,33 @@ export function UasAppShell() {
     if (typeof window !== "undefined") {
       window.localStorage.setItem("uas_user", u.id);
       window.localStorage.setItem("uas_view_mode", "erp");
+    }
+    // Bind or refresh this user's device seat (7 users × [1 Windows + 1 Android])
+    if (u.email) {
+      fetch("/api/licensing/seats", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-uas-user-id": u.id,
+          "x-uas-role": String(u.role),
+        },
+        body: JSON.stringify({
+          userEmail: u.email,
+          platform: detectClientPlatform(),
+          deviceId: getClientDeviceHwid(),
+        }),
+      })
+        .then(async (res) => {
+          if (!res.ok && (res.status === 403 || res.status === 409)) {
+            const data = await res.json().catch(() => ({}));
+            if (data?.error) showToast(String(data.error));
+            setLicenseModalOpen(true);
+          }
+          checkLicensingStatus();
+        })
+        .catch(() => {
+          // Offline mode fallback
+        });
     }
     const allowedProjects = filterAssignedProjects(u, state.projects);
     if (
@@ -1647,8 +1703,30 @@ export function UasAppShell() {
         open={licenseModalOpen}
         statusData={licenseStatus}
         lang={lang}
+        currentUser={currentUser}
+        enterpriseProfile={state.enterpriseProfile}
         onClose={() => setLicenseModalOpen(false)}
-        onRefreshStatus={checkLicensingStatus}
+        onRefreshStatus={() => {
+          checkLicensingStatus();
+          refreshFromServer();
+        }}
+        onToast={showToast}
+      />
+
+      <UasAiCopilot
+        lang={lang}
+        currentUser={currentUser}
+        state={state}
+        licenseStatus={licenseStatus}
+        offlineMode={offlineMode}
+        onNavigateTab={(tab) => {
+          if (currentUser && viewMode !== "erp") {
+            setViewMode("erp");
+          }
+          navigateToTab(tab);
+        }}
+        onOpenLicenseModal={() => setLicenseModalOpen(true)}
+        onRefreshState={refreshFromServer}
         onToast={showToast}
       />
     </div>

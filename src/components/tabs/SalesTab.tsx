@@ -23,6 +23,7 @@ import {
   type AccountingDirectionValue,
 } from "@/components/AccountingDirectionSelector";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
+import { triggerNativePrint } from "@/lib/nativeBridge";
 import type {
   UasProject,
   UasSaleTransaction,
@@ -793,7 +794,7 @@ export function SalesTab({
           </div>
           <div className="flex flex-wrap items-center gap-2 no-print">
             <button
-              onClick={() => window.print()}
+              onClick={() => void triggerNativePrint({ title: "UAS-Sales-Report" })}
               className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold inline-flex items-center gap-1"
             >
               <Printer className="w-3.5 h-3.5" />

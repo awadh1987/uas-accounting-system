@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Edit3, Plus, Users } from "lucide-react";
 import { fmtNum } from "@/lib/formulas";
+import { triggerNativePrint } from "@/lib/nativeBridge";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import type { UasProject, UasSaleTransaction, UasUser } from "@/types/uas";
@@ -261,7 +262,7 @@ export function CustomersTab({
               تصدير كشف العملاء Excel
             </button>
             <button
-              onClick={() => window.print()}
+              onClick={() => void triggerNativePrint({ title: "UAS-Customers-Statement" })}
               className="px-3.5 py-1.5 rounded-xl border border-slate-300 text-xs font-bold"
             >
               طباعة الفاتورة / الكشف PDF

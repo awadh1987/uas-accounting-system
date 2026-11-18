@@ -512,6 +512,10 @@ export async function executeMutation(opts: {
     };
 
     if (!res.ok) {
+      // Static Capacitor APK without a configured LAN/Cloud server returns HTML 404 for /api/*
+      if ((res.status === 404 || res.status === 405) && !data.error) {
+        throw new Error("STATIC_EXPORT_OFFLINE_FALLBACK");
+      }
       const queueCount = await getOfflineQueueCount();
       return {
         state: opts.currentState,

@@ -14,6 +14,7 @@ import { Bar } from "react-chartjs-2";
 import { BarChart3, CheckCircle2, FileSpreadsheet, Printer, Scale, AlertTriangle } from "lucide-react";
 import { exportFinancialStatementsToExcel } from "@/lib/excelExport";
 import { fmtNum } from "@/lib/formulas";
+import { triggerNativePrint } from "@/lib/nativeBridge";
 import type { UasEnterpriseProfile, UasProject } from "@/types/uas";
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend);
@@ -258,7 +259,7 @@ export function FinancialReportsTab({
               <span>تصدير Excel (RTL + Formulas)</span>
             </button>
             <button
-              onClick={() => window.print()}
+              onClick={() => void triggerNativePrint({ title: "UAS-Financial-Statements" })}
               className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold flex items-center gap-1.5"
             >
               <Printer className="w-4 h-4" />

@@ -13,6 +13,7 @@ import {
 import { Bar, Doughnut } from "react-chartjs-2";
 import { computeNetOperatingProfit, fmtNum, formatCurrencyVal, type CurrencyCode } from "@/lib/formulas";
 import { getDict } from "@/lib/i18n";
+import { triggerNativePrint } from "@/lib/nativeBridge";
 import type {
   LanguageCode,
   TabId,
@@ -194,7 +195,7 @@ export function DashboardTab({
             📥 <span>{dict.btnExportExcel}</span>
           </button>
           <button
-            onClick={() => window.print()}
+            onClick={() => void triggerNativePrint({ title: "UAS-Executive-Dashboard" })}
             className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1.5"
           >
             🖨️ <span>{dict.btnExportPDF}</span>

@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
-import { validateLicenseStructure, type UasSignedLicense } from "@/lib/licensing/licenseSchema";
+import { validateLicenseStructure, type SeatPlatform, type UasSignedLicense } from "@/lib/licensing/licenseSchema";
 import { verifyLicense, saveInstalledLicense } from "@/lib/licensing/verifier";
 import { getMachineHwid } from "@/lib/licensing/hwid";
 import { getRuntimeConfig } from "@/lib/runtimeMode";
+import { createPrismaSeatStore } from "@/lib/licensing/prismaSeatStore";
+import { createPrismaProfileRepo } from "@/lib/licensing/companyLockServer";
+import { enforceActivationPolicy } from "@/lib/licensing/activationPolicy";
+import { normalizePlatform } from "@/lib/licensing/seatService";
 
 export const dynamic = "force-dynamic";
 
@@ -12,10 +16,21 @@ export async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     let licenseObj: UasSignedLicense | null = null;
+    let confirmCompanyName = "";
+    let userEmail = "";
+    let platform: SeatPlatform = "windows";
+    let customHwid = "";
+    let deviceName = "";
+    let onlineError: { status?: number; code?: string; error?: string } | null = null;
     const contentType = req.headers.get("content-type") || "";
 
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
+      confirmCompanyName = String(formData.get("companyName") || formData.get("company_name") || "").trim();
+      userEmail = String(formData.get("userEmail") || formData.get("user_email") || "").trim();
+      platform = normalizePlatform(String(formData.get("platform") || "windows")) || "windows";
+      customHwid = String(formData.get("hwid") || formData.get("deviceId") || "").trim();
+      deviceName = String(formData.get("deviceName") || formData.get("device_name") || "").trim();
       const file = formData.get("licenseFile") as File | null;
       if (file) {
         const text = await file.text();
@@ -23,6 +38,12 @@ export async function POST(req: NextRequest) {
       }
     } else {
       const body = await req.json();
+      confirmCompanyName = String(body.companyName || body.company_name || "").trim();
+      userEmail = String(body.userEmail || body.user_email || "").trim();
+      platform = normalizePlatform(String(body.platform || "windows")) || "windows";
+      customHwid = String(body.hwid || body.deviceId || "").trim();
+      deviceName = String(body.deviceName || body.device_name || "").trim();
+
       if (body.licenseFileContent) {
         const text = typeof body.licenseFileContent === "string"
           ? body.licenseFileContent
@@ -31,28 +52,56 @@ export async function POST(req: NextRequest) {
       } else if (body.activationKey) {
         const key = String(body.activationKey).trim();
         if (key.startsWith("UASKEY-")) {
-          const b64 = key.replace("UASKEY-", "");
-          const decoded = Buffer.from(b64, "base64").toString("utf8");
-          licenseObj = validateLicenseStructure(JSON.parse(decoded));
-        } else {
-          // Query online activation server (always https://qat.world, never localhost)
           try {
-            const envActivationUrl = (process.env.UAS_ACTIVATION_URL || "").trim().replace(/\/+$/, "");
+            const b64 = key.replace("UASKEY-", "");
+            const decoded = Buffer.from(b64, "base64").toString("utf8");
+            licenseObj = validateLicenseStructure(JSON.parse(decoded));
+          } catch {
+            licenseObj = null;
+          }
+        }
+
+        // Query online activation server (always https://qat.world unless UAS_ACTIVATION_URL is overridden)
+        // when key is an online key or when online verification is explicitly requested.
+        const envActivationUrl = (process.env.UAS_ACTIVATION_URL || "").trim().replace(/\/+$/, "");
+        const shouldQueryOnline = !key.startsWith("UASKEY-") || Boolean(envActivationUrl) || body.verifyOnline === true;
+        if (shouldQueryOnline) {
+          try {
             const serverBase =
               envActivationUrl && !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(envActivationUrl)
                 ? envActivationUrl
                 : "https://qat.world";
-            const currentHwid = getMachineHwid();
+            const seatHwid = customHwid || getMachineHwid();
             const res = await fetch(`${serverBase}/api/licensing/verify-key`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ key, hwid: currentHwid }),
+              body: JSON.stringify({
+                key,
+                company_name: confirmCompanyName || licenseObj?.company_name || "",
+                user_email: userEmail,
+                platform,
+                hwid: seatHwid,
+                device_name: deviceName || undefined,
+              }),
               signal: AbortSignal.timeout(8000),
             });
+            const data = await res.json().catch(() => ({}));
             if (res.ok) {
-              const data = await res.json();
               if (data.license) {
                 licenseObj = validateLicenseStructure(data.license);
+              }
+            } else {
+              onlineError = { status: res.status, code: data?.code, error: data?.error };
+              // If the cloud authority explicitly rejected the company name or seat quota, stop immediately
+              if (res.status === 403 || res.status === 409) {
+                return NextResponse.json(
+                  {
+                    success: false,
+                    code: data?.code,
+                    error: data?.error || "فشل التحقق عبر الخادم السحابي / Cloud license verification failed",
+                  },
+                  { status: res.status }
+                );
               }
             }
           } catch (e: any) {
@@ -66,9 +115,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error: "بيانات ملف الترخيص أو مفتاح التفعيل غير صالحة. / Invalid license payload or activation key format.",
+          code: onlineError?.code,
+          error:
+            onlineError?.error ||
+            "بيانات ملف الترخيص أو مفتاح التفعيل غير صالحة. / Invalid license payload or activation key format.",
         },
-        { status: 400 }
+        { status: onlineError?.status || (onlineError?.code === "COMPANY_MISMATCH" ? 403 : 400) }
       );
     }
 
@@ -87,11 +139,32 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const currentHwid = getMachineHwid();
+    const seatHwid = (customHwid || currentHwid).toUpperCase();
+
+    // Company-name lock (EnterpriseProfile) + activating user's seat (7 users × 1 Windows + 1 Android)
+    const policy = await enforceActivationPolicy(
+      {
+        license: licenseObj,
+        confirmCompanyName,
+        userEmail,
+        platform,
+        hwid: seatHwid,
+        deviceName: deviceName || process.env.COMPUTERNAME || process.env.HOSTNAME || undefined,
+      },
+      { profileRepo: createPrismaProfileRepo(), seatStore: createPrismaSeatStore() }
+    );
+    if (!policy.ok) {
+      return NextResponse.json(
+        { success: false, code: policy.code, error: policy.error },
+        { status: policy.status }
+      );
+    }
+
     // Persist to disk (C:\UAS-Data\license.uas or local license.uas)
     const savedPath = saveInstalledLicense(licenseObj);
 
     // Update Database LicenseState
-    const currentHwid = getMachineHwid();
     const now = new Date();
     await prisma.licenseState.upsert({
       where: { id: "active" },
@@ -119,6 +192,15 @@ export async function POST(req: NextRequest) {
       message: "تم تفعيل الترخيص بنجاح وتوثيقه مشفراً على هذا الجهاز / License activated successfully and bound to this hardware.",
       saved_path: savedPath,
       license: licenseObj,
+      company_lock: policy.companyLock,
+      seat: policy.seat
+        ? {
+            user_email: policy.seat.binding.userEmail,
+            platform: policy.seat.binding.platform,
+            hwid: policy.seat.binding.hwid,
+            status: policy.seat.status,
+          }
+        : null,
     });
   } catch (err: any) {
     console.error("[Licensing Activation Error]:", err);

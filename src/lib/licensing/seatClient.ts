@@ -1,0 +1,771 @@
+/**
+ * Client-side & Capacitor Android offline licensing verifier and seat store.
+ *
+ * Uses zero Node-only modules (`node:fs`, `node:child_process`, `@prisma/client`) so it can be
+ * bundled directly into Next.js client components and the static Capacitor Android APK (`out/`).
+ *
+ * Shares the exact same `enforceActivationPolicy`, `evaluateCompanyLock`, `checkProfileUpdateAgainstLock`,
+ * `bindSeat`, and `releaseSeat` functions used by local SQLite and `https://qat.world`.
+ */
+import {
+  canonicalizeLicensePayload,
+  isCompanyLockedPayload,
+  parseHwidTargets,
+  validateLicenseStructure,
+  type SeatPlatform,
+  type UasSignedLicense,
+} from "./licenseSchema";
+import { UAS_LICENSE_PUBLIC_KEY } from "./publicKey";
+import {
+  checkProfileUpdateAgainstLock,
+  PLACEHOLDER_NAME_AR,
+  PLACEHOLDER_NAME_EN,
+  type ProfileNames,
+  type ProfileRepo,
+} from "./companyLock";
+import {
+  getSeatUsage,
+  normalizePlatform,
+  normalizeUserEmail,
+  releaseSeat,
+  seatPolicyFromLicense,
+  summarizeSeatUsage,
+  type SeatBindingRecord,
+  type SeatStore,
+  type SeatUsage,
+} from "./seatService";
+import { enforceActivationPolicy } from "./activationPolicy";
+
+export interface KeyValueStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem?(key: string): void;
+}
+
+export const OFFLINE_LICENSE_STORAGE_KEY = "uas_offline_installed_license_v2";
+export const OFFLINE_SEATS_STORAGE_KEY = "uas_offline_seat_bindings_v2";
+export const OFFLINE_PROFILE_STORAGE_KEY = "uas_offline_enterprise_profile_v2";
+export const CLIENT_HWID_STORAGE_KEY = "uas_client_device_hwid";
+
+export function createMemoryStorage(initial: Record<string, string> = {}): KeyValueStorage {
+  const map = new Map<string, string>(Object.entries(initial));
+  return {
+    getItem(k) {
+      return map.has(k) ? (map.get(k) as string) : null;
+    },
+    setItem(k, v) {
+      map.set(k, String(v));
+    },
+    removeItem(k) {
+      map.delete(k);
+    },
+  };
+}
+
+function getDefaultStorage(): KeyValueStorage | null {
+  if (typeof window !== "undefined" && window.localStorage) {
+    return window.localStorage;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Base64 helpers (browser + Node without importing node:buffer)
+// ---------------------------------------------------------------------------
+
+function base64ToBytes(b64: string): Uint8Array {
+  const clean = b64.replace(/[\r\n\s]/g, "");
+  if (typeof Buffer !== "undefined") {
+    return new Uint8Array(Buffer.from(clean, "base64"));
+  }
+  const bin = atob(clean);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    out[i] = bin.charCodeAt(i);
+  }
+  return out;
+}
+
+function decodeBase64Utf8(b64: string): string {
+  const bytes = base64ToBytes(b64);
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
+// ---------------------------------------------------------------------------
+// Platform & persistent client HWID
+// ---------------------------------------------------------------------------
+
+export function detectClientPlatform(): SeatPlatform {
+  if (typeof window !== "undefined") {
+    const w = window as unknown as {
+      Capacitor?: { getPlatform?: () => string };
+    };
+    const capPlatform = w.Capacitor?.getPlatform?.()?.toLowerCase();
+    if (capPlatform === "android") return "android";
+    if (typeof navigator !== "undefined" && /android/i.test(navigator.userAgent)) {
+      return "android";
+    }
+  }
+  return "windows";
+}
+
+export function getClientDeviceHwid(storage: KeyValueStorage | null = getDefaultStorage()): string {
+  if (storage) {
+    try {
+      const existing = storage.getItem(CLIENT_HWID_STORAGE_KEY);
+      if (existing && /^[A-F0-9]{16,64}$/i.test(existing.trim())) {
+        return existing.trim().toUpperCase();
+      }
+    } catch {
+      // ignore storage read error
+    }
+  }
+
+  const randomBytes = new Uint8Array(32);
+  if (typeof globalThis.crypto !== "undefined" && globalThis.crypto.getRandomValues) {
+    globalThis.crypto.getRandomValues(randomBytes);
+  } else {
+    for (let i = 0; i < randomBytes.length; i++) {
+      randomBytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  const hex = Array.from(randomBytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase();
+
+  if (storage) {
+    try {
+      storage.setItem(CLIENT_HWID_STORAGE_KEY, hex);
+    } catch {
+      // ignore storage write error
+    }
+  }
+  return hex;
+}
+
+export function getClientRequestCode(storage: KeyValueStorage | null = getDefaultStorage()): string {
+  const hwid = getClientDeviceHwid(storage);
+  const slice = hwid.slice(0, 16).padEnd(16, "0");
+  return `REQ-${slice.slice(0, 4)}-${slice.slice(4, 8)}-${slice.slice(8, 12)}-${slice.slice(12, 16)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Client-safe HWID & WebCrypto Ed25519 Verification
+// ---------------------------------------------------------------------------
+
+export function matchClientHwid(inputTarget: string, deviceHwid: string): boolean {
+  const { wildcard, targets } = parseHwidTargets(inputTarget);
+  if (wildcard) return true;
+  if (targets.length === 0) return false;
+  return targets.some((t) => {
+    if (t === "ANY" || t === "GLOBAL") return true;
+    const targetClean = t.replace(/^REQ-?/i, "").replace(/[^A-Fa-f0-9]/g, "").toUpperCase();
+    const machineClean = deviceHwid.replace(/^REQ-?/i, "").replace(/[^A-Fa-f0-9]/g, "").toUpperCase();
+    if (!targetClean || !machineClean) return false;
+    if (targetClean === machineClean) return true;
+    if (targetClean.length >= 16 && machineClean.startsWith(targetClean.slice(0, 16))) return true;
+    if (machineClean.length >= 16 && targetClean.startsWith(machineClean.slice(0, 16))) return true;
+    return false;
+  });
+}
+
+export async function verifyLicenseSignatureWebCrypto(
+  license: UasSignedLicense,
+  publicKeyPem: string = UAS_LICENSE_PUBLIC_KEY
+): Promise<boolean> {
+  try {
+    if (!globalThis.crypto?.subtle) return false;
+    const pemBody = publicKeyPem
+      .replace(/-----BEGIN PUBLIC KEY-----/g, "")
+      .replace(/-----END PUBLIC KEY-----/g, "")
+      .replace(/[\r\n\s]/g, "");
+    const spkiBytes = base64ToBytes(pemBody);
+    const sigBytes = base64ToBytes(license.signature);
+    const canonical = canonicalizeLicensePayload(license);
+    const dataBytes = new TextEncoder().encode(canonical);
+
+    const key = await globalThis.crypto.subtle.importKey(
+      "spki",
+      spkiBytes.buffer.slice(spkiBytes.byteOffset, spkiBytes.byteOffset + spkiBytes.byteLength) as ArrayBuffer,
+      { name: "Ed25519" },
+      false,
+      ["verify"]
+    );
+    return await globalThis.crypto.subtle.verify(
+      { name: "Ed25519" },
+      key,
+      sigBytes.buffer.slice(sigBytes.byteOffset, sigBytes.byteOffset + sigBytes.byteLength) as ArrayBuffer,
+      dataBytes.buffer.slice(dataBytes.byteOffset, dataBytes.byteOffset + dataBytes.byteLength) as ArrayBuffer
+    );
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// LocalStorage SeatStore & ProfileRepo (Capacitor Android Offline Mode)
+// ---------------------------------------------------------------------------
+
+interface StoredSeatRow {
+  id: string;
+  licenseId: string;
+  userEmail: string;
+  platform: SeatPlatform;
+  hwid: string;
+  deviceName: string;
+  activatedAt: string;
+  lastSeenAt: string;
+  active: boolean;
+}
+
+export class LocalStorageSeatStore implements SeatStore {
+  private storage: KeyValueStorage;
+  private storageKey: string;
+  private chain: Promise<unknown> = Promise.resolve();
+
+  constructor(storage: KeyValueStorage | null = getDefaultStorage(), storageKey = OFFLINE_SEATS_STORAGE_KEY) {
+    this.storage = storage ?? createMemoryStorage();
+    this.storageKey = storageKey;
+  }
+
+  private readAll(): StoredSeatRow[] {
+    try {
+      const raw = this.storage.getItem(this.storageKey);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private writeAll(rows: StoredSeatRow[]): void {
+    this.storage.setItem(this.storageKey, JSON.stringify(rows));
+  }
+
+  private toRecord(r: StoredSeatRow): SeatBindingRecord {
+    return {
+      id: r.id,
+      licenseId: r.licenseId,
+      userEmail: r.userEmail,
+      platform: r.platform,
+      hwid: r.hwid,
+      deviceName: r.deviceName,
+      activatedAt: new Date(r.activatedAt),
+      lastSeenAt: new Date(r.lastSeenAt),
+      active: Boolean(r.active),
+    };
+  }
+
+  async list(licenseId: string): Promise<SeatBindingRecord[]> {
+    const id = licenseId.trim().toUpperCase();
+    return this.readAll()
+      .filter((r) => r.licenseId === id)
+      .map((r) => this.toRecord(r));
+  }
+
+  async upsert(record: SeatBindingRecord): Promise<SeatBindingRecord> {
+    const rows = this.readAll();
+    const idx = rows.findIndex(
+      (r) =>
+        r.licenseId === record.licenseId &&
+        r.userEmail === record.userEmail &&
+        r.platform === record.platform
+    );
+    const saved: StoredSeatRow = {
+      id: record.id ?? (idx >= 0 ? rows[idx].id : `cap-${rows.length + 1}-${Date.now()}`),
+      licenseId: record.licenseId,
+      userEmail: record.userEmail,
+      platform: record.platform,
+      hwid: record.hwid,
+      deviceName: record.deviceName,
+      activatedAt: record.activatedAt.toISOString(),
+      lastSeenAt: record.lastSeenAt.toISOString(),
+      active: record.active,
+    };
+    if (idx >= 0) {
+      rows[idx] = saved;
+    } else {
+      rows.push(saved);
+    }
+    this.writeAll(rows);
+    return this.toRecord(saved);
+  }
+
+  async setActive(
+    licenseId: string,
+    userEmail: string,
+    platform: SeatPlatform | "all",
+    active: boolean
+  ): Promise<number> {
+    const rows = this.readAll();
+    let changed = 0;
+    for (const r of rows) {
+      if (r.licenseId !== licenseId || r.userEmail !== userEmail) continue;
+      if (platform !== "all" && r.platform !== platform) continue;
+      if (r.active !== active) {
+        r.active = active;
+        changed++;
+      }
+    }
+    if (changed > 0) this.writeAll(rows);
+    return changed;
+  }
+
+  transaction<T>(fn: (store: SeatStore) => Promise<T>): Promise<T> {
+    const run = this.chain.then(() => fn(this));
+    this.chain = run.catch(() => undefined);
+    return run;
+  }
+}
+
+export class LocalStorageProfileStore implements ProfileRepo {
+  private storage: KeyValueStorage;
+  private storageKey: string;
+
+  constructor(storage: KeyValueStorage | null = getDefaultStorage(), storageKey = OFFLINE_PROFILE_STORAGE_KEY) {
+    this.storage = storage ?? createMemoryStorage();
+    this.storageKey = storageKey;
+  }
+
+  async get(): Promise<ProfileNames | null> {
+    try {
+      const raw = this.storage.getItem(this.storageKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+      return {
+        legalNameAr: String(parsed.legalNameAr ?? PLACEHOLDER_NAME_AR),
+        legalNameEn: String(parsed.legalNameEn ?? PLACEHOLDER_NAME_EN),
+        isConfigured: Boolean(parsed.isConfigured),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async adopt(patch: { legalNameAr: string; legalNameEn: string; isConfigured: true }): Promise<void> {
+    this.storage.setItem(this.storageKey, JSON.stringify(patch));
+  }
+
+  /**
+   * Attempt to update the offline EnterpriseProfile names while respecting any active
+   * company-locked license installed in offline storage.
+   */
+  async updateNames(
+    patch: { legalNameAr?: string | null; legalNameEn?: string | null },
+    publicKeyPem: string = UAS_LICENSE_PUBLIC_KEY
+  ): Promise<{ ok: true; profile: ProfileNames } | { ok: false; code: string; error: string }> {
+    const existing = await this.get();
+    const installed = loadOfflineClientLicense(this.storage);
+    if (installed && isCompanyLockedPayload(installed)) {
+      const sigOk = await verifyLicenseSignatureWebCrypto(installed, publicKeyPem);
+      if (sigOk) {
+        const check = checkProfileUpdateAgainstLock(installed.company_name as string, existing, patch);
+        if (!check.ok) {
+          return { ok: false, code: "COMPANY_NAME_LOCKED", error: check.error };
+        }
+      }
+    }
+
+    const updated: ProfileNames = {
+      legalNameAr:
+        typeof patch.legalNameAr === "string" && patch.legalNameAr.trim()
+          ? patch.legalNameAr.trim()
+          : existing?.legalNameAr || PLACEHOLDER_NAME_AR,
+      legalNameEn:
+        typeof patch.legalNameEn === "string" && patch.legalNameEn.trim()
+          ? patch.legalNameEn.trim()
+          : existing?.legalNameEn || PLACEHOLDER_NAME_EN,
+      isConfigured: true,
+    };
+    this.storage.setItem(this.storageKey, JSON.stringify(updated));
+    return { ok: true, profile: updated };
+  }
+}
+
+export function loadOfflineClientLicense(
+  storage: KeyValueStorage | null = getDefaultStorage()
+): UasSignedLicense | null {
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(OFFLINE_LICENSE_STORAGE_KEY);
+    if (!raw) return null;
+    return validateLicenseStructure(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+export function saveOfflineClientLicense(
+  license: UasSignedLicense,
+  storage: KeyValueStorage | null = getDefaultStorage()
+): void {
+  if (!storage) return;
+  storage.setItem(OFFLINE_LICENSE_STORAGE_KEY, JSON.stringify(license));
+}
+
+// ---------------------------------------------------------------------------
+// Offline / Capacitor activation, seat bind & release
+// ---------------------------------------------------------------------------
+
+export interface OfflineActivationInput {
+  licenseFileContent?: string | Record<string, unknown>;
+  activationKey?: string;
+  confirmCompanyName?: string;
+  company_name?: string;
+  userEmail?: string;
+  user_email?: string;
+  platform?: SeatPlatform | string;
+  hwid?: string;
+  deviceName?: string;
+}
+
+export interface OfflineClientOptions {
+  storage?: KeyValueStorage;
+  seatStore?: SeatStore;
+  profileRepo?: ProfileRepo;
+  publicKeyPem?: string;
+  now?: Date;
+}
+
+export type OfflineActivationResult =
+  | {
+      success: true;
+      license: UasSignedLicense;
+      company_lock: "ADOPTED" | "MATCHED" | "NOT_REQUIRED";
+      seat?: {
+        user_email: string;
+        platform: SeatPlatform;
+        hwid: string;
+        status: "CREATED" | "REFRESHED" | "REBOUND";
+      } | null;
+      usage?: SeatUsage;
+    }
+  | {
+      success: false;
+      status: number;
+      code: string;
+      error: string;
+    };
+
+export async function activateOfflineClientLicense(
+  input: OfflineActivationInput,
+  opts: OfflineClientOptions = {}
+): Promise<OfflineActivationResult> {
+  const storage = opts.storage ?? getDefaultStorage() ?? createMemoryStorage();
+  const seatStore = opts.seatStore ?? new LocalStorageSeatStore(storage);
+  const profileRepo = opts.profileRepo ?? new LocalStorageProfileStore(storage);
+  const now = opts.now ?? new Date();
+
+  let licenseObj: UasSignedLicense | null = null;
+  try {
+    if (input.licenseFileContent) {
+      const parsed =
+        typeof input.licenseFileContent === "string"
+          ? JSON.parse(input.licenseFileContent)
+          : input.licenseFileContent;
+      licenseObj = validateLicenseStructure(parsed);
+    } else if (input.activationKey) {
+      const key = input.activationKey.trim();
+      if (key.startsWith("UASKEY-")) {
+        const decoded = decodeBase64Utf8(key.slice(7));
+        licenseObj = validateLicenseStructure(JSON.parse(decoded));
+      }
+    }
+  } catch {
+    licenseObj = null;
+  }
+
+  if (!licenseObj) {
+    return {
+      success: false,
+      status: 400,
+      code: "INVALID_LICENSE",
+      error: "بيانات ملف الترخيص أو مفتاح التفعيل غير صالحة. / Invalid license payload or activation key format.",
+    };
+  }
+
+  const sigOk = await verifyLicenseSignatureWebCrypto(licenseObj, opts.publicKeyPem ?? UAS_LICENSE_PUBLIC_KEY);
+  if (!sigOk) {
+    return {
+      success: false,
+      status: 403,
+      code: "INVALID_SIGNATURE",
+      error: "التوقيع الرقمي للترخيص غير صحيح أو تم التلاعب به / Invalid cryptographic signature",
+    };
+  }
+
+  const expires = new Date(licenseObj.expires_at);
+  if (Number.isNaN(expires.getTime()) || now.getTime() > expires.getTime()) {
+    return {
+      success: false,
+      status: 403,
+      code: "EXPIRED",
+      error: "انتهت صلاحية هذا الترخيص، يرجى التجديد / License has expired",
+    };
+  }
+
+  const platform = normalizePlatform(String(input.platform ?? detectClientPlatform()));
+  if (!platform) {
+    return {
+      success: false,
+      status: 400,
+      code: "INVALID_REQUEST",
+      error: "منصة غير صالحة (windows | android). / Invalid platform (windows | android).",
+    };
+  }
+
+  const hwid = (input.hwid?.trim() || getClientDeviceHwid(storage)).toUpperCase();
+  if (platform === "windows" && !matchClientHwid(licenseObj.hwid, hwid)) {
+    return {
+      success: false,
+      status: 403,
+      code: "HWID_MISMATCH",
+      error: "الترخيص مرتبط بجهاز كمبيوتر آخر / Hardware fingerprint mismatch",
+    };
+  }
+
+  const confirmCompanyName = (input.confirmCompanyName ?? input.company_name ?? "").trim();
+  const userEmail = (input.userEmail ?? input.user_email ?? "").trim();
+
+  const policyResult = await enforceActivationPolicy(
+    {
+      license: licenseObj,
+      confirmCompanyName,
+      userEmail,
+      platform,
+      hwid,
+      deviceName: input.deviceName,
+    },
+    { profileRepo, seatStore, now }
+  );
+
+  if (!policyResult.ok) {
+    return {
+      success: false,
+      status: policyResult.status,
+      code: policyResult.code,
+      error: policyResult.error,
+    };
+  }
+
+  saveOfflineClientLicense(licenseObj, storage);
+
+  const usage = isCompanyLockedPayload(licenseObj)
+    ? await getSeatUsage(seatStore, licenseObj.license_id, seatPolicyFromLicense(licenseObj))
+    : undefined;
+
+  return {
+    success: true,
+    license: licenseObj,
+    company_lock: policyResult.companyLock,
+    seat: policyResult.seat
+      ? {
+          user_email: policyResult.seat.binding.userEmail,
+          platform: policyResult.seat.binding.platform,
+          hwid: policyResult.seat.binding.hwid,
+          status: policyResult.seat.status,
+        }
+      : null,
+    usage,
+  };
+}
+
+export async function releaseOfflineClientSeat(
+  input: {
+    userEmail: string;
+    platform?: SeatPlatform | "all";
+    actorRole?: string;
+  },
+  opts: OfflineClientOptions = {}
+): Promise<
+  | { success: true; released: number; usage: SeatUsage }
+  | { success: false; status: number; code: string; error: string }
+> {
+  if (String(input.actorRole ?? "").trim().toUpperCase() !== "SUPER_ADMIN") {
+    return {
+      success: false,
+      status: 403,
+      code: "FORBIDDEN",
+      error: "⛔ إلغاء ربط الأجهزة محصور بمدير النظام العام / Releasing device seats is restricted to SUPER_ADMIN.",
+    };
+  }
+
+  const storage = opts.storage ?? getDefaultStorage() ?? createMemoryStorage();
+  const seatStore = opts.seatStore ?? new LocalStorageSeatStore(storage);
+  const license = loadOfflineClientLicense(storage);
+  if (!license || !isCompanyLockedPayload(license)) {
+    return {
+      success: false,
+      status: 400,
+      code: "NOT_SEAT_MANAGED",
+      error: "لا يوجد ترخيص بمقاعد مُدارة. / No seat-managed license installed.",
+    };
+  }
+
+  const userEmail = normalizeUserEmail(input.userEmail);
+  const rawPlatform = String(input.platform ?? "all").trim().toLowerCase();
+  const platform = rawPlatform === "all" ? "all" : normalizePlatform(rawPlatform);
+  if (!userEmail || !platform) {
+    return {
+      success: false,
+      status: 400,
+      code: "INVALID_REQUEST",
+      error: "userEmail / platform غير صالح / Invalid userEmail or platform.",
+    };
+  }
+
+  const res = await releaseSeat(seatStore, seatPolicyFromLicense(license), license.license_id, userEmail, platform);
+  return { success: true, released: res.released, usage: res.usage };
+}
+
+export async function getOfflineClientSeatUsage(
+  opts: OfflineClientOptions & { actorRole?: string } = {}
+): Promise<{
+  success: boolean;
+  seat_managed: boolean;
+  company_name?: string;
+  license_id?: string;
+  can_manage?: boolean;
+  usage?: SeatUsage | Omit<SeatUsage, "users">;
+}> {
+  const storage = opts.storage ?? getDefaultStorage() ?? createMemoryStorage();
+  const seatStore = opts.seatStore ?? new LocalStorageSeatStore(storage);
+  const license = loadOfflineClientLicense(storage);
+  if (!license || !isCompanyLockedPayload(license)) {
+    return { success: true, seat_managed: false };
+  }
+  const usage = await getSeatUsage(seatStore, license.license_id, seatPolicyFromLicense(license));
+  const isAdmin = String(opts.actorRole ?? "").trim().toUpperCase() === "SUPER_ADMIN";
+  return {
+    success: true,
+    seat_managed: true,
+    company_name: license.company_name,
+    license_id: license.license_id,
+    can_manage: isAdmin,
+    usage: isAdmin ? usage : summarizeSeatUsage(usage),
+  };
+}
+
+export async function buildOfflineClientLicenseStatus(
+  opts: OfflineClientOptions = {}
+): Promise<{
+  request_code: string;
+  hwid: string;
+  active_mode: "local" | "lan" | "cloud";
+  license_status:
+    | "ACTIVE"
+    | "UNLICENSED"
+    | "EXPIRED"
+    | "HWID_MISMATCH"
+    | "CLOCK_TAMPER"
+    | "SEAT_LIMIT_REACHED"
+    | "MODE_NOT_ALLOWED"
+    | "COMPANY_MISMATCH";
+  is_valid: boolean;
+  error?: string | null;
+  customer_name?: string | null;
+  company_name?: string | null;
+  company_locked?: boolean;
+  company_matches?: boolean | null;
+  seat_managed?: boolean;
+  max_users?: number | null;
+  per_user_devices?: { windows: number; android: number } | null;
+  seats?: {
+    used_users: number;
+    max_users: number;
+    windows_bound: number;
+    android_bound: number;
+  } | null;
+  license_id?: string | null;
+  allowed_modes: ("local" | "lan" | "cloud")[];
+  max_branches: number;
+  max_lan_seats: number;
+  active_seats: number;
+  expires_at?: string | null;
+  issued_at?: string | null;
+  remaining_days: number;
+  server_lan_ips: string[];
+  lan_url: string;
+  cloud_url?: string;
+}> {
+  const storage = opts.storage ?? getDefaultStorage() ?? createMemoryStorage();
+  const seatStore = opts.seatStore ?? new LocalStorageSeatStore(storage);
+  const hwid = getClientDeviceHwid(storage);
+  const requestCode = getClientRequestCode(storage);
+  const license = loadOfflineClientLicense(storage);
+
+  if (!license) {
+    return {
+      request_code: requestCode,
+      hwid,
+      active_mode: "local",
+      license_status: "UNLICENSED",
+      is_valid: false,
+      error: "المنظومة غير مفعلة بترخيص رسمي. / System is not activated with a valid license.",
+      allowed_modes: ["local", "lan", "cloud"],
+      max_branches: 1,
+      max_lan_seats: 1,
+      active_seats: 0,
+      remaining_days: 0,
+      server_lan_ips: ["127.0.0.1"],
+      lan_url: "http://127.0.0.1:3000",
+      cloud_url: "https://qat.world",
+    };
+  }
+
+  const sigOk = await verifyLicenseSignatureWebCrypto(license, opts.publicKeyPem ?? UAS_LICENSE_PUBLIC_KEY);
+  const now = opts.now ?? new Date();
+  const expires = new Date(license.expires_at);
+  const isExpired = Number.isNaN(expires.getTime()) || now.getTime() > expires.getTime();
+  const remainingDays = isExpired
+    ? 0
+    : Math.max(0, Math.floor((expires.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+
+  const companyLocked = isCompanyLockedPayload(license);
+  const policy = seatPolicyFromLicense(license);
+  const usage = companyLocked
+    ? await getSeatUsage(seatStore, license.license_id, policy)
+    : null;
+
+  return {
+    request_code: requestCode,
+    hwid,
+    active_mode: "local",
+    license_status: !sigOk ? "HWID_MISMATCH" : isExpired ? "EXPIRED" : "ACTIVE",
+    is_valid: sigOk && !isExpired,
+    error: !sigOk
+      ? "التوقيع الرقمي للترخيص غير صحيح / Invalid cryptographic signature"
+      : isExpired
+      ? "انتهت صلاحية هذا الترخيص / License has expired"
+      : null,
+    customer_name: license.customer_name,
+    company_name: license.company_name ?? license.customer_name,
+    company_locked: companyLocked,
+    company_matches: true,
+    seat_managed: companyLocked,
+    max_users: policy.maxUsers,
+    per_user_devices: policy.perUserDevices,
+    seats: usage
+      ? {
+          used_users: usage.usedUsers,
+          max_users: usage.maxUsers,
+          windows_bound: usage.windowsBound,
+          android_bound: usage.androidBound,
+        }
+      : null,
+    license_id: license.license_id,
+    allowed_modes: license.allowed_modes,
+    max_branches: license.max_branches,
+    max_lan_seats: license.max_lan_seats,
+    active_seats: usage?.usedUsers ?? 1,
+    expires_at: license.expires_at,
+    issued_at: license.issued_at,
+    remaining_days: remainingDays,
+    server_lan_ips: ["127.0.0.1"],
+    lan_url: "http://127.0.0.1:3000",
+    cloud_url: "https://qat.world",
+  };
+}

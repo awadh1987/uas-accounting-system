@@ -1,6 +1,22 @@
 import * as XLSX from "xlsx";
 import { computeNetOperatingProfit, computeRemainingStock } from "@/lib/formulas";
+import { exportOrShareBinaryFile } from "@/lib/nativeBridge";
 import type { UasBootstrapState } from "@/types/uas";
+
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+async function saveOrShareWorkbook(wb: XLSX.WorkBook, filename: string): Promise<void> {
+  const arrayBuffer = XLSX.write(wb, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
+  const res = await exportOrShareBinaryFile({
+    filename,
+    mimeType: XLSX_MIME,
+    data: new Uint8Array(arrayBuffer),
+    title: filename,
+  });
+  if (!res.ok && typeof window !== "undefined") {
+    XLSX.writeFile(wb, filename);
+  }
+}
 
 function createRtlSheet(rows: Record<string, unknown>[], numericCols: string[] = []): XLSX.WorkSheet {
   const ws = XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [{ "الحالة": "لا توجد بيانات" }]);
@@ -230,7 +246,7 @@ export function exportFullWorkbookToExcel(
   }));
   XLSX.utils.book_append_sheet(wb, createRtlSheet(auditRows), "Audit Log");
 
-  XLSX.writeFile(wb, options?.filename || "UAS_Unified_Accounting_System_Report.xlsx");
+  void saveOrShareWorkbook(wb, options?.filename || "UAS_Unified_Accounting_System_Report.xlsx");
 }
 
 export interface FinancialExportPayload {
@@ -419,6 +435,6 @@ export function exportFinancialStatementsToExcel(data: FinancialExportPayload): 
     XLSX.utils.book_append_sheet(wb, spSheet, "Sub-Projects Variance");
   }
 
-  XLSX.writeFile(wb, "UAS_Enterprise_Financial_Statements.xlsx");
+  void saveOrShareWorkbook(wb, "UAS_Enterprise_Financial_Statements.xlsx");
 }
 

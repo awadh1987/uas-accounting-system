@@ -19,6 +19,7 @@ const REQUIRED_CORE_TABLES = [
   "CurrencyRate",
   "JournalEntry",
   "ImmutableAuditLog",
+  "LicenseDeviceBinding",
 ];
 
 const globalForSqliteInit = globalThis as unknown as {

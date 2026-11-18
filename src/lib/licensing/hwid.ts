@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
+import { parseHwidTargets } from "./licenseSchema";
 
 let cachedHwid: string | null = null;
 let cachedRequestCode: string | null = null;
@@ -126,7 +127,23 @@ export function formatRequestCodeFromHwid(hwid: string): string {
   return `REQ-${rawSlice.slice(0, 4)}-${rawSlice.slice(4, 8)}-${rawSlice.slice(8, 12)}-${rawSlice.slice(12, 16)}`;
 }
 
+/**
+ * Matches a license `hwid` field against this machine.
+ *  - `"*"`            → company-wide seat-managed license (always matches; seats are enforced separately)
+ *  - `"A,B,C"`        → comma-separated list: matches if ANY entry matches
+ *  - single HWID / REQ-XXXX-XXXX-XXXX-XXXX request code
+ */
 export function matchHwidOrRequestCode(inputTarget: string, machineHwid: string): boolean {
+  const { wildcard, targets } = parseHwidTargets(inputTarget);
+  if (wildcard) return true;
+  if (targets.length === 0) return false;
+  if (targets.length > 1) {
+    return targets.some((t) => matchSingleHwid(t, machineHwid));
+  }
+  return matchSingleHwid(targets[0], machineHwid);
+}
+
+function matchSingleHwid(inputTarget: string, machineHwid: string): boolean {
   if (inputTarget.toUpperCase() === "ANY" || inputTarget.toUpperCase() === "GLOBAL") return true;
 
   const targetClean = inputTarget.replace(/^REQ-?/i, "").replace(/[^A-Fa-f0-9]/g, "").toUpperCase();

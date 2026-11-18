@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   canonicalizeLicensePayload,
+  getLicenseSeatPolicy,
   validateLicenseStructure,
+  type LicenseSeatPolicy,
   type RuntimeMode,
   type UasSignedLicense,
 } from "./licenseSchema";
@@ -16,6 +18,8 @@ export interface LicenseVerificationResult {
   error?: string;
   license?: UasSignedLicense;
   remainingDays?: number;
+  /** Effective company-lock / seat policy of the verified license (populated for signed licenses). */
+  seatPolicy?: LicenseSeatPolicy;
 }
 
 export function verifyLicenseSignature(
@@ -101,6 +105,7 @@ export function verifyLicense(
     status: "ACTIVE",
     license,
     remainingDays,
+    seatPolicy: getLicenseSeatPolicy(license),
   };
 }
 

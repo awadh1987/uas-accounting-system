@@ -26,6 +26,7 @@ import {
 import { DualLogoBadge } from "@/components/DualLogoBadge";
 import { getApiBaseUrl } from "@/lib/apiClient";
 import { fmtNum } from "@/lib/formulas";
+import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
 import type { LanguageCode, TabId, UasBootstrapState, UasUser } from "@/types/uas";
 
 interface LandingPageProps {
@@ -591,15 +592,14 @@ export function LandingPage({
                 </div>
               )}
               {profile?.contactWhatsApp && (
-                <a
-                  href={`https://wa.me/${profile.contactWhatsApp.replace(/[^0-9]/g, "")}`}
-                  target="_blank"
-                  rel="noreferrer"
+                <button
+                  type="button"
+                  onClick={() => openExternalOrWhatsApp({ phone: profile.contactWhatsApp })}
                   className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 font-bold hover:bg-emerald-500/20 transition"
                 >
                   <MessageCircle className="w-4 h-4 shrink-0" />
                   <span>{isAr ? "واتساب المؤسسة" : "Enterprise WhatsApp"}</span>
-                </a>
+                </button>
               )}
               {(profile?.contactAddress || profile?.address) && (
                 <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-slate-100/70 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">

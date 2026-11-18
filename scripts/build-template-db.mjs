@@ -80,7 +80,7 @@ async function verify() {
 
   const tables = await prisma.$queryRawUnsafe("SELECT name FROM sqlite_master WHERE type='table'");
   const names = tables.map((t) => t.name);
-  const required = ["EnterpriseProfile", "LicenseState", "Account", "Project", "User", "SystemSettings", "_prisma_migrations"];
+  const required = ["EnterpriseProfile", "LicenseState", "LicenseDeviceBinding", "Account", "Project", "User", "SystemSettings", "_prisma_migrations"];
   for (const r of required) {
     if (!names.includes(r)) {
       throw new Error("Template DB missing required table: " + r);

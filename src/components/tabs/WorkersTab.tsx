@@ -5,6 +5,7 @@ import { Pencil, Plus, Printer } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { computeWorkerWageTotals, fmtNum } from "@/lib/formulas";
+import { triggerNativePrint } from "@/lib/nativeBridge";
 import type { UasProject, UasWorkerWage } from "@/types/uas";
 import {
   AccountingDirectionSelector,
@@ -354,7 +355,7 @@ export function WorkersTab({
               تصدير Excel
             </button>
             <button
-              onClick={() => window.print()}
+              onClick={() => void triggerNativePrint({ title: "UAS-Workers-Wages-Report" })}
               className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold inline-flex items-center gap-1"
             >
               <Printer className="w-3.5 h-3.5" />
