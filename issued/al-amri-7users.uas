@@ -1,0 +1,21 @@
+{
+  "license_id": "UAS-2026-8916",
+  "customer_name": "وكالة العامري لتجارة القات",
+  "company_name": "وكالة العامري لتجارة القات",
+  "hwid": "*",
+  "allowed_modes": [
+    "cloud",
+    "lan",
+    "local"
+  ],
+  "max_branches": 3,
+  "max_lan_seats": 10,
+  "max_users": 7,
+  "per_user_devices": {
+    "windows": 1,
+    "android": 1
+  },
+  "expires_at": "2027-11-18T23:34:59.749Z",
+  "issued_at": "2026-11-18T23:34:59.747Z",
+  "signature": "am25gODY2pNzmbkZnfQKfDArC1XWpsU2UGRveUY28e363Ua2tcfyQt5OkcY6y5s4U84Bsrh7z1U9LZ5PLqSXAA=="
+}

@@ -1,7 +1,7 @@
 {
-  "license_id": "UAS-2026-5248",
-  "customer_name": "شركة الجابري للتجارة",
-  "company_name": "شركة الجابري للتجارة",
+  "license_id": "UAS-2026-8836",
+  "customer_name": "وكالة الجابري لتجارة القات",
+  "company_name": "وكالة الجابري لتجارة القات",
   "hwid": "*",
   "allowed_modes": [
     "cloud",
@@ -15,7 +15,7 @@
     "windows": 1,
     "android": 1
   },
-  "expires_at": "2027-11-18T21:19:44.281Z",
-  "issued_at": "2026-11-18T21:19:44.280Z",
-  "signature": "BQ+qPk2z/B7enRXsJBQzq705/hRcx0KmH75+akzIogGZCIHarelP2FZrIgE4sre/0D2YBr8UL8YL2aOKa/TzCQ=="
+  "expires_at": "2027-11-18T22:20:21.954Z",
+  "issued_at": "2026-11-18T22:20:21.953Z",
+  "signature": "KTC93FLGmQLSL9tDzTJ0hvYAWyRTJTp1emFSvN3GWyvN60hv4gCnqXxSI865ERUnyr6e98o3e0qP1K0yOYPeDQ=="
 }
