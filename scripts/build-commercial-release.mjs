@@ -592,18 +592,24 @@ if errorlevel 1 (
 
 echo [INFO] Terminating any running UAS processes before upgrade...
 taskkill /F /IM UAS.exe >nul 2>nul
-powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '*\\UAS\\*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>nul
+powershell -NoProfile -Command "try { Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { $p = Get-Process -Id $_ -ErrorAction SilentlyContinue; if ($p -and $p.ProcessName -eq 'node') { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } } } catch {}; try { Get-CimInstance Win32_Process | Where-Object { ($_.ExecutablePath -like '*\\UAS\\*') -or (($_.Name -in @('msedgewebview2.exe','msedge.exe','chrome.exe')) -and (($_.CommandLine -like '*\\UAS\\*') -or ($_.CommandLine -like '*UAS.exe.WebView2*') -or ($_.CommandLine -like '*UAS\\EBWebView*') -or ($_.CommandLine -like '*UAS\\ui-profile*'))) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } } catch {}" >nul 2>nul
 
 if not exist "C:\\UAS" mkdir "C:\\UAS"
 if not exist "C:\\UAS\\app" mkdir "C:\\UAS\\app"
 if not exist "C:\\UAS-Data" mkdir "C:\\UAS-Data"
 
-echo [1/5] Copying self-contained runtime and UAS.exe to C:\\UAS...
+echo [1/5] Cleaning stale .next bundle and WebView2 caches, then copying runtime to C:\\UAS...
+if exist "C:\\UAS\\app\\.next" rmdir /s /q "C:\\UAS\\app\\.next" >nul 2>nul
+if exist "C:\\UAS\\app\\UAS.exe" del /f /q "C:\\UAS\\app\\UAS.exe" >nul 2>nul
+if exist "C:\\UAS\\app\\server.js" del /f /q "C:\\UAS\\app\\server.js" >nul 2>nul
+if exist "C:\\UAS\\UAS.exe.WebView2" rmdir /s /q "C:\\UAS\\UAS.exe.WebView2" >nul 2>nul
+if exist "%LOCALAPPDATA%\\UAS\\EBWebView" rmdir /s /q "%LOCALAPPDATA%\\UAS\\EBWebView" >nul 2>nul
+if exist "%LOCALAPPDATA%\\UAS\\ui-profile\\Default\\Cache" rmdir /s /q "%LOCALAPPDATA%\\UAS\\ui-profile\\Default\\Cache" >nul 2>nul
+if exist "%LOCALAPPDATA%\\UAS\\ui-profile\\Default\\Code Cache" rmdir /s /q "%LOCALAPPDATA%\\UAS\\ui-profile\\Default\\Code Cache" >nul 2>nul
+if exist "%LOCALAPPDATA%\\UAS\\ui-profile\\Default\\Service Worker" rmdir /s /q "%LOCALAPPDATA%\\UAS\\ui-profile\\Default\\Service Worker" >nul 2>nul
+
 if exist "%~dp0UAS.exe" (
     copy "%~dp0UAS.exe" "C:\\UAS\\UAS.exe" /Y >nul
-)
-if exist "C:\\UAS\\app\\UAS.exe" (
-    del /f /q "C:\\UAS\\app\\UAS.exe" >nul 2>nul
 )
 
 xcopy "%~dp0app\\*" "C:\\UAS\\app\\" /E /I /Y /Q >nul
@@ -738,9 +744,21 @@ public class UasSetup
             if (!Directory.Exists(targetAppDir)) Directory.CreateDirectory(targetAppDir);
             if (!Directory.Exists(targetDataDir)) Directory.CreateDirectory(targetDataDir);
 
-            // Cleanly terminate running UAS.exe or background processes before copying
+            // Cleanly terminate running UAS.exe, port 3000 node.exe, or locked WebView2/Edge processes before copying
             RunPowerShell("Stop-Process -Name 'UAS' -Force -ErrorAction SilentlyContinue");
-            RunPowerShell("Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '*\\\\UAS\\\\*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }");
+            RunPowerShell("try { Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { $p = Get-Process -Id $_ -ErrorAction SilentlyContinue; if ($p -and $p.ProcessName -eq 'node') { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } } } catch {}");
+            RunPowerShell("Get-CimInstance Win32_Process | Where-Object { ($_.ExecutablePath -like '*\\\\UAS\\\\*') -or (($_.Name -in @('msedgewebview2.exe','msedge.exe','chrome.exe')) -and (($_.CommandLine -like '*\\\\UAS\\\\*') -or ($_.CommandLine -like '*UAS.exe.WebView2*') -or ($_.CommandLine -like '*UAS\\\\EBWebView*') -or ($_.CommandLine -like '*UAS\\\\ui-profile*'))) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }");
+
+            // Remove stale .next bundle, legacy app/UAS.exe, server.js, and WebView2 caches (preserving prisma/dev.db & C:\\UAS-Data)
+            string staleNextDir = Path.Combine(targetAppDir, "app", ".next");
+            if (Directory.Exists(staleNextDir)) { try { Directory.Delete(staleNextDir, true); } catch { } }
+            string staleServerJs = Path.Combine(targetAppDir, "app", "server.js");
+            if (File.Exists(staleServerJs)) { try { File.Delete(staleServerJs); } catch { } }
+            string staleWebView2 = Path.Combine(targetAppDir, "UAS.exe.WebView2");
+            if (Directory.Exists(staleWebView2)) { try { Directory.Delete(staleWebView2, true); } catch { } }
+            string localUasDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UAS");
+            string staleEbWebView = Path.Combine(localUasDir, "EBWebView");
+            if (Directory.Exists(staleEbWebView)) { try { Directory.Delete(staleEbWebView, true); } catch { } }
 
             string appSourceDir = Path.Combine(currentDir, "app");
             if (Directory.Exists(appSourceDir))

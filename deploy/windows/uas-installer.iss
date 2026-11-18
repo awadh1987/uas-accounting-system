@@ -49,8 +49,16 @@ Source: "..\..\release\UAS-Commercial-Dist\QUICK-START-AR-EN.md"; DestDir: "{app
 Source: "..\..\release\UAS-Commercial-Dist\UAS-Setup.bat"; DestDir: "{app}"; Flags: ignoreversion
 
 [InstallDelete]
-; Clean up any legacy {app}\app\UAS.exe binary from older installs so two .exe launchers can never coexist
+; Clean up stale compiled Next.js build artifacts, legacy launchers, and WebView2/UI browser caches before extracting new files
+; (Preserves {app}\app\prisma\dev.db, C:\UAS-Data\uas-enterprise.db, license.uas, and all customer backups)
+Type: filesandordirs; Name: "{app}\app\.next"
 Type: files; Name: "{app}\app\UAS.exe"
+Type: files; Name: "{app}\app\server.js"
+Type: filesandordirs; Name: "{app}\UAS.exe.WebView2"
+Type: filesandordirs; Name: "{localappdata}\UAS\EBWebView"
+Type: filesandordirs; Name: "{localappdata}\UAS\ui-profile\Default\Cache"
+Type: filesandordirs; Name: "{localappdata}\UAS\ui-profile\Default\Code Cache"
+Type: filesandordirs; Name: "{localappdata}\UAS\ui-profile\Default\Service Worker"
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}\{#MyAppName}"; Filename: "{app}\UAS.exe"; IconFilename: "{app}\app\public\uas-app.ico"; WorkingDir: "{app}"
@@ -64,23 +72,33 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Com
 Filename: "{app}\UAS.exe"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-function InitializeSetup(): Boolean;
+procedure StopRunningUasProcesses();
 var
   ResultCode: Integer;
+  PsCmd: String;
 begin
-  { Cleanly terminate any running UAS.exe or background node.exe process before copying files }
+  { 1. Terminate any running UAS.exe launcher }
   Exec('taskkill.exe', '/F /IM UAS.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like ''*\\UAS\\*'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  { 2. Terminate any node.exe listening on port 3000, any process running from *\UAS\*, and any msedgewebview2/edge/chrome process locked on UAS }
+  PsCmd :=
+    '-NoProfile -ExecutionPolicy Bypass -Command "' +
+    'try { Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { $p = Get-Process -Id $_ -ErrorAction SilentlyContinue; if ($p -and $p.ProcessName -eq ''node'') { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } } } catch {}; ' +
+    'try { Get-CimInstance Win32_Process | Where-Object { ($_.ExecutablePath -like ''*\UAS\*'') -or (($_.Name -in @(''msedgewebview2.exe'',''msedge.exe'',''chrome.exe'')) -and (($_.CommandLine -like ''*\UAS\*'') -or ($_.CommandLine -like ''*UAS.exe.WebView2*'') -or ($_.CommandLine -like ''*UAS\EBWebView*'') -or ($_.CommandLine -like ''*UAS\ui-profile*''))) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } } catch {}"';
+  Exec('powershell.exe', PsCmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  StopRunningUasProcesses();
   Sleep(500);
   Result := True;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
-var
-  ResultCode: Integer;
 begin
-  { Extra safeguard immediately before file extraction }
-  Exec('taskkill.exe', '/F /IM UAS.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Sleep(300);
+  { Extra safeguard immediately before [InstallDelete] and file extraction }
+  StopRunningUasProcesses();
+  Sleep(400);
   Result := '';
 end;
