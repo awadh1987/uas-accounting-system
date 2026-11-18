@@ -53,6 +53,7 @@ import {
   getRoleMeta,
   isReadOnly,
 } from "@/lib/permissions";
+import { isInstalledClientApp } from "@/lib/runtimePlatform";
 import { INITIAL_FALLBACK_STATE } from "@/lib/seedFallback";
 import type {
   LanguageCode,
@@ -129,9 +130,20 @@ export function UasAppShell() {
     return () => clearTimeout(timer);
   }, [toastMsg]);
 
+  // Auto-open activation modal in the same window whenever license is invalid
+  useEffect(() => {
+    if (licenseStatus && !licenseStatus.is_valid) {
+      setLicenseModalOpen(true);
+    }
+  }, [licenseStatus]);
+
   // Initial database bootstrap + restore session, user & tab across refreshes
   useEffect(() => {
     installGlobalApiFetchInterceptor();
+    const isClientApp = isInstalledClientApp();
+    if (isClientApp) {
+      setViewMode("login");
+    }
     checkLicensingStatus();
     let active = true;
     (async () => {
@@ -221,14 +233,15 @@ export function UasAppShell() {
       } else {
         setCurrentUser(null);
         const rawHash = typeof window !== "undefined" ? window.location.hash.replace(/^#\/?/, "") : "";
-        const unauthView = savedViewMode === "login" || rawHash === "login" ? "login" : "landing";
+        const unauthView =
+          isClientApp || savedViewMode === "login" || rawHash === "login" ? "login" : "landing";
         setViewMode(unauthView);
         if (typeof window !== "undefined") {
-          if (unauthView === "login") {
+          if (unauthView === "login" && !isClientApp) {
             if (window.location.hash !== "#/login") {
               window.location.hash = "#/login";
             }
-          } else {
+          } else if (unauthView === "landing") {
             if (window.location.hash) {
               if (typeof window.history.replaceState === "function") {
                 window.history.replaceState(null, "", window.location.pathname + window.location.search);
@@ -867,6 +880,8 @@ export function UasAppShell() {
           offlineMode={offlineMode}
           onBackToLanding={() => setViewMode("landing")}
           onToggleLang={() => setLang((prev) => (prev === "ar" ? "en" : "ar"))}
+          licenseStatus={licenseStatus}
+          onOpenLicenseModal={() => setLicenseModalOpen(true)}
           onLoginSuccess={(u) => handleLoginUser(u)}
           onToast={showToast}
         />

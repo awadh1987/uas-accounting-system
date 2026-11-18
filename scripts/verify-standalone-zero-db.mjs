@@ -51,9 +51,30 @@ async function runScenario(name, exe, args, env, dbPathToVerify, port = 3000) {
     await waitForUrl(`http://127.0.0.1:${port}/api/public/verify`);
 
     const rHome = await fetch(`http://127.0.0.1:${port}/`);
+    const homeHtml = await rHome.text();
     const rVerify = await fetch(`http://127.0.0.1:${port}/api/public/verify`);
     const rBoot = await fetch(`http://127.0.0.1:${port}/api/bootstrap`);
     const rLic = await fetch(`http://127.0.0.1:${port}/api/licensing/status`);
+
+    // Verify all linked /_next/static CSS chunks return 200 OK with text/css
+    const cssHrefs = [...homeHtml.matchAll(/href="(\/_next\/static\/[^"]+\.css[^"]*)"/g)].map(
+      (m) => m[1]
+    );
+    const cssResults = [];
+    for (const href of cssHrefs) {
+      const rCss = await fetch(`http://127.0.0.1:${port}${href}`);
+      const cssBody = await rCss.text();
+      cssResults.push({
+        href,
+        status: rCss.status,
+        contentType: rCss.headers.get("content-type"),
+        sizeBytes: cssBody.length,
+        hasTailwind: cssBody.includes("--tw-") || cssBody.includes("card-surface"),
+      });
+    }
+
+    const hasExeDownloadInHtml = homeHtml.includes("UAS-Setup-Win64.exe");
+    const hasApkDownloadInHtml = homeHtml.includes("uas-latest.apk");
 
     const jVerify = await rVerify.json();
     const jBoot = await rBoot.json();
@@ -66,20 +87,37 @@ async function runScenario(name, exe, args, env, dbPathToVerify, port = 3000) {
 
     console.log({
       homeStatus: rHome.status,
+      cssResults,
+      hasExeDownloadInHtml,
+      hasApkDownloadInHtml,
       verifyStatus: rVerify.status,
       bootstrapStatus: rBoot.status,
       licensingStatus: rLic.status,
       profileName: jVerify.profile?.legalNameEn,
       treasuryCount: jBoot.treasuryAccounts?.length,
       requestCode: jLic.request_code,
+      licenseStatus: jLic.license_status,
       dbExists,
       dbSizeBytes,
       hasP2021,
       hasPrismaErr,
     });
 
+    const cssOk =
+      cssResults.length > 0 &&
+      cssResults.every(
+        (c) =>
+          c.status === 200 &&
+          String(c.contentType || "").includes("text/css") &&
+          c.sizeBytes > 1000 &&
+          c.hasTailwind
+      );
+
     if (
       rHome.status !== 200 ||
+      !cssOk ||
+      hasExeDownloadInHtml ||
+      hasApkDownloadInHtml ||
       rVerify.status !== 200 ||
       rBoot.status !== 200 ||
       rLic.status !== 200 ||
@@ -91,7 +129,7 @@ async function runScenario(name, exe, args, env, dbPathToVerify, port = 3000) {
       console.error("[FAIL] Captured server logs:\n" + logs);
       process.exitCode = 1;
     } else {
-      console.log("[PASS] Clean boot: HTTP 200 across all endpoints, ZERO P2021 / prisma:error!");
+      console.log("[PASS] Clean boot: HTTP 200 + Tailwind CSS 200 OK + zero downloads in HTML + zero P2021!");
     }
   } catch (err) {
     console.error("[ERROR]", err.message);

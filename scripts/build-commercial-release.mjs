@@ -1,4 +1,4 @@
-﻿import fs from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { execFileSync, execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -71,14 +71,12 @@ if (!fs.existsSync(path.join(standaloneDir, "server.js"))) {
 // ---------------------------------------------------------------------------
 const releaseRoot = path.join(projectRoot, "release", "UAS-Commercial-Dist");
 const appDestDir = path.join(releaseRoot, "app");
-const mobileDestDir = path.join(releaseRoot, "mobile");
 
-console.log(`\n[Step 3/8] Assembling clean self-contained runtime in: ${releaseRoot}`);
+console.log(`\n[Step 3/7] Assembling clean self-contained runtime in: ${releaseRoot}`);
 if (fs.existsSync(releaseRoot)) {
   fs.rmSync(releaseRoot, { recursive: true, force: true });
 }
 fs.mkdirSync(appDestDir, { recursive: true });
-fs.mkdirSync(mobileDestDir, { recursive: true });
 
 // Copy ONLY runtime essentials from .next/standalone (exclude raw source, keys, dev scripts, docs)
 const standaloneExcludes = new Set([
@@ -119,20 +117,48 @@ const standaloneExcludes = new Set([
 
 copyRecursiveSync(standaloneDir, appDestDir, standaloneExcludes);
 
-// Copy .next/static assets (required by Next.js standalone)
+// Copy .next/static assets explicitly (required by Next.js standalone to serve CSS & JS chunks)
 const staticSrc = path.join(projectRoot, ".next", "static");
 const staticDest = path.join(appDestDir, ".next", "static");
-if (fs.existsSync(staticSrc)) {
-  copyRecursiveSync(staticSrc, staticDest);
+if (!fs.existsSync(staticSrc)) {
+  console.error(`[ERROR] Missing Next.js static assets directory: ${staticSrc}`);
+  process.exit(1);
 }
+copyRecursiveSync(staticSrc, staticDest);
 
-// Copy public assets (exclude large installer binary inside app/public/downloads to prevent recursive bloat)
+// Verify .next/static contains compiled CSS & JS chunks before packaging
+function collectFilesRecursive(dir, results = []) {
+  if (!fs.existsSync(dir)) return results;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) collectFilesRecursive(full, results);
+    else results.push(full);
+  }
+  return results;
+}
+const staticFiles = collectFilesRecursive(staticDest);
+const cssFiles = staticFiles.filter((f) => f.endsWith(".css"));
+const jsFiles = staticFiles.filter((f) => f.endsWith(".js"));
+if (cssFiles.length === 0 || jsFiles.length === 0) {
+  console.error(
+    `[ERROR] ${staticDest} is incomplete (css=${cssFiles.length}, js=${jsFiles.length}). Aborting build.`
+  );
+  process.exit(1);
+}
+console.log(
+  `[OK] Verified .next/static assets bundled (${cssFiles.length} CSS file(s), ${jsFiles.length} JS chunk(s))`
+);
+
+// Copy public assets and remove public/downloads so zero .apk or .exe files enter the Windows bundle
 const publicSrc = path.join(projectRoot, "public");
 const publicDest = path.join(appDestDir, "public");
 if (fs.existsSync(publicSrc)) {
   copyRecursiveSync(publicSrc, publicDest);
-  const nestedExe = path.join(publicDest, "downloads", "UAS-Setup-Win64.exe");
-  if (fs.existsSync(nestedExe)) fs.unlinkSync(nestedExe);
+  const publicDownloadsDir = path.join(publicDest, "downloads");
+  if (fs.existsSync(publicDownloadsDir)) {
+    fs.rmSync(publicDownloadsDir, { recursive: true, force: true });
+    console.log("[OK] Removed app/public/downloads from Windows release bundle (zero .apk/.exe bloat)");
+  }
 }
 
 // Copy Prisma schema + SQLite migrations (exclude dev.db!)
@@ -217,55 +243,25 @@ execFileSync(
 );
 
 // ---------------------------------------------------------------------------
-// STEP 5: Bundle Android Mobile APK
+// STEP 5: Compile Native Self-Contained Launcher UAS.exe (Zero CLI / Zero npx)
 // ---------------------------------------------------------------------------
-console.log("\n[Step 5/8] Bundling Android Mobile APK...");
-const apkSource = path.join(projectRoot, "public", "downloads", "uas-latest.apk");
-const apkDest = path.join(mobileDestDir, "UAS-Accounting.apk");
-if (fs.existsSync(apkSource)) {
-  fs.copyFileSync(apkSource, apkDest);
-  console.log(`[OK] Bundled: ${apkDest} (${(fs.statSync(apkDest).size / 1024 / 1024).toFixed(2)} MB)`);
-} else {
-  console.warn(`[WARN] Android APK not found at ${apkSource}`);
-}
-
-// ---------------------------------------------------------------------------
-// STEP 6: Compile Native Self-Contained Launcher UAS.exe (Zero CLI / Zero npx)
-// ---------------------------------------------------------------------------
-console.log("\n[Step 6/8] Compiling Native Self-Contained Launcher (app/UAS.exe)...");
+console.log("\n[Step 5/7] Compiling Native Self-Contained Launcher (app/UAS.exe)...");
 const uasLauncherCs = `
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
-using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 public class UasLauncher
 {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
+
     public static int Main(string[] args)
     {
-        Console.Title = "UAS Accounting System - Unified Enterprise ERP";
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("==================================================================");
-        Console.WriteLine("       UNIFIED ACCOUNTING SYSTEM (UAS ENTERPRISE ERP)             ");
-        Console.WriteLine("       Zero-Config Self-Contained Windows Runtime                 ");
-        Console.WriteLine("==================================================================");
-        Console.ResetColor();
-
         string appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\\\');
-        string serverJs = Path.Combine(appDir, "server.js");
-        if (!File.Exists(serverJs))
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine("[ERROR] server.js not found in: " + appDir);
-            Console.ResetColor();
-            Console.WriteLine("Press any key to exit...");
-            Console.ReadKey();
-            return 1;
-        }
-
-        // Determine persistent customer data directory (C:\\UAS-Data when installed, or sibling UAS-Data for portable mode)
         string dataDir = @"C:\\UAS-Data";
         if (!appDir.StartsWith(@"C:\\UAS", StringComparison.OrdinalIgnoreCase) && !Directory.Exists(dataDir))
         {
@@ -275,218 +271,242 @@ public class UasLauncher
 
         try
         {
-            if (!Directory.Exists(dataDir))
-            {
-                Directory.CreateDirectory(dataDir);
-            }
+            if (!Directory.Exists(dataDir)) Directory.CreateDirectory(dataDir);
         }
-        catch (Exception ex)
+        catch
         {
-            Console.WriteLine("[WARN] Could not create " + dataDir + " (" + ex.Message + "). Falling back to local app data.");
-            dataDir = Path.Combine(appDir, "data");
-            Directory.CreateDirectory(dataDir);
+            dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UAS-Data");
+            if (!Directory.Exists(dataDir)) Directory.CreateDirectory(dataDir);
         }
 
-        // 1. Copy pre-initialized template.db into customer data directory on first launch
-        string activeDbPath = Path.Combine(dataDir, "uas-enterprise.db");
-        string templateDbPath = Path.Combine(appDir, "prisma", "template.db");
+        string logDir = Path.Combine(dataDir, "logs");
+        if (!Directory.Exists(logDir)) Directory.CreateDirectory(logDir);
+        string serverLogPath = Path.Combine(logDir, "uas-server.log");
+        string crashLogPath = Path.Combine(logDir, "uas-crash.log");
 
-        bool needsTemplateCopy = !File.Exists(activeDbPath);
-        if (!needsTemplateCopy)
-        {
-            try
-            {
-                FileInfo fi = new FileInfo(activeDbPath);
-                if (fi.Length == 0) needsTemplateCopy = true;
-            }
-            catch { }
-        }
-
-        if (needsTemplateCopy && File.Exists(templateDbPath))
-        {
-            try
-            {
-                Console.WriteLine("[INIT] First launch detected. Installing clean pre-migrated database to:");
-                Console.WriteLine("       " + activeDbPath);
-                File.Copy(templateDbPath, activeDbPath, true);
-                Console.WriteLine("[OK] Database initialized cleanly (zero CLI required).");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("[WARN] Template copy skipped (" + ex.Message + "); runtime self-healing will initialize DB.");
-            }
-        }
-
-        // 2. Determine runtime mode (local vs lan) and port
-        string mode = "local";
-        int port = 3000;
-
-        // Read uas.runtime.json if present
-        string runtimeJsonPath = Path.Combine(dataDir, "uas.runtime.json");
-        if (File.Exists(runtimeJsonPath))
-        {
-            try
-            {
-                string json = File.ReadAllText(runtimeJsonPath);
-                string normalized = json.Replace(" ", "").Replace("\\t", "").Replace("\\r", "").Replace("\\n", "");
-                if (normalized.IndexOf("\\"mode\\":\\"lan\\"", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    mode = "lan";
-                }
-            }
-            catch { }
-        }
-
-        // CLI argument overrides (--local, --lan, --port XXXX, --no-browser)
-        bool noBrowser = false;
-        for (int i = 0; i < args.Length; i++)
-        {
-            string a = args[i].Trim().ToLowerInvariant();
-            if (a == "--lan") mode = "lan";
-            else if (a == "--local") mode = "local";
-            else if (a == "--no-browser") noBrowser = true;
-            else if (a == "--port" && i + 1 < args.Length)
-            {
-                int parsedPort;
-                if (int.TryParse(args[i + 1], out parsedPort) && parsedPort > 0) port = parsedPort;
-                i++;
-            }
-        }
-
-        string host = (mode == "lan") ? "0.0.0.0" : "127.0.0.1";
-
-        // 3. Locate bundled portable node.exe first (100% self-contained without system Node.js)
-        string bundledNode = Path.Combine(appDir, "runtime", "node.exe");
-        string nodeExe = File.Exists(bundledNode) ? bundledNode : "node.exe";
-
-        string dbUrl = "file:" + activeDbPath.Replace("\\\\", "/");
-        string licensePath = Path.Combine(dataDir, "license.uas");
-        string localUrl = "http://localhost:" + port;
-
-        Console.WriteLine();
-        Console.WriteLine("  Runtime Mode   : " + mode.ToUpperInvariant() + " (" + host + ":" + port + ")");
-        Console.WriteLine("  Data Directory : " + dataDir);
-        Console.WriteLine("  Database       : " + activeDbPath);
-        Console.WriteLine("  Node Engine    : " + nodeExe);
-        if (mode == "lan")
-        {
-            string lanIp = GetPrimaryLanIp();
-            Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.WriteLine("  Office LAN URL : http://" + lanIp + ":" + port);
-            Console.ResetColor();
-        }
-        Console.WriteLine("  Local URL      : " + localUrl);
-        Console.WriteLine();
-        Console.WriteLine("  Keep this window open while using UAS. Press Ctrl+C to stop.");
-        Console.WriteLine("==================================================================");
-        Console.WriteLine();
-
-        // 4. Launch browser automatically once health endpoint responds
-        if (!noBrowser)
-        {
-            Thread browserThread = new Thread(delegate()
-            {
-                WaitForServerAndOpenBrowser(port, localUrl);
-            });
-            browserThread.IsBackground = true;
-            browserThread.Start();
-        }
-
-        // 5. Start Next.js standalone server directly (ZERO npx / ZERO Prisma CLI)
         try
         {
+            string serverJs = Path.Combine(appDir, "server.js");
+            if (!File.Exists(serverJs))
+            {
+                MessageBoxW(IntPtr.Zero, "Runtime file missing: " + serverJs, "UAS Accounting System", 0x10);
+                return 1;
+            }
+
+            // 1. Copy pre-migrated template.db into C:\\UAS-Data\\uas-enterprise.db on first launch
+            string activeDbPath = Path.Combine(dataDir, "uas-enterprise.db");
+            string templateDbPath = Path.Combine(appDir, "prisma", "template.db");
+            bool needsTemplateCopy = !File.Exists(activeDbPath) || (new FileInfo(activeDbPath).Length == 0);
+            if (needsTemplateCopy && File.Exists(templateDbPath))
+            {
+                File.Copy(templateDbPath, activeDbPath, true);
+            }
+
+            // 2. Parse mode & flags (--local, --lan, --port, --no-browser, --browser)
+            string mode = "local";
+            int port = 3000;
+            bool noBrowser = false;
+            bool browserTabMode = false;
+
+            string runtimeJsonPath = Path.Combine(dataDir, "uas.runtime.json");
+            if (File.Exists(runtimeJsonPath))
+            {
+                try
+                {
+                    string normalized = File.ReadAllText(runtimeJsonPath).Replace(" ", "").Replace("\\t", "").Replace("\\r", "").Replace("\\n", "");
+                    if (normalized.IndexOf("\\"mode\\":\\"lan\\"", StringComparison.OrdinalIgnoreCase) >= 0) mode = "lan";
+                }
+                catch { }
+            }
+
+            for (int i = 0; i < args.Length; i++)
+            {
+                string a = args[i].Trim().ToLowerInvariant();
+                if (a == "--lan") mode = "lan";
+                else if (a == "--local") mode = "local";
+                else if (a == "--no-browser") noBrowser = true;
+                else if (a == "--browser") browserTabMode = true;
+                else if (a == "--port" && i + 1 < args.Length)
+                {
+                    int parsedPort;
+                    if (int.TryParse(args[i + 1], out parsedPort) && parsedPort > 0) port = parsedPort;
+                    i++;
+                }
+            }
+
+            string host = (mode == "lan") ? "0.0.0.0" : "127.0.0.1";
+            string localUrl = "http://127.0.0.1:" + port;
+
+            // 3. If server is already running on this port, open the desktop app window immediately
+            if (IsServerHealthy(port))
+            {
+                if (!noBrowser) OpenAppWindow(localUrl, browserTabMode);
+                return 0;
+            }
+
+            // 4. Start bundled Node.js standalone server silently in background
+            string bundledNode = Path.Combine(appDir, "runtime", "node.exe");
+            string nodeExe = File.Exists(bundledNode) ? bundledNode : "node.exe";
+            string dbUrl = "file:" + activeDbPath.Replace("\\\\", "/");
+            string licensePath = Path.Combine(dataDir, "license.uas");
+
+            File.AppendAllText(serverLogPath, "[" + DateTime.Now.ToString("s") + "] Starting UAS (" + mode + " on " + host + ":" + port + ")..." + Environment.NewLine);
+
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = nodeExe;
             psi.Arguments = "\\"" + serverJs + "\\"";
             psi.WorkingDirectory = appDir;
             psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.WindowStyle = ProcessWindowStyle.Hidden;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
             psi.EnvironmentVariables["NODE_ENV"] = "production";
             psi.EnvironmentVariables["PORT"] = port.ToString();
             psi.EnvironmentVariables["HOSTNAME"] = host;
             psi.EnvironmentVariables["DATABASE_URL"] = dbUrl;
             psi.EnvironmentVariables["UAS_LICENSE_PATH"] = licensePath;
 
-            Process proc = Process.Start(psi);
-            if (proc != null)
+            Process serverProc = new Process();
+            serverProc.StartInfo = psi;
+            object logLock = new object();
+            serverProc.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e)
             {
-                proc.WaitForExit();
-                return proc.ExitCode;
+                if (!string.IsNullOrEmpty(e.Data))
+                {
+                    lock (logLock) { File.AppendAllText(serverLogPath, e.Data + Environment.NewLine); }
+                }
+            };
+            serverProc.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e)
+            {
+                if (!string.IsNullOrEmpty(e.Data))
+                {
+                    lock (logLock) { File.AppendAllText(serverLogPath, "[ERR] " + e.Data + Environment.NewLine); }
+                }
+            };
+
+            if (!serverProc.Start())
+            {
+                MessageBoxW(IntPtr.Zero, "Failed to launch Node runtime: " + nodeExe, "UAS Accounting System", 0x10);
+                return 1;
             }
-            return 1;
+            serverProc.BeginOutputReadLine();
+            serverProc.BeginErrorReadLine();
+
+            if (!noBrowser)
+            {
+                WaitForServerAndOpenAppWindow(port, localUrl, browserTabMode);
+            }
+
+            serverProc.WaitForExit();
+            return serverProc.ExitCode;
         }
         catch (Exception ex)
         {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine("[ERROR] Failed to start UAS server: " + ex.Message);
-            Console.ResetColor();
-            Console.WriteLine("Press any key to exit...");
-            Console.ReadKey();
+            try { File.AppendAllText(crashLogPath, "[" + DateTime.Now.ToString("s") + "] " + ex.ToString() + Environment.NewLine); } catch { }
+            MessageBoxW(IntPtr.Zero, "UAS Startup Error:\\n" + ex.Message + "\\n\\nLog: " + crashLogPath, "UAS Accounting System", 0x10);
             return 1;
         }
     }
 
-    private static void WaitForServerAndOpenBrowser(int port, string url)
+    private static bool IsServerHealthy(int port)
     {
         string healthUrl = "http://127.0.0.1:" + port + "/api/public/verify";
-        for (int attempt = 0; attempt < 40; attempt++)
-        {
-            Thread.Sleep(500);
-            try
-            {
-                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(healthUrl);
-                req.Method = "GET";
-                req.Timeout = 1500;
-                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
-                {
-                    if ((int)resp.StatusCode >= 200 && (int)resp.StatusCode < 500)
-                    {
-                        break;
-                    }
-                }
-            }
-            catch
-            {
-                // Still booting
-            }
-        }
-
         try
         {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            HttpWebRequest req = (HttpWebRequest)WebRequest.Create(healthUrl);
+            req.Method = "GET";
+            req.Timeout = 1000;
+            using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+            {
+                return ((int)resp.StatusCode >= 200 && (int)resp.StatusCode < 500);
+            }
         }
-        catch { }
+        catch
+        {
+            return false;
+        }
     }
 
-    private static string GetPrimaryLanIp()
+    private static Process WaitForServerAndOpenAppWindow(int port, string url, bool browserTabMode)
     {
-        try
+        for (int attempt = 0; attempt < 50; attempt++)
         {
-            IPHostEntry host = Dns.GetHostEntry(Dns.GetHostName());
-            foreach (IPAddress ip in host.AddressList)
+            if (IsServerHealthy(port)) break;
+            Thread.Sleep(400);
+        }
+        return OpenAppWindow(url, browserTabMode);
+    }
+
+    private static Process OpenAppWindow(string url, bool browserTabMode)
+    {
+        if (!browserTabMode)
+        {
+            string uiProfileDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"UAS\\ui-profile");
+            if (!Directory.Exists(uiProfileDir)) Directory.CreateDirectory(uiProfileDir);
+
+            string[] shellCandidates = new string[]
             {
-                if (ip.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), @"Microsoft\\Edge\\Application\\msedge.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Microsoft\\Edge\\Application\\msedge.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Google\\Chrome\\Application\\chrome.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), @"Google\\Chrome\\Application\\chrome.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Google\\Chrome\\Application\\chrome.exe")
+            };
+
+            foreach (string exe in shellCandidates)
+            {
+                if (File.Exists(exe))
                 {
-                    string s = ip.ToString();
-                    if (!s.StartsWith("169.254.")) return s;
+                    try
+                    {
+                        ProcessStartInfo appPsi = new ProcessStartInfo();
+                        appPsi.FileName = exe;
+                        appPsi.Arguments = "--app=\\"" + url + "\\" --user-data-dir=\\"" + uiProfileDir + "\\" --no-first-run --no-default-browser-check --disable-extensions --disable-component-extensions-with-background-pages --disable-features=Translate --window-size=1366,840";
+                        appPsi.UseShellExecute = false;
+                        return Process.Start(appPsi);
+                    }
+                    catch { }
                 }
             }
         }
-        catch { }
-        return "127.0.0.1";
+
+        try
+        {
+            return Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
 `;
-
 const uasLauncherCsPath = path.join(projectRoot, "scripts", ".tmp-UasLauncher.cs");
 const uasExePath = path.join(appDestDir, "UAS.exe");
 fs.writeFileSync(uasLauncherCsPath, uasLauncherCs, "utf8");
 
+const iconWinPath = path.join(projectRoot, "public", "uas-app.ico");
+const cscCandidates = [
+  "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe",
+  "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe",
+];
+const cscExe = cscCandidates.find((p) => fs.existsSync(p));
+
 try {
-  execSync(
-    `powershell -NoProfile -Command "Add-Type -TypeDefinition (Get-Content '${uasLauncherCsPath}' -Raw) -OutputAssembly '${uasExePath}' -OutputType ConsoleApplication"`,
-    { stdio: "inherit" }
-  );
-  console.log(`[OK] Compiled self-contained launcher: ${uasExePath}`);
+  if (cscExe) {
+    const iconArg = fs.existsSync(iconWinPath) ? `/win32icon:"${iconWinPath}"` : "";
+    execSync(
+      `"${cscExe}" /nologo /optimize+ /target:winexe ${iconArg} /out:"${uasExePath}" "${uasLauncherCsPath}"`,
+      { stdio: "inherit" }
+    );
+  } else {
+    execSync(
+      `powershell -NoProfile -Command "Add-Type -TypeDefinition (Get-Content '${uasLauncherCsPath}' -Raw) -OutputAssembly '${uasExePath}' -OutputType WindowsApplication"`,
+      { stdio: "inherit" }
+    );
+  }
+  console.log(`[OK] Compiled silent GUI launcher with brand icon: ${uasExePath}`);
 } finally {
   if (fs.existsSync(uasLauncherCsPath)) fs.unlinkSync(uasLauncherCsPath);
 }
@@ -540,9 +560,6 @@ if not exist "C:\\UAS-Data" mkdir "C:\\UAS-Data"
 echo [1/5] Copying self-contained runtime to C:\\UAS\\app...
 xcopy "%~dp0app\\*" "C:\\UAS\\app\\" /E /I /Y /Q >nul
 
-if exist "%~dp0mobile" (
-    xcopy "%~dp0mobile\\*" "C:\\UAS\\mobile\\" /E /I /Y /Q >nul
-)
 if exist "%~dp0QUICK-START-AR-EN.md" (
     copy "%~dp0QUICK-START-AR-EN.md" "C:\\UAS\\" /Y >nul
 )
@@ -584,9 +601,63 @@ exit /b 0
 fs.writeFileSync(path.join(releaseRoot, "UAS-Setup.bat"), uasSetupBat, "utf8");
 
 // ---------------------------------------------------------------------------
-// STEP 8: Compile Native Windows Installer (UAS-Setup-Win64.exe)
+// Write clean bilingual QUICK-START-AR-EN.md BEFORE compiling Inno Setup
 // ---------------------------------------------------------------------------
-console.log("\n[Step 8/8] Compiling Native Windows Installer (UAS-Setup-Win64.exe)...");
+const quickStartMd = `# دليل البدء والتشغيل التجاري لمنظومة UAS المحاسبية
+# UAS Commercial Distribution & Quick Start Guide (Arabic & English)
+
+مرحباً بك في **منظومة الحسابات الموحدة (UAS Enterprise ERP)**.
+هذا الإصدار التجاري يعمل **بشكل مستقل 100% دون الحاجة لتثبيت Node.js أو أي أوامر برمجية أو اتصال بالإنترنت**.
+
+---
+
+## أولاً: التثبيت السريع على ويندوز (Zero-Config Windows Setup)
+
+1. اضغط مرتين على **\`UAS-Setup-Win64.exe\`** (أو **\`UAS-Setup.bat\`**).
+2. يقوم المثبت تلقائياً بـ:
+   - نسخ المحرك المستقل المدمج (\`UAS.exe\` + \`runtime/node.exe\` + محرك Prisma 6.19.3) إلى **\`C:\\UAS\\app\`**.
+   - تهيئة قاعدة البيانات الجاهزة مسبقاً (\`template.db\`) في **\`C:\\UAS-Data\\uas-enterprise.db\`** دون المساس ببياناتك السابقة عند التحديث.
+   - فتح المنفذ **3000** في جدار حماية ويندوز للشبكة المحلية.
+   - إنشاء اختصارات التشغيل المباشر لـ **\`UAS.exe\`** على سطح المكتب وقائمة ابدأ.
+3. حتى في حال حذف ملف قاعدة البيانات، تقوم المنظومة تلقائياً بالتهيئة الذاتية (Self-Healing SQLite Bootstrap) عند التشغيل بدون أي أخطاء \`P2021\`.
+
+---
+
+## ثانياً: أوضاع التشغيل الثلاثة (3 Runtime Modes)
+
+- **الجهاز المستقل (Local Standalone):** شغل **\`UAS Accounting System\`** (أو \`UAS.exe --local\`) ← يعمل على \`http://127.0.0.1:3000\`.
+- **خادم الشبكة المكتبية (Office LAN Server):** شغل **\`UAS Office LAN Server\`** (أو \`UAS.exe --lan\`) ← يتيح الاتصال من جميع أجهزة الموظفين والهواتف الميدانية عبر \`http://<LAN-IP>:3000\`.
+- **السحابي (Cloud):** اتصل مباشرة بـ \`https://qat.world\` أو نطاق شركتك المخصص.
+
+---
+
+## ثالثاً: تفعيل الترخيص المشفر (Ed25519 Activation)
+
+1. عند فتح النظام، انسخ **رمز طلب الترخيص (Machine Request Code)**: \`REQ-XXXX-XXXX-XXXX-XXXX\`.
+2. ارفع ملف **\`license.uas\`** مباشرة (تفعيل 100% دون إنترنت) أو أدخل المفتاح التسلسلي (يتحقق عبر \`https://qat.world\`).
+
+---
+
+## English Quick Start Summary
+
+1. **Zero-Config Install:** Double-click \`UAS-Setup-Win64.exe\` (or \`UAS-Setup.bat\`). No Node.js, no Prisma CLI, no \`npx\`, and no internet required.
+2. **Pre-Initialized & Self-Healing DB:** A clean, pre-migrated SQLite database (\`template.db\`) is installed to \`C:\\UAS-Data\\uas-enterprise.db\` on first launch. If deleted, the runtime automatically recreates all tables and baseline records on startup with zero \`P2021\` errors.
+3. **Launch:** Double-click \`UAS Accounting System\` on the Desktop (\`C:\\UAS\\app\\UAS.exe\`). The standalone desktop window opens directly to Login & Activation.
+`;
+fs.writeFileSync(path.join(releaseRoot, "QUICK-START-AR-EN.md"), quickStartMd, "utf8");
+
+// Pre-packaging audit gate: ZERO .apk files allowed inside Windows release bundle
+const allReleaseFiles = collectFilesRecursive(releaseRoot);
+const leakedApks = allReleaseFiles.filter((f) => f.toLowerCase().endsWith(".apk"));
+if (leakedApks.length > 0) {
+  console.error("[ERROR] Found leaked .apk file(s) inside Windows release bundle:", leakedApks);
+  process.exit(1);
+}
+console.log("[OK] Pre-installer audit passed: zero .apk files inside release/UAS-Commercial-Dist");
+
+// STEP 7: Compile Native Windows Installer (UAS-Setup-Win64.exe)
+// ---------------------------------------------------------------------------
+console.log("\n[Step 7/7] Compiling Native Windows Installer (UAS-Setup-Win64.exe)...");
 
 const csharpInstallerSource = `
 using System;
@@ -621,12 +692,6 @@ public class UasSetup
             {
                 Console.WriteLine("[2/5] Installing self-contained runtime, Node engine, and Prisma DB engine...");
                 CopyDirectory(appSourceDir, Path.Combine(targetAppDir, "app"));
-            }
-
-            string mobileSourceDir = Path.Combine(currentDir, "mobile");
-            if (Directory.Exists(mobileSourceDir))
-            {
-                CopyDirectory(mobileSourceDir, Path.Combine(targetAppDir, "mobile"));
             }
 
             // Copy pre-initialized template.db into C:\\UAS-Data\\uas-enterprise.db on fresh install
@@ -786,60 +851,14 @@ try {
   if (fs.existsSync(csTempPath)) fs.unlinkSync(csTempPath);
 }
 
-// Write updated bilingual QUICK-START-AR-EN.md
-const quickStartMd = `# ط¯ظ„ظٹظ„ ط§ظ„ط¨ط¯ط، ظˆط§ظ„طھط´ط؛ظٹظ„ ط§ظ„طھط¬ط§ط±ظٹ ظ„ظ…ظ†ط¸ظˆظ…ط© UAS ط§ظ„ظ…ط­ط§ط³ط¨ظٹط©
-# UAS Commercial Distribution & Quick Start Guide (Arabic & English)
-
-ظ…ط±ط­ط¨ط§ظ‹ ط¨ظƒ ظپظٹ **ظ…ظ†ط¸ظˆظ…ط© ط§ظ„ط­ط³ط§ط¨ط§طھ ط§ظ„ظ…ظˆط­ط¯ط© (UAS Enterprise ERP)**.
-ظ‡ط°ط§ ط§ظ„ط¥طµط¯ط§ط± ط§ظ„طھط¬ط§ط±ظٹ ظٹط¹ظ…ظ„ **ط¨ط´ظƒظ„ ظ…ط³طھظ‚ظ„ 100% ط¯ظˆظ† ط§ظ„ط­ط§ط¬ط© ظ„طھط«ط¨ظٹطھ Node.js ط£ظˆ ط£ظٹ ط£ظˆط§ظ…ط± ط¨ط±ظ…ط¬ظٹط© ط£ظˆ ط§طھطµط§ظ„ ط¨ط§ظ„ط¥ظ†طھط±ظ†طھ**.
-
----
-
-## ط£ظˆظ„ط§ظ‹: ط§ظ„طھط«ط¨ظٹطھ ط§ظ„ط³ط±ظٹط¹ ط¹ظ„ظ‰ ظˆظٹظ†ط¯ظˆط² (Zero-Config Windows Setup)
-
-1. ط§ط¶ط؛ط· ظ…ط±طھظٹظ† ط¹ظ„ظ‰ **\`UAS-Setup-Win64.exe\`** (ط£ظˆ **\`UAS-Setup.bat\`**).
-2. ظٹظ‚ظˆظ… ط§ظ„ظ…ط«ط¨طھ طھظ„ظ‚ط§ط¦ظٹط§ظ‹ ط¨ظ€:
-   - ظ†ط³ط® ط§ظ„ظ…ط­ط±ظƒ ط§ظ„ظ…ط³طھظ‚ظ„ ط§ظ„ظ…ط¯ظ…ط¬ (\`UAS.exe\` + \`runtime/node.exe\` + ظ…ط­ط±ظƒ Prisma 6.19.3) ط¥ظ„ظ‰ **\`C:\\UAS\\app\`**.
-   - طھظ‡ظٹط¦ط© ظ‚ط§ط¹ط¯ط© ط§ظ„ط¨ظٹط§ظ†ط§طھ ط§ظ„ط¬ط§ظ‡ط²ط© ظ…ط³ط¨ظ‚ط§ظ‹ (\`template.db\`) ظپظٹ **\`C:\\UAS-Data\\uas-enterprise.db\`** ط¯ظˆظ† ط§ظ„ظ…ط³ط§ط³ ط¨ط¨ظٹط§ظ†ط§طھظƒ ط§ظ„ط³ط§ط¨ظ‚ط© ط¹ظ†ط¯ ط§ظ„طھط­ط¯ظٹط«.
-   - ظپطھط­ ط§ظ„ظ…ظ†ظپط° **3000** ظپظٹ ط¬ط¯ط§ط± ط­ظ…ط§ظٹط© ظˆظٹظ†ط¯ظˆط² ظ„ظ„ط´ط¨ظƒط© ط§ظ„ظ…ط­ظ„ظٹط©.
-   - ط¥ظ†ط´ط§ط، ط§ط®طھطµط§ط±ط§طھ ط§ظ„طھط´ط؛ظٹظ„ ط§ظ„ظ…ط¨ط§ط´ط± ظ„ظ€ **\`UAS.exe\`** ط¹ظ„ظ‰ ط³ط·ط­ ط§ظ„ظ…ظƒطھط¨ ظˆظ‚ط§ط¦ظ…ط© ط§ط¨ط¯ط£.
-3. ط­طھظ‰ ظپظٹ ط­ط§ظ„ ط­ط°ظپ ظ…ظ„ظپ ظ‚ط§ط¹ط¯ط© ط§ظ„ط¨ظٹط§ظ†ط§طھطŒ طھظ‚ظˆظ… ط§ظ„ظ…ظ†ط¸ظˆظ…ط© طھظ„ظ‚ط§ط¦ظٹط§ظ‹ ط¨ط§ظ„طھظ‡ظٹط¦ط© ط§ظ„ط°ط§طھظٹط© (Self-Healing SQLite Bootstrap) ط¹ظ†ط¯ ط§ظ„طھط´ط؛ظٹظ„ ط¨ط¯ظˆظ† ط£ظٹ ط£ط®ط·ط§ط، \`P2021\`.
-
----
-
-## ط«ط§ظ†ظٹط§ظ‹: ط£ظˆط¶ط§ط¹ ط§ظ„طھط´ط؛ظٹظ„ ط§ظ„ط«ظ„ط§ط«ط© (3 Runtime Modes)
-
-- **ط§ظ„ط¬ظ‡ط§ط² ط§ظ„ظ…ط³طھظ‚ظ„ (Local Standalone):** ط´ط؛ظ„ **\`UAS Accounting System\`** (ط£ظˆ \`UAS.exe --local\`) â†’ ظٹط¹ظ…ظ„ ط¹ظ„ظ‰ \`http://localhost:3000\`.
-- **ط®ط§ط¯ظ… ط§ظ„ط´ط¨ظƒط© ط§ظ„ظ…ظƒطھط¨ظٹط© (Office LAN Server):** ط´ط؛ظ„ **\`UAS Office LAN Server\`** (ط£ظˆ \`UAS.exe --lan\`) â†’ ظٹطھظٹط­ ط§ظ„ط§طھطµط§ظ„ ظ…ظ† ط¬ظ…ظٹط¹ ط£ط¬ظ‡ط²ط© ط§ظ„ظ…ظˆط¸ظپظٹظ† ظˆط§ظ„ظ‡ظˆط§طھظپ ط§ظ„ظ…ظٹط¯ط§ظ†ظٹط© ط¹ط¨ط± \`http://<LAN-IP>:3000\`.
-- **ط§ظ„ط³ط­ط§ط¨ظٹ (Cloud):** ط§طھطµظ„ ظ…ط¨ط§ط´ط±ط© ط¨ظ€ \`https://qat.world\` ط£ظˆ ظ†ط·ط§ظ‚ ط´ط±ظƒطھظƒ ط§ظ„ظ…ط®طµطµ.
-
----
-
-## ط«ط§ظ„ط«ط§ظ‹: طھظپط¹ظٹظ„ ط§ظ„طھط±ط®ظٹطµ ط§ظ„ظ…ط´ظپط± (Ed25519 Activation)
-
-1. ط¹ظ†ط¯ ظپطھط­ ط§ظ„ظ†ط¸ط§ظ…طŒ ط§ظ†ط³ط® **ط±ظ…ط² ط·ظ„ط¨ ط§ظ„طھط±ط®ظٹطµ (Machine Request Code)**: \`REQ-XXXX-XXXX-XXXX-XXXX\`.
-2. ط§ط±ظپط¹ ظ…ظ„ظپ **\`license.uas\`** ظ…ط¨ط§ط´ط±ط© (طھظپط¹ظٹظ„ 100% ط¯ظˆظ† ط¥ظ†طھط±ظ†طھ) ط£ظˆ ط£ط¯ط®ظ„ ط§ظ„ظ…ظپطھط§ط­ ط§ظ„طھط³ظ„ط³ظ„ظٹ \`UASKEY-...\`.
-
----
-
-## English Quick Start Summary
-
-1. **Zero-Config Install:** Double-click \`UAS-Setup-Win64.exe\` (or \`UAS-Setup.bat\`). No Node.js, no Prisma CLI, no \`npx\`, and no internet required.
-2. **Pre-Initialized & Self-Healing DB:** A clean, pre-migrated SQLite database (\`template.db\`) is installed to \`C:\\UAS-Data\\uas-enterprise.db\` on first launch. If deleted, the runtime automatically recreates all tables and baseline records on startup with zero \`P2021\` errors.
-3. **Launch:** Double-click \`UAS Accounting System\` on the Desktop (\`C:\\UAS\\app\\UAS.exe\`). Your browser opens automatically to \`http://localhost:3000\`.
-4. **Android APK:** Install \`mobile/UAS-Accounting.apk\` and choose your Office LAN IP or Cloud URL on the login screen.
-`;
-
-fs.writeFileSync(path.join(releaseRoot, "QUICK-START-AR-EN.md"), quickStartMd, "utf8");
-
 console.log("\n=================================================================");
-console.log("   SELF-CONTAINED COMMERCIAL BUNDLE READY IN:");
+console.log("   SELF-CONTAINED WINDOWS DESKTOP BUNDLE READY IN:");
 console.log(`   ${releaseRoot}`);
-console.log("   - app/UAS.exe (Zero-config native launcher)");
+console.log("   - app/UAS.exe (Silent GUI native launcher)");
+console.log("   - app/.next/static (Verified CSS & JS chunks)");
 console.log("   - app/runtime/node.exe (Bundled Node.js engine)");
 console.log("   - app/prisma/template.db (Pre-migrated & seeded SQLite DB)");
 console.log("   - app/prisma/migrations/ (SQLite DDL migrations)");
 console.log("   - app/node_modules/.prisma/client/query_engine-windows.dll.node");
-console.log("   - mobile/UAS-Accounting.apk");
-console.log("   - UAS-Setup-Win64.exe & UAS-Setup.bat");
+console.log("   - UAS-Setup-Win64.exe & UAS-Setup.bat (Zero .apk files bundled)");
 console.log("=================================================================\n");

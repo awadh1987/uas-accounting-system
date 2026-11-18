@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -21,7 +21,9 @@ import {
   WifiOff,
 } from "lucide-react";
 import { DualLogoBadge } from "@/components/DualLogoBadge";
+import { isInstalledClientApp } from "@/lib/runtimePlatform";
 import { getApiBaseUrl, resetApiBaseUrl, setApiBaseUrl } from "@/lib/apiClient";
+import type { LicenseStatusData } from "@/components/LicenseActivationModal";
 import type { LanguageCode, ThemeName, UasEnterpriseProfile, UasUser } from "@/types/uas";
 
 interface LoginViewProps {
@@ -32,6 +34,8 @@ interface LoginViewProps {
   theme: ThemeName;
   currentUserId: string;
   offlineMode: boolean;
+  licenseStatus?: LicenseStatusData | null;
+  onOpenLicenseModal?: () => void;
   onBackToLanding: () => void;
   onToggleLang: () => void;
   onLoginSuccess: (user: UasUser, rememberDevice: boolean) => void;
@@ -48,13 +52,20 @@ export function LoginView({
   theme: _theme,
   currentUserId: _currentUserId,
   offlineMode,
+  licenseStatus,
+  onOpenLicenseModal,
   onBackToLanding,
   onToggleLang,
   onLoginSuccess,
   onToast,
 }: LoginViewProps) {
   const isAr = lang === "ar";
+  const [isInstalledApp, setIsInstalledApp] = useState(true);
   const activeUsers = users.filter((u) => u.active);
+
+  useEffect(() => {
+    setIsInstalledApp(isInstalledClientApp());
+  }, []);
 
   const [identifier, setIdentifier] = useState(() => {
     if (typeof window !== "undefined") {
@@ -267,6 +278,24 @@ export function LoginView({
             )}
 
             {/* Authentication Form */}
+            {onOpenLicenseModal && (
+              <button
+                type="button"
+                onClick={onOpenLicenseModal}
+                className={`w-full py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition ${
+                  licenseStatus && !licenseStatus.is_valid
+                    ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20"
+                    : "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10"
+                }`}
+              >
+                <KeyRound className="w-3.5 h-3.5 shrink-0" />
+                <span>
+                  {licenseStatus && !licenseStatus.is_valid
+                    ? (isAr ? "تفعيل الترخيص — أدخل مفتاح التفعيل أو ملف license.uas" : "Activate License — Enter Key or Upload license.uas")
+                    : (isAr ? "حالة الترخيص والتفعيل (Ed25519)" : "License & Activation Status")}
+                </span>
+              </button>
+            )}
             <form onSubmit={handleFormSubmit} className="space-y-4">
               <div>
                 <label
@@ -450,7 +479,8 @@ export function LoginView({
               <span>{isAr ? "اتصال مشفر وآمن بمعايير المؤسسات" : "Encrypted Enterprise-Grade Authentication"}</span>
             </div>
 
-            {/* Direct Commercial Downloads: Windows Desktop / LAN + Android Mobile App */}
+            {/* Direct Commercial Downloads: Windows Desktop / LAN + Android Mobile App (Web Portal Only) */}
+            {!isInstalledApp && (
             <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
               <div className="text-center text-[11px] font-bold text-slate-400">
                 {isAr ? "التحميل المباشر للأنظمة الميدانية والمكتبية:" : "Direct System Downloads:"}
@@ -476,6 +506,7 @@ export function LoginView({
                 </a>
               </div>
             </div>
+            )}
           </div>
         </div>
       </main>

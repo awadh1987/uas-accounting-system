@@ -1,6 +1,6 @@
 ; ==============================================================================
 ; Unified Accounting System (UAS Enterprise ERP) - Inno Setup 6 Script
-; Generates: UAS-Setup-Win64.exe (100% Zero-Config, Offline-Capable)
+; Generates: UAS-Setup-Win64.exe (100% Zero-Config, Offline-Capable Windows App)
 ; Targets: Windows 10, Windows 11, Windows Server 2019/2022/2025 (x64)
 ; ==============================================================================
 
@@ -26,6 +26,8 @@ OutputBaseFilename=UAS-Setup-Win64
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\..\public\uas-app.ico
+UninstallDisplayIcon={app}\app\public\uas-app.ico
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
@@ -37,19 +39,32 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-; Copy self-contained standalone Next.js runtime + bundled node.exe + Prisma engine + template.db + migrations + UAS.exe
+; Self-contained Windows standalone Next.js runtime + bundled node.exe + Prisma engine + template.db + migrations + UAS.exe
 Source: "..\..\release\UAS-Commercial-Dist\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\..\release\UAS-Commercial-Dist\mobile\*"; DestDir: "{app}\mobile"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Explicitly guarantee dot-directory .next (including .next\static CSS/JS chunks) is always packaged cleanly
+Source: "..\..\release\UAS-Commercial-Dist\app\.next\*"; DestDir: "{app}\app\.next"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\release\UAS-Commercial-Dist\QUICK-START-AR-EN.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\release\UAS-Commercial-Dist\UAS-Setup.bat"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}\{#MyAppName}"; Filename: "{app}\app\UAS.exe"; WorkingDir: "{app}\app"
-Name: "{autoprograms}\{#MyAppName}\UAS Local Standalone"; Filename: "{app}\app\UAS.exe"; Parameters: "--local"; WorkingDir: "{app}\app"
-Name: "{autoprograms}\{#MyAppName}\UAS Office LAN Server"; Filename: "{app}\app\UAS.exe"; Parameters: "--lan"; WorkingDir: "{app}\app"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\app\UAS.exe"; WorkingDir: "{app}\app"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppName}\{#MyAppName}"; Filename: "{app}\app\UAS.exe"; IconFilename: "{app}\app\public\uas-app.ico"; WorkingDir: "{app}\app"
+Name: "{autoprograms}\{#MyAppName}\UAS Local Standalone"; Filename: "{app}\app\UAS.exe"; Parameters: "--local"; IconFilename: "{app}\app\public\uas-app.ico"; WorkingDir: "{app}\app"
+Name: "{autoprograms}\{#MyAppName}\UAS Office LAN Server"; Filename: "{app}\app\UAS.exe"; Parameters: "--lan"; IconFilename: "{app}\app\public\uas-app.ico"; WorkingDir: "{app}\app"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\app\UAS.exe"; IconFilename: "{app}\app\public\uas-app.ico"; WorkingDir: "{app}\app"; Tasks: desktopicon
 
 [Run]
 ; Initialize C:\UAS-Data, copy pre-initialized template.db if customer DB does not exist, and configure Windows Firewall for LAN mode
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""if (!(Test-Path 'C:\UAS-Data')) {{ New-Item -ItemType Directory -Path 'C:\UAS-Data' -Force | Out-Null }}; if (!(Test-Path 'C:\UAS-Data\uas-enterprise.db') -and (Test-Path '{app}\app\prisma\template.db')) {{ Copy-Item '{app}\app\prisma\template.db' 'C:\UAS-Data\uas-enterprise.db' -Force }; if (!(Get-NetFirewallRule -DisplayName 'UAS Accounting LAN' -ErrorAction SilentlyContinue)) {{ New-NetFirewallRule -DisplayName 'UAS Accounting LAN' -Direction Inbound -LocalPort 3000 -Protocol TCP -Action Allow -Profile Any | Out-Null }"""; Flags: runhidden
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""if (!(Test-Path 'C:\UAS-Data')) {{ New-Item -ItemType Directory -Path 'C:\UAS-Data' -Force | Out-Null }; if (!(Test-Path 'C:\UAS-Data\uas-enterprise.db') -and (Test-Path '{app}\app\prisma\template.db')) {{ Copy-Item '{app}\app\prisma\template.db' 'C:\UAS-Data\uas-enterprise.db' -Force }; if (!(Get-NetFirewallRule -DisplayName 'UAS Accounting LAN' -ErrorAction SilentlyContinue)) {{ New-NetFirewallRule -DisplayName 'UAS Accounting LAN' -Direction Inbound -LocalPort 3000 -Protocol TCP -Action Allow -Profile Any | Out-Null }"""; Flags: runhidden
 Filename: "{app}\app\UAS.exe"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: shellexec postinstall nowait skipifsilent
+
+[Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  { Stop any running UAS.exe or bundled C:\UAS\app\runtime\node.exe before overwriting files }
+  Exec('taskkill.exe', '/F /IM UAS.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like ''*\\UAS\\app\\runtime\\node.exe'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(500);
+  Result := '';
+end;

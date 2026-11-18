@@ -35,15 +35,19 @@ export async function POST(req: NextRequest) {
           const decoded = Buffer.from(b64, "base64").toString("utf8");
           licenseObj = validateLicenseStructure(JSON.parse(decoded));
         } else {
-          // Query online activation server (https://qat.world)
+          // Query online activation server (always https://qat.world, never localhost)
           try {
-            const runtimeConfig = getRuntimeConfig();
-            const serverBase = runtimeConfig.cloudUrl || "https://qat.world";
+            const envActivationUrl = (process.env.UAS_ACTIVATION_URL || "").trim().replace(/\/+$/, "");
+            const serverBase =
+              envActivationUrl && !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(envActivationUrl)
+                ? envActivationUrl
+                : "https://qat.world";
             const currentHwid = getMachineHwid();
             const res = await fetch(`${serverBase}/api/licensing/verify-key`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ key, hwid: currentHwid }),
+              signal: AbortSignal.timeout(8000),
             });
             if (res.ok) {
               const data = await res.json();

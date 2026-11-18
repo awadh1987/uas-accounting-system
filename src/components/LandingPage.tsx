@@ -1,4 +1,5 @@
 "use client";
+import { isInstalledClientApp } from "@/lib/runtimePlatform";
 
 import React, { useEffect, useState } from "react";
 import {
@@ -70,10 +71,15 @@ export function LandingPage({
 }: LandingPageProps) {
   const profile = state.enterpriseProfile;
   const isAr = lang === "ar";
+  const [isInstalledApp, setIsInstalledApp] = useState(true);
   const [query, setQuery] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [publicMetrics, setPublicMetrics] = useState<PublicSummary | null>(null);
+
+  useEffect(() => {
+    setIsInstalledApp(isInstalledClientApp());
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -169,6 +175,8 @@ export function LandingPage({
 
           {/* Top Actions: Downloads + Language Switcher + Sign In Button */}
           <div className="flex items-center gap-2">
+            {!isInstalledApp && (
+              <>
             <a
               href="/downloads/UAS-Setup-Win64.exe"
               download="UAS-Setup-Win64.exe"
@@ -190,6 +198,8 @@ export function LandingPage({
               <span className="hidden sm:inline">{isAr ? "تطبيق أندرويد" : "Android"}</span>
               <span className="sm:hidden">APK</span>
             </a>
+              </>
+            )}
 
             <button
               type="button"
@@ -265,6 +275,8 @@ export function LandingPage({
                 </span>
               </button>
 
+              {!isInstalledApp && (
+                <>
               <a
                 href="/downloads/UAS-Setup-Win64.exe"
                 download="UAS-Setup-Win64.exe"
@@ -282,6 +294,8 @@ export function LandingPage({
                 <Download className="w-4 h-4 text-emerald-600" />
                 <span>{isAr ? "تحميل تطبيق Android APK الميداني" : "Download Android APK"}</span>
               </a>
+                </>
+              )}
             </div>
           </div>
 
