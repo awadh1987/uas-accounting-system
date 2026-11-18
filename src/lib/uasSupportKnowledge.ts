@@ -156,6 +156,59 @@ export const UAS_SUPPORT_CHAPTERS: SupportChapter[] = [
         targetTab: "system",
         relatedAction: "navigate_tab",
       },
+      {
+        id: "ch1-sec3-admin-password-recovery",
+        chapterNumber: 1,
+        chapterId: "ch1-setup-auth-rbac",
+        titleAr: "استعادة كلمة مرور مدير النظام العام (SUPER_ADMIN Password Recovery)",
+        titleEn: "SUPER_ADMIN Password Recovery via License & Local CLI",
+        summaryAr:
+          "استعادة كلمة مرور مدير النظام بأمان تام عبر إثبات ملكية الترخيص الرقمي واسم المنشأة دون إنترنت، أو عبر أداة CLI المحلية.",
+        summaryEn:
+          "Recover the SUPER_ADMIN password securely offline via cryptographic proof of license ownership (license.uas / UASKEY) or local CLI script.",
+        contentAr:
+          "لتفادي إغلاق النظام وفقدان الوصول الإداري، يوفر نظام UAS طريقتين رسميتين لاستعادة كلمة مرور مدير النظام العام (SUPER_ADMIN):\n1. الاستعادة من شاشة تسجيل الدخول (Login Screen): اضغط على رابط (نسيت كلمة مرور مدير النظام؟) ثم ارفع ملف الترخيص الرقمي (license.uas) أو الصق رمز (UASKEY-...) وأدخل اسم المنشأة المرخصة بالضبط وكلمة المرور الجديدة. يتحقق النظام تشفيرياً عبر توقيع Ed25519 ومطابقة اسم المنشأة، ويعيد تفعيل الحساب فوراً ويسجل العملية في سجل التدقيق غير القابل للتعديل.\n2. أداة CLI المحلية للطوارئ (Local CLI Script): في خادم الويندوز، افتح سطر الأوامر (PowerShell / CMD) ونفّذ الأمر:\nnode scripts/reset-admin-password.mjs --db \"C:\\UAS-Data\\uas-enterprise.db\" --password \"<كلمة_المرور_الجديدة>\"\nيتم تحديث كلمة المرور وتفعيل الحساب مباشرة.",
+        contentEn:
+          "To guarantee business continuity without lockouts, UAS provides two authoritative methods to recover the SUPER_ADMIN password:\n1. Login Screen Recovery Modal: Click 'Forgot Admin Password?' on the sign-in screen, upload your signed license.uas file (or paste UASKEY token), enter your exact licensed Company Name, and provide the new password. The system cryptographically verifies Ed25519 ownership, validates company matching, updates the password, and writes an immutable audit record.\n2. Local Emergency CLI Script: On the Windows server host, execute:\nnode scripts/reset-admin-password.mjs --db \"C:\\UAS-Data\\uas-enterprise.db\" --password \"<NewPassword>\"\nThe CLI directly updates the SUPER_ADMIN password and activates the user.",
+        stepsAr: [
+          "في شاشة تسجيل الدخول: اضغط على رابط (نسيت كلمة مرور مدير النظام؟).",
+          "أدخل اسم المنشأة المرخصة تماماً كما هو مسجل في الترخيص.",
+          "ارفع ملف license.uas أو الصق رمز المفتاح UASKEY-...",
+          "أدخل كلمة المرور الجديدة (6 أحرف على الأقل) واضغط (استعادة وتعيين كلمة المرور).",
+          "للاستعادة عبر سطر الأوامر: شغّل node scripts/reset-admin-password.mjs --password <كلمة_المرور>.",
+        ],
+        stepsEn: [
+          "On the login screen: click 'Forgot Admin Password?'.",
+          "Enter your licensed organization name exactly as licensed.",
+          "Upload your signed license.uas file or paste your UASKEY serial token.",
+          "Enter your new password (at least 6 characters) and click 'Recover & Reset'.",
+          "Via server CLI: run `node scripts/reset-admin-password.mjs --password <newPassword>`.",
+        ],
+        keywordsAr: [
+          "نسيت كلمة المرور",
+          "استعادة كلمة المرور",
+          "مدير النظام",
+          "super_admin",
+          "license.uas",
+          "uaskey",
+          "إثبات ملكية",
+          "reset-admin-password",
+          "طوارئ",
+        ],
+        keywordsEn: [
+          "forgot password",
+          "password recovery",
+          "recover admin",
+          "super_admin",
+          "license.uas",
+          "uaskey",
+          "proof of ownership",
+          "reset-admin-password",
+          "cli reset",
+        ],
+        targetTab: "system",
+        relatedAction: "navigate_tab",
+      },
     ],
   },
 
@@ -809,16 +862,20 @@ export const UAS_SUPPORT_CHAPTERS: SupportChapter[] = [
         summaryEn:
           "Backing up and restoring the self-contained SQLite database (C:\\UAS-Data) and offline snapshots without data loss.",
         contentAr:
-          "تُخزن جميع البيانات المالية في ملف قاعدة بيانات SQLite مستقل وموحد (في المسار C:\\UAS-Data\\uas-enterprise.db على ويندوز أو prisma/dev.db):\n• النسخ الاحتياطي (Backup): يمكنك أخذ نسخة احتياطية فورية بنسخ ملف قاعدة البيانات في C:\\UAS-Data بالإضافة إلى تصدير المصنف الكامل بصيغة Excel (.xlsx) من الشريط العلوي.\n• الاستعادة (Restore): لاستعادة نسخة احتياطية على جهاز جديد، قم بتثبيت البرنامج، تفعيل ترخيص المنشأة، ثم وضع ملف قاعدة البيانات الاحتياطي في C:\\UAS-Data؛ سيقوم محرك التهيئة الذاتية (sqliteBootstrap) بالتحقق من سلامة الجداول وتشغيلها فوراً.\n• حماية ساعة النظام (Monotonic Anti-Clock-Rollback): يراقب النظام أي تراجع في ساعة الجهاز لمنع التلاعب بتواريخ الصلاحية أو القيود.",
+          "تُخزن جميع البيانات المالية في ملف قاعدة بيانات SQLite مستقل وموحد (في المسار C:\\UAS-Data\\uas-enterprise.db على ويندوز أو prisma/dev.db):\n• النسخ التلقائي الدوري (Daily Rolling Snapshots): يقوم النظام يومياً عند بدء التشغيل بأخذ نسخة احتياطية ذرية متسقة عبر أمر VACUUM INTO داخل المجلد C:\\UAS-Data\\backups ويحتفظ بآخر 14 نسخة تلقائياً لحفظ مساحة القرص.\n• تصدير نسخة احتياطية (.uasbak): من تبويب (إدارة النظام والأمان) > (النسخ الاحتياطي واستعادة البيانات)، اضغط (تحميل نسخة احتياطية الآن) لتنزيل حزمة موثقة ومتحقق منها تشفيرياً ببصمة SHA-256، متوافقة مع كل من تطبيق الويندوز وتطبيق الأندرويد والمتصفح.\n• الاستعادة الآمنة مع قفل المنشأة (Safe Restore with Company Lock): يدعم النظام استعادة ملفات .uasbak أو قواعد بيانات .db مع فحص تكامل SQLite والتحقق الصارم من تطابق اسم المنشأة لمنع استبدال دفاتر شركة بأخرى بالخطأ، مع إنشاء نسخة أمان احتياطية تلقائياً قبل الاستبدال (Pre-Restore Snapshot).\n• حماية ساعة النظام (Monotonic Anti-Clock-Rollback): يراقب النظام أي تراجع في ساعة الجهاز لمنع التلاعب بتواريخ الصلاحية أو القيود.",
         contentEn:
-          "All financial data lives in a self-contained SQLite database file (C:\\UAS-Data on Windows desktop):\n• Backup: Copy the SQLite database file from C:\\UAS-Data (along with license.uas) to an external USB drive or secure cloud folder, and export periodic Excel (.xlsx) workbooks from the top bar.\n• Restore: On a replacement machine, install UAS, place your backed-up SQLite database and license.uas in C:\\UAS-Data, and launch the app. The pure-runtime self-healing bootstrap automatically verifies schema integrity.\n• Anti-Clock-Rollback Protection: Monotonic clock checks block write mutations if the system clock is rolled backward.",
+          "All financial data lives in a self-contained SQLite database file (C:\\UAS-Data on Windows desktop):\n• Daily Rolling Backups: The server automatically creates an atomic SQLite snapshot via `VACUUM INTO` on startup (at most once every 24 hours) stored in `C:\\UAS-Data\\backups`, keeping the 14 most recent snapshots.\n• 1-Click .uasbak Export: In System Settings > Backup & Disaster Recovery, click 'Download Backup (.uasbak)' to export an SHA-256 verified backup envelope compatible with Windows desktop, Android APK, and web browsers.\n• Safe Restore with Company Lock: Restoring from file or server snapshot validates SQLite integrity, enforces strict company name matching against the active license to prevent overwriting across tenants, and automatically saves a safety pre-restore backup before replacement.\n• Anti-Clock-Rollback Protection: Monotonic clock checks block write mutations if the system clock is rolled backward.",
         stepsAr: [
-          "لأخذ نسخة احتياطية سريعة: اضغط (تصدير Excel) من الشريط العلوي، وانسخ مجلد C:\\UAS-Data إلى وحدة تخزين خارجية (USB).",
-          "عند استبدال جهاز كمبيوتر: اطلب من مدير النظام العام (SUPER_ADMIN) الضغط على (إلغاء ربط الجهاز) للجهاز القديم، ثم انسخ C:\\UAS-Data للجهاز الجديد وفعّل الترخيص.",
+          "لتحميل نسخة احتياطية فورية: افتح (إدارة النظام والأمان) > اضغط (تحميل نسخة احتياطية الآن .uasbak).",
+          "لاستعادة نسخة احتياطية: اضغط (استعادة من ملف) أو اختر أي نسخة يومية من جدول النسخ التلقائية واضغط (استعادة).",
+          "سيطلب النظام التأكيد وسيقوم تلقائياً بإنشاء نسخة أمان احتياطية قبل الاستبدال (Pre-Restore Snapshot).",
+          "لأخذ نسخة خارجية كاملة: انسخ مجلد C:\\UAS-Data إلى وحدة تخزين خارجية (USB) أو قرص سحابي آمن.",
         ],
         stepsEn: [
-          "For immediate backup: click 'Export Excel' in the top bar and copy C:\\UAS-Data to an external USB or backup drive.",
-          "When migrating to a new PC: have SUPER_ADMIN click 'Release Device Seat' for the old PC, copy C:\\UAS-Data to the new PC, and activate.",
+          "To export an immediate backup: navigate to System Settings > click 'Download Backup (.uasbak)'.",
+          "To restore a backup: click 'Restore from File' or select an automated daily snapshot and click 'Restore'.",
+          "The system will prompt for confirmation and automatically take a safety pre-restore snapshot before applying changes.",
+          "For cold backups: copy the entire C:\\UAS-Data folder to an external USB drive or secure external storage.",
         ],
         keywordsAr: [
           "نسخ احتياطي",
@@ -830,6 +887,9 @@ export const UAS_SUPPORT_CHAPTERS: SupportChapter[] = [
           "قاعدة بيانات",
           "sqlite",
           "c:\\uas-data",
+          "uasbak",
+          "vacuum into",
+          "نسخ تلقائي",
           "تلاعب بالساعة",
         ],
         keywordsEn: [
@@ -838,6 +898,9 @@ export const UAS_SUPPORT_CHAPTERS: SupportChapter[] = [
           "sqlite",
           "database file",
           "c:\\uas-data",
+          "uasbak",
+          "vacuum into",
+          "rolling backup",
           "recovery",
           "migrate pc",
           "clock rollback",

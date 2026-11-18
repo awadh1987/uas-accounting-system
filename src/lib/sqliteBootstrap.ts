@@ -37,7 +37,7 @@ export function isSqliteRuntime(): boolean {
   return url.startsWith("file:") || !url.includes("://");
 }
 
-function resolveSqliteFilePath(): string | null {
+export function resolveSqliteFilePath(): string | null {
   const raw = (process.env.DATABASE_URL || "").trim();
   if (!raw) return null;
   if (!raw.toLowerCase().startsWith("file:")) return null;
@@ -433,6 +433,14 @@ async function runSelfHealingBootstrap(): Promise<void> {
     // Check if any new migration files need to be applied, and ensure baseline singletons exist
     await applyMigrationsIfNeeded(false);
     await seedDefaultBaselineRecords();
+  }
+
+  // Automated rolling SQLite backup (at most once per 24 hours)
+  try {
+    const { performDailyAutoBackupIfNeeded } = await import("./backupService");
+    await performDailyAutoBackupIfNeeded();
+  } catch (backupErr) {
+    console.warn("[SQLite Bootstrap] Daily auto-backup notice:", backupErr);
   }
 }
 

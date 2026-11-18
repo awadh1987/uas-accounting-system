@@ -17,8 +17,11 @@ import {
   Monitor,
   Network,
   RefreshCw,
+  ShieldCheck,
   Smartphone,
+  Upload,
   WifiOff,
+  X,
 } from "lucide-react";
 import { DualLogoBadge } from "@/components/DualLogoBadge";
 import { isInstalledClientApp } from "@/lib/runtimePlatform";
@@ -85,6 +88,101 @@ export function LoginView({
   const [customServerUrl, setCustomServerUrl] = useState(() => getApiBaseUrl());
   const [testingConnection, setTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "ok" | "fail">("idle");
+
+  // Admin Password Recovery Modal
+  const [showRecoveryModal, setShowRecoveryModal] = useState(false);
+  const [recoveryCompanyName, setRecoveryCompanyName] = useState(
+    enterpriseProfile?.legalNameAr || enterpriseProfile?.legalNameEn || ""
+  );
+  const [recoveryKeyOrJson, setRecoveryKeyOrJson] = useState("");
+  const [recoveryFileName, setRecoveryFileName] = useState("");
+  const [recoveryNewPassword, setRecoveryNewPassword] = useState("");
+  const [recoveryConfirmPassword, setRecoveryConfirmPassword] = useState("");
+  const [recoverySubmitting, setRecoverySubmitting] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recoverySuccess, setRecoverySuccess] = useState<string | null>(null);
+
+  async function handleRecoverAdminPassword(e: React.FormEvent) {
+    e.preventDefault();
+    setRecoveryError(null);
+    setRecoverySuccess(null);
+
+    if (!recoveryCompanyName.trim()) {
+      setRecoveryError(isAr ? "يرجى إدخال اسم المنشأة المرخصة" : "Please enter the licensed company name");
+      return;
+    }
+
+    if (!recoveryKeyOrJson.trim()) {
+      setRecoveryError(
+        isAr
+          ? "يرجى رفع ملف الترخيص الرقمي (license.uas) أو إدخال رمز المفتاح (UASKEY-...)"
+          : "Please upload license.uas file or enter UASKEY serial token"
+      );
+      return;
+    }
+
+    if (recoveryNewPassword.length < 6) {
+      setRecoveryError(
+        isAr ? "كلمة المرور يجب أن تتكون من 6 أحرف على الأقل" : "Password must be at least 6 characters"
+      );
+      return;
+    }
+
+    if (recoveryNewPassword !== recoveryConfirmPassword) {
+      setRecoveryError(isAr ? "كلمتا المرور غير متطابقتين" : "Passwords do not match");
+      return;
+    }
+
+    setRecoverySubmitting(true);
+    try {
+      const baseUrl = getApiBaseUrl();
+      const endpoint = baseUrl ? `${baseUrl}/api/auth/recover-admin` : "/api/auth/recover-admin";
+
+      let licensePayload: Record<string, unknown> = {};
+      const trimmedKey = recoveryKeyOrJson.trim();
+      if (trimmedKey.startsWith("UASKEY-")) {
+        licensePayload.activationKey = trimmedKey;
+      } else {
+        try {
+          const parsed = JSON.parse(trimmedKey);
+          licensePayload.licenseFileContent = parsed;
+        } catch {
+          licensePayload.activationKey = trimmedKey;
+        }
+      }
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyName: recoveryCompanyName.trim(),
+          newPassword: recoveryNewPassword,
+          ...licensePayload,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setRecoveryError(data.error || (isAr ? "فشلت عملية الاستعادة" : "Recovery failed"));
+        return;
+      }
+
+      setRecoverySuccess(
+        data.message ||
+          (isAr
+            ? "تمت استعادة كلمة مرور مدير النظام بنجاح! يمكنك الآن تسجيل الدخول."
+            : "Admin password successfully reset! You can now sign in.")
+      );
+      if (data.username) {
+        setIdentifier(data.username);
+      }
+      onToast(isAr ? "تم إعادة تعيين كلمة مرور مدير النظام بنجاح" : "Admin password recovered successfully");
+    } catch (err) {
+      setRecoveryError((err as Error).message);
+    } finally {
+      setRecoverySubmitting(false);
+    }
+  }
 
   const BackArrow = isAr ? ArrowRight : ArrowLeft;
 
@@ -358,6 +456,18 @@ export function LoginView({
                   />
                   <span>{isAr ? "تذكر هذا الجهاز" : "Remember this device"}</span>
                 </label>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecoveryError(null);
+                    setRecoverySuccess(null);
+                    setShowRecoveryModal(true);
+                  }}
+                  className="font-bold text-emerald-600 dark:text-emerald-400 hover:underline transition"
+                >
+                  {isAr ? "نسيت كلمة مرور مدير النظام؟" : "Forgot Admin Password?"}
+                </button>
               </div>
 
               <button
@@ -530,6 +640,187 @@ export function LoginView({
         </p>
         <p>© 2026 {legalName} — Unified Accounting System (UAS ERP)</p>
       </footer>
+
+      {/* Admin Password Recovery Modal */}
+      {showRecoveryModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => {
+            if (!recoverySubmitting) setShowRecoveryModal(false);
+          }}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="card-surface rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4 text-xs"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-slate-900 dark:text-slate-100">
+                    {isAr ? "استعادة كلمة مرور مدير النظام العام" : "SUPER_ADMIN Password Recovery"}
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {isAr
+                      ? "إثبات الملكية عبر الترخيص الرقمي واسم المنشأة"
+                      : "Cryptographic Proof of License Ownership & Company Match"}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowRecoveryModal(false)}
+                disabled={recoverySubmitting}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {recoverySuccess ? (
+              <div className="space-y-4 py-2">
+                <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 space-y-2">
+                  <div className="flex items-center gap-2 font-extrabold text-sm">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                    <span>{isAr ? "نجحت عملية الاستعادة!" : "Recovery Successful!"}</span>
+                  </div>
+                  <p className="text-xs leading-relaxed">{recoverySuccess}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRecoveryModal(false);
+                    setPassword("");
+                  }}
+                  className="w-full py-2.5 rounded-xl accent-bg font-extrabold text-xs shadow-sm transition"
+                >
+                  {isAr ? "الانتقال لتسجيل الدخول الآن" : "Proceed to Sign In"}
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleRecoverAdminPassword} className="space-y-3.5">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 text-[11px] leading-relaxed">
+                  {isAr
+                    ? "لضمان أعلى معايير الأمان المالي، يتطلب إعادة تعيين كلمة مرور مدير النظام تقديم إثبات تشفيري بملكية ترخيص المنشأة (ملف license.uas أو رمز UASKEY) مع إدخال اسم المنشأة المعتمد."
+                    : "To maintain enterprise accounting security, resetting the SUPER_ADMIN password requires cryptographic proof of license ownership (license.uas or UASKEY token) matching the company name."}
+                </div>
+
+                {recoveryError && (
+                  <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <span className="text-xs font-semibold leading-relaxed">{recoveryError}</span>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block font-bold mb-1 text-slate-700 dark:text-slate-300">
+                    {isAr ? "اسم المنشأة المرخصة (Company Name):" : "Licensed Company Name:"}
+                  </label>
+                  <input
+                    type="text"
+                    value={recoveryCompanyName}
+                    onChange={(e) => setRecoveryCompanyName(e.target.value)}
+                    required
+                    placeholder={isAr ? "مثال: مؤسسة القات للإنتاج الزراعي" : "e.g. UAS Enterprise Co"}
+                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50 px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1 text-slate-700 dark:text-slate-300">
+                    {isAr ? "ملف الترخيص (license.uas) أو رمز التفعيل (UASKEY-...):" : "License File (license.uas) or UASKEY Token:"}
+                  </label>
+                  <div className="space-y-2">
+                    <label className="flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-emerald-500 bg-slate-50/40 dark:bg-slate-900/40 cursor-pointer transition">
+                      <Upload className="w-4 h-4 text-emerald-600" />
+                      <span className="font-bold text-xs text-slate-600 dark:text-slate-300">
+                        {recoveryFileName ? recoveryFileName : isAr ? "رفع ملف license.uas" : "Upload license.uas"}
+                      </span>
+                      <input
+                        type="file"
+                        accept=".uas,.json"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            setRecoveryFileName(file.name);
+                            const text = await file.text();
+                            setRecoveryKeyOrJson(text);
+                          }
+                        }}
+                      />
+                    </label>
+
+                    <div className="relative">
+                      <textarea
+                        value={recoveryKeyOrJson}
+                        onChange={(e) => setRecoveryKeyOrJson(e.target.value)}
+                        placeholder="UASKEY-..."
+                        rows={2}
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50 p-2.5 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block font-bold mb-1 text-slate-700 dark:text-slate-300">
+                      {isAr ? "كلمة المرور الجديدة:" : "New Password:"}
+                    </label>
+                    <input
+                      type="password"
+                      value={recoveryNewPassword}
+                      onChange={(e) => setRecoveryNewPassword(e.target.value)}
+                      required
+                      minLength={6}
+                      placeholder="••••••••"
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50 px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold mb-1 text-slate-700 dark:text-slate-300">
+                      {isAr ? "تأكيد كلمة المرور:" : "Confirm Password:"}
+                    </label>
+                    <input
+                      type="password"
+                      value={recoveryConfirmPassword}
+                      onChange={(e) => setRecoveryConfirmPassword(e.target.value)}
+                      required
+                      minLength={6}
+                      placeholder="••••••••"
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50 px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <button
+                    type="button"
+                    disabled={recoverySubmitting}
+                    onClick={() => setShowRecoveryModal(false)}
+                    className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                  >
+                    {isAr ? "إلغاء" : "Cancel"}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={recoverySubmitting}
+                    className="px-5 py-2 rounded-xl accent-bg font-extrabold flex items-center gap-1.5 shadow-sm disabled:opacity-50 transition"
+                  >
+                    {recoverySubmitting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                    <span>{recoverySubmitting ? (isAr ? "جاري التحقق والتعيين..." : "Verifying...") : isAr ? "استعادة وتعيين كلمة المرور" : "Recover & Reset"}</span>
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -228,6 +228,15 @@ console.log(
   `[OK] Bundled self-contained Node.js runtime: runtime/node.exe (${(fs.statSync(bundledNodePath).size / 1024 / 1024).toFixed(2)} MB)`
 );
 
+// Bundle admin recovery CLI script
+const scriptsDest = path.join(appDestDir, "scripts");
+fs.mkdirSync(scriptsDest, { recursive: true });
+fs.copyFileSync(
+  path.join(projectRoot, "scripts", "reset-admin-password.mjs"),
+  path.join(scriptsDest, "reset-admin-password.mjs")
+);
+console.log("[OK] Bundled scripts/reset-admin-password.mjs for offline emergency recovery");
+
 // ---------------------------------------------------------------------------
 // STEP 4: Generate Pre-Initialized Template SQLite Database (template.db)
 // ---------------------------------------------------------------------------

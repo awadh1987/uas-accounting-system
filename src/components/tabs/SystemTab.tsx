@@ -32,8 +32,13 @@ import {
   UserCheck,
   Wifi,
   X,
+  Database,
+  AlertTriangle,
+  Archive,
+  FileText,
 } from "lucide-react";
 import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl } from "@/lib/apiClient";
+import { exportOrShareBinaryFile } from "@/lib/nativeBridge";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import {
   ALL_USER_ROLES,
@@ -348,6 +353,162 @@ export function SystemTab({
   }
 
   const [copiedApkLink, setCopiedApkLink] = useState(false);
+
+  // Backup & Disaster Recovery States
+  interface AutoBackupItem {
+    filename: string;
+    sizeFormatted: string;
+    createdAt: string;
+    type: "auto" | "pre-restore" | "manual";
+  }
+  const [localBackups, setLocalBackups] = useState<AutoBackupItem[]>([]);
+  const [loadingBackups, setLoadingBackups] = useState(false);
+  const [downloadingBackup, setDownloadingBackup] = useState(false);
+  const [restoringBackup, setRestoringBackup] = useState(false);
+  const [confirmRestoreModal, setConfirmRestoreModal] = useState<{
+    open: boolean;
+    localSnapshotName?: string;
+    file?: File | null;
+  }>({ open: false });
+
+  const fetchBackups = React.useCallback(async () => {
+    if (currentUser.role !== "SUPER_ADMIN" && !canManageUsers) return;
+    setLoadingBackups(true);
+    try {
+      const baseUrl = getApiBaseUrl();
+      const endpoint = baseUrl ? `${baseUrl}/api/system/backups` : "/api/system/backups";
+      const res = await fetch(endpoint, {
+        headers: {
+          "x-uas-role": currentUser.role,
+          "x-uas-user-id": currentUser.id,
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ok && Array.isArray(data.backups)) {
+          setLocalBackups(data.backups);
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to fetch backups:", err);
+    } finally {
+      setLoadingBackups(false);
+    }
+  }, [currentUser.role, currentUser.id, canManageUsers]);
+
+  useEffect(() => {
+    if (activeSubTab === "security" && (currentUser.role === "SUPER_ADMIN" || canManageUsers)) {
+      fetchBackups();
+    }
+  }, [activeSubTab, currentUser.role, canManageUsers, fetchBackups]);
+
+  async function handleDownloadBackup() {
+    setDownloadingBackup(true);
+    try {
+      const baseUrl = getApiBaseUrl();
+      const endpoint = baseUrl ? `${baseUrl}/api/system/backup` : "/api/system/backup";
+      const res = await fetch(endpoint, {
+        headers: {
+          "x-uas-role": currentUser.role,
+          "x-uas-user-id": currentUser.id,
+        },
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `HTTP ${res.status}`);
+      }
+
+      const contentDisp = res.headers.get("content-disposition") || "";
+      const filenameMatch = contentDisp.match(/filename="?([^"]+)"?/);
+      const filename = filenameMatch ? filenameMatch[1] : `UAS-Backup-${new Date().toISOString().slice(0, 10)}.uasbak`;
+
+      const blob = await res.blob();
+      const arrayBuf = await blob.arrayBuffer();
+
+      await exportOrShareBinaryFile({
+        filename,
+        mimeType: "application/json",
+        data: arrayBuf,
+        title: isAr ? "نسخة احتياطية لنظام UAS" : "UAS Accounting Backup",
+      });
+
+      onToast(isAr ? "✅ تم تحميل وحفظ النسخة الاحتياطية بنجاح" : "✅ Backup file exported successfully");
+    } catch (err) {
+      onToast(
+        isAr
+          ? `❌ فشل تحميل النسخة الاحتياطية: ${(err as Error).message}`
+          : `❌ Backup download failed: ${(err as Error).message}`
+      );
+    } finally {
+      setDownloadingBackup(false);
+    }
+  }
+
+  async function handleExecuteRestore(localSnapshotName?: string, fileToRestore?: File | null) {
+    setRestoringBackup(true);
+    try {
+      const baseUrl = getApiBaseUrl();
+      const endpoint = baseUrl ? `${baseUrl}/api/system/restore` : "/api/system/restore";
+
+      let res: Response;
+      if (fileToRestore) {
+        const formData = new FormData();
+        formData.append("file", fileToRestore);
+        res = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "x-uas-role": currentUser.role,
+            "x-uas-user-id": currentUser.id,
+          },
+          body: formData,
+        });
+      } else if (localSnapshotName) {
+        res = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-uas-role": currentUser.role,
+            "x-uas-user-id": currentUser.id,
+          },
+          body: JSON.stringify({
+            localSnapshotName,
+            actor: {
+              userId: currentUser.id,
+              userRole: currentUser.role,
+              userDisplay: currentUser.displayName || currentUser.name,
+            },
+          }),
+        });
+      } else {
+        throw new Error(isAr ? "لم يتم تحديد أي ملف للاستعادة" : "No restore file or snapshot specified");
+      }
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || (isAr ? "فشلت عملية الاستعادة" : "Restore failed"));
+      }
+
+      setConfirmRestoreModal({ open: false });
+      onToast(
+        isAr
+          ? `✅ تمت استعادة قاعدة البيانات بنجاح! تم إنشاء نسخة أمان سابقة: ${data.preRestoreSnapshot}`
+          : `✅ Database restored successfully! Safety pre-restore snapshot: ${data.preRestoreSnapshot}`
+      );
+      await fetchBackups();
+      if (onRefreshState) {
+        await onRefreshState();
+      }
+    } catch (err) {
+      onToast(
+        isAr
+          ? `❌ فشلت استعادة النسخة الاحتياطية: ${(err as Error).message}`
+          : `❌ Restore failed: ${(err as Error).message}`
+      );
+    } finally {
+      setRestoringBackup(false);
+    }
+  }
 
   async function handleCopyApkLink() {
     const url = "https://qat.world/downloads/UAS-Mobile-Release-qat.world.apk";
@@ -950,8 +1111,266 @@ export function SystemTab({
               </div>
             </div>
           )}
+
+          {/* Backup & Disaster Recovery Card (Restricted to Administrators) */}
+          {(canManageUsers || currentUser.role === "SUPER_ADMIN") && (
+            <div className="card-surface rounded-2xl p-5 space-y-4 text-xs lg:col-span-2 border border-slate-200 dark:border-slate-800 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                    <Database className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-sm">
+                      {isAr
+                        ? "النسخ الاحتياطي واستعادة البيانات (Backup & Disaster Recovery)"
+                        : "Database Backup & Disaster Recovery"}
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {isAr
+                        ? "تصدير حزم آمنة (.uasbak)، الاستعادة مع فحص السلامة وتطابق المنشأة، والنسخ التلقائي اليومي"
+                        : "Encrypted export (.uasbak), verified restore with company lock, and daily rolling snapshots"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDownloadBackup}
+                    disabled={downloadingBackup}
+                    className="px-4 py-2 rounded-xl accent-bg font-extrabold flex items-center gap-1.5 shadow-sm disabled:opacity-50 transition"
+                  >
+                    {downloadingBackup ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Download className="w-3.5 h-3.5" />
+                    )}
+                    <span>
+                      {downloadingBackup
+                        ? isAr
+                          ? "جاري التصدير..."
+                          : "Exporting..."
+                        : isAr
+                        ? "تحميل نسخة احتياطية الآن (.uasbak)"
+                        : "Download Backup (.uasbak)"}
+                    </span>
+                  </button>
+
+                  <label className="px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-emerald-500 font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 cursor-pointer transition">
+                    <Upload className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>{isAr ? "استعادة من ملف" : "Restore from File"}</span>
+                    <input
+                      type="file"
+                      accept=".uasbak,.db"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setConfirmRestoreModal({ open: true, file });
+                        }
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {/* Informational Note */}
+              <p className="text-slate-600 dark:text-slate-300 leading-relaxed text-xs">
+                {isAr
+                  ? "يضمن نظام UAS استمرارية الأعمال وحماية البيانات المالية عبر أخذ نسخ احتياطية ذرية مشفرة. عند استعادة أي نسخة، يتحقق النظام تلقائياً من سلامة قاعدة البيانات وتطابق اسم المنشأة المرخصة، ويحتفظ بنسخة أمان فورية قبل أي تعديل."
+                  : "UAS ensures business continuity through atomic consistent snapshots. Before any restore executes, the system verifies SQLite integrity and company lock, and automatically creates a safety pre-restore backup."}
+              </p>
+
+              {/* Local Rolling Backups Table */}
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Archive className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="font-extrabold text-xs text-slate-800 dark:text-slate-200">
+                      {isAr ? "النسخ الاحتياطية التلقائية على الخادم (Daily Rolling Snapshots):" : "Automatic Server Rolling Snapshots:"}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={fetchBackups}
+                    disabled={loadingBackups}
+                    className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
+                    title={isAr ? "تحديث القائمة" : "Refresh"}
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingBackups ? "animate-spin" : ""}`} />
+                  </button>
+                </div>
+
+                {loadingBackups ? (
+                  <div className="p-4 text-center text-slate-400 font-bold">
+                    <RefreshCw className="w-4 h-4 animate-spin mx-auto mb-1 text-emerald-600" />
+                    <span>{isAr ? "جاري فحص النسخ الاحتياطية..." : "Loading backups..."}</span>
+                  </div>
+                ) : localBackups.length === 0 ? (
+                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 text-center text-slate-400">
+                    {isAr
+                      ? "لا توجد نسخ احتياطية مسجلة حالياً على الخادم (يتم إنشاؤها تلقائياً يومياً)"
+                      : "No local rolling snapshots found (created automatically once per 24 hours)"}
+                  </div>
+                ) : (
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                    <table className="w-full text-start text-xs font-medium">
+                      <thead className="bg-slate-50 dark:bg-slate-900/70 border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                        <tr>
+                          <th className="py-2 px-3 text-start">{isAr ? "اسم الملف" : "Filename"}</th>
+                          <th className="py-2 px-3 text-start">{isAr ? "النوع" : "Type"}</th>
+                          <th className="py-2 px-3 text-start">{isAr ? "الحجم" : "Size"}</th>
+                          <th className="py-2 px-3 text-start">{isAr ? "تاريخ الإنشاء" : "Created At"}</th>
+                          <th className="py-2 px-3 text-end">{isAr ? "الإجراء" : "Action"}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {localBackups.map((b) => (
+                          <tr key={b.filename} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/30 transition">
+                            <td className="py-2 px-3 font-mono font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                              <FileText className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span className="truncate max-w-[220px]">{b.filename}</span>
+                            </td>
+                            <td className="py-2 px-3">
+                              {b.type === "auto" ? (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300">
+                                  {isAr ? "تلقائي يومي" : "Daily Auto"}
+                                </span>
+                              ) : b.type === "pre-restore" ? (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300">
+                                  {isAr ? "أمان قبل الاستعادة" : "Pre-Restore"}
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                                  {isAr ? "يدوي" : "Manual"}
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2 px-3 font-mono text-slate-500">{b.sizeFormatted}</td>
+                            <td className="py-2 px-3 font-mono text-slate-500">
+                              {new Date(b.createdAt).toLocaleString(isAr ? "ar-EG" : "en-US", {
+                                dateStyle: "short",
+                                timeStyle: "short",
+                              })}
+                            </td>
+                            <td className="py-2 px-3 text-end">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setConfirmRestoreModal({
+                                    open: true,
+                                    localSnapshotName: b.filename,
+                                  })
+                                }
+                                disabled={restoringBackup}
+                                className="px-2.5 py-1 rounded-lg border border-amber-500/40 bg-amber-50/50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 hover:bg-amber-500 hover:text-white font-bold text-[11px] transition"
+                              >
+                                {isAr ? "استعادة" : "Restore"}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
+
+      {/* Restore Confirmation Modal */}
+      {confirmRestoreModal.open &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[80] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 no-print"
+            onClick={() => {
+              if (!restoringBackup) setConfirmRestoreModal({ open: false });
+            }}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div
+              className="card-surface rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-700 space-y-4 text-xs"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 flex items-center justify-center">
+                    <AlertTriangle className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-sm text-slate-900 dark:text-slate-100">
+                      {isAr ? "تأكيد استعادة قاعدة البيانات" : "Confirm Database Restore"}
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      {isAr ? "إجراء إداري حساس يستبدل البيانات الحالية" : "Critical action replacing active data"}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setConfirmRestoreModal({ open: false })}
+                  disabled={restoringBackup}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 space-y-2 leading-relaxed">
+                <div className="font-extrabold text-xs flex items-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>{isAr ? "تحذير استبدال البيانات:" : "Data Replacement Warning:"}</span>
+                </div>
+                <p>
+                  {isAr
+                    ? "سيؤدي تنفيذ هذا الإجراء إلى استبدال قاعدة البيانات الحالية بالكامل بالنسخة المحددة. سيقوم النظام تلقائياً بإنشاء نسخة أمان احتياطية قبل الاستبدال (Pre-Restore Snapshot)."
+                    : "Executing this action will completely replace active database records with the selected snapshot. A safety pre-restore backup will be created automatically before proceeding."}
+                </p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 font-mono text-[11px]">
+                <span className="text-slate-500">{isAr ? "الملف المحدد:" : "Target Snapshot:"} </span>
+                <span className="font-bold text-slate-800 dark:text-slate-200">
+                  {confirmRestoreModal.file
+                    ? confirmRestoreModal.file.name
+                    : confirmRestoreModal.localSnapshotName}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmRestoreModal({ open: false })}
+                  disabled={restoringBackup}
+                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                >
+                  {isAr ? "إلغاء" : "Cancel"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleExecuteRestore(
+                      confirmRestoreModal.localSnapshotName,
+                      confirmRestoreModal.file
+                    )
+                  }
+                  disabled={restoringBackup}
+                  className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold shadow-sm disabled:opacity-50 inline-flex items-center gap-2"
+                >
+                  {restoringBackup && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{restoringBackup ? (isAr ? "جاري الاستعادة..." : "Restoring...") : isAr ? "تأكيد الاستعادة الآن" : "Confirm Restore"}</span>
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
 
       {activeSubTab === "users" && (
         <div className="space-y-6">
