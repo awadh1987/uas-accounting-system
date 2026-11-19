@@ -115,10 +115,50 @@ describe("Phase 4: Excel/CSV Import Parser & Template Invariants", () => {
 
     assert.equal(parsed.length, 1);
     assert.equal(parsed[0].CustomerName, "Al-Amal Co");
+    assert.equal(parsed[0].customer, "Al-Amal Co");
     assert.equal(parsed[0].CostCenterCode, "CC-MAIN");
+    assert.equal(parsed[0].costCenterCode, "CC-MAIN");
     assert.equal(parsed[0].CurrencyCode, "SAR");
+    assert.equal(parsed[0].currencyCode, "SAR");
     assert.equal(Number(parsed[0].ExchangeRate), 530);
     assert.equal(parsed[0].UnitCode, "BUNDLE");
+    assert.equal(parsed[0].unitCode, "BUNDLE");
     assert.equal(Number(parsed[0].FactorToBase), 1);
+    assert.equal(Number(parsed[0].factorToBase), 1);
+  });
+
+  it("normalizes composite bilingual headers and preserves decimal exchange rates & factors", () => {
+    const wb = XLSX.utils.book_new();
+    const rows = [
+      {
+        "اسم العميل / CustomerName": "شركة الأمل للتجارة",
+        "كود مركز التكلفة / CostCenterCode": "CC-AGRI-01",
+        "كود العملة / CurrencyCode": "USD",
+        "سعر الصرف / ExchangeRate": 530.75,
+        "الكمية / Quantity": 25.5,
+        "كود الوحدة / UnitCode": "CARTON",
+        "معامل التحويل / FactorToBase": 12.5,
+        "سعر الوحدة / UnitPrice": 80.25,
+        "دائن مقبوض / PaidCredit": 150000,
+        "مدين متبقي / RemainingDebit": 0,
+      },
+    ];
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, "Sales");
+
+    const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
+    const parsed = parseExcelImport<any>(buf, "sales");
+
+    assert.equal(parsed.length, 1);
+    assert.equal(parsed[0].customer, "شركة الأمل للتجارة");
+    assert.equal(parsed[0].customerName, "شركة الأمل للتجارة");
+    assert.equal(parsed[0].costCenterCode, "CC-AGRI-01");
+    assert.equal(parsed[0].currencyCode, "USD");
+    assert.equal(parsed[0].exchangeRate, 530.75);
+    assert.equal(parsed[0].quantity, 25.5);
+    assert.equal(parsed[0].unitCode, "CARTON");
+    assert.equal(parsed[0].factorToBase, 12.5);
+    assert.equal(parsed[0].unitPrice, 80.25);
+    assert.equal(parsed[0].credit, 150000);
   });
 });

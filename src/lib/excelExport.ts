@@ -27,11 +27,20 @@ function createRtlSheet(rows: Record<string, unknown>[], numericCols: string[] =
     numericCols.forEach((colName) => {
       const colIdx = headers.indexOf(colName);
       if (colIdx === -1) return;
+      const isRateOrFactor =
+        colName.toLowerCase().includes("rate") ||
+        colName.toLowerCase().includes("factor") ||
+        colName.includes("سعر الصرف") ||
+        colName.includes("معامل التحويل") ||
+        colName.includes("معامل");
+
+      const numFormat = isRateOrFactor ? "#,##0.00##" : "#,##0";
+
       for (let r = 1; r <= rows.length; r++) {
         const cellRef = XLSX.utils.encode_cell({ r, c: colIdx });
         const cell = ws[cellRef];
         if (cell && typeof cell.v === "number") {
-          cell.z = "#,##0";
+          cell.z = numFormat;
         }
       }
     });
@@ -126,7 +135,12 @@ export function exportFullWorkbookToExcel(
   const saleRows = filteredSales.map((s) => ({
     "المشروع": projectNameById(s.projectId),
     "القطاع الفرعي": subProjectNameById(s.projectId, s.subProjectId) || "—",
-    "مركز التكلفة / Cost Center": (s as any).costCenterCode || (s as any).costCenterId || "—",
+    "مركز التكلفة / Cost Center":
+      (s as any).costCenterCode ||
+      (s as any).costCenterId ||
+      (s.subProjectId
+        ? state.projects.flatMap((p) => p.subProjects || []).find((sp) => sp.id === s.subProjectId)?.code || s.subProjectId
+        : "—"),
     "العملة / Currency": (s as any).currencyCode || (s as any).currency || "YER",
     "سعر الصرف / FX Rate": Number((s as any).exchangeRate || 1),
     "القطفة": s.harvest,
@@ -136,13 +150,13 @@ export function exportFullWorkbookToExcel(
     "اسم العميل": s.customer,
     "رقم الهاتف": s.phone,
     "النوع / الدرجة": s.grade,
-    "الكمية": Number(s.bundles),
+    "الكمية": Number(s.bundles || 0),
     "كود الوحدة / Unit Code": (s as any).unitCode || "BUNDLE",
     "معامل التحويل / Factor": Number((s as any).factorToBase || 1),
-    "السعر": Number(s.price),
-    "الإجمالي": Number(s.total),
-    "دائن (مقبوض)": Number(s.credit),
-    "مدين (متبقي)": Number(s.debit),
+    "السعر": Number(s.price || 0),
+    "الإجمالي": Number(s.total || 0),
+    "دائن (مقبوض)": Number(s.credit || 0),
+    "مدين (متبقي)": Number(s.debit || 0),
     "الحساب الإيرادي": s.revenueAccountCode || "411101",
     "الخزينة": s.treasuryName || "—",
     "التاريخ": s.date,
@@ -190,17 +204,22 @@ export function exportFullWorkbookToExcel(
   const expRows = state.expenses.map((e) => ({
     "المشروع": projectNameById(e.projectId),
     "القطاع الفرعي": subProjectNameById(e.projectId, e.subProjectId) || "—",
-    "مركز التكلفة / Cost Center": (e as any).costCenterCode || (e as any).costCenterId || "—",
+    "مركز التكلفة / Cost Center":
+      (e as any).costCenterCode ||
+      (e as any).costCenterId ||
+      (e.subProjectId
+        ? state.projects.flatMap((p) => p.subProjects || []).find((sp) => sp.id === e.subProjectId)?.code || e.subProjectId
+        : "—"),
     "العملة / Currency": (e as any).currencyCode || (e as any).currency || "YER",
     "سعر الصرف / FX Rate": Number((e as any).exchangeRate || 1),
     "القطفة": e.harvest,
     "الفئة": e.category,
     "البيان": e.subType,
-    "الكمية": Number(e.qty),
+    "الكمية": Number(e.qty || 0),
     "كود الوحدة / Unit Code": (e as any).unitCode || "QTY",
     "معامل التحويل / Factor": Number((e as any).factorToBase || 1),
-    "قيمة الوحدة": Number(e.unitPrice),
-    "الإجمالي": Number(e.total),
+    "قيمة الوحدة": Number(e.unitPrice || 0),
+    "الإجمالي": Number(e.total || 0),
     "التاريخ": e.date,
     "ملاحظات": e.notes,
   }));
@@ -569,6 +588,95 @@ export async function exportUasModuleTemplate(module: TemplateModule): Promise<v
   await saveOrShareWorkbook(wb, filename);
 }
 
+export function normalizeExcelRow(rawRow: Record<string, unknown>): Record<string, unknown> {
+  const normalized: Record<string, unknown> = { ...rawRow };
+
+  for (const [key, val] of Object.entries(rawRow)) {
+    const cleanKey = key.trim();
+    // Split bilingual headers like "اسم العميل / CustomerName"
+    const parts = cleanKey.split("/").map((p) => p.trim());
+    const enPart = parts.length > 1 ? parts[1] : parts[0];
+
+    // Canonical camelCase conversion of English part
+    const camelKey = enPart.charAt(0).toLowerCase() + enPart.slice(1);
+    if (!(camelKey in normalized)) {
+      normalized[camelKey] = val;
+    }
+
+    // Common accounting field aliases & numeric coercions
+    const lowerKey = cleanKey.toLowerCase();
+    if (lowerKey.includes("customer") || cleanKey.includes("العميل")) {
+      if (!("customer" in normalized)) normalized.customer = val;
+      if (!("customerName" in normalized)) normalized.customerName = val;
+    }
+    if (lowerKey.includes("vendor") || cleanKey.includes("المورد")) {
+      if (!("vendor" in normalized)) normalized.vendor = val;
+      if (!("vendorName" in normalized)) normalized.vendorName = val;
+    }
+    if (lowerKey.includes("costcenter") || cleanKey.includes("مركز التكلفة")) {
+      if (!("costCenterCode" in normalized)) normalized.costCenterCode = val;
+      if (!("costCenterId" in normalized)) normalized.costCenterId = val;
+    }
+    if (lowerKey.includes("currency") || cleanKey.includes("العملة")) {
+      if (!("currencyCode" in normalized)) normalized.currencyCode = val;
+      if (!("currency" in normalized)) normalized.currency = val;
+    }
+    if (lowerKey.includes("rate") || cleanKey.includes("سعر الصرف")) {
+      if (!("exchangeRate" in normalized)) normalized.exchangeRate = Number(val) || 1;
+    }
+    if (
+      lowerKey.includes("quantity") ||
+      lowerKey.includes("bundles") ||
+      cleanKey.includes("الكمية") ||
+      cleanKey.includes("علاقيات")
+    ) {
+      if (!("quantity" in normalized)) normalized.quantity = Number(val) || 0;
+      if (!("bundles" in normalized)) normalized.bundles = Number(val) || 0;
+      if (!("qty" in normalized)) normalized.qty = Number(val) || 0;
+    }
+    if (lowerKey.includes("unitcode") || cleanKey.includes("كود الوحدة") || cleanKey.includes("الوحدة")) {
+      if (!("unitCode" in normalized)) normalized.unitCode = val;
+    }
+    if (lowerKey.includes("factor") || cleanKey.includes("معامل التحويل") || cleanKey.includes("معامل")) {
+      if (!("factorToBase" in normalized)) normalized.factorToBase = Number(val) || 1;
+    }
+    if (lowerKey.includes("price") || cleanKey.includes("السعر") || cleanKey.includes("قيمة الوحدة")) {
+      if (!("unitPrice" in normalized)) normalized.unitPrice = Number(val) || 0;
+      if (!("price" in normalized)) normalized.price = Number(val) || 0;
+    }
+    if (lowerKey.includes("credit") || cleanKey.includes("دائن") || cleanKey.includes("مقبوض") || cleanKey.includes("مدفوع")) {
+      if (!("credit" in normalized)) normalized.credit = Number(val) || 0;
+      if (!("paidCredit" in normalized)) normalized.paidCredit = Number(val) || 0;
+    }
+    if (lowerKey.includes("debit") || cleanKey.includes("مدين") || cleanKey.includes("متبقي")) {
+      if (!("debit" in normalized)) normalized.debit = Number(val) || 0;
+      if (!("remainingDebit" in normalized)) normalized.remainingDebit = Number(val) || 0;
+    }
+    if (lowerKey.includes("total") || cleanKey.includes("الإجمالي")) {
+      if (!("total" in normalized)) normalized.total = Number(val) || 0;
+    }
+    if (lowerKey.includes("itemcode") || cleanKey.includes("كود الصنف")) {
+      if (!("itemCode" in normalized)) normalized.itemCode = val;
+      if (!("code" in normalized)) normalized.code = val;
+    }
+    if (lowerKey.includes("accountcode") || cleanKey.includes("كود الحساب")) {
+      if (!("accountCode" in normalized)) normalized.accountCode = val;
+    }
+    if (lowerKey.includes("entrynumber") || cleanKey.includes("رقم القيد")) {
+      if (!("entryNumber" in normalized)) normalized.entryNumber = val;
+    }
+    if (lowerKey.includes("date") || cleanKey.includes("التاريخ")) {
+      if (!("date" in normalized)) normalized.date = val;
+    }
+    if (lowerKey.includes("notes") || lowerKey.includes("narration") || cleanKey.includes("البيان") || cleanKey.includes("ملاحظات")) {
+      if (!("notes" in normalized)) normalized.notes = val;
+      if (!("narration" in normalized)) normalized.narration = val;
+    }
+  }
+
+  return normalized;
+}
+
 export function parseExcelImport<T = Record<string, unknown>>(
   fileBuffer: ArrayBuffer | Uint8Array,
   _moduleName?: string
@@ -577,6 +685,7 @@ export function parseExcelImport<T = Record<string, unknown>>(
   const sheetName = wb.SheetNames[0];
   if (!sheetName) return [];
   const ws = wb.Sheets[sheetName];
-  return XLSX.utils.sheet_to_json<T>(ws, { defval: "" });
+  const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+  return rawRows.map((r) => normalizeExcelRow(r) as T);
 }
 

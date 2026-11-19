@@ -106,19 +106,26 @@ if ($SkipCloud) {
 
     $RemoteDownloadsDir = "$RemoteAppDir/public/downloads"
     $TargetHost = "$RemoteUser@$TargetDomain"
+    $SshOpts = @("-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new")
 
     Write-Host "-> Connecting to target cloud host: $TargetHost ($RemoteDownloadsDir)..." -ForegroundColor Cyan
-    ssh $TargetHost "mkdir -p '$RemoteDownloadsDir'"
+    & ssh $SshOpts $TargetHost "mkdir -p '$RemoteDownloadsDir'"
 
     Write-Host "-> Uploading Windows installer (UAS-Setup-Win64.exe) to $TargetDomain..." -ForegroundColor Cyan
-    scp $InstallerLocal "${TargetHost}:${RemoteDownloadsDir}/UAS-Setup-Win64.exe"
+    & scp $SshOpts $InstallerLocal "${TargetHost}:${RemoteDownloadsDir}/UAS-Setup-Win64.exe"
+
+    $UasExeLocal = Join-Path $PublicDownloadsDir "UAS.exe"
+    if (Test-Path $UasExeLocal) {
+        Write-Host "-> Uploading native Windows launcher (UAS.exe) to $TargetDomain..." -ForegroundColor Cyan
+        & scp $SshOpts $UasExeLocal "${TargetHost}:${RemoteDownloadsDir}/UAS.exe"
+    }
 
     Write-Host "-> Uploading signed Android APK to $TargetDomain..." -ForegroundColor Cyan
-    scp $ApkCanonicalLocal "${TargetHost}:${RemoteDownloadsDir}/uas-latest.apk"
+    & scp $SshOpts $ApkCanonicalLocal "${TargetHost}:${RemoteDownloadsDir}/uas-latest.apk"
 
     Write-Host "-> Synchronizing all APK filenames, permissions, and restarting uas-qat.service..." -ForegroundColor Cyan
     $remoteCmd = "cp -f '$RemoteDownloadsDir/uas-latest.apk' '$RemoteDownloadsDir/UAS-Accounting.apk' && cp -f '$RemoteDownloadsDir/uas-latest.apk' '$RemoteDownloadsDir/UAS-Mobile-Release-qat.world.apk' && chown -R www-data:www-data '$RemoteDownloadsDir' && chmod 644 '$RemoteDownloadsDir'/* && systemctl restart uas-qat"
-    ssh $TargetHost $remoteCmd
+    & ssh $SshOpts $TargetHost $remoteCmd
 
     Write-Host "-> Cloud server $TargetDomain successfully updated and synced!" -ForegroundColor Green
 }
