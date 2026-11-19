@@ -16,6 +16,11 @@ import {
   saveOfflineSnapshot,
 } from "@/lib/offlineDb";
 import { INITIAL_FALLBACK_STATE } from "@/lib/seedFallback";
+import {
+  getOfflineSyncQueue,
+  handleOfflineAndroidApiRequest,
+  loadOfflineAndroidState,
+} from "@/lib/offlineAndroidStore";
 import type { UasBootstrapState, UasUser } from "@/types/uas";
 
 export const SERVER_URL_STORAGE_KEY = "uas_server_url";
@@ -140,12 +145,35 @@ export function setStoredRuntimeMode(
   return { mode, serverUrl };
 }
 
+export function isAndroidLocalIsolatedMode(
+  winOverride?: BrowserEnvLike,
+  storage?: Pick<StorageLike, "getItem"> | null
+): boolean {
+  return isNativeAndroid(winOverride) && getStoredRuntimeMode(storage) === "local";
+}
+
 export function resolveApiBaseUrl(opts?: {
   preferCloudFallback?: boolean;
   storage?: Pick<StorageLike, "getItem"> | null;
   win?: BrowserEnvLike;
 }): string {
   const s = getStorage(opts?.storage);
+  const win: BrowserEnvLike | undefined =
+    opts?.win ?? (typeof window !== "undefined" ? (window as unknown as BrowserEnvLike) : undefined);
+  const onAndroid = isNativeAndroid(win);
+  const mode = getStoredRuntimeMode(s);
+
+  // STRICT LOCAL ISOLATION: On Android in `"local"` mode, NEVER route business APIs
+  // (`/api/bootstrap`, `/api/users`, `/api/system/branding`, accounting/inventory) to `https://qat.world`.
+  // Only explicit licensing calls (`preferCloudFallback: true`) may contact `https://qat.world`.
+  if (onAndroid && mode === "local") {
+    if (opts?.preferCloudFallback) {
+      const urls = getStoredServerUrls(s);
+      return urls.cloudUrl || DEFAULT_CLOUD_API_URL;
+    }
+    return "";
+  }
+
   if (s) {
     const saved = s.getItem(SERVER_URL_STORAGE_KEY);
     if (saved && saved.trim()) {
@@ -153,15 +181,11 @@ export function resolveApiBaseUrl(opts?: {
     }
   }
 
-  const win: BrowserEnvLike | undefined =
-    opts?.win ?? (typeof window !== "undefined" ? (window as unknown as BrowserEnvLike) : undefined);
-  const onAndroid = isNativeAndroid(win);
   const host = (win?.location?.hostname || "").toLowerCase();
   const proto = (win?.location?.protocol || "").toLowerCase();
   const isCapacitorLocalOrigin = onAndroid && (host === "localhost" || proto === "capacitor:" || proto === "file:" || !host);
 
   if (isCapacitorLocalOrigin) {
-    const mode = getStoredRuntimeMode(s);
     const urls = getStoredServerUrls(s);
     if (mode === "cloud") {
       return urls.cloudUrl || DEFAULT_CLOUD_API_URL;
@@ -285,9 +309,20 @@ export function installGlobalApiFetchInterceptor(): void {
   fetchInterceptorInstalled = true;
   const originalFetch = window.fetch.bind(window);
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
-    const base = resolveApiBaseUrl();
-    if (base && typeof input === "string" && input.startsWith("/api/")) {
-      return originalFetch(`${base}${input}`, init);
+    const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : "";
+    const isRelativeApi = urlStr.startsWith("/api/");
+    const isLocalhostApi = /^https?:\/\/localhost(?::\d+)?\/api\//i.test(urlStr);
+
+    if (isRelativeApi || isLocalhostApi) {
+      // On Android in `"local"` mode, route all local `/api/*` calls to on-device localStorage adapter
+      // (never reaching https://qat.world or Capacitor's HTML fallback).
+      if (isAndroidLocalIsolatedMode()) {
+        return handleOfflineAndroidApiRequest(urlStr, init);
+      }
+      const base = resolveApiBaseUrl();
+      if (base && isRelativeApi) {
+        return originalFetch(`${base}${urlStr}`, init);
+      }
     }
     return originalFetch(input, init);
   };
@@ -319,13 +354,23 @@ export async function fetchBootstrapState(): Promise<{
   fromOfflineCache: boolean;
   queueCount: number;
 }> {
+  if (isAndroidLocalIsolatedMode()) {
+    const localState = loadOfflineAndroidState();
+    const syncQueueLen = getOfflineSyncQueue().length;
+    return { state: localState, fromOfflineCache: true, queueCount: syncQueueLen };
+  }
+
   const queueCount = await getOfflineQueueCount();
   try {
-    const base = getApiBaseUrl();
+    const base = resolveApiBaseUrl();
     const res = await fetch(`${base}/api/bootstrap`, {
       cache: "no-store",
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const contentType = (res.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.includes("application/json")) {
+      throw new Error("Non-JSON bootstrap response");
+    }
     const serverState = (await res.json()) as UasBootstrapState;
     await saveOfflineSnapshot(serverState);
     return { state: serverState, fromOfflineCache: false, queueCount };

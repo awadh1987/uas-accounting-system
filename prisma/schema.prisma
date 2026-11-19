@@ -71,11 +71,16 @@ model JournalEntryLine {
   debit          Decimal       @default(0)
   credit         Decimal       @default(0)
   currency       String        @default("YER")
+  currencyCode   String        @default("YER")
   exchangeRate   Decimal       @default(1.0)
 
-  // Multi-Currency Normalized amounts (Base YER)
+  // Multi-Currency Normalized amounts (Foreign + Base YER)
+  foreignDebit   Decimal       @default(0)
+  foreignCredit  Decimal       @default(0)
   debitBase      Decimal       @default(0)
   creditBase     Decimal       @default(0)
+  baseDebit      Decimal       @default(0)
+  baseCredit     Decimal       @default(0)
 
   memo           String?
   projectId      String?
@@ -143,19 +148,58 @@ model EnterpriseProfile {
 }
 
 model SystemSettings {
-  id              String   @id @default("default")
-  orgName         String   @default("شركة الجبري الزراعية للتنمية والاستثمار | UAS")
-  logoText        String   @default("UAS")
-  defaultLang     String   @default("ar")
-  defaultTheme    String   @default("emerald")
-  defaultCurrency String   @default("YER")
-  updatedAt       DateTime @updatedAt
+  id                      String   @id @default("default")
+  orgName                 String   @default("شركة الجبري الزراعية للتنمية والاستثمار | UAS")
+  logoText                String   @default("UAS")
+  defaultLang             String   @default("ar")
+  defaultTheme            String   @default("emerald")
+  defaultCurrency         String   @default("YER")
+  fiscalYearStart         String?  @default("2026-01-01")
+  fiscalYearEnd           String?  @default("2026-12-31")
+  periodLockDate          String?
+  requireApprovalWorkflow Boolean  @default(false)
+  costingMethod           String   @default("WEIGHTED_AVERAGE") // WEIGHTED_AVERAGE | FIFO
+  negativeStockPolicy     String   @default("BLOCK")            // BLOCK | WARN
+  printLayout             String   @default("A4")               // A4 | 80MM | CUSTOM
+  controlAccountsJson     String   @default("{}")               // JSON map of default GL control accounts
+  documentSequencesJson   String   @default("{}")               // JSON map of JV-/RV-/PV-/INV-/BILL-/TRN- prefixes & counters
+  updatedAt               DateTime @updatedAt
 }
 
 model CurrencyRate {
   currencyCode String   @id // YER | SAR | USD
   rateToYER    Float
   updatedAt    DateTime @updatedAt
+}
+
+model Currency {
+  id             String         @id @default(cuid())
+  code           String         @unique // e.g., YER, SAR, USD, AED, OMR, or custom code
+  nameAr         String
+  nameEn         String
+  symbol         String         @default("")
+  decimalPlaces  Int            @default(2) // 0 for YER, 2 for USD/SAR/AED, 3 for OMR
+  isBaseCurrency Boolean        @default(false)
+  isCustom       Boolean        @default(false)
+  isActive       Boolean        @default(true)
+  exchangeRates  ExchangeRate[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+}
+
+model ExchangeRate {
+  id           String   @id @default(cuid())
+  currencyCode String
+  currency     Currency @relation(fields: [currencyCode], references: [code], onDelete: Cascade)
+  rateDate     DateTime @default(now())
+  buyRate      Float
+  sellRate     Float
+  midRate      Float
+  source       String   @default("MANUAL")
+  createdBy    String?
+  createdAt    DateTime @default(now())
+
+  @@index([currencyCode, rateDate])
 }
 
 model Project {
@@ -374,6 +418,10 @@ model VendorBill {
   paidAmount      Decimal          @default(0)
   balanceDue      Decimal
   currency        String           @default("YER")
+  currencyCode    String           @default("YER")
+  exchangeRate    Float            @default(1.0)
+  foreignAmount   Float            @default(0)
+  baseAmount      Float            @default(0)
   isInventory     Boolean          @default(false)
   debitAccountId  String?
   journalEntryId  String?
@@ -397,6 +445,10 @@ model PaymentVoucher {
   amount             Decimal
   transferFee        Decimal                  @default(0)
   currency           String                   @default("YER")
+  currencyCode       String                   @default("YER")
+  exchangeRate       Float                    @default(1.0)
+  foreignAmount      Float                    @default(0)
+  baseAmount         Float                    @default(0)
   referenceNumber    String?
   notes              String?
   projectId          String?
@@ -460,6 +512,10 @@ model SalesInvoice {
   balanceDue         Decimal
   status             String           @default("POSTED") // DRAFT | POSTED | PARTIALLY_PAID | PAID | VOIDED
   currency           String           @default("YER")
+  currencyCode       String           @default("YER")
+  exchangeRate       Float            @default(1.0)
+  foreignAmount      Float            @default(0)
+  baseAmount         Float            @default(0)
   notes              String?
   journalEntryId     String?
   qrVerificationHash String?
@@ -483,6 +539,10 @@ model ReceiptVoucher {
 
   amount             Decimal
   currency           String          @default("YER")
+  currencyCode       String          @default("YER")
+  exchangeRate       Float           @default(1.0)
+  foreignAmount      Float           @default(0)
+  baseAmount         Float           @default(0)
   notes              String?
   journalEntryId     String?
   qrVerificationHash String?
@@ -696,6 +756,7 @@ model User {
   department            String         @default("المالية والعمليات")
   active                Boolean        @default(true)
   isActive              Boolean        @default(true)
+  archivedAt            DateTime?      // Soft-archive timestamp when user has linked accounting/audit records
   avatarChar            String         @default("م")
   avatarUrl             String?        // Profile photo URL
   avatarColor           String         @default("#059669")
@@ -784,4 +845,149 @@ model LicenseDeviceBinding {
 
   @@unique([licenseId, userEmail, platform])
   @@index([licenseId])
+}
+
+// ---------------------------------------------------------
+// 8. MULTI-CURRENCY TREASURY TRANSACTIONS & MULTI-UNIT INVENTORY
+// ---------------------------------------------------------
+
+model TreasuryTransaction {
+  id             String   @id @default(cuid())
+  treasuryId     String
+  direction      String   // IN | OUT | TRANSFER
+  currencyCode   String   @default("YER")
+  exchangeRate   Float    @default(1.0)
+  foreignAmount  Float    @default(0)
+  baseAmount     Float    @default(0)
+  referenceType  String?  // RECEIPT | PAYMENT | TRANSFER | FX_REVALUATION
+  referenceId    String?
+  notes          String?
+  date           DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  @@index([treasuryId, date])
+}
+
+model UnitOfMeasure {
+  id            String               @id @default(cuid())
+  code          String               @unique // e.g. PIECE, BUNDLE, BAG, CARTON, KG, G, TON, or custom code
+  nameAr        String
+  nameEn        String
+  isBaseDefault Boolean              @default(false)
+  isCustom      Boolean              @default(false)
+  baseItems     InventoryItem[]      @relation("ItemBaseUnit")
+  conversions   ItemUnitConversion[]
+  movements     StockMovement[]
+  createdAt     DateTime             @default(now())
+}
+
+model ItemCategory {
+  id        String          @id @default(cuid())
+  code      String          @unique
+  nameAr    String
+  nameEn    String
+  parentId  String?
+  parent    ItemCategory?   @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children  ItemCategory[]  @relation("CategoryHierarchy")
+  isCustom  Boolean         @default(false)
+  items     InventoryItem[]
+  createdAt DateTime        @default(now())
+}
+
+model Warehouse {
+  id            String          @id @default(cuid())
+  code          String          @unique
+  nameAr        String
+  nameEn        String
+  location      String?
+  isDefault     Boolean         @default(false)
+  isCustom      Boolean         @default(false)
+  isActive      Boolean         @default(true)
+  defaultItems  InventoryItem[] @relation("ItemDefaultWarehouse")
+  stockBalances StockBalance[]
+  movements     StockMovement[]
+  createdAt     DateTime        @default(now())
+}
+
+model InventoryItem {
+  id                 String               @id @default(cuid())
+  sku                String               @unique
+  barcode            String?
+  nameAr             String
+  nameEn             String
+  categoryId         String?
+  category           ItemCategory?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  itemType           String               @default("STOCKABLE") // STOCKABLE | SERVICE | CONSUMABLE | or custom type
+  grade              String?              // Open string supporting custom grades
+  origin             String?              // Open string supporting custom origins
+  baseUnitId         String
+  baseUnit           UnitOfMeasure        @relation("ItemBaseUnit", fields: [baseUnitId], references: [id], onDelete: Restrict)
+  defaultWarehouseId String?
+  defaultWarehouse   Warehouse?           @relation("ItemDefaultWarehouse", fields: [defaultWarehouseId], references: [id], onDelete: SetNull)
+  purchasePrice      Float                @default(0)
+  wholesalePrice     Float                @default(0)
+  retailPrice        Float                @default(0)
+  minSellPrice       Float                @default(0)
+  minStockAlert      Float                @default(0)
+  maxStockLevel      Float                @default(0)
+  inventoryAccountId String?
+  cogsAccountId      String?
+  revenueAccountId   String?
+  isActive           Boolean              @default(true)
+  conversions        ItemUnitConversion[]
+  balances           StockBalance[]
+  movements          StockMovement[]
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+}
+
+model ItemUnitConversion {
+  id                    String        @id @default(cuid())
+  itemId                String
+  item                  InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  unitId                String
+  unit                  UnitOfMeasure @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  customUnitLabel       String?
+  factorToBase          Float         // Must be > 0, e.g. 1 bundle = 10 pieces, 1 carton = 240 pieces
+  barcode               String?
+  purchasePrice         Float?
+  sellPrice             Float?
+  isDefaultSalesUnit    Boolean       @default(false)
+  isDefaultPurchaseUnit Boolean       @default(false)
+
+  @@unique([itemId, unitId])
+}
+
+model StockBalance {
+  id              String        @id @default(cuid())
+  itemId          String
+  item            InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  warehouseId     String
+  warehouse       Warehouse     @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  qtyOnHandBase   Float         @default(0)
+  avgUnitCostBase Float         @default(0)
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([itemId, warehouseId])
+}
+
+model StockMovement {
+  id            String        @id @default(cuid())
+  itemId        String
+  item          InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  warehouseId   String
+  warehouse     Warehouse     @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  movementType  String        // PURCHASE_IN | SALE_OUT | ADJUSTMENT_IN | ADJUSTMENT_OUT | TRANSFER_IN | TRANSFER_OUT | OPENING
+  enteredQty    Float
+  enteredUnitId String
+  enteredUnit   UnitOfMeasure @relation(fields: [enteredUnitId], references: [id], onDelete: Restrict)
+  factorToBase  Float         @default(1)
+  baseQtyDelta  Float         // Positive for IN, negative for OUT
+  unitCostBase  Float         @default(0)
+  referenceType String?       // INVOICE | BILL | ADJUSTMENT | TRANSFER
+  referenceId   String?
+  notes         String?
+  createdAt     DateTime      @default(now())
+
+  @@index([itemId, warehouseId, createdAt])
 }

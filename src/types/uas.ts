@@ -70,6 +70,7 @@ export interface UasUser {
   department?: string;
   active: boolean;
   isActive?: boolean;
+  archivedAt?: string | null;
   avatarChar: string;
   avatarUrl?: string;
   avatarColor?: string;

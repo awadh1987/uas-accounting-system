@@ -122,6 +122,7 @@ export function FinancialReportsTab({
   onToast,
 }: FinancialReportsTabProps) {
   const [reportTab, setReportTab] = useState<"tb" | "pl" | "bs" | "budget">("tb");
+  const [currencyDisplayMode, setCurrencyDisplayMode] = useState<"BASE_YER" | "TX_CURRENCY">("BASE_YER");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [projectIdOverride, setProjectIdOverride] = useState<string | null>(null);
@@ -250,7 +251,31 @@ export function FinancialReportsTab({
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2 no-print">
+          <div className="flex flex-wrap gap-2 no-print items-center">
+            <div className="inline-flex rounded-xl border border-slate-300 dark:border-slate-700 overflow-hidden text-[11px] font-bold">
+              <button
+                type="button"
+                onClick={() => setCurrencyDisplayMode("BASE_YER")}
+                className={`px-2.5 py-1.5 transition ${
+                  currencyDisplayMode === "BASE_YER"
+                    ? "accent-bg"
+                    : "bg-transparent text-slate-600 dark:text-slate-300"
+                }`}
+              >
+                عملة الأساس (YER)
+              </button>
+              <button
+                type="button"
+                onClick={() => setCurrencyDisplayMode("TX_CURRENCY")}
+                className={`px-2.5 py-1.5 transition ${
+                  currencyDisplayMode === "TX_CURRENCY"
+                    ? "accent-bg"
+                    : "bg-transparent text-slate-600 dark:text-slate-300"
+                }`}
+              >
+                عملة المعاملة (FX)
+              </button>
+            </div>
             <button
               onClick={handleExportExcel}
               className="px-3.5 py-2 rounded-xl accent-bg text-xs font-extrabold flex items-center gap-1.5"

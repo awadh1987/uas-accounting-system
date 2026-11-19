@@ -4,6 +4,18 @@ import { normalizeRole, ROLE_DEFINITIONS } from "@/lib/permissions";
 import { appendAuditLogTx, getBootstrapState, hashPassword } from "@/lib/serverBootstrap";
 import { extractActor, jsonError } from "@/lib/apiHelpers";
 
+export async function GET(req: NextRequest) {
+  try {
+    const includeArchived = req.nextUrl.searchParams.get("includeArchived") === "true";
+    const state = await getBootstrapState();
+    const users = includeArchived ? state.users : state.users.filter((u) => !u.archivedAt);
+    return NextResponse.json({ users, total: users.length }, { status: 200 });
+  } catch (error) {
+    console.error("GET /api/users error:", error);
+    return jsonError("تعذر تحميل قائمة المستخدمين", 500);
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;

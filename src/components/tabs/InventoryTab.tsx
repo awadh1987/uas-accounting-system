@@ -5,6 +5,7 @@ import { Pencil, Plus } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { SelectWithOther } from "@/components/SelectWithOther";
+import { MultiUnitInventoryPanel } from "@/components/MultiUnitInventoryPanel";
 import { computeRemainingStock, fmtNum } from "@/lib/formulas";
 import type { UasInventoryBatch, UasProject, UasSaleTransaction } from "@/types/uas";
 
@@ -107,6 +108,9 @@ export function InventoryTab({
 
   return (
     <section className="space-y-6">
+      {/* Phase 3: Item Master Data & Multi-Unit Inventory Panel (with universal Other/Custom support) */}
+      <MultiUnitInventoryPanel readOnly={readOnly} />
+
       <SlideOverDrawer
         open={drawerOpen && !readOnly}
         onClose={() => {

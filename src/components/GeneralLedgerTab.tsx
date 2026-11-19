@@ -7,6 +7,7 @@ import type { UasProject, UasUser } from "@/types/uas";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { EmptyState } from "@/components/EmptyState";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
+import { MultiCurrencyFxPanel } from "@/components/MultiCurrencyFxPanel";
 
 interface AccountOption {
   id: string;
@@ -92,6 +93,7 @@ export function GeneralLedgerTab({
   const [postingAccounts, setPostingAccounts] = useState<AccountOption[]>([]);
   const [summary, setSummary] = useState({ count: 0, totalDebitBase: 0, totalCreditBase: 0, isLedgerBalanced: true });
   const [loading, setLoading] = useState(true);
+  const [showFxPanel, setShowFxPanel] = useState(false);
 
   const [filterAccountId, setFilterAccountId] = useState("ALL");
   const [filterFrom, setFilterFrom] = useState("");
@@ -354,6 +356,9 @@ export function GeneralLedgerTab({
 
   return (
     <section className="space-y-5">
+      {showFxPanel && (
+        <MultiCurrencyFxPanel readOnly={readOnly} onToast={onToast} />
+      )}
       <div className="card-surface rounded-2xl p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
@@ -371,6 +376,17 @@ export function GeneralLedgerTab({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowFxPanel((v) => !v)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border transition ${
+                showFxPanel
+                  ? "border-amber-500 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300"
+                  : "border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+              }`}
+            >
+              💱 العملات وإعادة التقييم (FX)
+            </button>
             <span
               className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 ${
                 summary.isLedgerBalanced

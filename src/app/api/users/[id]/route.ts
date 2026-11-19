@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { canManageUsers, normalizeRole } from "@/lib/permissions";
 import { appendAuditLogTx, getBootstrapState, hashPassword, parseAssignedProjects } from "@/lib/serverBootstrap";
 import { extractActor, forbiddenError, jsonError } from "@/lib/apiHelpers";
+import { archiveOrRestoreUser, safeDeleteOrArchiveUser } from "@/lib/userLifecycle";
 import type { UasUser } from "@/types/uas";
 
 export async function PATCH(
@@ -16,6 +17,23 @@ export async function PATCH(
 
     if (!canManageUsers(actor.userRole)) {
       return forbiddenError("⛔ إدارة صلاحيات وحسابات المستخدمين محصورة بمدير النظام العام");
+    }
+
+    const lifecycleAction = String(body.action || "").trim().toLowerCase();
+    if (lifecycleAction === "archive" || lifecycleAction === "restore") {
+      const outcome = await archiveOrRestoreUser(id, lifecycleAction, actor);
+      if (!outcome.ok) {
+        return jsonError(outcome.error || outcome.message, outcome.status);
+      }
+      const state = await getBootstrapState();
+      return NextResponse.json({
+        success: true,
+        archived: Boolean(outcome.archived),
+        restored: Boolean(outcome.restored),
+        seatsReleased: outcome.seatsReleased ?? 0,
+        message: outcome.message,
+        state,
+      });
     }
 
     const result = await prisma.$transaction(async (tx) => {
@@ -172,6 +190,7 @@ export async function PATCH(
         department: updated.department,
         active: updated.active && updated.isActive,
         isActive: updated.isActive && updated.active,
+        archivedAt: updated.archivedAt ? updated.archivedAt.toISOString() : null,
         avatarChar: updated.avatarChar,
         avatarUrl: updated.avatarUrl ?? "",
         avatarColor: updated.avatarColor ?? "#059669",
@@ -202,6 +221,40 @@ export async function PATCH(
   } catch (error) {
     console.error("PATCH /api/users/[id] error:", error);
     return jsonError("تعذر تحديث بيانات وصلاحيات المستخدم", 500);
+  }
+}
+
+export async function DELETE(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await context.params;
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      body = {};
+    }
+    const actor = extractActor(body, req);
+    const outcome = await safeDeleteOrArchiveUser(id, actor);
+    if (!outcome.ok) {
+      return jsonError(outcome.error || outcome.message, outcome.status);
+    }
+
+    const state = await getBootstrapState();
+    return NextResponse.json({
+      success: true,
+      deleted: outcome.deleted,
+      archived: outcome.archived,
+      seatsReleased: outcome.seatsReleased,
+      linkedCount: outcome.linkedCount ?? 0,
+      message: outcome.message,
+      state,
+    });
+  } catch (error) {
+    console.error("DELETE /api/users/[id] error:", error);
+    return jsonError("تعذر حذف أو أرشفة المستخدم", 500);
   }
 }
 

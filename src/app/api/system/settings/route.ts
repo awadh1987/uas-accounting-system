@@ -1,12 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
 import { extractActor, jsonError } from "@/lib/apiHelpers";
+import {
+  DEFAULT_CONTROL_ACCOUNTS,
+  DEFAULT_DOCUMENT_SEQUENCES,
+  parseAccountingSettings,
+} from "@/lib/accountingSettings";
 
-export async function PATCH(req: NextRequest) {
+export const dynamic = "force-dynamic";
+
+export async function GET() {
   try {
+    await ensureSqliteDatabaseReady();
+    const row = await prisma.systemSettings.findUnique({ where: { id: "default" } });
+    const accountingSettings = parseAccountingSettings(row);
+    return NextResponse.json({ success: true, settings: accountingSettings });
+  } catch (error) {
+    console.error("GET /api/system/settings error:", error);
+    return jsonError("تعذر تحميل إعدادات النظام / Failed to load system settings", 500);
+  }
+}
+
+async function saveSettings(req: NextRequest) {
+  try {
+    await ensureSqliteDatabaseReady();
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body);
+    const actor = extractActor(body, req);
+
+    const existingRow = await prisma.systemSettings.findUnique({ where: { id: "default" } });
+    const current = parseAccountingSettings(existingRow);
 
     const orgName = body.orgName !== undefined ? String(body.orgName).trim() : undefined;
     const logoText = body.logoText !== undefined ? String(body.logoText).trim() : undefined;
@@ -19,14 +43,52 @@ export async function PATCH(req: NextRequest) {
         ? body.defaultTheme
         : undefined;
     const defaultCurrency =
-      body.defaultCurrency === "YER" ||
-      body.defaultCurrency === "SAR" ||
-      body.defaultCurrency === "USD"
-        ? body.defaultCurrency
+      typeof body.defaultCurrency === "string" && body.defaultCurrency.trim().length >= 2
+        ? body.defaultCurrency.trim().toUpperCase()
         : undefined;
 
-    await prisma.$transaction(async (tx) => {
-      await tx.systemSettings.upsert({
+    const fiscalYearStart =
+      typeof body.fiscalYearStart === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.fiscalYearStart.trim())
+        ? body.fiscalYearStart.trim()
+        : undefined;
+    const fiscalYearEnd =
+      typeof body.fiscalYearEnd === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.fiscalYearEnd.trim())
+        ? body.fiscalYearEnd.trim()
+        : undefined;
+    const periodLockDate =
+      body.periodLockDate === null || body.periodLockDate === ""
+        ? null
+        : typeof body.periodLockDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.periodLockDate.trim())
+        ? body.periodLockDate.trim()
+        : undefined;
+
+    const requireApprovalWorkflow =
+      typeof body.requireApprovalWorkflow === "boolean" ? body.requireApprovalWorkflow : undefined;
+    const costingMethod =
+      body.costingMethod === "WEIGHTED_AVERAGE" || body.costingMethod === "FIFO"
+        ? body.costingMethod
+        : undefined;
+    const negativeStockPolicy =
+      body.negativeStockPolicy === "BLOCK" || body.negativeStockPolicy === "WARN"
+        ? body.negativeStockPolicy
+        : undefined;
+    const printLayout =
+      typeof body.printLayout === "string" && body.printLayout.trim()
+        ? body.printLayout.trim().toUpperCase()
+        : undefined;
+
+    const mergedControlAccounts =
+      body.controlAccounts && typeof body.controlAccounts === "object"
+        ? { ...DEFAULT_CONTROL_ACCOUNTS, ...current.controlAccounts, ...(body.controlAccounts as Record<string, string>) }
+        : current.controlAccounts;
+
+    const mergedSequences =
+      body.documentSequences && typeof body.documentSequences === "object"
+        ? { ...DEFAULT_DOCUMENT_SEQUENCES, ...current.documentSequences, ...(body.documentSequences as Record<string, unknown>) }
+        : current.documentSequences;
+
+    const updatedRow = await prisma.$transaction(async (tx) => {
+      const saved = await tx.systemSettings.upsert({
         where: { id: "default" },
         update: {
           ...(orgName ? { orgName } : {}),
@@ -34,32 +96,65 @@ export async function PATCH(req: NextRequest) {
           ...(defaultLang ? { defaultLang } : {}),
           ...(defaultTheme ? { defaultTheme } : {}),
           ...(defaultCurrency ? { defaultCurrency } : {}),
+          ...(fiscalYearStart !== undefined ? { fiscalYearStart } : {}),
+          ...(fiscalYearEnd !== undefined ? { fiscalYearEnd } : {}),
+          ...(periodLockDate !== undefined ? { periodLockDate } : {}),
+          ...(requireApprovalWorkflow !== undefined ? { requireApprovalWorkflow } : {}),
+          ...(costingMethod ? { costingMethod } : {}),
+          ...(negativeStockPolicy ? { negativeStockPolicy } : {}),
+          ...(printLayout ? { printLayout } : {}),
+          ...(body.controlAccounts ? { controlAccountsJson: JSON.stringify(mergedControlAccounts) } : {}),
+          ...(body.documentSequences ? { documentSequencesJson: JSON.stringify(mergedSequences) } : {}),
         },
         create: {
           id: "default",
-          orgName: orgName || "النظام المحاسبي الموحد Unified Accounting System (UAS)",
-          logoText: logoText || "UAS",
-          defaultLang: defaultLang || "ar",
-          defaultTheme: defaultTheme || "emerald",
-          defaultCurrency: defaultCurrency || "YER",
+          orgName: orgName || current.orgName,
+          logoText: logoText || current.logoText,
+          defaultLang: defaultLang || current.defaultLang,
+          defaultTheme: defaultTheme || current.defaultTheme,
+          defaultCurrency: defaultCurrency || current.defaultCurrency,
+          fiscalYearStart: fiscalYearStart || current.fiscalYearStart,
+          fiscalYearEnd: fiscalYearEnd || current.fiscalYearEnd,
+          periodLockDate: periodLockDate ?? current.periodLockDate,
+          requireApprovalWorkflow: requireApprovalWorkflow ?? current.requireApprovalWorkflow,
+          costingMethod: costingMethod || current.costingMethod,
+          negativeStockPolicy: negativeStockPolicy || current.negativeStockPolicy,
+          printLayout: printLayout || current.printLayout,
+          controlAccountsJson: JSON.stringify(mergedControlAccounts),
+          documentSequencesJson: JSON.stringify(mergedSequences),
         },
       });
 
-      if (orgName || logoText) {
-        await appendAuditLogTx(tx, {
-          ...actor,
-          actionType: "تحديث إعدادات النظام",
-          entityReference: "settings",
-          details: `تحديث اسم النظام والشعار (${logoText || "UAS"})`,
-        });
-      }
+      await appendAuditLogTx(tx, {
+        ...actor,
+        actionType: "تحديث الإعدادات المحاسبية والتشغيلية",
+        entityReference: "SystemSettings:default",
+        details: JSON.stringify({
+          periodLockDate: saved.periodLockDate,
+          costingMethod: saved.costingMethod,
+          negativeStockPolicy: saved.negativeStockPolicy,
+          printLayout: saved.printLayout,
+        }),
+      });
+      return saved;
     });
 
     const state = await getBootstrapState();
-    return NextResponse.json({ state });
+    return NextResponse.json({
+      success: true,
+      settings: parseAccountingSettings(updatedRow),
+      state,
+    });
   } catch (error) {
-    console.error("PATCH /api/system/settings error:", error);
-    return jsonError("تعذر حفظ إعدادات النظام", 500);
+    console.error("PUT/PATCH /api/system/settings error:", error);
+    return jsonError("تعذر حفظ إعدادات النظام / Failed to save system settings", 500);
   }
 }
 
+export async function PUT(req: NextRequest) {
+  return saveSettings(req);
+}
+
+export async function PATCH(req: NextRequest) {
+  return saveSettings(req);
+}

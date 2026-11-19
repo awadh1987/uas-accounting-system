@@ -43,9 +43,14 @@ CREATE TABLE "JournalEntryLine" (
     "debit" DECIMAL NOT NULL DEFAULT 0,
     "credit" DECIMAL NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'YER',
+    "currencyCode" TEXT NOT NULL DEFAULT 'YER',
     "exchangeRate" DECIMAL NOT NULL DEFAULT 1.0,
+    "foreignDebit" DECIMAL NOT NULL DEFAULT 0,
+    "foreignCredit" DECIMAL NOT NULL DEFAULT 0,
     "debitBase" DECIMAL NOT NULL DEFAULT 0,
     "creditBase" DECIMAL NOT NULL DEFAULT 0,
+    "baseDebit" DECIMAL NOT NULL DEFAULT 0,
+    "baseCredit" DECIMAL NOT NULL DEFAULT 0,
     "memo" TEXT,
     "projectId" TEXT,
     "subProjectId" TEXT,
@@ -114,6 +119,15 @@ CREATE TABLE "SystemSettings" (
     "defaultLang" TEXT NOT NULL DEFAULT 'ar',
     "defaultTheme" TEXT NOT NULL DEFAULT 'emerald',
     "defaultCurrency" TEXT NOT NULL DEFAULT 'YER',
+    "fiscalYearStart" TEXT DEFAULT '2026-01-01',
+    "fiscalYearEnd" TEXT DEFAULT '2026-12-31',
+    "periodLockDate" TEXT,
+    "requireApprovalWorkflow" BOOLEAN NOT NULL DEFAULT false,
+    "costingMethod" TEXT NOT NULL DEFAULT 'WEIGHTED_AVERAGE',
+    "negativeStockPolicy" TEXT NOT NULL DEFAULT 'BLOCK',
+    "printLayout" TEXT NOT NULL DEFAULT 'A4',
+    "controlAccountsJson" TEXT NOT NULL DEFAULT '{}',
+    "documentSequencesJson" TEXT NOT NULL DEFAULT '{}',
     "updatedAt" DATETIME NOT NULL
 );
 
@@ -122,6 +136,35 @@ CREATE TABLE "CurrencyRate" (
     "currencyCode" TEXT NOT NULL PRIMARY KEY,
     "rateToYER" REAL NOT NULL,
     "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "Currency" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "code" TEXT NOT NULL,
+    "nameAr" TEXT NOT NULL,
+    "nameEn" TEXT NOT NULL,
+    "symbol" TEXT NOT NULL DEFAULT '',
+    "decimalPlaces" INTEGER NOT NULL DEFAULT 2,
+    "isBaseCurrency" BOOLEAN NOT NULL DEFAULT false,
+    "isCustom" BOOLEAN NOT NULL DEFAULT false,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "ExchangeRate" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "currencyCode" TEXT NOT NULL,
+    "rateDate" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "buyRate" REAL NOT NULL,
+    "sellRate" REAL NOT NULL,
+    "midRate" REAL NOT NULL,
+    "source" TEXT NOT NULL DEFAULT 'MANUAL',
+    "createdBy" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "ExchangeRate_currencyCode_fkey" FOREIGN KEY ("currencyCode") REFERENCES "Currency" ("code") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -276,6 +319,10 @@ CREATE TABLE "VendorBill" (
     "paidAmount" DECIMAL NOT NULL DEFAULT 0,
     "balanceDue" DECIMAL NOT NULL,
     "currency" TEXT NOT NULL DEFAULT 'YER',
+    "currencyCode" TEXT NOT NULL DEFAULT 'YER',
+    "exchangeRate" REAL NOT NULL DEFAULT 1.0,
+    "foreignAmount" REAL NOT NULL DEFAULT 0,
+    "baseAmount" REAL NOT NULL DEFAULT 0,
     "isInventory" BOOLEAN NOT NULL DEFAULT false,
     "debitAccountId" TEXT,
     "journalEntryId" TEXT,
@@ -299,6 +346,10 @@ CREATE TABLE "PaymentVoucher" (
     "amount" DECIMAL NOT NULL,
     "transferFee" DECIMAL NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'YER',
+    "currencyCode" TEXT NOT NULL DEFAULT 'YER',
+    "exchangeRate" REAL NOT NULL DEFAULT 1.0,
+    "foreignAmount" REAL NOT NULL DEFAULT 0,
+    "baseAmount" REAL NOT NULL DEFAULT 0,
     "referenceNumber" TEXT,
     "notes" TEXT,
     "projectId" TEXT,
@@ -350,6 +401,10 @@ CREATE TABLE "SalesInvoice" (
     "balanceDue" DECIMAL NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'POSTED',
     "currency" TEXT NOT NULL DEFAULT 'YER',
+    "currencyCode" TEXT NOT NULL DEFAULT 'YER',
+    "exchangeRate" REAL NOT NULL DEFAULT 1.0,
+    "foreignAmount" REAL NOT NULL DEFAULT 0,
+    "baseAmount" REAL NOT NULL DEFAULT 0,
     "notes" TEXT,
     "journalEntryId" TEXT,
     "qrVerificationHash" TEXT,
@@ -372,6 +427,10 @@ CREATE TABLE "ReceiptVoucher" (
     "subProjectId" TEXT,
     "amount" DECIMAL NOT NULL,
     "currency" TEXT NOT NULL DEFAULT 'YER',
+    "currencyCode" TEXT NOT NULL DEFAULT 'YER',
+    "exchangeRate" REAL NOT NULL DEFAULT 1.0,
+    "foreignAmount" REAL NOT NULL DEFAULT 0,
+    "baseAmount" REAL NOT NULL DEFAULT 0,
     "notes" TEXT,
     "journalEntryId" TEXT,
     "qrVerificationHash" TEXT,
@@ -570,6 +629,7 @@ CREATE TABLE "User" (
     "department" TEXT NOT NULL DEFAULT 'المالية والعمليات',
     "active" BOOLEAN NOT NULL DEFAULT true,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "archivedAt" DATETIME,
     "avatarChar" TEXT NOT NULL DEFAULT 'م',
     "avatarUrl" TEXT,
     "avatarColor" TEXT NOT NULL DEFAULT '#059669',
@@ -657,11 +717,147 @@ CREATE TABLE "LicenseDeviceBinding" (
     "active" BOOLEAN NOT NULL DEFAULT true
 );
 
+-- CreateTable
+CREATE TABLE "TreasuryTransaction" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "treasuryId" TEXT NOT NULL,
+    "direction" TEXT NOT NULL,
+    "currencyCode" TEXT NOT NULL DEFAULT 'YER',
+    "exchangeRate" REAL NOT NULL DEFAULT 1.0,
+    "foreignAmount" REAL NOT NULL DEFAULT 0,
+    "baseAmount" REAL NOT NULL DEFAULT 0,
+    "referenceType" TEXT,
+    "referenceId" TEXT,
+    "notes" TEXT,
+    "date" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "UnitOfMeasure" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "code" TEXT NOT NULL,
+    "nameAr" TEXT NOT NULL,
+    "nameEn" TEXT NOT NULL,
+    "isBaseDefault" BOOLEAN NOT NULL DEFAULT false,
+    "isCustom" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "ItemCategory" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "code" TEXT NOT NULL,
+    "nameAr" TEXT NOT NULL,
+    "nameEn" TEXT NOT NULL,
+    "parentId" TEXT,
+    "isCustom" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "ItemCategory_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "ItemCategory" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "Warehouse" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "code" TEXT NOT NULL,
+    "nameAr" TEXT NOT NULL,
+    "nameEn" TEXT NOT NULL,
+    "location" TEXT,
+    "isDefault" BOOLEAN NOT NULL DEFAULT false,
+    "isCustom" BOOLEAN NOT NULL DEFAULT false,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "InventoryItem" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "sku" TEXT NOT NULL,
+    "barcode" TEXT,
+    "nameAr" TEXT NOT NULL,
+    "nameEn" TEXT NOT NULL,
+    "categoryId" TEXT,
+    "itemType" TEXT NOT NULL DEFAULT 'STOCKABLE',
+    "grade" TEXT,
+    "origin" TEXT,
+    "baseUnitId" TEXT NOT NULL,
+    "defaultWarehouseId" TEXT,
+    "purchasePrice" REAL NOT NULL DEFAULT 0,
+    "wholesalePrice" REAL NOT NULL DEFAULT 0,
+    "retailPrice" REAL NOT NULL DEFAULT 0,
+    "minSellPrice" REAL NOT NULL DEFAULT 0,
+    "minStockAlert" REAL NOT NULL DEFAULT 0,
+    "maxStockLevel" REAL NOT NULL DEFAULT 0,
+    "inventoryAccountId" TEXT,
+    "cogsAccountId" TEXT,
+    "revenueAccountId" TEXT,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "InventoryItem_categoryId_fkey" FOREIGN KEY ("categoryId") REFERENCES "ItemCategory" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "InventoryItem_baseUnitId_fkey" FOREIGN KEY ("baseUnitId") REFERENCES "UnitOfMeasure" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "InventoryItem_defaultWarehouseId_fkey" FOREIGN KEY ("defaultWarehouseId") REFERENCES "Warehouse" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "ItemUnitConversion" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "itemId" TEXT NOT NULL,
+    "unitId" TEXT NOT NULL,
+    "customUnitLabel" TEXT,
+    "factorToBase" REAL NOT NULL,
+    "barcode" TEXT,
+    "purchasePrice" REAL,
+    "sellPrice" REAL,
+    "isDefaultSalesUnit" BOOLEAN NOT NULL DEFAULT false,
+    "isDefaultPurchaseUnit" BOOLEAN NOT NULL DEFAULT false,
+    CONSTRAINT "ItemUnitConversion_itemId_fkey" FOREIGN KEY ("itemId") REFERENCES "InventoryItem" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "ItemUnitConversion_unitId_fkey" FOREIGN KEY ("unitId") REFERENCES "UnitOfMeasure" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "StockBalance" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "itemId" TEXT NOT NULL,
+    "warehouseId" TEXT NOT NULL,
+    "qtyOnHandBase" REAL NOT NULL DEFAULT 0,
+    "avgUnitCostBase" REAL NOT NULL DEFAULT 0,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "StockBalance_itemId_fkey" FOREIGN KEY ("itemId") REFERENCES "InventoryItem" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "StockBalance_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "StockMovement" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "itemId" TEXT NOT NULL,
+    "warehouseId" TEXT NOT NULL,
+    "movementType" TEXT NOT NULL,
+    "enteredQty" REAL NOT NULL,
+    "enteredUnitId" TEXT NOT NULL,
+    "factorToBase" REAL NOT NULL DEFAULT 1,
+    "baseQtyDelta" REAL NOT NULL,
+    "unitCostBase" REAL NOT NULL DEFAULT 0,
+    "referenceType" TEXT,
+    "referenceId" TEXT,
+    "notes" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "StockMovement_itemId_fkey" FOREIGN KEY ("itemId") REFERENCES "InventoryItem" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "StockMovement_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "StockMovement_enteredUnitId_fkey" FOREIGN KEY ("enteredUnitId") REFERENCES "UnitOfMeasure" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "Account_code_key" ON "Account"("code");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "JournalEntry_entryNumber_key" ON "JournalEntry"("entryNumber");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Currency_code_key" ON "Currency"("code");
+
+-- CreateIndex
+CREATE INDEX "ExchangeRate_currencyCode_rateDate_idx" ON "ExchangeRate"("currencyCode", "rateDate");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Project_code_key" ON "Project"("code");
@@ -731,3 +927,27 @@ CREATE INDEX "LicenseDeviceBinding_licenseId_idx" ON "LicenseDeviceBinding"("lic
 
 -- CreateIndex
 CREATE UNIQUE INDEX "LicenseDeviceBinding_licenseId_userEmail_platform_key" ON "LicenseDeviceBinding"("licenseId", "userEmail", "platform");
+
+-- CreateIndex
+CREATE INDEX "TreasuryTransaction_treasuryId_date_idx" ON "TreasuryTransaction"("treasuryId", "date");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "UnitOfMeasure_code_key" ON "UnitOfMeasure"("code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ItemCategory_code_key" ON "ItemCategory"("code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Warehouse_code_key" ON "Warehouse"("code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "InventoryItem_sku_key" ON "InventoryItem"("sku");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ItemUnitConversion_itemId_unitId_key" ON "ItemUnitConversion"("itemId", "unitId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "StockBalance_itemId_warehouseId_key" ON "StockBalance"("itemId", "warehouseId");
+
+-- CreateIndex
+CREATE INDEX "StockMovement_itemId_warehouseId_createdAt_idx" ON "StockMovement"("itemId", "warehouseId", "createdAt");

@@ -85,6 +85,36 @@ function cleanApkFiles(dir) {
   }
 }
 
+/**
+ * Strips .map sourcemaps and removes /downloads from ./out before `cap sync`
+ * so the Android APK remains compact and contains zero self-download artifacts.
+ * @param {string} outDir
+ */
+function stripSourcemapsAndDownloads(outDir) {
+  if (!fs.existsSync(outDir)) return;
+  const outDownloads = path.join(outDir, "downloads");
+  if (fs.existsSync(outDownloads)) {
+    fs.rmSync(outDownloads, { recursive: true, force: true });
+    console.log(`[optimize-apk] Removed ${outDownloads} from static export.`);
+  }
+  let removedMaps = 0;
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.name.toLowerCase().endsWith(".map")) {
+        fs.rmSync(full, { force: true });
+        removedMaps++;
+      }
+    }
+  }
+  walk(outDir);
+  if (removedMaps > 0) {
+    console.log(`[optimize-apk] Stripped ${removedMaps} .map sourcemap file(s) from ./out.`);
+  }
+}
+
 try {
   // Stash public downloads APKs so next export doesn't copy large APKs into out/
   stashedApks = stashPublicApks();
@@ -111,8 +141,9 @@ try {
     env: { ...process.env, CAPACITOR_EXPORT: "1" },
   });
 
-  // Ensure no stale or copied .apk exists in out/ before capacitor sync
+  // Ensure no stale .apk, .exe, .map sourcemaps, or /downloads folder exist in out/ before capacitor sync
   cleanApkFiles(path.join(rootDir, "out"));
+  stripSourcemapsAndDownloads(path.join(rootDir, "out"));
   cleanApkFiles(androidAssetsPublicDir);
 } finally {
   if (movedApi && fs.existsSync(backupApiDir)) {

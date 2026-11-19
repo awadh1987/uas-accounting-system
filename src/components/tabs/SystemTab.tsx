@@ -36,10 +36,13 @@ import {
   AlertTriangle,
   Archive,
   FileText,
+  RotateCcw,
+  Trash2,
 } from "lucide-react";
-import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl } from "@/lib/apiClient";
+import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl, safeFetchJson } from "@/lib/apiClient";
 import { exportOrShareBinaryFile } from "@/lib/nativeBridge";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
+import { AccountingSettingsPanel } from "@/components/AccountingSettingsPanel";
 import {
   ALL_USER_ROLES,
   ROLE_DEFAULT_PERMISSIONS,
@@ -258,7 +261,7 @@ export function SystemTab({
   onToast,
 }: SystemTabProps) {
   const isAr = lang === "ar";
-  const [activeSubTab, setActiveSubTab] = useState<"branding" | "users" | "security">("branding");
+  const [activeSubTab, setActiveSubTab] = useState<"branding" | "users" | "accounting" | "security">("branding");
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -266,13 +269,13 @@ export function SystemTab({
     const readInitialSubTab = () => {
       const rawHash = window.location.hash.replace(/^#\/?/, "");
       const [hTab, hSub] = rawHash.split("/");
-      if (hTab === "system" && (hSub === "branding" || hSub === "users" || hSub === "security")) {
+      if (hTab === "system" && (hSub === "branding" || hSub === "users" || hSub === "accounting" || hSub === "security")) {
         setActiveSubTab(hSub);
         window.sessionStorage.setItem("uas_system_subtab", hSub);
         return;
       }
       const saved = window.sessionStorage.getItem("uas_system_subtab");
-      if (saved === "branding" || saved === "users" || saved === "security") {
+      if (saved === "branding" || saved === "users" || saved === "accounting" || saved === "security") {
         setActiveSubTab(saved);
         if (hTab === "system") {
           window.location.hash = `#/system/${saved}`;
@@ -285,7 +288,7 @@ export function SystemTab({
     const handleHash = () => {
       const rawHash = window.location.hash.replace(/^#\/?/, "");
       const [hTab, hSub] = rawHash.split("/");
-      if (hTab === "system" && (hSub === "branding" || hSub === "users" || hSub === "security")) {
+      if (hTab === "system" && (hSub === "branding" || hSub === "users" || hSub === "accounting" || hSub === "security")) {
         setActiveSubTab(hSub);
         window.sessionStorage.setItem("uas_system_subtab", hSub);
       }
@@ -295,7 +298,7 @@ export function SystemTab({
     return () => window.removeEventListener("hashchange", handleHash);
   }, []);
 
-  function handleSelectSubTab(subTab: "branding" | "users" | "security") {
+  function handleSelectSubTab(subTab: "branding" | "users" | "accounting" | "security") {
     setActiveSubTab(subTab);
     if (typeof window !== "undefined") {
       window.sessionStorage.setItem("uas_system_subtab", subTab);
@@ -308,6 +311,100 @@ export function SystemTab({
   const [profileNameDraft, setProfileNameDraft] = useState<string | null>(null);
   const [profileAvatarDraft, setProfileAvatarDraft] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState("");
+  const [showArchivedUsers, setShowArchivedUsers] = useState(false);
+  const [userLifecycleBusyId, setUserLifecycleBusyId] = useState<string | null>(null);
+
+  async function handleArchiveOrRestoreUser(user: UasUser, action: "archive" | "restore") {
+    if (user.id === currentUser.id) return;
+    const confirmText =
+      action === "archive"
+        ? isAr
+          ? `هل تريد أرشفة المستخدم "${user.name}" وإلغاء ربط أجهزته من الترخيص؟`
+          : `Archive user "${user.name}" and release their bound license seats?`
+        : isAr
+        ? `هل تريد استعادة المستخدم المؤرشف "${user.name}" وتفعيل حسابه؟`
+        : `Restore archived user "${user.name}"?`;
+    if (typeof window !== "undefined" && !window.confirm(confirmText)) return;
+
+    setUserLifecycleBusyId(user.id);
+    try {
+      const res = await safeFetchJson<{ success?: boolean; message?: string; error?: string }>(
+        `/api/users/${encodeURIComponent(user.id)}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            "x-uas-user-id": currentUser.id,
+            "x-uas-role": String(currentUser.role),
+            "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+          },
+          body: JSON.stringify({
+            action,
+            actor: {
+              userId: currentUser.id,
+              userRole: currentUser.role,
+              userDisplay: `${currentUser.name} (${currentUser.role})`,
+            },
+          }),
+        }
+      );
+      if (!res.ok || !res.data?.success) {
+        onToast(res.data?.error || (isAr ? "تعذر تحديث حالة أرشفة المستخدم" : "Failed to update user archive status"));
+        return;
+      }
+      onToast(
+        res.data.message ||
+          (action === "archive"
+            ? "تمت أرشفة المستخدم وتحرير مقعد الترخيص بنجاح"
+            : "تمت استعادة المستخدم بنجاح")
+      );
+      onRefreshState?.();
+    } finally {
+      setUserLifecycleBusyId(null);
+    }
+  }
+
+  async function handleDeleteUser(user: UasUser) {
+    if (user.id === currentUser.id) return;
+    const confirmText = isAr
+      ? `هل تريد حذف المستخدم "${user.name}"؟\nسيتم الحذف النهائي إذا لم توجد قيود محاسبية مرتبطة به، أو أرشفته تلقائياً مع تحرير مقعد الترخيص إذا وُجدت قيود مرتبطة.`
+      : `Delete user "${user.name}"? Users with 0 linked records are permanently deleted; users with accounting/audit records are automatically archived and their license seat is released.`;
+    if (typeof window !== "undefined" && !window.confirm(confirmText)) return;
+
+    setUserLifecycleBusyId(user.id);
+    try {
+      const res = await safeFetchJson<{
+        success?: boolean;
+        deleted?: boolean;
+        archived?: boolean;
+        message?: string;
+        error?: string;
+      }>(`/api/users/${encodeURIComponent(user.id)}`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          "x-uas-user-id": currentUser.id,
+          "x-uas-role": String(currentUser.role),
+          "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+        },
+        body: JSON.stringify({
+          actor: {
+            userId: currentUser.id,
+            userRole: currentUser.role,
+            userDisplay: `${currentUser.name} (${currentUser.role})`,
+          },
+        }),
+      });
+      if (!res.ok || !res.data?.success) {
+        onToast(res.data?.error || (isAr ? "تعذر حذف المستخدم" : "Failed to delete user"));
+        return;
+      }
+      onToast(res.data.message || (isAr ? "تمت معالجة حذف المستخدم بنجاح" : "User removed successfully"));
+      onRefreshState?.();
+    } finally {
+      setUserLifecycleBusyId(null);
+    }
+  }
 
   const [serverUrlDraft, setServerUrlDraft] = useState(() => getApiBaseUrl());
   const [testingServer, setTestingServer] = useState(false);
@@ -838,6 +935,18 @@ export function SystemTab({
         </button>
         <button
           type="button"
+          onClick={() => handleSelectSubTab("accounting")}
+          className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+            activeSubTab === "accounting"
+              ? "accent-bg shadow-sm"
+              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+          }`}
+        >
+          <FileText className="w-4 h-4" />
+          <span>{isAr ? "الإعدادات المحاسبية والتشغيلية (Accounting Settings)" : "Accounting & Operational Settings"}</span>
+        </button>
+        <button
+          type="button"
           onClick={() => handleSelectSubTab("security")}
           className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
             activeSubTab === "security"
@@ -849,6 +958,16 @@ export function SystemTab({
           <span>{isAr ? "إعدادات النظام والأمان والربط (Settings & Connectivity)" : "System Settings & Connectivity"}</span>
         </button>
       </div>
+
+      {activeSubTab === "accounting" && (
+        <div className="card-surface rounded-2xl p-5">
+          <AccountingSettingsPanel
+            lang={lang}
+            readOnly={readOnly || !canManageUsers}
+            onToast={onToast}
+          />
+        </div>
+      )}
 
       {activeSubTab === "security" && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1434,6 +1553,24 @@ export function SystemTab({
             </div>
           )}
 
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              {isAr
+                ? `إجمالي المستخدمين المعروضين: ${users.filter((u) => (showArchivedUsers ? true : !u.archivedAt)).length} (المؤرشفون: ${users.filter((u) => Boolean(u.archivedAt)).length})`
+                : `Visible Users: ${users.filter((u) => (showArchivedUsers ? true : !u.archivedAt)).length} (Archived: ${users.filter((u) => Boolean(u.archivedAt)).length})`}
+            </div>
+            <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 text-xs font-bold cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showArchivedUsers}
+                onChange={(e) => setShowArchivedUsers(e.target.checked)}
+                className="rounded border-slate-400 text-emerald-600 focus:ring-emerald-500"
+              />
+              <Archive className="w-3.5 h-3.5 text-slate-500" />
+              <span>{isAr ? "إظهار المؤرشفين" : "Show Archived"}</span>
+            </label>
+          </div>
+
           <table className="w-full text-xs text-right border-collapse">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-800/60">
@@ -1446,10 +1583,15 @@ export function SystemTab({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-              {users.map((u) => {
+              {users
+                .filter((u) => (showArchivedUsers ? true : !u.archivedAt))
+                .map((u) => {
                 const roleMeta = getRoleMeta(u.role);
-                const isUserActive = u.active && (u.isActive ?? true);
+                const isArchived = Boolean(u.archivedAt);
+                const isUserActive = !isArchived && u.active && (u.isActive ?? true);
                 const hasCustom = Boolean(u.useCustomPermissions);
+                const isSelf = u.id === currentUser.id;
+                const isBusy = userLifecycleBusyId === u.id;
 
                 return (
                   <tr key={u.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
@@ -1506,12 +1648,18 @@ export function SystemTab({
                       <div className="flex flex-col gap-1 items-start">
                         <span
                           className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                            isUserActive
+                            isArchived
+                              ? "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                              : isUserActive
                               ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
                               : "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300"
                           }`}
                         >
-                          {isUserActive ? "نشط (Active)" : "موقوف (Suspended)"}
+                          {isArchived
+                            ? "مؤرشف (Archived)"
+                            : isUserActive
+                            ? "نشط (Active)"
+                            : "موقوف (Suspended)"}
                         </span>
                         {u.mustChangePassword && (
                           <span className="text-[9px] font-extrabold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-1 py-0.5 rounded">
@@ -1521,7 +1669,7 @@ export function SystemTab({
                       </div>
                     </td>
                     <td className="p-2.5">
-                      <div className="flex items-center justify-center gap-1.5">
+                      <div className="flex flex-wrap items-center justify-center gap-1.5">
                         <button
                           type="button"
                           onClick={() => openPermissionsDrawer(u)}
@@ -1547,7 +1695,7 @@ export function SystemTab({
                         <button
                           type="button"
                           onClick={() => onToggleUserStatus(u.id)}
-                          disabled={readOnly || !canManageUsers || u.id === currentUser.id}
+                          disabled={readOnly || !canManageUsers || isSelf || isArchived}
                           title={isUserActive ? "إيقاف الحساب" : "تفعيل الحساب"}
                           className={`px-2 py-1 rounded-lg border text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40 ${
                             isUserActive
@@ -1558,6 +1706,36 @@ export function SystemTab({
                           <UserCheck className="w-3.5 h-3.5" />
                           <span>{isUserActive ? "إيقاف" : "تفعيل"}</span>
                         </button>
+
+                        {!isSelf && (
+                          <button
+                            type="button"
+                            onClick={() => handleArchiveOrRestoreUser(u, isArchived ? "restore" : "archive")}
+                            disabled={readOnly || !canManageUsers || isBusy}
+                            title={isArchived ? "استعادة الحساب المؤرشف" : "أرشفة الحساب وتحرير مقعد الترخيص"}
+                            className={`px-2 py-1 rounded-lg border text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40 ${
+                              isArchived
+                                ? "border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
+                                : "border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                            }`}
+                          >
+                            {isArchived ? <RotateCcw className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}
+                            <span>{isArchived ? "استعادة" : "أرشفة"}</span>
+                          </button>
+                        )}
+
+                        {!isSelf && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteUser(u)}
+                            disabled={readOnly || !canManageUsers || isBusy}
+                            title="حذف المستخدم (أو أرشفة تلقائية في حال وجود قيود محاسبية)"
+                            className="px-2 py-1 rounded-lg border border-red-300 dark:border-red-900 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>حذف</span>
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
