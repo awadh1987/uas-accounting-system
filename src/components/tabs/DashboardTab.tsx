@@ -77,17 +77,54 @@ export function DashboardTab({
     [state.projects, selectedProjectId]
   );
 
+  const isPostedDoc = (item: { documentStatus?: string | null; status?: string | null }) => {
+    const docStatus = (item.documentStatus || "").toUpperCase();
+    if (
+      docStatus === "DRAFT" ||
+      docStatus === "PENDING_APPROVAL" ||
+      docStatus === "VOIDED" ||
+      docStatus === "REJECTED" ||
+      docStatus === "AMENDMENT_PENDING"
+    ) {
+      return false;
+    }
+    const status = (item.status || "").toUpperCase();
+    if (
+      status === "DRAFT" ||
+      status === "PENDING" ||
+      status === "VOIDED" ||
+      status === "REJECTED" ||
+      status === "CANCELLED"
+    ) {
+      return false;
+    }
+    return true;
+  };
+
+  const postedFilteredSales = useMemo(
+    () => filteredSales.filter(isPostedDoc),
+    [filteredSales]
+  );
+  const postedFilteredExpenses = useMemo(
+    () => filteredExpenses.filter(isPostedDoc),
+    [filteredExpenses]
+  );
+  const postedFilteredWorkers = useMemo(
+    () => filteredWorkers.filter(isPostedDoc),
+    [filteredWorkers]
+  );
+
   const totalProjVal = selectedSubProject
     ? Number(selectedSubProject.budget) || 0
     : filteredProjects.reduce((acc, p) => acc + (Number(p.estimatedValue) || 0), 0);
-  const totalSales = filteredSales.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
-  const totalSalesCredit = filteredSales.reduce((acc, s) => acc + (Number(s.credit) || 0), 0);
-  const totalSalesDebit = filteredSales.reduce((acc, s) => acc + (Number(s.debit) || 0), 0);
+  const totalSales = postedFilteredSales.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+  const totalSalesCredit = postedFilteredSales.reduce((acc, s) => acc + (Number(s.credit) || 0), 0);
+  const totalSalesDebit = postedFilteredSales.reduce((acc, s) => acc + (Number(s.debit) || 0), 0);
 
-  const totalOpExp = filteredExpenses.reduce((acc, e) => acc + (Number(e.total) || 0), 0);
-  const totalWrkWages = filteredWorkers.reduce((acc, w) => acc + (Number(w.total) || 0), 0);
-  const totalWrkCredit = filteredWorkers.reduce((acc, w) => acc + (Number(w.credit) || 0), 0);
-  const totalWrkDebit = filteredWorkers.reduce((acc, w) => acc + (Number(w.debit) || 0), 0);
+  const totalOpExp = postedFilteredExpenses.reduce((acc, e) => acc + (Number(e.total) || 0), 0);
+  const totalWrkWages = postedFilteredWorkers.reduce((acc, w) => acc + (Number(w.total) || 0), 0);
+  const totalWrkCredit = postedFilteredWorkers.reduce((acc, w) => acc + (Number(w.credit) || 0), 0);
+  const totalWrkDebit = postedFilteredWorkers.reduce((acc, w) => acc + (Number(w.debit) || 0), 0);
 
   const netProfit = computeNetOperatingProfit(totalSales, totalOpExp, totalWrkWages);
 
@@ -95,15 +132,15 @@ export function DashboardTab({
     const labels = state.projects.map((p) => p.name);
     const salesData = state.projects.map((p) =>
       state.sales
-        .filter((s) => s.projectId === p.id)
+        .filter((s) => s.projectId === p.id && isPostedDoc(s))
         .reduce((a, b) => a + Number(b.total), 0)
     );
     const costData = state.projects.map((p) => {
       const e = state.expenses
-        .filter((x) => x.projectId === p.id)
+        .filter((x) => x.projectId === p.id && isPostedDoc(x))
         .reduce((a, b) => a + Number(b.total), 0);
       const w = state.workers
-        .filter((x) => x.projectId === p.id)
+        .filter((x) => x.projectId === p.id && isPostedDoc(x))
         .reduce((a, b) => a + Number(b.total), 0);
       return e + w;
     });
@@ -123,10 +160,12 @@ export function DashboardTab({
     const cats = ["وقود/محروقات", "وجبات غذائية", "مواد غذائية", "أجور نقل", "أخرى"];
     const catSums = cats.map((c) =>
       state.expenses
-        .filter((e) => e.category === c)
+        .filter((e) => e.category === c && isPostedDoc(e))
         .reduce((a, b) => a + Number(b.total), 0)
     );
-    const totalWages = state.workers.reduce((a, b) => a + Number(b.total), 0);
+    const totalWages = state.workers
+      .filter((w) => isPostedDoc(w))
+      .reduce((a, b) => a + Number(b.total), 0);
     return {
       labels: [...cats, "أجور العمال"],
       datasets: [
@@ -181,6 +220,23 @@ export function DashboardTab({
 
   return (
     <section className="space-y-6">
+      {/* Period Lock Notice if Active */}
+      {state.settings?.periodLockDate && (
+        <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-200 text-xs font-bold flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span>🔒</span>
+            <span>
+              {lang === "ar"
+                ? `الفترة المحاسبية مقفلة حتى تاريخ: ${state.settings.periodLockDate} (لا يمكن إضافة أو تعديل قيود بأثر رجعي)`
+                : `Accounting period locked until: ${state.settings.periodLockDate} (No backdated transactions allowed)`}
+            </span>
+          </div>
+          <span className="px-2 py-0.5 rounded-full text-[10px] bg-amber-500/20 font-mono">
+            PERIOD_LOCKED
+          </span>
+        </div>
+      )}
+
       {/* Top Action & Export Bar */}
       <div className="card-surface rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
         <div>

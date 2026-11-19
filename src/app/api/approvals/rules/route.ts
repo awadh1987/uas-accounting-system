@@ -28,6 +28,11 @@ export async function POST(req: NextRequest) {
     const auth = await authorizeApiAction(body, req, { moduleId: "system", action: "edit" });
     if (!auth.ok) return auth.response;
 
+    const { hasGranularPermission } = await import("@/lib/permissions");
+    if (!hasGranularPermission(auth.actor.userRole, "approvals.configure")) {
+      return jsonError("غير مصرح: ليس لديك صلاحية ضبط قواعد الاعتماد", 403);
+    }
+
     const rule = await createApprovalRule({
       module: String(body.module || "ACCOUNTING"),
       actionType: String(body.actionType || "GL_POSTING"),
@@ -51,6 +56,11 @@ export async function PUT(req: NextRequest) {
     const body = (await req.json()) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, { moduleId: "system", action: "edit" });
     if (!auth.ok) return auth.response;
+
+    const { hasGranularPermission } = await import("@/lib/permissions");
+    if (!hasGranularPermission(auth.actor.userRole, "approvals.configure")) {
+      return jsonError("غير مصرح: ليس لديك صلاحية ضبط قواعد الاعتماد", 403);
+    }
     const id = String(body.id || "");
     if (!id) return jsonError("id is required", 400);
 
@@ -81,6 +91,11 @@ export async function DELETE(req: NextRequest) {
     }
     const auth = await authorizeApiAction(body, req, { moduleId: "system", action: "edit" });
     if (!auth.ok) return auth.response;
+
+    const { hasGranularPermission } = await import("@/lib/permissions");
+    if (!hasGranularPermission(auth.actor.userRole, "approvals.configure")) {
+      return jsonError("غير مصرح: ليس لديك صلاحية ضبط قواعد الاعتماد", 403);
+    }
     const id = searchParams.get("id") || String(body.id || "");
     if (!id) return jsonError("id is required", 400);
     await deleteApprovalRule(id);

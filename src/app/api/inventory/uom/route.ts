@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { DEFAULT_UOMS, slugifyLookupCode } from "@/lib/multiUnitInventoryEngine";
-import { jsonError } from "@/lib/apiHelpers";
+import { extractActor, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +37,13 @@ export async function POST(req: NextRequest) {
     await ensureSqliteDatabaseReady();
     await ensureDefaultUomsSeeded();
     const body = (await req.json()) as Record<string, unknown>;
+    const actor = extractActor(body, req);
+
+    const { hasGranularPermission } = await import("@/lib/permissions");
+    if (!hasGranularPermission(actor.userRole, "inventory.custom_uom")) {
+      return jsonError("غير مصرح: ليس لديك صلاحية إضافة وحدات قياس مخصصة", 403);
+    }
+
     const nameAr = String(body.nameAr || body.customUnitLabel || "").trim();
     const nameEn = String(body.nameEn || nameAr).trim();
     if (!nameAr) {

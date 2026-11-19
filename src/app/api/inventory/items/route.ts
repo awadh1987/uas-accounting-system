@@ -10,6 +10,12 @@ import {
 } from "@/lib/multiUnitInventoryEngine";
 import { extractActor, jsonError } from "@/lib/apiHelpers";
 import { appendAuditLogTx } from "@/lib/serverBootstrap";
+import { withIdempotency } from "@/lib/idempotencyGuard";
+import {
+  archiveMasterRecord,
+  restoreMasterRecord,
+  safeDeleteOrArchiveMasterRecord,
+} from "@/lib/masterLifecycle";
 
 export const dynamic = "force-dynamic";
 
@@ -287,9 +293,45 @@ async function upsertItem(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  return upsertItem(req);
+  return withIdempotency(req, (r) => upsertItem(r));
 }
 
 export async function PUT(req: NextRequest) {
   return upsertItem(req);
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      body = {};
+    }
+    const actor = extractActor(body, req);
+    const id = searchParams.get("id") || String(body.id || "");
+    const action = String(body.action || searchParams.get("action") || "SAFE_DELETE").toUpperCase();
+    if (!id) return jsonError("معرف الصنف مطلوب / Item id is required", 400);
+
+    const validActor = {
+      userId: actor.userId,
+      userRole: actor.userRole,
+      userDisplay: actor.userDisplay || "مستخدم النظام",
+    };
+
+    let result;
+    if (action === "ARCHIVE") {
+      result = await archiveMasterRecord("InventoryItem", id, validActor);
+    } else if (action === "RESTORE") {
+      result = await restoreMasterRecord("InventoryItem", id, validActor);
+    } else {
+      result = await safeDeleteOrArchiveMasterRecord("InventoryItem", id, validActor);
+    }
+
+    return NextResponse.json(result, { status: result.status });
+  } catch (error) {
+    console.error("DELETE /api/inventory/items error:", error);
+    return jsonError("تعذر حذف أو أرشفة الصنف", 500);
+  }
 }

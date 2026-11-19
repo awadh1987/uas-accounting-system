@@ -1827,6 +1827,7 @@ function buildPostedLineWhere(filters: FinancialReportFilters): Prisma.JournalEn
     ...(filters.costCenterId && filters.costCenterId !== "ALL" ? { costCenterId: filters.costCenterId } : {}),
     journalEntry: {
       status: "POSTED",
+      documentStatus: "POSTED",
       ...(filters.fromDate || filters.toDate ? { date: dateFilter } : {}),
     },
   };

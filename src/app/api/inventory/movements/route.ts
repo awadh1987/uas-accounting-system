@@ -11,6 +11,7 @@ import {
 import { parseAccountingSettings } from "@/lib/accountingSettings";
 import { extractActor, jsonError } from "@/lib/apiHelpers";
 import { appendAuditLogTx } from "@/lib/serverBootstrap";
+import { withIdempotency } from "@/lib/idempotencyGuard";
 
 export const dynamic = "force-dynamic";
 
@@ -42,10 +43,11 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    await ensureSqliteDatabaseReady();
-    const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body, req);
+  return withIdempotency(req, async (r) => {
+    try {
+      await ensureSqliteDatabaseReady();
+      const body = (await r.json()) as Record<string, unknown>;
+      const actor = extractActor(body, r);
 
     const itemId = String(body.itemId || "").trim();
     const movementType = String(body.movementType || "ADJUSTMENT_IN").trim().toUpperCase();
@@ -215,4 +217,5 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/inventory/movements error:", error);
     return jsonError("تعذر تسجيل الحركة المخزنية / Failed to record stock movement", 500);
   }
+  });
 }

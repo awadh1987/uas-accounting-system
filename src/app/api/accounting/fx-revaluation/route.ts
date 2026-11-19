@@ -102,6 +102,12 @@ export async function POST(req: NextRequest) {
     await ensureSqliteDatabaseReady();
     const body = (await req.json()) as Record<string, unknown>;
     const actor = extractActor(body, req);
+
+    const { hasGranularPermission } = await import("@/lib/permissions");
+    if (!hasGranularPermission(actor.userRole, "accounting.fx_revalue")) {
+      return jsonError("غير مصرح: ليس لديك صلاحية إعادة تقييم فروق العملات الأجنبية", 403);
+    }
+
     const revalDateStr = String(body.date || new Date().toISOString().slice(0, 10));
 
     const settingsRow = await prisma.systemSettings.findUnique({ where: { id: "default" } });

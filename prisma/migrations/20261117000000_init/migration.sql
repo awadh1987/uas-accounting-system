@@ -17,6 +17,8 @@ CREATE TABLE "Account" (
     "subLedgerType" TEXT,
     "subLedgerEntityId" TEXT,
     "defaultCostCenterId" TEXT,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "archivedAt" DATETIME,
     CONSTRAINT "Account_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "Account_defaultCostCenterId_fkey" FOREIGN KEY ("defaultCostCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
@@ -202,6 +204,8 @@ CREATE TABLE "Project" (
     "updatedAt" DATETIME NOT NULL,
     "glAccountId" TEXT,
     "costCenterId" TEXT,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "archivedAt" DATETIME,
     CONSTRAINT "Project_parentProjectId_fkey" FOREIGN KEY ("parentProjectId") REFERENCES "Project" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "Project_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "Project_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
@@ -271,6 +275,8 @@ CREATE TABLE "Vendor" (
     "updatedAt" DATETIME NOT NULL,
     "glAccountId" TEXT,
     "costCenterId" TEXT,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "archivedAt" DATETIME,
     CONSTRAINT "Vendor_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "Vendor_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "Vendor_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
@@ -410,6 +416,8 @@ CREATE TABLE "Customer" (
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "glAccountId" TEXT,
     "costCenterId" TEXT,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "archivedAt" DATETIME,
     CONSTRAINT "Customer_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "Customer_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "Customer_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
@@ -576,6 +584,8 @@ CREATE TABLE "Worker" (
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "glAccountId" TEXT,
     "costCenterId" TEXT,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "archivedAt" DATETIME,
     CONSTRAINT "Worker_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "Worker_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "Worker_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
@@ -812,6 +822,7 @@ CREATE TABLE "Warehouse" (
     "isDefault" BOOLEAN NOT NULL DEFAULT false,
     "isCustom" BOOLEAN NOT NULL DEFAULT false,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "archivedAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "glAccountId" TEXT,
     "costCenterId" TEXT,
@@ -842,6 +853,7 @@ CREATE TABLE "InventoryItem" (
     "cogsAccountId" TEXT,
     "revenueAccountId" TEXT,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "archivedAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "InventoryItem_categoryId_fkey" FOREIGN KEY ("categoryId") REFERENCES "ItemCategory" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
@@ -913,6 +925,7 @@ CREATE TABLE "CostCenter" (
     "customLabel" TEXT,
     "isCustom" BOOLEAN NOT NULL DEFAULT false,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "archivedAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "CostCenter_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
@@ -1003,6 +1016,19 @@ CREATE TABLE "ApprovalRequest" (
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "ApprovalRequest_ruleId_fkey" FOREIGN KEY ("ruleId") REFERENCES "ApprovalRule" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "IdempotencyRecord" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "idempotencyKey" TEXT NOT NULL,
+    "endpoint" TEXT NOT NULL,
+    "method" TEXT NOT NULL,
+    "userId" TEXT,
+    "statusCode" INTEGER NOT NULL,
+    "responseJson" TEXT NOT NULL,
+    "expiresAt" DATETIME NOT NULL,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- CreateIndex
@@ -1136,3 +1162,12 @@ CREATE INDEX "ApprovalRequest_status_module_idx" ON "ApprovalRequest"("status", 
 
 -- CreateIndex
 CREATE INDEX "ApprovalRequest_targetType_targetId_idx" ON "ApprovalRequest"("targetType", "targetId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "IdempotencyRecord_idempotencyKey_key" ON "IdempotencyRecord"("idempotencyKey");
+
+-- CreateIndex
+CREATE INDEX "IdempotencyRecord_idempotencyKey_idx" ON "IdempotencyRecord"("idempotencyKey");
+
+-- CreateIndex
+CREATE INDEX "IdempotencyRecord_expiresAt_idx" ON "IdempotencyRecord"("expiresAt");

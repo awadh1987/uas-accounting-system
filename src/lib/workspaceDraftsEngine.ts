@@ -228,9 +228,13 @@ export async function discardWorkspaceDraft(
   if (
     existing.visibility === "PRIVATE" &&
     actor.userRole !== "SUPER_ADMIN" &&
+    actor.userRole !== "CHIEF_ACCOUNTANT" &&
     existing.createdById !== actor.userId
   ) {
-    throw new Error("DRAFT_ACCESS_DENIED");
+    const { hasGranularPermission } = await import("@/lib/permissions");
+    if (!hasGranularPermission(actor.userRole, "drafts.manage_all")) {
+      throw new Error("DRAFT_ACCESS_DENIED");
+    }
   }
   return client.workspaceDraft.update({
     where: { id },
@@ -253,14 +257,29 @@ export async function promoteWorkspaceDraft(
   client: typeof prisma = prisma
 ) {
   return client.$transaction(async (tx) => {
-    const draft = await tx.workspaceDraft.findUnique({ where: { id } });
-    if (!draft) throw new Error("DRAFT_NOT_FOUND");
-    if (draft.status === "CONVERTED") {
-      throw new Error("DRAFT_ALREADY_CONVERTED: تم تحويل هذه المسودة مسبقاً");
+    // Concurrency State Guard: Atomically lock draft from ACTIVE_DRAFT / SUBMITTED_FOR_APPROVAL
+    const guarded = await tx.workspaceDraft.updateMany({
+      where: {
+        id,
+        status: { in: ["ACTIVE_DRAFT", "SUBMITTED_FOR_APPROVAL"] },
+      },
+      data: {
+        status: "CONVERTED",
+      },
+    });
+    if (guarded.count === 0) {
+      const existing = await tx.workspaceDraft.findUnique({ where: { id } });
+      if (!existing) throw new Error("DRAFT_NOT_FOUND");
+      if (existing.status === "CONVERTED") {
+        throw new Error("DRAFT_ALREADY_CONVERTED: تم تحويل هذه المسودة مسبقاً");
+      }
+      if (existing.status === "DISCARDED") {
+        throw new Error("DRAFT_DISCARDED: لا يمكن ترحيل مسودة ملغاة");
+      }
+      throw new Error(`DRAFT_INVALID_STATUS: لا يمكن ترحيل مسودة في حالة (${existing.status})`);
     }
-    if (draft.status === "DISCARDED") {
-      throw new Error("DRAFT_DISCARDED: لا يمكن ترحيل مسودة ملغاة");
-    }
+
+    const draft = await tx.workspaceDraft.findUniqueOrThrow({ where: { id } });
 
     const payload = safeParsePayload(draft.payloadJson);
     const settingsRow = await tx.systemSettings.findUnique({ where: { id: "default" } });

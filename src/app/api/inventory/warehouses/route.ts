@@ -2,8 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { DEFAULT_WAREHOUSES, slugifyLookupCode } from "@/lib/multiUnitInventoryEngine";
-import { jsonError } from "@/lib/apiHelpers";
+import { extractActor, jsonError } from "@/lib/apiHelpers";
 import { provisionEntityGen6AccountAndCostCenter } from "@/lib/accountingCoreEngine";
+import { withIdempotency } from "@/lib/idempotencyGuard";
+import {
+  archiveMasterRecord,
+  restoreMasterRecord,
+  safeDeleteOrArchiveMasterRecord,
+} from "@/lib/masterLifecycle";
 
 export const dynamic = "force-dynamic";
 
@@ -19,12 +25,13 @@ export async function ensureDefaultWarehousesSeeded() {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     await ensureDefaultWarehousesSeeded();
+    const showArchived = req.nextUrl?.searchParams?.get("includeArchived") === "true";
     const warehouses = await prisma.warehouse.findMany({
-      where: { isActive: true },
+      where: showArchived ? {} : { isActive: true },
       orderBy: [{ isDefault: "desc" }, { nameAr: "asc" }],
     });
     return NextResponse.json({ warehouses });
@@ -35,51 +42,90 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    await ensureSqliteDatabaseReady();
-    await ensureDefaultWarehousesSeeded();
-    const body = (await req.json()) as Record<string, unknown>;
-    const nameAr = String(body.nameAr || "").trim();
-    const nameEn = String(body.nameEn || nameAr).trim();
-    if (!nameAr) {
-      return jsonError("يرجى إدخال اسم المستودع / Warehouse name is required.", 400);
-    }
-    const rawCode = String(body.code || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
-    const code = rawCode || slugifyLookupCode(nameEn || nameAr, "WH");
+  return withIdempotency(req, async (r) => {
+    try {
+      await ensureSqliteDatabaseReady();
+      await ensureDefaultWarehousesSeeded();
+      const body = (await r.json()) as Record<string, unknown>;
+      const nameAr = String(body.nameAr || "").trim();
+      const nameEn = String(body.nameEn || nameAr).trim();
+      if (!nameAr) {
+        return jsonError("يرجى إدخال اسم المستودع / Warehouse name is required.", 400);
+      }
+      const rawCode = String(body.code || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+      const code = rawCode || slugifyLookupCode(nameEn || nameAr, "WH");
 
-    const warehouse = await prisma.warehouse.upsert({
-      where: { code },
-      update: {
-        nameAr,
-        nameEn,
-        location: body.location !== undefined ? String(body.location) : undefined,
-        isActive: true,
-      },
-      create: {
-        code,
-        nameAr,
-        nameEn,
-        location: body.location ? String(body.location) : null,
-        isDefault: Boolean(body.isDefault),
-        isCustom: body.isCustom !== undefined ? Boolean(body.isCustom) : true,
-        isActive: true,
-      },
-    });
-    // Accounting-Core: every warehouse owns a Gen-6 inventory GL leaf + Cost Center
-    const prov = await provisionEntityGen6AccountAndCostCenter({
-      entityType: "WAREHOUSE",
-      entityId: warehouse.id,
-      nameAr: warehouse.nameAr,
-      nameEn: warehouse.nameEn,
-      costCenterId: warehouse.costCenterId,
-    });
-    const linked = await prisma.warehouse.findUnique({ where: { id: warehouse.id } });
-    return NextResponse.json(
-      { success: true, warehouse: linked ?? warehouse, glAccount: prov.account, costCenterId: prov.costCenterId },
-      { status: 201 }
-    );
+      const warehouse = await prisma.warehouse.upsert({
+        where: { code },
+        update: {
+          nameAr,
+          nameEn,
+          location: body.location !== undefined ? String(body.location) : undefined,
+          isActive: true,
+          archivedAt: null,
+        },
+        create: {
+          code,
+          nameAr,
+          nameEn,
+          location: body.location ? String(body.location) : null,
+          isDefault: Boolean(body.isDefault),
+          isCustom: body.isCustom !== undefined ? Boolean(body.isCustom) : true,
+          isActive: true,
+        },
+      });
+      // Accounting-Core: every warehouse owns a Gen-6 inventory GL leaf + Cost Center
+      const prov = await provisionEntityGen6AccountAndCostCenter({
+        entityType: "WAREHOUSE",
+        entityId: warehouse.id,
+        nameAr: warehouse.nameAr,
+        nameEn: warehouse.nameEn,
+        costCenterId: warehouse.costCenterId,
+      });
+      const linked = await prisma.warehouse.findUnique({ where: { id: warehouse.id } });
+      return NextResponse.json(
+        { success: true, warehouse: linked ?? warehouse, glAccount: prov.account, costCenterId: prov.costCenterId },
+        { status: 201 }
+      );
+    } catch (error) {
+      console.error("POST /api/inventory/warehouses error:", error);
+      return jsonError("تعذر حفظ المستودع / Failed to save warehouse", 500);
+    }
+  });
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      body = {};
+    }
+    const actor = extractActor(body, req);
+    const id = searchParams.get("id") || String(body.id || "");
+    const action = String(body.action || searchParams.get("action") || "SAFE_DELETE").toUpperCase();
+    if (!id) return jsonError("معرف المستودع مطلوب / Warehouse id is required", 400);
+
+    const validActor = {
+      userId: actor.userId,
+      userRole: actor.userRole,
+      userDisplay: actor.userDisplay || "مستخدم النظام",
+    };
+
+    let result;
+    if (action === "ARCHIVE") {
+      result = await archiveMasterRecord("Warehouse", id, validActor);
+    } else if (action === "RESTORE") {
+      result = await restoreMasterRecord("Warehouse", id, validActor);
+    } else {
+      result = await safeDeleteOrArchiveMasterRecord("Warehouse", id, validActor);
+    }
+
+    return NextResponse.json(result, { status: result.status });
   } catch (error) {
-    console.error("POST /api/inventory/warehouses error:", error);
-    return jsonError("تعذر حفظ المستودع / Failed to save warehouse", 500);
+    console.error("DELETE /api/inventory/warehouses error:", error);
+    return jsonError("تعذر حذف أو أرشفة المستودع", 500);
   }
 }

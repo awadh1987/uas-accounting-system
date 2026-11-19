@@ -1115,7 +1115,7 @@ export function UasAppShell() {
               onLogout={handleLogout}
             />
 
-            <main className="max-w-7xl w-full mx-auto flex-1 p-4 md:p-6 pb-24 md:pb-8 space-y-5">
+            <main className="max-w-7xl w-full mx-auto flex-1 p-4 md:p-6 pb-24 md:pb-20 space-y-5">
               {loading && (
                 <div className="card-surface rounded-2xl p-3 text-xs text-center text-slate-500">
                   جاري تحميل البيانات المحاسبية...

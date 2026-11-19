@@ -5,6 +5,9 @@ import {
   postJournalEntry,
   recordAuditDiffTx,
 } from "@/lib/accounting/ledgerService";
+import { assertDateNotInClosedFiscalYear } from "@/lib/fiscalYearClosingEngine";
+import { findMatchingApprovalRule, submitApprovalRequest } from "@/lib/approvalEngine";
+import { createWorkspaceDraft } from "@/lib/workspaceDraftsEngine";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
 import { collectServerSupportDiagnostics } from "@/lib/supportDiagnosticsServer";
 import {
@@ -194,6 +197,9 @@ export interface ConfirmedExecutionResult {
   executed_by_ai: boolean;
   entryNumber?: string;
   journalEntryId?: string;
+  approvalRequired?: boolean;
+  approvalRequestNumber?: string;
+  draftId?: string;
   summaryAr: string;
   summaryEn: string;
 }
@@ -276,11 +282,168 @@ export async function executeConfirmedAiAction(input: {
     };
   }
 
+  // 1. Workspace Draft Routing (if user explicitly requested saving as draft)
+  if (confirmationCard.executionPayload?.isDraft || confirmationCard.executionPayload?.saveAsDraft) {
+    const draft = await createWorkspaceDraft({
+      module: "ACCOUNTING",
+      formType: op,
+      titleAr: confirmationCard.narrationAr,
+      titleEn: confirmationCard.narrationEn,
+      payload: {
+        ...confirmationCard.executionPayload,
+        currency: confirmationCard.currency || "YER",
+        costCenterId: confirmationCard.costCenterId || null,
+        lines,
+        totalDebit: totalDr,
+        totalCredit: totalCr,
+      },
+      actor: {
+        userId: actor.userId || "u1",
+        userName: actor.userDisplay || "AI Copilot",
+        userRole: actor.userRole || "FIELD_ACCOUNTANT",
+      },
+    });
+    return {
+      ok: true,
+      status: 201,
+      code: "DRAFT_SAVED",
+      executed_by_ai: true,
+      draftId: draft.id,
+      summaryAr: `📝 تم حفظ العملية كمسودة عمل بنجاح (${draft.draftNumber}). يمكنك متابعتها واعتمادها لاحقاً.`,
+      summaryEn: `📝 Transaction successfully saved as workspace draft (${draft.draftNumber}).`,
+    };
+  }
+
+  // 2. Fiscal Year Period Lock Verification
+  const entryDateStr = confirmationCard.date || new Date().toISOString().slice(0, 10);
   try {
+    await assertDateNotInClosedFiscalYear(prisma, new Date(entryDateStr));
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: 400,
+      code: "FISCAL_YEAR_CLOSED",
+      executed_by_ai: false,
+      summaryAr: `⛔ لا يمكن ترحيل العملية: الفترة المالية لتاريخ (${entryDateStr}) مغلقة ومقفلة بالكامل.`,
+      summaryEn: `⛔ Transaction blocked: Fiscal year for date (${entryDateStr}) is closed and locked.`,
+    };
+  }
+
+  // 3. Approval Engine Governance & Threshold Evaluation
+  let exchangeRate = Number(confirmationCard.exchangeRate || 0);
+  if (exchangeRate <= 0) {
+    if (confirmationCard.currency === "SAR") exchangeRate = 530;
+    else if (confirmationCard.currency === "USD") exchangeRate = 2000;
+    else exchangeRate = 1.0;
+  }
+  const totalDrBase = Number((totalDr * exchangeRate).toFixed(2));
+
+  const matchingRule = await findMatchingApprovalRule(
+    { module: "ACCOUNTING", actionType: "GL_POSTING", amountBase: totalDrBase },
+    prisma
+  );
+
+  try {
+    if (matchingRule) {
+      // Create journal entry with PENDING_APPROVAL status and route to Approval Queue
+      const result = await prisma.$transaction(async (tx) => {
+        const entry = await postJournalEntry({
+          tx,
+          date: entryDateStr,
+          narrationAr: confirmationCard.narrationAr,
+          narrationEn: confirmationCard.narrationEn,
+          sourceType: `AI_COPILOT_${op}`,
+          projectId: confirmationCard.projectId ?? null,
+          createdById: actor.userId ?? undefined,
+          lines: lines.map((l) => ({
+            accountCode: l.accountCode,
+            debit: l.debit,
+            credit: l.credit,
+            currency: l.currency || confirmationCard.currency || "YER",
+            exchangeRate: l.exchangeRate || exchangeRate,
+            costCenterId: l.costCenterId || confirmationCard.costCenterId || null,
+            memo: l.memo || confirmationCard.narrationAr,
+          })),
+        });
+
+        await tx.journalEntry.updateMany({
+          where: { id: entry.id },
+          data: { status: "PENDING_APPROVAL", documentStatus: "PENDING_APPROVAL" },
+        });
+
+        return entry;
+      });
+
+      const aprReq = await submitApprovalRequest({
+        module: "ACCOUNTING",
+        actionType: "GL_POSTING",
+        targetType: "JournalEntry",
+        targetId: result.id,
+        documentNumber: result.entryNumber,
+        summaryAr: confirmationCard.narrationAr,
+        amountBase: totalDrBase,
+        currencyCode: confirmationCard.currency || "YER",
+        afterSnapshot: {
+          entryNumber: result.entryNumber,
+          totalDebit: totalDr,
+          lines,
+          executed_by_ai: true,
+        },
+        actor: {
+          userId: actor.userId || "u1",
+          userName: actor.userDisplay || "AI Copilot",
+          userRole: actor.userRole || "FIELD_ACCOUNTANT",
+        },
+      });
+
+      await prisma.$transaction(async (tx) => {
+        await recordAuditDiffTx(tx, {
+          userId: actor.userId,
+          action: "CREATE",
+          entity: "ApprovalRequest",
+          entityId: aprReq.id,
+          before: null,
+          after: {
+            requestNumber: aprReq.requestNumber,
+            targetDocument: result.entryNumber,
+            amountBase: totalDrBase,
+            ruleId: matchingRule.id,
+            executed_by_ai: true,
+          },
+        });
+
+        await appendAuditLogTx(tx, {
+          ...actor,
+          actionType: `إحالة عملية المساعد الذكي للاعتماد (${aprReq.requestNumber}) [executed_by_ai: true]`,
+          entityReference: aprReq.requestNumber,
+          details: JSON.stringify({
+            requestNumber: aprReq.requestNumber,
+            entryNumber: result.entryNumber,
+            amountBase: totalDrBase,
+            requiredRole: matchingRule.requiredRole,
+          }),
+        });
+      });
+
+      return {
+        ok: true,
+        status: 202,
+        code: "SUBMITTED_FOR_APPROVAL",
+        executed_by_ai: true,
+        entryNumber: result.entryNumber,
+        journalEntryId: result.id,
+        approvalRequired: true,
+        approvalRequestNumber: aprReq.requestNumber,
+        summaryAr: `⏳ **تم إنشاء القيد بنجاح (${result.entryNumber}) وإحالته لطابور الاعتماد (${aprReq.requestNumber})** نظراً لأن المبلغ (${totalDrBase.toLocaleString()} YER) يتجاوز الحد المالي للقواعد (${matchingRule.minAmountBase.toLocaleString()} YER). يتطلب موافقة: ${matchingRule.requiredRole}.`,
+        summaryEn: `⏳ **Journal entry (${result.entryNumber}) created and routed to Approval Queue (${aprReq.requestNumber})** as amount (${totalDrBase.toLocaleString()} YER) exceeds rule threshold (${matchingRule.minAmountBase.toLocaleString()} YER). Requires: ${matchingRule.requiredRole}.`,
+      };
+    }
+
+    // Direct posting when no approval rule matches
     const posted = await prisma.$transaction(async (tx) => {
       const entry = await postJournalEntry({
         tx,
-        date: confirmationCard.date || new Date().toISOString().slice(0, 10),
+        date: entryDateStr,
         narrationAr: confirmationCard.narrationAr,
         narrationEn: confirmationCard.narrationEn,
         sourceType: `AI_COPILOT_${op}`,
@@ -290,7 +453,9 @@ export async function executeConfirmedAiAction(input: {
           accountCode: l.accountCode,
           debit: l.debit,
           credit: l.credit,
-          currency: confirmationCard.currency || "YER",
+          currency: l.currency || confirmationCard.currency || "YER",
+          exchangeRate: l.exchangeRate || exchangeRate,
+          costCenterId: l.costCenterId || confirmationCard.costCenterId || null,
           memo: l.memo || confirmationCard.narrationAr,
         })),
       });
@@ -306,6 +471,9 @@ export async function executeConfirmedAiAction(input: {
           operationType: op,
           totalDebit: totalDr,
           totalCredit: totalCr,
+          costCenterId: confirmationCard.costCenterId,
+          currency: confirmationCard.currency || "YER",
+          exchangeRate,
           executed_by_ai: true,
         },
       });
@@ -321,6 +489,8 @@ export async function executeConfirmedAiAction(input: {
           totalDebit: totalDr,
           totalCredit: totalCr,
           currency: confirmationCard.currency || "YER",
+          exchangeRate,
+          costCenterId: confirmationCard.costCenterId,
           executed_by_ai: true,
         }),
       });

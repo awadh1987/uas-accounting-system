@@ -55,6 +55,13 @@ export interface UasUserCustomOverrides {
   canManageTreasury?: boolean;
   canManageLandingCms?: boolean;
   canManageUsers?: boolean;
+  canCloseFiscalYear?: boolean;
+  canFxRevalue?: boolean;
+  canDecideApprovals?: boolean;
+  canConfigureApprovals?: boolean;
+  canManageAllDrafts?: boolean;
+  canCustomUom?: boolean;
+  canArchiveDeleteRecords?: boolean;
   [key: string]: boolean | ErpGroupId[] | undefined;
 }
 
@@ -229,6 +236,10 @@ export interface UasOperatingExpense {
   total: number;
   date: string;
   notes: string;
+  documentStatus?: string | null;
+  status?: string | null;
+  isActive?: boolean;
+  archivedAt?: string | null;
 }
 
 export interface UasWorkerWage {
@@ -245,6 +256,10 @@ export interface UasWorkerWage {
   debit: number;
   date: string;
   notes: string;
+  documentStatus?: string | null;
+  status?: string | null;
+  isActive?: boolean;
+  archivedAt?: string | null;
 }
 
 export interface UasSaleTransaction {
@@ -272,6 +287,10 @@ export interface UasSaleTransaction {
   date: string;
   voucherNo: string;
   notes: string;
+  documentStatus?: string | null;
+  status?: string | null;
+  isActive?: boolean;
+  archivedAt?: string | null;
 }
 
 export interface UasTreasuryAccount {
@@ -339,6 +358,7 @@ export interface UasSystemSettings {
   defaultLang: LanguageCode;
   defaultTheme: ThemeName;
   defaultCurrency: CurrencyCode;
+  periodLockDate?: string | null;
 }
 
 export interface UasBootstrapState {

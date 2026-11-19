@@ -8,6 +8,7 @@ import {
   type JournalLineInput,
 } from "@/lib/accounting/ledgerService";
 import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
+import { withIdempotency } from "@/lib/idempotencyGuard";
 
 export const dynamic = "force-dynamic";
 
@@ -138,65 +139,67 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    const body = (await req.json()) as Record<string, unknown>;
-    const auth = await authorizeApiAction(body, req, {
-      moduleId: "ledger",
-      action: "post",
-      dateChanged: Boolean(body.date),
-    });
-    if (!auth.ok) return auth.response;
-    const actor = auth.actor;
-
-    if (body.action === "REVERSE") {
-      const journalEntryId = String(body.journalEntryId || "").trim();
-      if (!journalEntryId) return jsonError("معرف القيد مطلوب للعكس", 400);
-      const reversal = await reverseJournalEntry({
-        journalEntryId,
-        createdById: actor.userId ?? undefined,
-        reason: String(body.reason || "عكس قيد من دفتر اليومية"),
+  return withIdempotency(req, async (r) => {
+    try {
+      const body = (await r.json()) as Record<string, unknown>;
+      const auth = await authorizeApiAction(body, r, {
+        moduleId: "ledger",
+        action: "post",
+        dateChanged: Boolean(body.date),
       });
-      return NextResponse.json({ entry: reversal }, { status: 201 });
+      if (!auth.ok) return auth.response;
+      const actor = auth.actor;
+
+      if (body.action === "REVERSE") {
+        const journalEntryId = String(body.journalEntryId || "").trim();
+        if (!journalEntryId) return jsonError("معرف القيد مطلوب للعكس", 400);
+        const reversal = await reverseJournalEntry({
+          journalEntryId,
+          createdById: actor.userId ?? undefined,
+          reason: String(body.reason || "عكس قيد من دفتر اليومية"),
+        });
+        return NextResponse.json({ entry: reversal }, { status: 201 });
+      }
+
+      const narrationAr = String(body.narrationAr || "").trim();
+      const narrationEn = body.narrationEn ? String(body.narrationEn).trim() : undefined;
+      const reference = body.reference ? String(body.reference).trim() : undefined;
+      const projectId = body.projectId && body.projectId !== "ALL" ? String(body.projectId) : null;
+      const subProjectId =
+        body.subProjectId && body.subProjectId !== "ALL" ? String(body.subProjectId) : null;
+      const date = body.date ? String(body.date) : new Date().toISOString();
+      const lines = Array.isArray(body.lines) ? (body.lines as JournalLineInput[]) : [];
+      const attachments = Array.isArray(body.attachments)
+        ? (body.attachments as AttachmentInput[])
+        : undefined;
+
+      if (!narrationAr) {
+        return jsonError("يرجى إدخال البيان المحاسبي للقيد", 400);
+      }
+
+      const entry = await postJournalEntry({
+        date,
+        reference,
+        narrationAr,
+        narrationEn,
+        projectId,
+        subProjectId,
+        costCenterId: body.costCenterId ? String(body.costCenterId) : null,
+        createdById: actor.userId ?? undefined,
+        sourceType: "MANUAL",
+        status: "POSTED",
+        lines,
+        attachments,
+      });
+
+      return NextResponse.json({ entry }, { status: 201 });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "تعذر ترحيل القيد المحاسبي";
+      if (msg.includes("HARVEST_LOCKED")) return lockedError();
+      const status = msg.includes("UNBALANCED") || msg.includes("NON_POSTING") ? 400 : 500;
+      return jsonError(msg, status);
     }
-
-    const narrationAr = String(body.narrationAr || "").trim();
-    const narrationEn = body.narrationEn ? String(body.narrationEn).trim() : undefined;
-    const reference = body.reference ? String(body.reference).trim() : undefined;
-    const projectId = body.projectId && body.projectId !== "ALL" ? String(body.projectId) : null;
-    const subProjectId =
-      body.subProjectId && body.subProjectId !== "ALL" ? String(body.subProjectId) : null;
-    const date = body.date ? String(body.date) : new Date().toISOString();
-    const lines = Array.isArray(body.lines) ? (body.lines as JournalLineInput[]) : [];
-    const attachments = Array.isArray(body.attachments)
-      ? (body.attachments as AttachmentInput[])
-      : undefined;
-
-    if (!narrationAr) {
-      return jsonError("يرجى إدخال البيان المحاسبي للقيد", 400);
-    }
-
-    const entry = await postJournalEntry({
-      date,
-      reference,
-      narrationAr,
-      narrationEn,
-      projectId,
-      subProjectId,
-      costCenterId: body.costCenterId ? String(body.costCenterId) : null,
-      createdById: actor.userId ?? undefined,
-      sourceType: "MANUAL",
-      status: "POSTED",
-      lines,
-      attachments,
-    });
-
-    return NextResponse.json({ entry }, { status: 201 });
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : "تعذر ترحيل القيد المحاسبي";
-    if (msg.includes("HARVEST_LOCKED")) return lockedError();
-    const status = msg.includes("UNBALANCED") || msg.includes("NON_POSTING") ? 400 : 500;
-    return jsonError(msg, status);
-  }
+  });
 }
 
 async function handleJournalUpdate(req: NextRequest) {

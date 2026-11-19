@@ -4,6 +4,12 @@ import { prisma } from "@/lib/prisma";
 import { generateFinancialReports, recordAuditDiffTx } from "@/lib/accounting/ledgerService";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
+import { withIdempotency } from "@/lib/idempotencyGuard";
+import {
+  archiveMasterRecord,
+  restoreMasterRecord,
+  safeDeleteOrArchiveMasterRecord,
+} from "@/lib/masterLifecycle";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +60,8 @@ export async function GET() {
           estimatedValue: p.estimatedValue,
           status: p.status,
           notes: p.notes,
+          isActive: p.isActive ?? true,
+          archivedAt: p.archivedAt ? p.archivedAt.toISOString() : null,
           startDate: p.startDate ? p.startDate.toISOString() : null,
           endDate: p.endDate ? p.endDate.toISOString() : null,
           subProjects: p.subProjects.map((sp) => {
@@ -115,93 +123,95 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    const body = (await req.json()) as Record<string, unknown>;
-    const auth = await authorizeApiAction(body, req, {
-      moduleId: "projects",
-      action: "create",
-      dateChanged: Boolean(body.startDate || body.endDate),
-    });
-    if (!auth.ok) return auth.response;
+  return withIdempotency(req, async (r) => {
+    try {
+      const body = (await r.json()) as Record<string, unknown>;
+      const auth = await authorizeApiAction(body, r, {
+        moduleId: "projects",
+        action: "create",
+        dateChanged: Boolean(body.startDate || body.endDate),
+      });
+      if (!auth.ok) return auth.response;
 
-    const name = String(body.nameAr || body.name || "").trim();
-    const nameEn = String(body.nameEn || name).trim();
-    const type = String(body.type || "مشروع رئيسي").trim();
-    const parentProjectId =
-      type === "مشروع فرعي" && body.parentProjectId ? String(body.parentProjectId) : null;
-    const vendorId = body.vendorId ? String(body.vendorId).trim() : null;
-    const budgetTotal = Number(body.budgetTotal ?? body.estimatedValue) || 0;
-    const count = Math.max(1, Math.min(20, Number(body.plannedHarvests) || 1));
-    const notes = String(body.notes || "").trim();
-    const actor = auth.actor;
+      const name = String(body.nameAr || body.name || "").trim();
+      const nameEn = String(body.nameEn || name).trim();
+      const type = String(body.type || "مشروع رئيسي").trim();
+      const parentProjectId =
+        type === "مشروع فرعي" && body.parentProjectId ? String(body.parentProjectId) : null;
+      const vendorId = body.vendorId ? String(body.vendorId).trim() : null;
+      const budgetTotal = Number(body.budgetTotal ?? body.estimatedValue) || 0;
+      const count = Math.max(1, Math.min(20, Number(body.plannedHarvests) || 1));
+      const notes = String(body.notes || "").trim();
+      const actor = auth.actor;
 
-    if (!name) {
-      return jsonError("يرجى إدخال اسم المشروع", 400);
-    }
+      if (!name) {
+        return jsonError("يرجى إدخال اسم المشروع", 400);
+      }
 
-    const harvests: string[] = [];
-    for (let i = 0; i < count; i++) {
-      harvests.push(ORDINAL_HARVESTS[i] || `القطفة ${i + 1}`);
-    }
+      const harvests: string[] = [];
+      for (let i = 0; i < count; i++) {
+        harvests.push(ORDINAL_HARVESTS[i] || `القطفة ${i + 1}`);
+      }
 
-    const existingCount = await prisma.project.count();
-    const code =
-      String(body.code || "").trim() || `PRJ-${String(existingCount + 1).padStart(3, "0")}`;
+      const existingCount = await prisma.project.count();
+      const code =
+        String(body.code || "").trim() || `PRJ-${String(existingCount + 1).padStart(3, "0")}`;
 
-    const created = await prisma.$transaction(async (tx) => {
-      const uniqueCode = (await tx.project.findUnique({ where: { code } }))
-        ? `${code}-${Date.now().toString().slice(-3)}`
-        : code;
+      const created = await prisma.$transaction(async (tx) => {
+        const uniqueCode = (await tx.project.findUnique({ where: { code } }))
+          ? `${code}-${Date.now().toString().slice(-3)}`
+          : code;
 
-      const project = await tx.project.create({
-        data: {
-          code: uniqueCode,
-          name,
-          nameAr: name,
-          nameEn,
-          type,
-          parentProjectId,
-          vendorId,
-          budgetTotal,
-          estimatedValue: budgetTotal,
-          plannedHarvestCount: count,
-          status: String(body.status || "ACTIVE"),
-          startDate: body.startDate ? new Date(`${String(body.startDate).slice(0, 10)}T00:00:00Z`) : null,
-          endDate: body.endDate ? new Date(`${String(body.endDate).slice(0, 10)}T23:59:59Z`) : null,
-          notes,
-          harvestCycles: {
-            create: harvests.map((hName, idx) => ({
-              cycleNumber: idx + 1,
-              name: hName,
-              sortOrder: idx + 1,
-              isLocked: false,
-            })),
+        const project = await tx.project.create({
+          data: {
+            code: uniqueCode,
+            name,
+            nameAr: name,
+            nameEn,
+            type,
+            parentProjectId,
+            vendorId,
+            budgetTotal,
+            estimatedValue: budgetTotal,
+            plannedHarvestCount: count,
+            status: String(body.status || "ACTIVE"),
+            startDate: body.startDate ? new Date(`${String(body.startDate).slice(0, 10)}T00:00:00Z`) : null,
+            endDate: body.endDate ? new Date(`${String(body.endDate).slice(0, 10)}T23:59:59Z`) : null,
+            notes,
+            harvestCycles: {
+              create: harvests.map((hName, idx) => ({
+                cycleNumber: idx + 1,
+                name: hName,
+                sortOrder: idx + 1,
+                isLocked: false,
+              })),
+            },
           },
-        },
+        });
+
+        // Accounting-Core: Gen-6 project GL leaf + Cost Center
+        await provisionEntityGen6AccountAndCostCenter(
+          { entityType: "PROJECT", entityId: project.id, nameAr: name, nameEn },
+          tx
+        );
+
+        await appendAuditLogTx(tx, {
+          ...actor,
+          actionType: "إنشاء مشروع",
+          entityReference: project.id,
+          details: `إضافة مشروع ${name} (${uniqueCode}) بموازنة ${budgetTotal.toLocaleString("en-US")} ريال`,
+        });
+
+        return project;
       });
 
-      // Accounting-Core: Gen-6 project GL leaf + Cost Center
-      await provisionEntityGen6AccountAndCostCenter(
-        { entityType: "PROJECT", entityId: project.id, nameAr: name, nameEn },
-        tx
-      );
-
-      await appendAuditLogTx(tx, {
-        ...actor,
-        actionType: "إنشاء مشروع",
-        entityReference: project.id,
-        details: `إضافة مشروع ${name} (${uniqueCode}) بموازنة ${budgetTotal.toLocaleString("en-US")} ريال`,
-      });
-
-      return project;
-    });
-
-    const state = await getBootstrapState();
-    return NextResponse.json({ createdId: created.id, state }, { status: 201 });
-  } catch (error) {
-    console.error("POST /api/projects error:", error);
-    return jsonError("تعذر إنشاء المشروع", 500);
-  }
+      const state = await getBootstrapState();
+      return NextResponse.json({ createdId: created.id, state }, { status: 201 });
+    } catch (error) {
+      console.error("POST /api/projects error:", error);
+      return jsonError("تعذر إنشاء المشروع", 500);
+    }
+  });
 }
 
 async function handleProjectUpdate(req: NextRequest) {
@@ -371,4 +381,45 @@ export async function PATCH(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   return handleProjectUpdate(req);
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      body = {};
+    }
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "projects",
+      action: "delete",
+    });
+    if (!auth.ok) return auth.response;
+
+    const id = searchParams.get("id") || String(body.id || "");
+    const action = String(body.action || searchParams.get("action") || "SAFE_DELETE").toUpperCase();
+    if (!id) return jsonError("معرف المشروع مطلوب للحذف", 400);
+
+    const actor = {
+      userId: auth.actor.userId,
+      userRole: auth.actor.userRole,
+      userDisplay: auth.actor.userDisplay,
+    };
+
+    let result;
+    if (action === "ARCHIVE") {
+      result = await archiveMasterRecord("Project", id, actor);
+    } else if (action === "RESTORE") {
+      result = await restoreMasterRecord("Project", id, actor);
+    } else {
+      result = await safeDeleteOrArchiveMasterRecord("Project", id, actor);
+    }
+
+    return NextResponse.json(result, { status: result.status });
+  } catch (error) {
+    console.error("DELETE /api/projects error:", error);
+    return jsonError("تعذر حذف أو أرشفة المشروع", 500);
+  }
 }

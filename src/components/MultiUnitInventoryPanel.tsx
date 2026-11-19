@@ -32,6 +32,8 @@ interface WarehouseRecord {
   nameEn: string;
   isDefault: boolean;
   isCustom: boolean;
+  isActive?: boolean;
+  archivedAt?: string | null;
 }
 
 interface ConversionRowDraft {
@@ -71,6 +73,8 @@ interface InventoryItemRecord {
   }>;
   totalBaseQty?: number;
   compoundBreakdown?: string;
+  isActive?: boolean;
+  archivedAt?: string | null;
 }
 
 interface MultiUnitInventoryPanelProps {
@@ -169,6 +173,74 @@ export function MultiUnitInventoryPanel({
       setLoading(false);
     }
   }, [baseUnitId, categoryId, defaultWarehouseId, movItemId]);
+
+  const [showArchivedItems, setShowArchivedItems] = useState(false);
+
+  const handleArchiveItem = useCallback(
+    async (item: InventoryItemRecord) => {
+      try {
+        const res = await fetch("/api/system/lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entityType: "InventoryItem", id: item.id, action: "ARCHIVE" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error);
+        notify(data.message || "تمت أرشفة الصنف بنجاح");
+        await loadAll();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "تعذر أرشفة الصنف";
+        notify(msg);
+      }
+    },
+    [loadAll]
+  );
+
+  const handleRestoreItem = useCallback(
+    async (item: InventoryItemRecord) => {
+      try {
+        const res = await fetch("/api/system/lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entityType: "InventoryItem", id: item.id, action: "RESTORE" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error);
+        notify(data.message || "تمت استعادة الصنف بنجاح");
+        await loadAll();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "تعذر استعادة الصنف";
+        notify(msg);
+      }
+    },
+    [loadAll]
+  );
+
+  const handleDeleteItem = useCallback(
+    async (item: InventoryItemRecord) => {
+      if (
+        !confirm(
+          `هل أنت متأكد من حذف الصنف (${item.nameAr})؟ في حال وجود حركات مخزنية أو فواتير مرتبطة سيتم أرشفته آلياً حفاظاً على التاريخ المالي.`
+        )
+      )
+        return;
+      try {
+        const res = await fetch("/api/system/lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entityType: "InventoryItem", id: item.id, action: "SAFE_DELETE" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error);
+        notify(data.message || "تمت العملية بنجاح");
+        await loadAll();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "تعذر حذف الصنف";
+        notify(msg);
+      }
+    },
+    [loadAll]
+  );
 
   useEffect(() => {
     loadAll();
@@ -836,8 +908,37 @@ export function MultiUnitInventoryPanel({
           </form>
         )}
 
+        {/* Archive / Active Filter Header */}
+        <div className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-xl bg-slate-100/70 dark:bg-slate-800/50">
+          <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+            <span className="font-bold">{isAr ? "إجمالي الأصناف:" : "Total Items:"}</span>
+            <span className="font-mono font-black">{items.length}</span>
+            <span className="text-[10px] text-slate-400">
+              ({isAr ? "النشطة" : "Active"}: {items.filter((i) => i.isActive !== false).length} •{" "}
+              {isAr ? "المؤرشفة" : "Archived"}: {items.filter((i) => i.isActive === false).length})
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowArchivedItems((p) => !p)}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${
+              showArchivedItems
+                ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700"
+                : "bg-slate-200/50 dark:bg-slate-700/50 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600"
+            }`}
+          >
+            {showArchivedItems
+              ? isAr
+                ? "إخفاء الأصناف المؤرشفة"
+                : "Hide Archived Items"
+              : isAr
+              ? "إظهار الأصناف المؤرشفة"
+              : "Show Archived Items"}
+          </button>
+        </div>
+
         {/* Item Master & Compound Stock Balance Table */}
-        {items.length > 0 ? (
+        {items.filter((i) => (showArchivedItems ? true : i.isActive !== false)).length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-right border-collapse">
               <thead>
@@ -847,50 +948,112 @@ export function MultiUnitInventoryPanel({
                   <th className="p-2">{isAr ? "الوحدة الأساسية والتحويلات" : "Base Unit & Conversions"}</th>
                   <th className="p-2">{isAr ? "الرصيد بالوحدة الأساسية" : "Total Base Qty"}</th>
                   <th className="p-2">{isAr ? "التفصيل المركب للرصيد" : "Compound Breakdown"}</th>
+                  {!readOnly && <th className="p-2 no-print">{isAr ? "الإجراءات" : "Actions"}</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                {items.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
-                    <td className="p-2">
-                      <div className="font-bold">{item.nameAr}</div>
-                      <div className="text-[10px] font-mono text-slate-400">
-                        {item.sku} {item.grade ? `• ${item.grade}` : ""} {item.origin ? `• ${item.origin}` : ""}
-                      </div>
-                    </td>
-                    <td className="p-2">
-                      <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-bold">
-                        {item.category?.nameAr || "عام"}
-                      </span>
-                      <div className="text-[10px] text-slate-400 mt-0.5">{item.itemType}</div>
-                    </td>
-                    <td className="p-2">
-                      <div className="font-bold text-emerald-700 dark:text-emerald-300">
-                        {item.baseUnit?.nameAr || "حبة"}
-                      </div>
-                      {item.conversions && item.conversions.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {item.conversions.map((c) => (
-                            <span
-                              key={c.id}
-                              className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 text-[10px] font-mono font-bold"
-                            >
-                              1 {c.customUnitLabel || c.unit?.nameAr} = {c.factorToBase}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </td>
-                    <td className="p-2 font-mono font-black">
-                      {fmtNum(item.totalBaseQty ?? 0)} {item.baseUnit?.nameAr || ""}
-                    </td>
-                    <td className="p-2">
-                      <span className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300 font-extrabold">
-                        {item.compoundBreakdown || `0 ${item.baseUnit?.nameAr || ""}`}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {items
+                  .filter((i) => (showArchivedItems ? true : i.isActive !== false))
+                  .map((item) => {
+                    const isArchived = item.isActive === false;
+                    return (
+                      <tr
+                        key={item.id}
+                        className={`hover:bg-slate-50/50 dark:hover:bg-slate-800/40 transition ${
+                          isArchived
+                            ? "bg-amber-50/20 dark:bg-amber-950/10 text-slate-500"
+                            : ""
+                        }`}
+                      >
+                        <td className="p-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold">{item.nameAr}</span>
+                            {isArchived && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                                مؤرشف
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] font-mono text-slate-400">
+                            {item.sku} {item.grade ? `• ${item.grade}` : ""}{" "}
+                            {item.origin ? `• ${item.origin}` : ""}
+                          </div>
+                        </td>
+                        <td className="p-2">
+                          <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-bold">
+                            {item.category?.nameAr || "عام"}
+                          </span>
+                          <div className="text-[10px] text-slate-400 mt-0.5">{item.itemType}</div>
+                        </td>
+                        <td className="p-2">
+                          <div className="font-bold text-emerald-700 dark:text-emerald-300">
+                            {item.baseUnit?.nameAr || "حبة"}
+                          </div>
+                          {item.conversions && item.conversions.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {item.conversions.map((c) => (
+                                <span
+                                  key={c.id}
+                                  className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 text-[10px] font-mono font-bold"
+                                >
+                                  1 {c.customUnitLabel || c.unit?.nameAr} = {c.factorToBase}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-2 font-mono font-black">
+                          {fmtNum(item.totalBaseQty ?? 0)} {item.baseUnit?.nameAr || ""}
+                        </td>
+                        <td className="p-2">
+                          <span className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300 font-extrabold">
+                            {item.compoundBreakdown || `0 ${item.baseUnit?.nameAr || ""}`}
+                          </span>
+                        </td>
+                        {!readOnly && (
+                          <td className="p-2 no-print">
+                            <div className="flex items-center gap-1.5">
+                              {!isArchived ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleArchiveItem(item)}
+                                    className="px-2 py-1 rounded border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 font-bold hover:bg-amber-50"
+                                  >
+                                    أرشفة
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDeleteItem(item)}
+                                    className="px-2 py-1 rounded border border-rose-300 dark:border-rose-700 text-rose-600 font-bold hover:bg-rose-50"
+                                  >
+                                    حذف
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleRestoreItem(item)}
+                                    className="px-2 py-1 rounded border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 font-bold hover:bg-emerald-50"
+                                  >
+                                    استعادة
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDeleteItem(item)}
+                                    className="px-2 py-1 rounded border border-rose-300 dark:border-rose-700 text-rose-600 font-bold hover:bg-rose-50"
+                                  >
+                                    حذف نهائي
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>

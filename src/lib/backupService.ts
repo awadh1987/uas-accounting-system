@@ -13,6 +13,103 @@ import {
 import { companyNamesMatch } from "@/lib/licensing/licenseSchema";
 import { loadInstalledLicense } from "@/lib/licensing/verifier";
 import { appendAuditLogTx } from "@/lib/serverBootstrap";
+import { ensure6GenerationCoaHierarchy } from "@/lib/accountingCoreEngine";
+import { ensureDefaultFiscalYear } from "@/lib/fiscalYearClosingEngine";
+
+export interface FullSchemaBackupData {
+  format: "UAS-FULL-SCHEMA-JSON-V1";
+  version: "3.0.0";
+  createdAt: string;
+  companyName: string;
+  licenseId: string;
+  tableCounts: Record<string, number>;
+  tables: Record<string, unknown[]>;
+}
+
+export const FULL_SCHEMA_TABLE_ORDER = [
+  // 1. Core Config & Master Lookups
+  "enterpriseProfile",
+  "systemSettings",
+  "currency",
+  "exchangeRate",
+  "costCenter",
+  "fiscalYear",
+  "unitOfMeasure",
+  "itemCategory",
+  "warehouse",
+  "user",
+  "licenseState",
+  "licenseDeviceBinding",
+  "currencyRate",
+  // 2. Chart of Accounts & Projects
+  "account",
+  "project",
+  "subProject",
+  "projectAcquisitionCycle",
+  "harvestCycle",
+  "treasuryAccount",
+  // 3. Parties & Items
+  "vendor",
+  "customer",
+  "worker",
+  "inventoryItem",
+  "itemUnitConversion",
+  "stockBalance",
+  "inventoryLot",
+  "harvestInventoryBatch",
+  // 4. Governance & Drafts
+  "approvalRule",
+  "workspaceDraft",
+  "idempotencyRecord",
+  // 5. Transactions & Documents
+  "purchaseOrder",
+  "purchaseOrderItem",
+  "goodsReceipt",
+  "vendorBill",
+  "paymentVoucher",
+  "salesInvoice",
+  "receiptVoucher",
+  "saleTransaction",
+  "installmentVoucher",
+  "operatingExpense",
+  "workerWageEntry",
+  "stockMovement",
+  "treasuryTransaction",
+  "journalEntry",
+  "journalEntryLine",
+  "attachment",
+  "adjustmentEntry",
+  "approvalRequest",
+  // 6. Audit Logs
+  "auditLog",
+  "immutableAuditLog",
+] as const;
+
+export async function backfillLegacyBaseCurrencies(client: typeof prisma = prisma) {
+  try {
+    await client.$executeRawUnsafe(`
+      UPDATE "JournalEntryLine"
+      SET "baseDebit" = "debit",
+          "debitBase" = "debit",
+          "foreignDebit" = CASE WHEN "foreignDebit" = 0 THEN "debit" ELSE "foreignDebit" END,
+          "exchangeRate" = CASE WHEN "exchangeRate" = 0 THEN 1.0 ELSE "exchangeRate" END,
+          "currencyCode" = CASE WHEN "currencyCode" IS NULL OR "currencyCode" = '' THEN "currency" ELSE "currencyCode" END
+      WHERE ("baseDebit" = 0 OR "baseDebit" IS NULL) AND "debit" > 0;
+    `);
+
+    await client.$executeRawUnsafe(`
+      UPDATE "JournalEntryLine"
+      SET "baseCredit" = "credit",
+          "creditBase" = "credit",
+          "foreignCredit" = CASE WHEN "foreignCredit" = 0 THEN "credit" ELSE "foreignCredit" END,
+          "exchangeRate" = CASE WHEN "exchangeRate" = 0 THEN 1.0 ELSE "exchangeRate" END,
+          "currencyCode" = CASE WHEN "currencyCode" IS NULL OR "currencyCode" = '' THEN "currency" ELSE "currencyCode" END
+      WHERE ("baseCredit" = 0 OR "baseCredit" IS NULL) AND "credit" > 0;
+    `);
+  } catch (err) {
+    console.warn("[BackupService] backfillLegacyBaseCurrencies non-fatal error:", err);
+  }
+}
 
 export interface UasbakEnvelope {
   format: "UAS-BACKUP-V1";
@@ -436,6 +533,15 @@ export async function restoreDatabaseFromBuffer(
   resetSqliteBootstrapCacheForTests();
   await ensureSqliteDatabaseReady();
 
+  // Automatic backward-compatible migration for restored databases
+  try {
+    await ensure6GenerationCoaHierarchy();
+    await backfillLegacyBaseCurrencies();
+    await ensureDefaultFiscalYear();
+  } catch (err) {
+    console.warn("[BackupService] Post-restore migration warning:", err);
+  }
+
   // 6. Record immutable audit log
   await prisma.$transaction(async (tx) => {
     await appendAuditLogTx(tx, {
@@ -452,5 +558,180 @@ export async function restoreDatabaseFromBuffer(
     ok: true,
     preRestoreSnapshot: preRestoreFilename,
     companyName: inspection.companyName,
+  };
+}
+
+export async function exportFullSchemaJsonBackup(params?: {
+  companyName?: string;
+  licenseId?: string;
+}): Promise<{
+  backup: FullSchemaBackupData;
+  filename: string;
+}> {
+  await ensureSqliteDatabaseReady();
+  const tableCounts: Record<string, number> = {};
+  const tables: Record<string, unknown[]> = {};
+
+  for (const tableKey of FULL_SCHEMA_TABLE_ORDER) {
+    const delegate = (prisma as any)[tableKey];
+    if (delegate && typeof delegate.findMany === "function") {
+      try {
+        const rows = await delegate.findMany();
+        tables[tableKey] = rows;
+        tableCounts[tableKey] = rows.length;
+      } catch {
+        tables[tableKey] = [];
+        tableCounts[tableKey] = 0;
+      }
+    }
+  }
+
+  let compName = (params?.companyName || "").trim();
+  let licId = (params?.licenseId || "").trim();
+  if (!compName || !licId) {
+    const { license } = loadInstalledLicense();
+    if (license) {
+      if (!compName && license.company_name) compName = license.company_name;
+      if (!licId && license.license_id) licId = license.license_id;
+    }
+  }
+  if (!compName) {
+    try {
+      const profile = await prisma.enterpriseProfile.findFirst({ select: { legalNameAr: true } });
+      compName = profile?.legalNameAr || "UAS-Enterprise";
+    } catch {
+      compName = "UAS-Enterprise";
+    }
+  }
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const slug = compName.replace(/[^a-zA-Z0-9\u0600-\u06FF_-]/g, "_").slice(0, 30);
+  const filename = `UAS-FullBackup-${slug}-${todayStr}.json`;
+
+  const backup: FullSchemaBackupData = {
+    format: "UAS-FULL-SCHEMA-JSON-V1",
+    version: "3.0.0",
+    createdAt: new Date().toISOString(),
+    companyName: compName,
+    licenseId: licId || "COMMERCIAL",
+    tableCounts,
+    tables,
+  };
+
+  return { backup, filename };
+}
+
+export async function restoreFullSchemaJsonBackup(
+  backupData: FullSchemaBackupData | { tables: Record<string, unknown[]>; companyName?: string },
+  actor: { userId?: string | null; userDisplay: string; userRole: string },
+  sourceDesc = "json_restore"
+): Promise<{
+  ok: boolean;
+  preRestoreSnapshot: string;
+  companyName?: string;
+  restoredTables: string[];
+}> {
+  await ensureSqliteDatabaseReady();
+
+  const { license } = loadInstalledLicense();
+  const expectedCompany = license?.company_name;
+  if (expectedCompany && backupData.companyName) {
+    if (!companyNamesMatch(backupData.companyName, expectedCompany)) {
+      throw new Error(
+        `اسم المنشأة في النسخة الاحتياطية (${backupData.companyName}) لا يطابق المنشأة المرخصة في هذا النظام (${expectedCompany}).`
+      );
+    }
+  }
+
+  // Save safety pre-restore snapshot
+  let preRestoreFilename = "";
+  if (isSqliteRuntime()) {
+    const activeDbPath = resolveSqliteFilePath();
+    if (activeDbPath && fs.existsSync(activeDbPath)) {
+      const backupsDir = getBackupsDirectory();
+      const timestamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+      preRestoreFilename = `pre-restore-${timestamp}.db`;
+      try {
+        fs.copyFileSync(activeDbPath, path.join(backupsDir, preRestoreFilename));
+      } catch {}
+    }
+  }
+
+  const restoredTables: string[] = [];
+
+  // Disable FK constraints during bulk restore on SQLite
+  if (isSqliteRuntime()) {
+    try {
+      await prisma.$executeRawUnsafe("PRAGMA foreign_keys = OFF;");
+    } catch {}
+  }
+
+  try {
+    // 1. Delete rows in REVERSE topological order (children first)
+    const reversedOrder = [...FULL_SCHEMA_TABLE_ORDER].reverse();
+    for (const tableKey of reversedOrder) {
+      const delegate = (prisma as any)[tableKey];
+      if (delegate && typeof delegate.deleteMany === "function") {
+        try {
+          await delegate.deleteMany();
+        } catch {}
+      }
+    }
+
+    // 2. Insert rows in FORWARD topological order (parents first)
+    for (const tableKey of FULL_SCHEMA_TABLE_ORDER) {
+      const rows = backupData.tables?.[tableKey];
+      const delegate = (prisma as any)[tableKey];
+      if (Array.isArray(rows) && rows.length > 0 && delegate) {
+        let inserted = false;
+        if (typeof delegate.createMany === "function") {
+          try {
+            await delegate.createMany({ data: rows });
+            inserted = true;
+          } catch {}
+        }
+        if (!inserted && typeof delegate.create === "function") {
+          for (const r of rows) {
+            try {
+              await delegate.create({ data: r });
+            } catch {}
+          }
+          inserted = true;
+        }
+        if (inserted) {
+          restoredTables.push(tableKey);
+        }
+      }
+    }
+  } finally {
+    if (isSqliteRuntime()) {
+      try {
+        await prisma.$executeRawUnsafe("PRAGMA foreign_keys = ON;");
+      } catch {}
+    }
+  }
+
+  // 3. Post-restore migration hooks
+  await ensure6GenerationCoaHierarchy();
+  await backfillLegacyBaseCurrencies();
+  await ensureDefaultFiscalYear();
+
+  // 4. Record immutable audit log
+  await prisma.$transaction(async (tx) => {
+    await appendAuditLogTx(tx, {
+      userId: actor.userId ?? null,
+      userDisplay: actor.userDisplay,
+      userRole: actor.userRole,
+      actionType: "DATABASE_JSON_RESTORED_BY_ADMIN",
+      entityReference: preRestoreFilename || "JSON_RESTORE",
+      details: `تمت استعادة قاعدة بيانات المنشأة (${backupData.companyName || "UAS"}) بنجاح من (${sourceDesc}). عدد الجداول المستعادة: ${restoredTables.length}`,
+    });
+  });
+
+  return {
+    ok: true,
+    preRestoreSnapshot: preRestoreFilename,
+    companyName: backupData.companyName,
+    restoredTables,
   };
 }

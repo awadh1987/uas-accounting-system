@@ -31,6 +31,22 @@ type WorkerPayload = {
   customAccount?: { nameAr: string; nameEn?: string; parentCode: string; code?: string } | null;
 };
 
+interface WorkerMasterItem {
+  id: string;
+  name: string;
+  phone?: string | null;
+  defaultDailyWage?: number;
+  accountId?: string | null;
+  account?: { id: string; code: string; nameAr: string } | null;
+  costCenterId?: string | null;
+  isActive?: boolean;
+  archivedAt?: string | null;
+  wageCount?: number;
+  totalWages?: number;
+  totalPaid?: number;
+  balanceDue?: number;
+}
+
 interface WorkersTabProps {
   projects: UasProject[];
   workers: UasWorkerWage[];
@@ -172,6 +188,92 @@ export function WorkersTab({
       setDrawerOpen(false);
     }
   }
+
+  const [subView, setSubView] = useState<"wages" | "directory">("wages");
+  const [masterWorkers, setMasterWorkers] = useState<WorkerMasterItem[]>([]);
+  const [showArchivedWorkers, setShowArchivedWorkers] = useState(false);
+
+  const loadMasterWorkers = React.useCallback(async () => {
+    try {
+      const res = await fetch("/api/workers", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.workers) setMasterWorkers(data.workers);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  React.useEffect(() => {
+    loadMasterWorkers();
+  }, [loadMasterWorkers, workers]);
+
+  const handleArchiveMasterWorker = React.useCallback(
+    async (w: WorkerMasterItem) => {
+      try {
+        const res = await fetch("/api/system/lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entityType: "Worker", id: w.id, action: "ARCHIVE" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error);
+        onToast(data.message || "تمت أرشفة العامل بنجاح");
+        await loadMasterWorkers();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "تعذر أرشفة العامل";
+        onToast(msg);
+      }
+    },
+    [loadMasterWorkers, onToast]
+  );
+
+  const handleRestoreMasterWorker = React.useCallback(
+    async (w: WorkerMasterItem) => {
+      try {
+        const res = await fetch("/api/system/lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entityType: "Worker", id: w.id, action: "RESTORE" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error);
+        onToast(data.message || "تمت استعادة العامل بنجاح");
+        await loadMasterWorkers();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "تعذر استعادة العامل";
+        onToast(msg);
+      }
+    },
+    [loadMasterWorkers, onToast]
+  );
+
+  const handleDeleteMasterWorker = React.useCallback(
+    async (w: WorkerMasterItem) => {
+      if (
+        !confirm(
+          `هل أنت متأكد من حذف العامل (${w.name})؟ في حال وجود سجلات أجور أو قيود مرتبطة سيتم أرشفته آلياً حفاظاً على التاريخ المالي.`
+        )
+      )
+        return;
+      try {
+        const res = await fetch("/api/system/lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entityType: "Worker", id: w.id, action: "SAFE_DELETE" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error);
+        onToast(data.message || "تمت العملية بنجاح");
+        await loadMasterWorkers();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "تعذر حذف العامل";
+        onToast(msg);
+      }
+    },
+    [loadMasterWorkers, onToast]
+  );
 
   return (
     <section className="space-y-6">
@@ -346,7 +448,159 @@ export function WorkersTab({
         </form>
       </SlideOverDrawer>
 
-      <div className="card-surface rounded-2xl p-5 space-y-4 overflow-x-auto">
+      {/* Sub-Tabs: Wages vs Directory */}
+      <div className="card-surface rounded-2xl p-2 flex flex-wrap items-center justify-between gap-2 no-print">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setSubView("wages")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${
+              subView === "wages"
+                ? "accent-bg shadow-sm"
+                : "text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+            }`}
+          >
+            سجلات واستحقاقات الأجور ({workers.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setSubView("directory")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${
+              subView === "directory"
+                ? "accent-bg shadow-sm"
+                : "text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+            }`}
+          >
+            دليل العمال وحسابات الذمم (2112xx) ({masterWorkers.length})
+          </button>
+        </div>
+      </div>
+
+      {subView === "directory" ? (
+        <div className="card-surface rounded-2xl p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-xl bg-slate-100/70 dark:bg-slate-800/50">
+            <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+              <span className="font-bold">إجمالي العمال في الدليل:</span>
+              <span className="font-mono font-black">{masterWorkers.length}</span>
+              <span className="text-[10px] text-slate-400">
+                (النشطين: {masterWorkers.filter((w) => w.isActive !== false).length} • المؤرشفين:{" "}
+                {masterWorkers.filter((w) => w.isActive === false).length})
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowArchivedWorkers((p) => !p)}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${
+                showArchivedWorkers
+                  ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700"
+                  : "bg-slate-200/50 dark:bg-slate-700/50 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600"
+              }`}
+            >
+              {showArchivedWorkers ? "إخفاء المؤرشفين" : "إظهار المؤرشفين"}
+            </button>
+          </div>
+
+          {masterWorkers.filter((w) => (showArchivedWorkers ? true : w.isActive !== false)).length === 0 ? (
+            <EmptyState
+              title="دليل العمال فارغ"
+              description="سجل أول حركة أجر لعامل ليتم فتح بطاقة وحساب أستاذ فرعي له آلياً (2112xx)."
+            />
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {masterWorkers
+                .filter((w) => (showArchivedWorkers ? true : w.isActive !== false))
+                .map((w) => {
+                  const isArchived = w.isActive === false;
+                  return (
+                    <div
+                      key={w.id}
+                      className={`p-4 rounded-2xl border text-xs space-y-2 transition ${
+                        isArchived
+                          ? "border-amber-300/60 bg-amber-50/20 dark:bg-amber-950/10 dark:border-amber-800/40 opacity-80"
+                          : "border-slate-200 dark:border-slate-700"
+                      }`}
+                    >
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-mono font-bold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
+                            COA {w.account?.code || "2112xx"}
+                          </span>
+                          {isArchived && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                              مؤرشف
+                            </span>
+                          )}
+                        </div>
+                        {w.phone && <span className="text-slate-500 font-mono text-[11px]">{w.phone}</span>}
+                      </div>
+
+                      <div className="font-extrabold text-sm">{w.name}</div>
+                      <div className="text-[11px] text-slate-500">
+                        الأجر الافتراضي: <span className="font-mono font-bold tabular-nums">{fmtNum(w.defaultDailyWage ?? 0)}</span> ريال
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 pt-2 border-t text-center tabular-nums">
+                        <div>
+                          <div className="text-[10px] text-slate-400">إجمالي الأجور</div>
+                          <div className="font-bold">{fmtNum(w.totalWages ?? 0)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-slate-400">المسلم</div>
+                          <div className="font-bold text-emerald-600">{fmtNum(w.totalPaid ?? 0)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-slate-400">المتبقي له</div>
+                          <div className="font-extrabold text-rose-600">{fmtNum(w.balanceDue ?? 0)}</div>
+                        </div>
+                      </div>
+
+                      {!readOnly && (
+                        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2">
+                          {!isArchived ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void handleArchiveMasterWorker(w)}
+                                className="text-amber-700 dark:text-amber-400 font-bold hover:underline"
+                              >
+                                أرشفة
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleDeleteMasterWorker(w)}
+                                className="text-rose-600 font-bold hover:underline"
+                              >
+                                حذف
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void handleRestoreMasterWorker(w)}
+                                className="text-emerald-700 dark:text-emerald-400 font-bold hover:underline"
+                              >
+                                استعادة
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleDeleteMasterWorker(w)}
+                                className="text-rose-600 font-bold hover:underline"
+                              >
+                                حذف نهائي
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="card-surface rounded-2xl p-5 space-y-4 overflow-x-auto">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="text-sm font-extrabold">كشف حساب وأجور العمال (Worker Account Report)</h3>
@@ -537,6 +791,7 @@ export function WorkersTab({
           </table>
         )}
       </div>
+      )}
     </section>
   );
 }

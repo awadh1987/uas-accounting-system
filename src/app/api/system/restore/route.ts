@@ -6,6 +6,8 @@ import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import {
   getBackupsDirectory,
   restoreDatabaseFromBuffer,
+  restoreFullSchemaJsonBackup,
+  type FullSchemaBackupData,
   type UasbakEnvelope,
 } from "@/lib/backupService";
 import { extractActor, jsonError, forbiddenError } from "@/lib/apiHelpers";
@@ -21,29 +23,34 @@ export async function POST(req: NextRequest) {
 
     let actorInput: Record<string, unknown> = {};
     let buffer: Buffer | null = null;
+    let jsonBackup: FullSchemaBackupData | null = null;
     let sourceDesc = "manual_restore";
 
     if (isFormData) {
       const formData = await req.formData();
       const file = formData.get("file") as File | null;
       if (!file) {
-        return jsonError("يرجى اختيار ملف النسخة الاحتياطية (.uasbak أو .db)", 400);
+        return jsonError("يرجى اختيار ملف النسخة الاحتياطية (.uasbak أو .db أو .json)", 400);
       }
 
       const fileText = await file.text();
       sourceDesc = `uploaded_file: ${file.name}`;
 
-      // Check if uploaded file is JSON .uasbak envelope
-      if (file.name.endsWith(".uasbak") || fileText.trim().startsWith("{")) {
+      // Check if uploaded file is JSON (.uasbak envelope or full schema JSON)
+      if (file.name.endsWith(".uasbak") || file.name.endsWith(".json") || fileText.trim().startsWith("{")) {
         try {
-          const envelope = JSON.parse(fileText) as UasbakEnvelope;
-          if (!envelope.dbBase64) {
-            return jsonError("حزمة النسخة الاحتياطية غير صالحة (حقل dbBase64 مفقود)", 400);
-          }
-          buffer = Buffer.from(envelope.dbBase64, "base64");
-          const calculatedSha256 = crypto.createHash("sha256").update(buffer).digest("hex");
-          if (envelope.sha256 && calculatedSha256 !== envelope.sha256) {
-            return jsonError("فشل التحقق من صحة بصمة التشفير (SHA-256 Checksum Mismatch). قد يكون الملف تالفاً أو تم التلاعب به", 400);
+          const parsed = JSON.parse(fileText);
+          if (parsed.format === "UAS-FULL-SCHEMA-JSON-V1" || parsed.tables) {
+            jsonBackup = parsed as FullSchemaBackupData;
+          } else if (parsed.dbBase64) {
+            const envelope = parsed as UasbakEnvelope;
+            buffer = Buffer.from(envelope.dbBase64, "base64");
+            const calculatedSha256 = crypto.createHash("sha256").update(buffer).digest("hex");
+            if (envelope.sha256 && calculatedSha256 !== envelope.sha256) {
+              return jsonError("فشل التحقق من صحة بصمة التشفير (SHA-256 Checksum Mismatch). قد يكون الملف تالفاً أو تم التلاعب به", 400);
+            }
+          } else {
+            return jsonError("حزمة النسخة الاحتياطية غير صالحة (حقل dbBase64 أو جداول البيانات مفقودة)", 400);
           }
         } catch (e) {
           return jsonError(`تعذر قراءة حزمة النسخة الاحتياطية: ${(e as Error).message}`, 400);
@@ -57,7 +64,10 @@ export async function POST(req: NextRequest) {
       const body = (await req.json()) as Record<string, unknown>;
       actorInput = body;
 
-      if (body.localSnapshotName) {
+      if (body.format === "UAS-FULL-SCHEMA-JSON-V1" || body.tables) {
+        jsonBackup = body as unknown as FullSchemaBackupData;
+        sourceDesc = `json_payload: ${jsonBackup.companyName || "UAS"}`;
+      } else if (body.localSnapshotName) {
         const safeName = path.basename(String(body.localSnapshotName).trim());
         const backupsDir = getBackupsDirectory();
         const fullPath = path.join(backupsDir, safeName);
@@ -85,6 +95,17 @@ export async function POST(req: NextRequest) {
     const actor = extractActor(actorInput, req);
     if (actor.userRole !== "SUPER_ADMIN") {
       return forbiddenError("⛔ استعادة النسخ الاحتياطية محصورة بمدير النظام العام (SUPER_ADMIN)");
+    }
+
+    if (jsonBackup) {
+      const result = await restoreFullSchemaJsonBackup(jsonBackup, actor, sourceDesc);
+      return NextResponse.json({
+        ok: true,
+        message: "تمت استعادة قاعدة البيانات بنجاح (JSON Full Schema)",
+        preRestoreSnapshot: result.preRestoreSnapshot,
+        companyName: result.companyName,
+        restoredTables: result.restoredTables,
+      });
     }
 
     if (!buffer || buffer.length === 0) {

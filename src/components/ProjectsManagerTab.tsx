@@ -89,6 +89,8 @@ interface ApiProjectItem {
   budgetTotal: number;
   status: string;
   notes: string;
+  isActive?: boolean;
+  archivedAt?: string | null;
   subProjects: ApiSubProjectItem[];
   harvestCycles: Array<{ id: string; cycleNumber: number; name: string; isLocked: boolean }>;
   metrics: {
@@ -247,6 +249,74 @@ export function ProjectsManagerTab({
       // keep fallback from props
     }
   }, []);
+
+  const [showArchivedProjects, setShowArchivedProjects] = useState(false);
+
+  const handleArchiveProject = useCallback(
+    async (proj: ApiProjectItem) => {
+      try {
+        const res = await fetch("/api/system/lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entityType: "Project", id: proj.id, action: "ARCHIVE" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error);
+        onToast(data.message || "تمت أرشفة المشروع بنجاح");
+        await Promise.all([loadPortfolioData(), onRefreshState()]);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "تعذر أرشفة المشروع";
+        onToast(msg);
+      }
+    },
+    [loadPortfolioData, onRefreshState, onToast]
+  );
+
+  const handleRestoreProject = useCallback(
+    async (proj: ApiProjectItem) => {
+      try {
+        const res = await fetch("/api/system/lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entityType: "Project", id: proj.id, action: "RESTORE" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error);
+        onToast(data.message || "تمت استعادة المشروع بنجاح");
+        await Promise.all([loadPortfolioData(), onRefreshState()]);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "تعذر استعادة المشروع";
+        onToast(msg);
+      }
+    },
+    [loadPortfolioData, onRefreshState, onToast]
+  );
+
+  const handleDeleteProject = useCallback(
+    async (proj: ApiProjectItem) => {
+      if (
+        !confirm(
+          `هل أنت متأكد من حذف المشروع (${proj.nameAr})؟ في حال وجود حركات أو قيود أو دورات مرتبطة سيتم أرشفته آلياً حفاظاً على التاريخ المالي.`
+        )
+      )
+        return;
+      try {
+        const res = await fetch("/api/system/lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entityType: "Project", id: proj.id, action: "SAFE_DELETE" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error);
+        onToast(data.message || "تمت العملية بنجاح");
+        await Promise.all([loadPortfolioData(), onRefreshState()]);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "تعذر حذف المشروع";
+        onToast(msg);
+      }
+    },
+    [loadPortfolioData, onRefreshState, onToast]
+  );
 
   useEffect(() => {
     let active = true;
@@ -621,7 +691,7 @@ export function ProjectsManagerTab({
     await Promise.all([loadPortfolioData(), onRefreshState()]);
   }
 
-  const displayList: ApiProjectItem[] =
+  const rawList: ApiProjectItem[] =
     apiProjects.length > 0
       ? apiProjects
       : projects.map((p) => ({
@@ -638,6 +708,8 @@ export function ProjectsManagerTab({
           budgetTotal: p.budgetTotal ?? p.estimatedValue,
           status: p.status || "ACTIVE",
           notes: p.notes,
+          isActive: (p as unknown as { isActive?: boolean }).isActive ?? true,
+          archivedAt: (p as unknown as { archivedAt?: string | null }).archivedAt ?? null,
           subProjects: p.subProjects || [],
           harvestCycles: (p.harvestCycles || []).map((hc) => ({
             id: hc.id,
@@ -654,6 +726,10 @@ export function ProjectsManagerTab({
             isOverBudget: false,
           },
         }));
+
+  const displayList: ApiProjectItem[] = rawList.filter((p) =>
+    showArchivedProjects ? true : p.isActive !== false
+  );
 
   return (
     <section className="space-y-6">
@@ -729,6 +805,35 @@ export function ProjectsManagerTab({
         )}
       </div>
 
+      {/* Archive / Active Filter Header */}
+      <div className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-xl bg-slate-100/70 dark:bg-slate-800/50">
+        <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+          <span className="font-bold">{isAr ? "إجمالي المشاريع:" : "Total Projects:"}</span>
+          <span className="font-mono font-black">{rawList.length}</span>
+          <span className="text-[10px] text-slate-400">
+            ({isAr ? "النشطة" : "Active"}: {rawList.filter((p) => p.isActive !== false).length} •{" "}
+            {isAr ? "المؤرشفة" : "Archived"}: {rawList.filter((p) => p.isActive === false).length})
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowArchivedProjects((p) => !p)}
+          className={`px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${
+            showArchivedProjects
+              ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700"
+              : "bg-slate-200/50 dark:bg-slate-700/50 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600"
+          }`}
+        >
+          {showArchivedProjects
+            ? isAr
+              ? "إخفاء المشاريع المؤرشفة"
+              : "Hide Archived Projects"
+            : isAr
+            ? "إظهار المشاريع المؤرشفة"
+            : "Show Archived Projects"}
+        </button>
+      </div>
+
       {/* Full-Width Project Cards with Budget Meters, Owner Vendor & Lock Switches */}
       {displayList.length === 0 ? (
         <EmptyState
@@ -741,8 +846,16 @@ export function ProjectsManagerTab({
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           {displayList.map((proj) => {
             const pct = Math.min(100, Math.max(0, proj.metrics.utilizationPct));
+            const isArchived = proj.isActive === false;
             return (
-              <div key={proj.id} className="card-surface rounded-2xl p-5 space-y-4 text-xs">
+              <div
+                key={proj.id}
+                className={`card-surface rounded-2xl p-5 space-y-4 text-xs transition ${
+                  isArchived
+                    ? "border-amber-300/60 bg-amber-50/15 dark:bg-amber-950/10 dark:border-amber-800/40 opacity-80"
+                    : ""
+                }`}
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5">
                     <div className="w-9 h-9 rounded-xl accent-badge flex items-center justify-center">
@@ -754,6 +867,11 @@ export function ProjectsManagerTab({
                           {proj.code}
                         </span>
                         <h3 className="font-extrabold text-base">{proj.nameAr}</h3>
+                        {isArchived && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                            مؤرشف
+                          </span>
+                        )}
                       </div>
                       <p className="text-slate-500">{proj.notes}</p>
                     </div>
@@ -773,7 +891,7 @@ export function ProjectsManagerTab({
                       </span>
                     )}
                     <span className="px-2.5 py-1 rounded-full accent-badge font-bold">{proj.status}</span>
-                    {!readOnly && canEditRecords && (
+                    {!readOnly && canEditRecords && !isArchived && (
                       <button
                         type="button"
                         onClick={() => openEditProjectDrawer(proj)}
@@ -781,6 +899,33 @@ export function ProjectsManagerTab({
                       >
                         <Edit3 className="w-3 h-3" />
                         <span>تعديل</span>
+                      </button>
+                    )}
+                    {!readOnly && !isArchived && (
+                      <button
+                        type="button"
+                        onClick={() => void handleArchiveProject(proj)}
+                        className="px-2.5 py-1 rounded-lg border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 font-bold hover:bg-amber-50"
+                      >
+                        أرشفة
+                      </button>
+                    )}
+                    {!readOnly && isArchived && (
+                      <button
+                        type="button"
+                        onClick={() => void handleRestoreProject(proj)}
+                        className="px-2.5 py-1 rounded-lg border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 font-bold hover:bg-emerald-50"
+                      >
+                        استعادة
+                      </button>
+                    )}
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteProject(proj)}
+                        className="px-2.5 py-1 rounded-lg border border-rose-300 dark:border-rose-700 text-rose-600 font-bold hover:bg-rose-50"
+                      >
+                        {isArchived ? "حذف نهائي" : "حذف"}
                       </button>
                     )}
                   </div>

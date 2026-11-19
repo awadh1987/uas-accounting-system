@@ -49,6 +49,10 @@ export interface PreviewLedgerLine {
   debit: number;
   credit: number;
   memo?: string;
+  costCenterId?: string | null;
+  currency?: string;
+  exchangeRate?: number;
+  factorToBase?: number;
 }
 
 export interface ConfirmationPreviewCard {
@@ -60,7 +64,9 @@ export interface ConfirmationPreviewCard {
   narrationAr: string;
   narrationEn: string;
   date: string;
-  currency: "YER" | "SAR" | "USD";
+  currency: "YER" | "SAR" | "USD" | string;
+  exchangeRate?: number;
+  costCenterId?: string | null;
   totalDebit: number;
   totalCredit: number;
   isBalanced: boolean;
@@ -307,13 +313,32 @@ export function findCoaAccount(
   if (exactCode) return exactCode;
 
   const qLower = q.toLowerCase();
-  // Prefer leaf posting accounts when matching by name
+
+  // 1. Prioritize Generation 6 leaf posting accounts (level === 6 && isPosting)
+  const gen6Match = catalog.find(
+    (a) =>
+      a.isPosting &&
+      a.level === 6 &&
+      (a.nameAr.includes(q) || a.nameEn.toLowerCase().includes(qLower))
+  );
+  if (gen6Match) return gen6Match;
+
+  // 2. Prioritize Generation 5+ leaf posting accounts (level >= 5 && isPosting)
   const postingMatch = catalog.find(
+    (a) =>
+      a.isPosting &&
+      a.level >= 5 &&
+      (a.nameAr.includes(q) || a.nameEn.toLowerCase().includes(qLower))
+  );
+  if (postingMatch) return postingMatch;
+
+  // 3. Any leaf posting account
+  const anyPosting = catalog.find(
     (a) =>
       a.isPosting &&
       (a.nameAr.includes(q) || a.nameEn.toLowerCase().includes(qLower))
   );
-  if (postingMatch) return postingMatch;
+  if (anyPosting) return anyPosting;
 
   return catalog.find(
     (a) => a.nameAr.includes(q) || a.nameEn.toLowerCase().includes(qLower)
@@ -649,6 +674,10 @@ export async function executeUasAgentTool(
           debit,
           credit,
           memo: typeof line.memo === "string" ? line.memo : undefined,
+          costCenterId: typeof line.costCenterId === "string" ? line.costCenterId : (typeof args.costCenterId === "string" ? args.costCenterId : undefined),
+          currency: typeof line.currency === "string" ? line.currency : (typeof args.currency === "string" ? args.currency : undefined),
+          exchangeRate: typeof line.exchangeRate === "number" ? line.exchangeRate : (typeof args.exchangeRate === "number" ? args.exchangeRate : undefined),
+          factorToBase: typeof line.factorToBase === "number" ? line.factorToBase : (typeof args.factorToBase === "number" ? args.factorToBase : undefined),
         });
       }
 
@@ -669,9 +698,9 @@ export async function executeUasAgentTool(
       const narrationAr = String(args.narrationAr ?? args.narration ?? "قيد يومية عبر المساعد الذكي").trim();
       const narrationEn = String(args.narrationEn ?? args.narration ?? narrationAr).trim();
       const date = String(args.date ?? todayIso).slice(0, 10);
-      const currencyRaw = String(args.currency ?? "YER").toUpperCase();
-      const currency: "YER" | "SAR" | "USD" =
-        currencyRaw === "SAR" || currencyRaw === "USD" ? currencyRaw : "YER";
+      const currency = String(args.currency ?? "YER").toUpperCase();
+      const exchangeRate = typeof args.exchangeRate === "number" ? args.exchangeRate : undefined;
+      const costCenterId = typeof args.costCenterId === "string" ? args.costCenterId : undefined;
 
       const card: ConfirmationPreviewCard = {
         actionId: `ai-je-${Date.now()}`,
@@ -683,6 +712,8 @@ export async function executeUasAgentTool(
         narrationEn,
         date,
         currency,
+        exchangeRate,
+        costCenterId,
         totalDebit,
         totalCredit,
         isBalanced: true,
@@ -697,6 +728,8 @@ export async function executeUasAgentTool(
           narrationEn,
           date,
           currency,
+          exchangeRate,
+          costCenterId,
           lines: resolvedLines,
           projectId: typeof args.projectId === "string" ? args.projectId : undefined,
           executed_by_ai: true,
@@ -747,9 +780,9 @@ export async function executeUasAgentTool(
       }
 
       const partyName = String(args.partyName ?? args.party ?? (isReceipt ? "عميل نقدي" : "مستفيد عام")).trim();
-      const currencyRaw = String(args.currency ?? "YER").toUpperCase();
-      const currency: "YER" | "SAR" | "USD" =
-        currencyRaw === "SAR" || currencyRaw === "USD" ? currencyRaw : "YER";
+      const currency = String(args.currency ?? "YER").toUpperCase();
+      const exchangeRate = typeof args.exchangeRate === "number" ? args.exchangeRate : undefined;
+      const costCenterId = typeof args.costCenterId === "string" ? args.costCenterId : undefined;
       const defaultTreasuryCode = currency === "SAR" ? "111102" : currency === "USD" ? "111103" : "111101";
 
       const treasuryAcc =
@@ -793,6 +826,9 @@ export async function executeUasAgentTool(
               debit: amount,
               credit: 0,
               memo: narrationAr,
+              costCenterId,
+              currency,
+              exchangeRate,
             },
             {
               accountCode: counterpartyAcc.code,
@@ -801,6 +837,9 @@ export async function executeUasAgentTool(
               debit: 0,
               credit: amount,
               memo: partyName,
+              costCenterId,
+              currency,
+              exchangeRate,
             },
           ]
         : [
@@ -811,6 +850,9 @@ export async function executeUasAgentTool(
               debit: amount,
               credit: 0,
               memo: partyName,
+              costCenterId,
+              currency,
+              exchangeRate,
             },
             {
               accountCode: treasuryAcc.code,
@@ -819,6 +861,9 @@ export async function executeUasAgentTool(
               debit: 0,
               credit: amount,
               memo: narrationAr,
+              costCenterId,
+              currency,
+              exchangeRate,
             },
           ];
 
@@ -836,6 +881,8 @@ export async function executeUasAgentTool(
         narrationEn,
         date: String(args.date ?? todayIso).slice(0, 10),
         currency,
+        exchangeRate,
+        costCenterId,
         totalDebit: amount,
         totalCredit: amount,
         isBalanced: true,
@@ -849,6 +896,8 @@ export async function executeUasAgentTool(
           partyName,
           amount,
           currency,
+          exchangeRate,
+          costCenterId,
           narrationAr,
           narrationEn,
           date: String(args.date ?? todayIso).slice(0, 10),
@@ -907,9 +956,10 @@ export async function executeUasAgentTool(
       const partyName = String(args.partyName ?? args.customer ?? args.vendor ?? (isPurchase ? "مورد عام" : "عميل عام")).trim();
       const itemName = String(args.itemName ?? args.grade ?? "صنف 1 ممتاز").trim();
       const paymentMethod = String(args.paymentMethod ?? "CREDIT").toUpperCase() === "CASH" ? "CASH" : "CREDIT";
-      const currencyRaw = String(args.currency ?? "YER").toUpperCase();
-      const currency: "YER" | "SAR" | "USD" =
-        currencyRaw === "SAR" || currencyRaw === "USD" ? currencyRaw : "YER";
+      const currency = String(args.currency ?? "YER").toUpperCase();
+      const exchangeRate = typeof args.exchangeRate === "number" ? args.exchangeRate : undefined;
+      const costCenterId = typeof args.costCenterId === "string" ? args.costCenterId : undefined;
+      const factorToBase = typeof args.factorToBase === "number" ? args.factorToBase : undefined;
 
       const debitCode = isPurchase
         ? "512101" // مصروف مدخلات الإنتاج المستهلكة
@@ -941,6 +991,10 @@ export async function executeUasAgentTool(
           debit: totalAmount,
           credit: 0,
           memo: narrationAr,
+          costCenterId,
+          currency,
+          exchangeRate,
+          factorToBase,
         },
         {
           accountCode: creditAcc.code,
@@ -949,6 +1003,10 @@ export async function executeUasAgentTool(
           debit: 0,
           credit: totalAmount,
           memo: narrationAr,
+          costCenterId,
+          currency,
+          exchangeRate,
+          factorToBase,
         },
       ];
 
@@ -966,6 +1024,8 @@ export async function executeUasAgentTool(
         narrationEn,
         date: String(args.date ?? todayIso).slice(0, 10),
         currency,
+        exchangeRate,
+        costCenterId,
         totalDebit: totalAmount,
         totalCredit: totalAmount,
         isBalanced: true,
@@ -979,12 +1039,13 @@ export async function executeUasAgentTool(
           partyName,
           itemName,
           quantity: qty,
-          unitPrice: unitPrice || totalAmount,
-          totalAmount,
-          paymentMethod,
+          unitPrice,
+          amount: totalAmount,
           currency,
-          narrationAr,
-          narrationEn,
+          exchangeRate,
+          costCenterId,
+          factorToBase,
+          paymentMethod,
           date: String(args.date ?? todayIso).slice(0, 10),
           lines,
           executed_by_ai: true,

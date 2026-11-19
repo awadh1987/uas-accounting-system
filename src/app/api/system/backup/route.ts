@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
-import { createUasbakEnvelope, createTempBackupSnapshot } from "@/lib/backupService";
+import {
+  createUasbakEnvelope,
+  createTempBackupSnapshot,
+  exportFullSchemaJsonBackup,
+} from "@/lib/backupService";
 import { extractActor, jsonError, forbiddenError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +20,17 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const format = (searchParams.get("format") || "uasbak").toLowerCase();
+
+    if (format === "json") {
+      const { backup, filename } = await exportFullSchemaJsonBackup();
+      return NextResponse.json(backup, {
+        status: 200,
+        headers: {
+          "Content-Disposition": `attachment; filename="${filename}"`,
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+        },
+      });
+    }
 
     if (format === "raw") {
       const { buffer } = await createTempBackupSnapshot();

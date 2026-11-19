@@ -345,13 +345,15 @@ export function SalesTab({
           <div>
             <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
               <Package className="w-3.5 h-3.5 text-sky-600" />
-              <span>إجمالي حجم المبيعات (Sales Volume)</span>
+              <span>
+                <bdi dir="auto">إجمالي حجم المبيعات (Sales Volume)</bdi>
+              </span>
             </div>
             <div className="text-xl font-black text-slate-900 dark:text-slate-100 mt-1 tabular-nums">
               {fmtNum(sumTotal)} <span className="text-xs font-normal text-slate-500">ريال</span>
             </div>
             <div className="text-[11px] font-semibold text-sky-600 mt-0.5">
-              {fmtNum(sumBundles)} علاقية مباعة ({visibleSales.length} عملية)
+              {fmtNum(sumBundles)} وحدة قياس مباعة ({visibleSales.length} عملية)
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-sky-50 dark:bg-sky-950/40 text-sky-600 flex items-center justify-center font-bold">
@@ -364,7 +366,9 @@ export function SalesTab({
           <div>
             <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
               <Wallet className="w-3.5 h-3.5 text-emerald-600" />
-              <span>المقبوضات النقدية (Cash Collections)</span>
+              <span>
+                <bdi dir="auto">المقبوضات النقدية (Cash Collections)</bdi>
+              </span>
             </div>
             <div className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-1 tabular-nums">
               {fmtNum(sumCredit)} <span className="text-xs font-normal text-slate-500">ريال</span>
@@ -383,7 +387,9 @@ export function SalesTab({
           <div>
             <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
               <DollarSign className="w-3.5 h-3.5 text-rose-600" />
-              <span>ديون العملاء الآجلة (Credit Due)</span>
+              <span>
+                <bdi dir="auto">ديون العملاء الآجلة (Credit Due)</bdi>
+              </span>
             </div>
             <div className="text-xl font-black text-rose-600 dark:text-rose-400 mt-1 tabular-nums">
               {fmtNum(sumDebit)} <span className="text-xs font-normal text-slate-500">ريال</span>
@@ -490,7 +496,9 @@ export function SalesTab({
             </div>
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="block font-semibold">القطاع الفرعي (Sub-Project)</label>
+                <label className="block font-semibold">
+                  <bdi dir="auto">القطاع الفرعي (Sub-Project)</bdi>
+                </label>
                 <span className="text-[10px] text-slate-400">مركز تكلفة</span>
               </div>
               <select
@@ -641,7 +649,7 @@ export function SalesTab({
           {/* Pricing & Quantities */}
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="block font-semibold mb-1">عدد العلاقيات</label>
+              <label className="block font-semibold mb-1">الكمية المباعة (وحدات القياس)</label>
               <input
                 value={bundles}
                 onChange={(e) => setBundles(e.target.value)}
@@ -652,7 +660,7 @@ export function SalesTab({
               />
             </div>
             <div>
-              <label className="block font-semibold mb-1">السعر (للعلاقية)</label>
+              <label className="block font-semibold mb-1">سعر الوحدة</label>
               <input
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}
@@ -824,7 +832,7 @@ export function SalesTab({
                     { labelAr: "إجمالي المبيعات", labelEn: "Total Sales", value: `${fmtNum(sumTotal)} YER`, tone: "indigo" },
                     { labelAr: "التحصيل النقدي", labelEn: "Cash Collected", value: `${fmtNum(sumCredit)} YER`, tone: "emerald" },
                     { labelAr: "المتبقي الآجل", labelEn: "Receivable", value: `${fmtNum(sumDebit)} YER`, tone: "rose" },
-                    { labelAr: "إجمالي العلاقيات", labelEn: "Bundles", value: `${fmtNum(sumBundles)} (${visibleSales.length})`, tone: "amber" },
+                    { labelAr: "إجمالي الكمية (الوحدات)", labelEn: "Total Quantity", value: `${fmtNum(sumBundles)} (${visibleSales.length})`, tone: "amber" },
                   ],
                   tables: [
                     {
@@ -835,7 +843,7 @@ export function SalesTab({
                         { key: "voucherNo", labelAr: "رقم السند", labelEn: "Voucher" },
                         { key: "customer", labelAr: "العميل", labelEn: "Customer" },
                         { key: "grade", labelAr: "الصنف", labelEn: "Grade" },
-                        { key: "bundles", labelAr: "الكمية", labelEn: "Qty", numeric: true },
+                        { key: "bundles", labelAr: "الكمية / الوحدة", labelEn: "Qty / UoM", numeric: true },
                         { key: "price", labelAr: "السعر", labelEn: "Price", numeric: true },
                         { key: "total", labelAr: "الإجمالي", labelEn: "Total", numeric: true },
                         { key: "credit", labelAr: "المدفوع", labelEn: "Paid", numeric: true },
@@ -964,7 +972,7 @@ export function SalesTab({
                 <th className="p-2.5">المسؤول / الوردية</th>
                 <th className="p-2.5">اسم العميل والهاتف</th>
                 <th className="p-2.5">الدرجة</th>
-                <th className="p-2.5">العلاقيات</th>
+                <th className="p-2.5">الكمية / الوحدة</th>
                 <th className="p-2.5">السعر</th>
                 <th className="p-2.5">الإجمالي</th>
                 <th className="p-2.5">دائن (مقبوض)</th>

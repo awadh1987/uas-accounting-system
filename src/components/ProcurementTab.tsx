@@ -41,6 +41,8 @@ interface VendorItem {
   totalBilled: number;
   totalPaid: number;
   totalDue: number;
+  isActive?: boolean;
+  archivedAt?: string | null;
 }
 
 interface PurchaseOrderItem {
@@ -250,6 +252,74 @@ export function ProcurementTab({
       setLoading(false);
     }
   }, [fetchProcurementBundle, applyProcurementBundle, onToast]);
+
+  const [showArchivedVendors, setShowArchivedVendors] = useState(false);
+
+  const handleArchiveVendor = useCallback(
+    async (v: VendorItem) => {
+      try {
+        const res = await fetch("/api/system/lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entityType: "Vendor", id: v.id, action: "ARCHIVE" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error);
+        onToast(data.message || "تمت أرشفة المورد بنجاح");
+        await loadAll();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "تعذر أرشفة المورد";
+        onToast(msg);
+      }
+    },
+    [loadAll, onToast]
+  );
+
+  const handleRestoreVendor = useCallback(
+    async (v: VendorItem) => {
+      try {
+        const res = await fetch("/api/system/lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entityType: "Vendor", id: v.id, action: "RESTORE" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error);
+        onToast(data.message || "تمت استعادة المورد بنجاح");
+        await loadAll();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "تعذر استعادة المورد";
+        onToast(msg);
+      }
+    },
+    [loadAll, onToast]
+  );
+
+  const handleDeleteVendor = useCallback(
+    async (v: VendorItem) => {
+      if (
+        !confirm(
+          `هل أنت متأكد من حذف المورد (${v.nameAr})؟ في حال وجود حركات أو فواتير مرتبطة سيتم أرشفته آلياً حفاظاً على التاريخ المالي.`
+        )
+      )
+        return;
+      try {
+        const res = await fetch("/api/system/lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entityType: "Vendor", id: v.id, action: "SAFE_DELETE" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error);
+        onToast(data.message || "تمت العملية بنجاح");
+        await loadAll();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "تعذر حذف المورد";
+        onToast(msg);
+      }
+    },
+    [loadAll, onToast]
+  );
 
   useEffect(() => {
     let active = true;
@@ -905,7 +975,31 @@ export function ProcurementTab({
         {/* SUB-TAB 4: VENDORS DIRECTORY */}
         {subTab === "vendors" && (
           <div className="space-y-3">
-            {vendors.length === 0 ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-xl bg-slate-100/70 dark:bg-slate-800/50">
+              <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                <span className="font-bold">إجمالي الموردين:</span>
+                <span className="font-mono font-black">{vendors.length}</span>
+                <span className="text-[10px] text-slate-400">
+                  (النشطين: {vendors.filter((v) => v.isActive !== false).length} • المؤرشفين:{" "}
+                  {vendors.filter((v) => v.isActive === false).length})
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowArchivedVendors((p) => !p)}
+                  className={`px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${
+                    showArchivedVendors
+                      ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700"
+                      : "bg-slate-200/50 dark:bg-slate-700/50 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600"
+                  }`}
+                >
+                  {showArchivedVendors ? "إخفاء المؤرشفين" : "إظهار المؤرشفين"}
+                </button>
+              </div>
+            </div>
+
+            {vendors.filter((v) => (showArchivedVendors ? true : v.isActive !== false)).length === 0 ? (
               <EmptyState
                 title="دليل الموردين فارغ"
                 description="أضف مورداً جديداً ليتم فتح حساب أستاذ فرعي له آلياً ضمن ذمم الموردين (2111xx)."
@@ -914,53 +1008,105 @@ export function ProcurementTab({
               />
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {vendors.map((v) => (
-                  <div
-                    key={v.id}
-                    className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs space-y-2"
-                  >
-                    <div className="flex justify-between items-center">
-                      <span className="font-mono font-bold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
-                        {v.code} • COA {v.account.code}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-slate-500">{v.phone}</span>
+                {vendors
+                  .filter((v) => (showArchivedVendors ? true : v.isActive !== false))
+                  .map((v) => {
+                    const isArchived = v.isActive === false;
+                    return (
+                      <div
+                        key={v.id}
+                        className={`p-4 rounded-2xl border text-xs space-y-2 transition ${
+                          isArchived
+                            ? "border-amber-300/60 bg-amber-50/20 dark:bg-amber-950/10 dark:border-amber-800/40 opacity-80"
+                            : "border-slate-200 dark:border-slate-700"
+                        }`}
+                      >
+                        <div className="flex justify-between items-center">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-mono font-bold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
+                              {v.code} • COA {v.account.code}
+                            </span>
+                            {isArchived && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                                مؤرشف
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-slate-500 font-mono text-[11px]">{v.phone}</span>
+                        </div>
+                        <div className="font-extrabold text-sm">{v.nameAr}</div>
+                        <div className="grid grid-cols-3 gap-2 pt-2 border-t text-center tabular-nums">
+                          <div>
+                            <div className="text-[10px] text-slate-400">الفواتير</div>
+                            <div className="font-bold">{fmtNum(v.totalBilled)}</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] text-slate-400">المدفوع</div>
+                            <div className="font-bold text-emerald-600">{fmtNum(v.totalPaid)}</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] text-slate-400">المتبقي</div>
+                            <div className="font-extrabold text-rose-600">{fmtNum(v.totalDue)}</div>
+                          </div>
+                        </div>
+
                         {!readOnly && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingVendorId(v.id);
-                              setVNameAr(v.nameAr);
-                              setVNameEn(v.nameEn || "");
-                              setVPhone(v.phone);
-                              setVTax(v.taxRegistration || "");
-                              setDrawerKind("vendor");
-                            }}
-                            className="text-indigo-600 font-bold hover:underline inline-flex items-center gap-0.5"
-                          >
-                            <Edit3 className="w-3 h-3" />
-                            <span>تعديل</span>
-                          </button>
+                          <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2">
+                            {!isArchived ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingVendorId(v.id);
+                                    setVNameAr(v.nameAr);
+                                    setVNameEn(v.nameEn || "");
+                                    setVPhone(v.phone);
+                                    setVTax(v.taxRegistration || "");
+                                    setDrawerKind("vendor");
+                                  }}
+                                  className="text-indigo-600 font-bold hover:underline inline-flex items-center gap-0.5"
+                                >
+                                  <Edit3 className="w-3 h-3" />
+                                  <span>تعديل</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleArchiveVendor(v)}
+                                  className="text-amber-700 dark:text-amber-400 font-bold hover:underline"
+                                >
+                                  أرشفة
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDeleteVendor(v)}
+                                  className="text-rose-600 font-bold hover:underline"
+                                >
+                                  حذف
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleRestoreVendor(v)}
+                                  className="text-emerald-700 dark:text-emerald-400 font-bold hover:underline"
+                                >
+                                  استعادة
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDeleteVendor(v)}
+                                  className="text-rose-600 font-bold hover:underline"
+                                >
+                                  حذف نهائي
+                                </button>
+                              </>
+                            )}
+                          </div>
                         )}
                       </div>
-                    </div>
-                    <div className="font-extrabold text-sm">{v.nameAr}</div>
-                    <div className="grid grid-cols-3 gap-2 pt-2 border-t text-center tabular-nums">
-                      <div>
-                        <div className="text-[10px] text-slate-400">الفواتير</div>
-                        <div className="font-bold">{fmtNum(v.totalBilled)}</div>
-                      </div>
-                      <div>
-                        <div className="text-[10px] text-slate-400">المدفوع</div>
-                        <div className="font-bold text-emerald-600">{fmtNum(v.totalPaid)}</div>
-                      </div>
-                      <div>
-                        <div className="text-[10px] text-slate-400">المتبقي</div>
-                        <div className="font-extrabold text-rose-600">{fmtNum(v.totalDue)}</div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                    );
+                  })}
               </div>
             )}
           </div>

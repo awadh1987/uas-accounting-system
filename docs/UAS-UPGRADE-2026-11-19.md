@@ -161,3 +161,60 @@ This release elevates UAS from an operational bookkeeping platform into a full I
 | Approval Requests | `/api/approvals` | `GET, POST` | List inbox & submit creation/amendment for approval |
 | Approval Decision | `/api/approvals/[id]/decide` | `POST` | Execute `APPROVED`, `REJECTED`, or `RETURNED_FOR_EDIT` |
 | Approval Rules | `/api/approvals/rules` | `GET, POST, PUT, DELETE` | Configure Approval Governance Matrix |
+
+---
+
+## 11. Mission 3 Architecture: Global Idempotency, Universal Archive/Safe-Delete, AI Chat Controls & Granular RBAC
+### 11. هندسة المرحلة الثالثة: منع التكرار العام، دورة حياة الحذف والأرشفة الآمنة، تحكم المحادثة الذكية وصلاحيات RBAC الدقيقة
+
+#### 11.1 Global Double-Click Idempotency (`withIdempotency`)
+- **Implementation:** `src/lib/idempotencyGuard.ts`, `prisma/schema.prisma` (`IdempotencyRecord`), `src/lib/offlineAndroidStore.ts`.
+- **Mechanism:** Intercepts mutating requests carrying `X-Idempotency-Key` (UUIDv4) with a 24-hour cache window. Rapid double-clicks or double-taps on web/mobile return the cached HTTP status and body without re-executing general ledger postings, stock deductions, or fiscal year closings.
+- **Atomic Transactions & State Guards:** Multi-step financial operations are wrapped in `prisma.$transaction` blocks with conditional `WHERE status = 'ACTIVE_DRAFT'`, `WHERE status = 'OPEN'`, or `WHERE status = 'PENDING'` guards to eliminate concurrency race conditions.
+
+#### 11.2 Universal Master Record Lifecycle (`MasterLifecycle`)
+- **Implementation:** `src/lib/masterLifecycle.ts`, `/api/system/lifecycle`, `src/lib/offlineAndroidStore.ts`.
+- **Safe-Delete Invariant:** Master entities (`Customer`, `Vendor`, `Worker`, `Project`, `Warehouse`, `InventoryItem`, `CostCenter`, and unposted `WorkspaceDraft`) are inspected for linked financial records (`JournalEntryLine`, `StockMovement`, `SaleTransaction`, `OperatingExpense`, `WorkerWage`, `AuditLog`).
+  - **Zero Linked Records:** Permanently deleted from the database along with their associated Generation 6 GL leaf account.
+  - **Historical Linked Records:** Auto-archived (`isActive = false`, `archivedAt = now()`) while safely preserving referential integrity, and deactivating the linked Generation 6 GL account (`isPosting = false`).
+  - **Restoration:** Single-click restore (`isActive = true`, `archivedAt = null`) reactivates the master record and its GL account.
+- **Frontend Action Buttons:** Unified `تعديل` / `أرشفة` / `استعادة` / `حذف` action buttons with an `"إظهار المؤرشفين"` filter toggle across all master tabs.
+
+#### 11.3 AI Copilot Chat Controls & Reasoning Transparency
+- **Implementation:** `src/components/UasAiCopilot.tsx`.
+- **Collapsible / Minimize Support:** Toggle between full floating copilot modal and minimized bottom-left pill handle (`localStorage.uas_copilot_minimized`), ensuring the right-sidebar Logout button and table columns are never obstructed.
+- **Per-Message Edit (`تعديل`):** Inline editing on any historical user prompt bubble. Truncates stale assistant replies after that turn and cleanly re-executes AI reasoning with the updated query.
+- **Per-Message Delete (`حذف`) & Clear History (`مسح السجل`):** Delete individual bubbles or clear entire chat thread history (`localStorage.uas_copilot_history_*`).
+- **Dismissable Action Preview (`تجاهل الاقتراح`):** Financial Confirmation Preview Cards feature 3 distinct decision buttons:
+  - **تنفيذ وترحيل / Execute & Post:** Posts the balanced transaction to the General Ledger.
+  - **حفظ كمسودة / Save Draft:** Saves the transaction as an editable `WorkspaceDraft` without affecting the General Ledger.
+  - **تجاهل / Dismiss:** Discards the proposed transaction cleanly without writing to the database.
+
+#### 11.4 AI Agent Gen-6, Multi-Currency & Period-Lock Routing
+- **Implementation:** `src/lib/ai/uasAgentTools.ts`, `src/lib/ai/offlineAgentEngine.ts`, `src/lib/ai/agentServerExecutor.ts`.
+- **Gen-6 Resolution:** Prioritizes postable leaf accounts (`level === 6 && isPosting === true`).
+- **Multi-Currency & Multi-Unit:** Extracts foreign currencies (`SAR`, `USD`, `AED`, `OMR`, `EUR`, `YER`) and exchange rates, and converts multi-unit item quantities via `factorToBase`.
+- **Governance Gateways:** Enforces `assertDateNotInClosedFiscalYear` and routes transactions exceeding approval thresholds into `SUBMITTED_FOR_APPROVAL` or `WorkspaceDraft` queues.
+
+#### 11.5 Topological Backup, Legacy Restore & Android Replay Queue
+- **Implementation:** `src/lib/backupService.ts`, `src/lib/offlineAndroidStore.ts`.
+- **Full Schema Export:** Exports all tables in strict foreign-key order: `Currency`, `ExchangeRate`, `CostCenter`, `FiscalYear`, `UnitOfMeasure`, `ItemCategory`, `Warehouse`, `InventoryItem`, `StockBalance`, `TreasuryTransaction`, `WorkspaceDraft`, `ApprovalRule`, `ApprovalRequest`, `IdempotencyRecord`.
+- **Legacy Backward-Compatibility:** On restoring older database snapshots, auto-executes `ensure6GenerationCoaHierarchy()`, backfills `baseDebit`/`baseCredit` (`exchangeRate = 1`), and initializes the active `FiscalYear`.
+- **Topological Replay Queue:** Android offline mutations are sorted by priority tiers (Currencies/FiscalYears 10 → CostCenters 20 → UOMs/Warehouses 30 → Master Entities 40 → Rules/Drafts 50 → Ledger/Transactions 60 → Approvals 70) to prevent foreign-key deadlock during reconnection.
+
+#### 11.6 Granular RBAC Permissions Matrix
+- **Implementation:** `src/lib/permissions.ts`, `src/components/tabs/SystemTab.tsx`.
+- **New Permission Flags:**
+  - `accounting.close_year` (`canCloseFiscalYear`): Close fiscal year & execute rollover.
+  - `accounting.fx_revalue` (`canFxRevalue`): Post unrealized FX revaluation entries.
+  - `approvals.decide` (`canDecideApprovals`): Approve or reject approval requests.
+  - `approvals.configure` (`canConfigureApprovals`): Configure approval rules & thresholds.
+  - `drafts.manage_all` (`canManageAllDrafts`): Inspect and manage all workspace drafts.
+  - `inventory.custom_uom` (`canCustomUom`): Register custom units of measure.
+  - `records.archive_delete` (`canArchiveDeleteRecords`): Archive, delete, or restore master entities.
+- **Configurable UI:** Integrated into the System Tab RBAC matrix and User Permissions Drawer with per-user custom overrides.
+
+#### 11.7 Excel/CSV Reusable Templates & Import Parser
+- **Implementation:** `src/lib/excelExport.ts`.
+- **Extended Columns:** Added `costCenterCode`, `currencyCode`, `exchangeRate`, `unitCode`, and `factorToBase` across Customer Sales and Operating Expenses sheets.
+- **Template Generators & Parsers:** `exportUasModuleTemplate()` produces downloadable templates with sample data for Sales, Expenses, Items, Customers, Vendors, and Journal Vouchers, while `parseExcelImport()` parses uploaded spreadsheets into structured arrays.

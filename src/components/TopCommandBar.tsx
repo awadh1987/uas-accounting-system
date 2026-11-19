@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Bot,
   ChevronDown,
   FileClock,
   Globe2,
@@ -118,11 +119,31 @@ export function TopCommandBar({
   const breadcrumb = getBreadcrumb(activeTab, lang);
   const activeGroup = resolveGroupForTab(activeTab);
   const activeSub = activeGroup.subTabs.find((s) => s.id === activeTab);
-  const domainNamespace = activeSub?.subdomain || activeGroup.domainPath;
   const roleMeta = getRoleMeta(currentUser);
   const readOnly = isReadOnly(currentUser);
   const [profileOpen, setProfileOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
+
+  const localizedModuleBadge = useMemo(() => {
+    const map: Record<string, { ar: string; en: string }> = {
+      dashboard: { ar: "لوحة المؤشرات", en: "Executive Dashboard" },
+      sales: { ar: "المبيعات والعملاء", en: "Sales & Clients" },
+      customers: { ar: "دليل العملاء وكشوفات الحساب", en: "Clients & Ledgers" },
+      procurement: { ar: "المشتريات والتوريدات", en: "Procurement & Vendors" },
+      expenses: { ar: "المصروفات التشغيلية", en: "Operational Expenses" },
+      workers: { ar: "العمال والأجور والعهد", en: "Labor & Payroll" },
+      ledger: { ar: "الأستاذ العام وميزان المراجعة", en: "General Ledger" },
+      coa: { ar: "دليل الحسابات الشجري", en: "Chart of Accounts" },
+      reports: { ar: "التقارير المالية والختامية", en: "Financial Reports" },
+      inventory: { ar: "إدارة المخزون والمستودعات", en: "Multi-Unit Inventory" },
+      projects: { ar: "إدارة المشاريع والقطاعات", en: "Projects & Operations" },
+      system: { ar: "إعدادات النظام والترخيص", en: "System & Governance" },
+      audit: { ar: "سجل الرقابة وإقفال الفترات", en: "Audit & Period Lock" },
+    };
+    const item = map[activeTab];
+    if (item) return isAr ? item.ar : item.en;
+    return activeSub ? (isAr ? activeSub.labelAr : activeSub.labelEn) : (isAr ? activeGroup.labelAr : activeGroup.labelEn);
+  }, [activeTab, activeSub, activeGroup, isAr]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -181,30 +202,30 @@ export function TopCommandBar({
           </div>
         </div>
 
-        {/* Dynamic Breadcrumb Trail + Domain Namespace */}
+        {/* Dynamic Breadcrumb Trail + Localized Module Badge */}
         <nav aria-label="Breadcrumb" className="hidden sm:flex items-center gap-1.5 text-xs min-w-0">
           <span className="font-extrabold truncate max-w-[150px] lg:max-w-[200px]">
-            {breadcrumb.groupLabel}
+            <bdi dir="auto">{breadcrumb.groupLabel}</bdi>
           </span>
           {breadcrumb.subLabel && (
             <>
               <span className="text-slate-400">/</span>
               <span className="font-bold text-emerald-600 dark:text-emerald-400 truncate max-w-[160px]">
-                {breadcrumb.subLabel}
+                <bdi dir="auto">{breadcrumb.subLabel}</bdi>
               </span>
             </>
           )}
-          <span className="hidden lg:inline-block px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-[10px] font-mono text-slate-500">
-            {domainNamespace}
+          <span className="hidden lg:inline-block px-2.5 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200/50 dark:border-emerald-800/40 text-[10px] font-bold text-emerald-800 dark:text-emerald-300">
+            <bdi dir="auto">{localizedModuleBadge}</bdi>
           </span>
         </nav>
       </div>
 
       {/* Center / Trailing Controls */}
       <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar">
-        {/* Global Project & Harvest Filter Pills */}
+        {/* Global Project Filter Pill (Clean, uncluttered) */}
         {!mobileSimulatorActive && (
-          <div className="hidden xl:flex items-center gap-1.5">
+          <div className="hidden xl:flex items-center gap-1.5 shrink-0">
             <select
               aria-label={dict.activeProjectLbl}
               value={selectedProjectId}
@@ -218,37 +239,30 @@ export function TopCommandBar({
                 </option>
               ))}
             </select>
-
-            {/* Cascading Sub-Project Filter */}
-            <select
-              aria-label={isAr ? "القطاع الفرعي" : "Sub-Project"}
-              value={selectedSubProjectId}
-              onChange={(e) => onSubProjectChange?.(e.target.value)}
-              className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 px-2.5 py-1.5 text-[11px] font-bold focus:outline-none max-w-[160px]"
-            >
-              <option value="ALL">{isAr ? "كل القطاعات الفرعية" : "All Sub-Projects"}</option>
-              {availableSubProjects.map((sp) => (
-                <option key={sp.id} value={sp.id}>
-                  {sp.code ? `${sp.code} - ${sp.nameAr}` : sp.nameAr}
-                </option>
-              ))}
-            </select>
-
-            <select
-              aria-label={dict.activeHarvestLbl}
-              value={selectedHarvest}
-              onChange={(e) => onHarvestChange(e.target.value)}
-              className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 px-2.5 py-1.5 text-[11px] font-bold focus:outline-none max-w-[140px]"
-            >
-              <option value="ALL">{dict.allHarvests}</option>
-              {availableHarvests.map((h) => (
-                <option key={h} value={h}>
-                  {h}
-                </option>
-              ))}
-            </select>
           </div>
         )}
+
+        {/* AI Copilot Quick Launch Button */}
+        <button
+          type="button"
+          data-testid="topbar-ai-copilot-btn"
+          onClick={() => {
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new CustomEvent("uas:toggle-copilot"));
+            }
+          }}
+          title={
+            isAr
+              ? "فتح المساعد المحاسبي الذكي ودليل المستخدم"
+              : "Open UAS AI Copilot & User Manual"
+          }
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-emerald-500/50 bg-emerald-50/70 dark:bg-emerald-950/30 hover:bg-emerald-100/80 text-emerald-800 dark:text-emerald-300 text-xs font-extrabold transition shrink-0"
+        >
+          <Bot className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+          <span className="hidden xl:inline text-[11px]">
+            {isAr ? "المساعد الذكي" : "AI Copilot"}
+          </span>
+        </button>
 
         {/* Pending Approvals Counter Badge */}
         {onOpenApprovalsCenter && (
@@ -291,10 +305,10 @@ export function TopCommandBar({
           type="button"
           onClick={onOpenSearch}
           title="Ctrl+K / ⌘K"
-          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-800/70 hover:border-emerald-500 text-xs text-slate-500 transition shrink-0"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-800/70 hover:border-emerald-500 text-xs text-slate-700 dark:text-slate-200 transition shrink-0"
         >
           <Search className="w-3.5 h-3.5 text-emerald-600" />
-          <span className="hidden lg:inline text-[11px] font-semibold">
+          <span className="inline text-[11px] font-bold">
             {isAr ? "بحث..." : "Search..."}
           </span>
           <kbd className="hidden md:inline-block px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[10px] font-mono">

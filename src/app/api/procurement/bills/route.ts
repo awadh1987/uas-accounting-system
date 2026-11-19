@@ -7,6 +7,7 @@ import {
   reverseJournalEntry,
 } from "@/lib/accounting/ledgerService";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
+import { withIdempotency } from "@/lib/idempotencyGuard";
 
 export const dynamic = "force-dynamic";
 
@@ -81,63 +82,65 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    const body = (await req.json()) as Record<string, unknown>;
-    const auth = await authorizeApiAction(body, req, {
-      moduleId: "procurement",
-      action: "create",
-      dateChanged: Boolean(body.date),
-    });
-    if (!auth.ok) return auth.response;
-    const actor = auth.actor;
+  return withIdempotency(req, async (r) => {
+    try {
+      const body = (await r.json()) as Record<string, unknown>;
+      const auth = await authorizeApiAction(body, r, {
+        moduleId: "procurement",
+        action: "create",
+        dateChanged: Boolean(body.date),
+      });
+      if (!auth.ok) return auth.response;
+      const actor = auth.actor;
 
-    const vendorId = String(body.vendorId || "").trim();
-    const projectId = String(body.projectId || "").trim();
-    const subProjectId = body.subProjectId ? String(body.subProjectId).trim() : null;
-    const purchaseOrderId = body.purchaseOrderId ? String(body.purchaseOrderId).trim() : null;
-    const acquisitionCycleId = body.acquisitionCycleId ? String(body.acquisitionCycleId).trim() : null;
-    const totalAmount = Number(body.totalAmount) || 0;
-    const currency = String(body.currency || "YER").toUpperCase();
-    const isInventory = Boolean(body.isInventory);
-    const debitAccountCode = body.debitAccountCode ? String(body.debitAccountCode).trim() : undefined;
-    const debitAccountId = body.debitAccountId ? String(body.debitAccountId).trim() : undefined;
-    const customAccount =
-      body.customAccount && typeof body.customAccount === "object"
-        ? (body.customAccount as { nameAr: string; nameEn?: string; parentCode: string; code?: string })
-        : undefined;
-    const notes = body.notes ? String(body.notes).trim() : undefined;
+      const vendorId = String(body.vendorId || "").trim();
+      const projectId = String(body.projectId || "").trim();
+      const subProjectId = body.subProjectId ? String(body.subProjectId).trim() : null;
+      const purchaseOrderId = body.purchaseOrderId ? String(body.purchaseOrderId).trim() : null;
+      const acquisitionCycleId = body.acquisitionCycleId ? String(body.acquisitionCycleId).trim() : null;
+      const totalAmount = Number(body.totalAmount) || 0;
+      const currency = String(body.currency || "YER").toUpperCase();
+      const isInventory = Boolean(body.isInventory);
+      const debitAccountCode = body.debitAccountCode ? String(body.debitAccountCode).trim() : undefined;
+      const debitAccountId = body.debitAccountId ? String(body.debitAccountId).trim() : undefined;
+      const customAccount =
+        body.customAccount && typeof body.customAccount === "object"
+          ? (body.customAccount as { nameAr: string; nameEn?: string; parentCode: string; code?: string })
+          : undefined;
+      const notes = body.notes ? String(body.notes).trim() : undefined;
 
-    if (!vendorId || !projectId || totalAmount <= 0) {
-      return jsonError("يرجى تحديد المورد والمشروع وإدخال مبلغ الفاتورة", 400);
+      if (!vendorId || !projectId || totalAmount <= 0) {
+        return jsonError("يرجى تحديد المورد والمشروع وإدخال مبلغ الفاتورة", 400);
+      }
+
+      const result = await postVendorBill({
+        vendorId,
+        projectId,
+        subProjectId,
+        purchaseOrderId,
+        acquisitionCycleId,
+        totalAmount,
+        currency,
+        date: body.date ? String(body.date) : new Date(),
+        dueDate: body.dueDate ? String(body.dueDate) : null,
+        isInventory,
+        debitAccountCode,
+        debitAccountId,
+        customAccount,
+        notes,
+        costCenterId: body.costCenterId ? String(body.costCenterId) : null,
+        createdById: actor.userId ?? undefined,
+      });
+
+      return NextResponse.json(
+        { bill: result.bill, journalEntry: result.journalEntry },
+        { status: 201 }
+      );
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "تعذر إصدار فاتورة المورد";
+      return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
     }
-
-    const result = await postVendorBill({
-      vendorId,
-      projectId,
-      subProjectId,
-      purchaseOrderId,
-      acquisitionCycleId,
-      totalAmount,
-      currency,
-      date: body.date ? String(body.date) : new Date(),
-      dueDate: body.dueDate ? String(body.dueDate) : null,
-      isInventory,
-      debitAccountCode,
-      debitAccountId,
-      customAccount,
-      notes,
-      costCenterId: body.costCenterId ? String(body.costCenterId) : null,
-      createdById: actor.userId ?? undefined,
-    });
-
-    return NextResponse.json(
-      { bill: result.bill, journalEntry: result.journalEntry },
-      { status: 201 }
-    );
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : "تعذر إصدار فاتورة المورد";
-    return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
-  }
+  });
 }
 
 async function handleBillUpdate(req: NextRequest) {

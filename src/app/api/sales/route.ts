@@ -14,17 +14,19 @@ import {
   isHarvestLockedTx,
 } from "@/lib/serverBootstrap";
 import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
+import { withIdempotency } from "@/lib/idempotencyGuard";
 
 export async function POST(req: NextRequest) {
-  try {
-    const body = (await req.json()) as Record<string, unknown>;
-    const auth = await authorizeApiAction(body, req, {
-      moduleId: "sales",
-      action: "create",
-      dateChanged: Boolean(body.date),
-    });
-    if (!auth.ok) return auth.response;
-    const actor = auth.actor;
+  return withIdempotency(req, async (r) => {
+    try {
+      const body = (await r.json()) as Record<string, unknown>;
+      const auth = await authorizeApiAction(body, r, {
+        moduleId: "sales",
+        action: "create",
+        dateChanged: Boolean(body.date),
+      });
+      if (!auth.ok) return auth.response;
+      const actor = auth.actor;
 
     const projectId = String(body.projectId || "").trim();
     const subProjectId = body.subProjectId ? String(body.subProjectId).trim() : null;
@@ -210,6 +212,7 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/sales error:", error);
     return jsonError("تعذر حفظ عملية البيع", 500);
   }
+  });
 }
 
 async function handleSalePatch(req: NextRequest) {

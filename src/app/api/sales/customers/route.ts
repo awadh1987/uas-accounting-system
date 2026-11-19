@@ -5,6 +5,12 @@ import {
   recordAuditDiffTx,
 } from "@/lib/accounting/ledgerService";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
+import { withIdempotency } from "@/lib/idempotencyGuard";
+import {
+  archiveMasterRecord,
+  restoreMasterRecord,
+  safeDeleteOrArchiveMasterRecord,
+} from "@/lib/masterLifecycle";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +48,8 @@ export async function GET() {
           totalInvoiced,
           totalCollected,
           totalReceivable,
+          isActive: c.isActive ?? true,
+          archivedAt: c.archivedAt ? c.archivedAt.toISOString() : null,
         };
       }),
     });
@@ -52,53 +60,55 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    const body = (await req.json()) as Record<string, unknown>;
-    const auth = await authorizeApiAction(body, req, {
-      moduleId: "customers",
-      action: "create",
-    });
-    if (!auth.ok) return auth.response;
-
-    const name = String(body.nameAr || body.name || "").trim();
-    if (!name) return jsonError("يرجى إدخال اسم العميل", 400);
-
-    const customer = await prisma.$transaction(async (tx) => {
-      const created = await ensureCustomerWithAccountTx(tx, {
-        name,
-        nameEn: body.nameEn ? String(body.nameEn).trim() : undefined,
-        phone: body.phone ? String(body.phone).trim() : undefined,
-        address: body.address ? String(body.address).trim() : undefined,
-        costCenterId: body.costCenterId ? String(body.costCenterId).trim() : undefined,
+  return withIdempotency(req, async (r) => {
+    try {
+      const body = (await r.json()) as Record<string, unknown>;
+      const auth = await authorizeApiAction(body, r, {
+        moduleId: "customers",
+        action: "create",
       });
+      if (!auth.ok) return auth.response;
 
-      if (body.creditLimit !== undefined) {
-        await tx.customer.update({
-          where: { id: created.id },
-          data: { creditLimit: Math.max(0, Number(body.creditLimit) || 0) },
+      const name = String(body.nameAr || body.name || "").trim();
+      if (!name) return jsonError("يرجى إدخال اسم العميل", 400);
+
+      const customer = await prisma.$transaction(async (tx) => {
+        const created = await ensureCustomerWithAccountTx(tx, {
+          name,
+          nameEn: body.nameEn ? String(body.nameEn).trim() : undefined,
+          phone: body.phone ? String(body.phone).trim() : undefined,
+          address: body.address ? String(body.address).trim() : undefined,
+          costCenterId: body.costCenterId ? String(body.costCenterId).trim() : undefined,
         });
-      }
 
-      await recordAuditDiffTx(tx, {
-        userId: auth.actor.userId,
-        action: "CREATE",
-        entity: "Customer",
-        entityId: created.id,
-        before: null,
-        after: { code: created.code, nameAr: created.nameAr, phone: created.phone },
+        if (body.creditLimit !== undefined) {
+          await tx.customer.update({
+            where: { id: created.id },
+            data: { creditLimit: Math.max(0, Number(body.creditLimit) || 0) },
+          });
+        }
+
+        await recordAuditDiffTx(tx, {
+          userId: auth.actor.userId,
+          action: "CREATE",
+          entity: "Customer",
+          entityId: created.id,
+          before: null,
+          after: { code: created.code, nameAr: created.nameAr, phone: created.phone },
+        });
+
+        return tx.customer.findUnique({
+          where: { id: created.id },
+          include: { account: { select: { id: true, code: true, nameAr: true, nameEn: true } } },
+        });
       });
 
-      return tx.customer.findUnique({
-        where: { id: created.id },
-        include: { account: { select: { id: true, code: true, nameAr: true, nameEn: true } } },
-      });
-    });
-
-    return NextResponse.json({ customer }, { status: 201 });
-  } catch (error) {
-    console.error("POST /api/sales/customers error:", error);
-    return jsonError("تعذر إنشاء ملف العميل", 500);
-  }
+      return NextResponse.json({ customer }, { status: 201 });
+    } catch (error) {
+      console.error("POST /api/sales/customers error:", error);
+      return jsonError("تعذر إنشاء ملف العميل", 500);
+    }
+  });
 }
 
 async function handleUpdateCustomer(req: NextRequest) {
@@ -181,4 +191,45 @@ export async function PATCH(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   return handleUpdateCustomer(req);
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      body = {};
+    }
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "customers",
+      action: "delete",
+    });
+    if (!auth.ok) return auth.response;
+
+    const id = searchParams.get("id") || String(body.id || "");
+    const action = String(body.action || searchParams.get("action") || "SAFE_DELETE").toUpperCase();
+    if (!id) return jsonError("معرف العميل مطلوب للحذف", 400);
+
+    const actor = {
+      userId: auth.actor.userId,
+      userRole: auth.actor.userRole,
+      userDisplay: auth.actor.userDisplay,
+    };
+
+    let result;
+    if (action === "ARCHIVE") {
+      result = await archiveMasterRecord("Customer", id, actor);
+    } else if (action === "RESTORE") {
+      result = await restoreMasterRecord("Customer", id, actor);
+    } else {
+      result = await safeDeleteOrArchiveMasterRecord("Customer", id, actor);
+    }
+
+    return NextResponse.json(result, { status: result.status });
+  } catch (error) {
+    console.error("DELETE /api/sales/customers error:", error);
+    return jsonError("تعذر حذف أو أرشفة العميل", 500);
+  }
 }

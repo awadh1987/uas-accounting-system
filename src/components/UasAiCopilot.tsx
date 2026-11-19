@@ -4,12 +4,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowUpRight,
+  Ban,
   BookOpen,
   Bot,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   Cpu,
+  Edit3,
+  FileText,
   HelpCircle,
   KeyRound,
   Mic,
@@ -18,6 +22,7 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Volume2,
   VolumeX,
   X,
@@ -59,6 +64,7 @@ interface CopilotChatMessage {
     entryNumber?: string;
     summary: string;
   };
+  dismissed?: boolean;
   navigationTab?: TabId;
   openLicenseModal?: boolean;
 }
@@ -93,6 +99,8 @@ export function UasAiCopilot({
   const [busy, setBusy] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [expandedTraces, setExpandedTraces] = useState<Record<string, boolean>>({});
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState("");
 
   // Voice Recognition & TTS state
   const [voiceLang, setVoiceLang] = useState<"ar-SA" | "ar-YE" | "en-US">(
@@ -105,6 +113,41 @@ export function UasAiCopilot({
   // User Manual search & selected chapter state
   const [manualSearch, setManualSearch] = useState("");
   const [selectedChapterNum, setSelectedChapterNum] = useState<number>(1);
+
+  // Collapsible / Hideable Copilot State
+  const [isMinimized, setIsMinimized] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return window.localStorage.getItem("uas_copilot_minimized") === "true";
+    }
+    return false;
+  });
+
+  const handleToggleMinimize = (min?: boolean) => {
+    setIsMinimized((prev) => {
+      const next = typeof min === "boolean" ? min : !prev;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("uas_copilot_minimized", next ? "true" : "false");
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const handleToggle = () => {
+      setIsMinimized(false);
+      setOpen((v) => !v);
+    };
+    const handleOpen = () => {
+      setIsMinimized(false);
+      setOpen(true);
+    };
+    window.addEventListener("uas:toggle-copilot", handleToggle);
+    window.addEventListener("uas:open-copilot", handleOpen);
+    return () => {
+      window.removeEventListener("uas:toggle-copilot", handleToggle);
+      window.removeEventListener("uas:open-copilot", handleOpen);
+    };
+  }, []);
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -143,16 +186,54 @@ export function UasAiCopilot({
     [clientDiagnostics]
   );
 
-  const [messages, setMessages] = useState<CopilotChatMessage[]>(() => [
-    {
+  const historyStorageKey = `uas_copilot_history_${currentUser?.id || "guest"}`;
+
+  const welcomeMessage: CopilotChatMessage = useMemo(
+    () => ({
       id: "welcome-1",
       role: "assistant",
       text: isAr
         ? "مرحباً بك في **المساعد المحاسبي الذكي وخدمة العملاء (UAS AI Copilot)** 🤖.\nيمكنك التحدث بالصوت أو الكتابة بالعربية والإنجليزية لتنفيذ العمليات المحاسبية (مسودة قيد مزدوج، سند قبض/صرف، فاتورة، استعلام عن رصيد حساب، تقارير مالية، فحص المخزون، أو تشخيص الترخيص والمقاعد) — ويعمل بالكامل متصلاً ودون إنترنت!"
         : "Welcome to the **UAS Enterprise Bilingual Voice + Text ERP Copilot & Support Assistant** 🤖.\nSpeak or type in Arabic or English to query account balances, generate Trial Balance / P&L summaries, draft balanced journal entries or vouchers with Confirmation Preview Cards, diagnose 7-user license seats, or search the 7-chapter User Manual — both online and 100% offline!",
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    },
-  ]);
+    }),
+    [isAr]
+  );
+
+  const [messages, setMessages] = useState<CopilotChatMessage[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = window.localStorage.getItem(historyStorageKey);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch {
+        // storage fallback
+      }
+    }
+    return [
+      {
+        id: "welcome-1",
+        role: "assistant",
+        text: isAr
+          ? "مرحباً بك في **المساعد المحاسبي الذكي وخدمة العملاء (UAS AI Copilot)** 🤖.\nيمكنك التحدث بالصوت أو الكتابة بالعربية والإنجليزية لتنفيذ العمليات المحاسبية (مسودة قيد مزدوج، سند قبض/صرف، فاتورة، استعلام عن رصيد حساب، تقارير مالية، فحص المخزون، أو تشخيص الترخيص والمقاعد) — ويعمل بالكامل متصلاً ودون إنترنت!"
+          : "Welcome to the **UAS Enterprise Bilingual Voice + Text ERP Copilot & Support Assistant** 🤖.\nSpeak or type in Arabic or English to query account balances, generate Trial Balance / P&L summaries, draft balanced journal entries or vouchers with Confirmation Preview Cards, diagnose 7-user license seats, or search the 7-chapter User Manual — both online and 100% offline!",
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      },
+    ];
+  });
+
+  // Sync messages to localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined" && messages.length > 0) {
+      try {
+        window.localStorage.setItem(historyStorageKey, JSON.stringify(messages));
+      } catch {
+        // quota exceeded or private browsing
+      }
+    }
+  }, [messages, historyStorageKey]);
 
   useEffect(() => {
     setVoiceLang(isAr ? "ar-SA" : "en-US");
@@ -273,7 +354,46 @@ export function UasAiCopilot({
     }
   }
 
-  async function handleSendPrompt(overrideText?: string) {
+  const handleClearHistory = () => {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(historyStorageKey);
+    }
+    setMessages([welcomeMessage]);
+    onToast(isAr ? "تم مسح سجل المحادثة بنجاح" : "Chat history cleared successfully");
+  };
+
+  const handleDeleteMessage = (msgId: string) => {
+    setMessages((prev) => {
+      const next = prev.filter((m) => m.id !== msgId);
+      return next.length > 0 ? next : [welcomeMessage];
+    });
+    onToast(isAr ? "تم حذف الرسالة" : "Message deleted");
+  };
+
+  const handleSaveEditMessage = async (msgId: string) => {
+    const trimmed = editingText.trim();
+    if (!trimmed) return;
+    setEditingMessageId(null);
+
+    const idx = messages.findIndex((m) => m.id === msgId);
+    if (idx === -1) return;
+
+    // Truncate subsequent messages after this turn
+    const truncated = messages.slice(0, idx);
+    setMessages(truncated);
+
+    // Re-run AI reasoning with updated prompt
+    await handleSendPrompt(trimmed, truncated);
+  };
+
+  const handleDismissAction = (msgId: string) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msgId ? { ...m, dismissed: true } : m))
+    );
+    onToast(isAr ? "تم تجاهل الاقتراح دون ترحيل" : "Proposal dismissed without posting");
+  };
+
+  async function handleSendPrompt(overrideText?: string, baseMessages?: CopilotChatMessage[]) {
     const prompt = (overrideText ?? inputPrompt).trim();
     if (!prompt || busy) return;
 
@@ -283,7 +403,11 @@ export function UasAiCopilot({
       text: prompt,
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
-    setMessages((prev) => [...prev, userMsg]);
+    if (baseMessages) {
+      setMessages([...baseMessages, userMsg]);
+    } else {
+      setMessages((prev) => [...prev, userMsg]);
+    }
     if (!overrideText) setInputPrompt("");
     setBusy(true);
 
@@ -447,6 +571,79 @@ export function UasAiCopilot({
     }
   }
 
+  async function handleSaveAsDraft(msgId: string, card: ConfirmationPreviewCard) {
+    if (confirmingId) return;
+    setConfirmingId(msgId);
+
+    try {
+      let summaryText = "";
+      let draftNumber = `DRFT-AI-${Date.now().toString().slice(-4)}`;
+      let handledByServer = false;
+
+      if (!offlineMode && (typeof navigator === "undefined" || navigator.onLine)) {
+        try {
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
+          if (currentUser?.role) headers["x-uas-role"] = String(currentUser.role);
+
+          const res = await fetch("/api/ai/agent", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              confirmAction: card,
+              isDraft: true,
+              lang,
+              actor: currentUser
+                ? {
+                    userId: currentUser.id,
+                    userDisplay: currentUser.name,
+                    userRole: currentUser.role,
+                  }
+                : undefined,
+            }),
+          });
+          handledByServer = true;
+          const data = await res.json();
+          if (!res.ok || !data.success) {
+            throw new Error(data.reply || data.error || "Saving draft failed");
+          }
+          draftNumber = data.draftNumber || data.draftId || draftNumber;
+          summaryText = isAr ? data.summaryAr : data.summaryEn;
+          await onRefreshState();
+        } catch (serverErr: any) {
+          if (handledByServer) throw serverErr;
+        }
+      }
+
+      if (!handledByServer) {
+        summaryText = isAr
+          ? `📝 تم حفظ العملية كمسودة عمل محلياً (${draftNumber}) بنجاح.`
+          : `📝 Saved locally as workspace draft (${draftNumber}).`;
+      }
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId
+            ? {
+                ...m,
+                confirmedResult: {
+                  executed: true,
+                  entryNumber: draftNumber,
+                  summary: summaryText,
+                },
+              }
+            : m
+        )
+      );
+      onToast(summaryText);
+      speakText(summaryText);
+    } catch (err: any) {
+      onToast(err?.message || (isAr ? "فشل حفظ المسودة" : "Failed to save draft"));
+    } finally {
+      setConfirmingId(null);
+    }
+  }
+
   const manualSearchResults = useMemo(() => {
     if (!manualSearch.trim()) return [];
     return searchSupportKnowledge(manualSearch, { topK: 6 });
@@ -476,41 +673,98 @@ export function UasAiCopilot({
 
   return (
     <>
-      {/* Floating Copilot Trigger Button */}
-      <div className="fixed bottom-5 right-5 z-40 flex items-center gap-2">
-        <button
-          type="button"
-          data-testid="uas-ai-copilot-fab"
-          onClick={() => setOpen((v) => !v)}
-          className="group flex items-center gap-2.5 px-4 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-xl shadow-emerald-900/30 border border-emerald-400/30 transition-all"
-          title={
+      {/* Floating Copilot Trigger Pill or Minimized Handle */}
+      {isMinimized ? (
+        <div
+          className={
             isAr
-              ? "المساعد المحاسبي الذكي ودليل المستخدم (صوت + نص)"
-              : "UAS AI ERP Copilot & User Manual (Voice + Text)"
+              ? "fixed bottom-5 left-4 sm:left-6 z-40 flex items-center gap-1.5"
+              : "fixed bottom-5 right-4 sm:right-6 z-40 flex items-center gap-1.5"
           }
         >
-          <div className="relative flex items-center justify-center">
-            <Bot className="w-5 h-5" />
-            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-300 animate-ping" />
-            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-400" />
-          </div>
-          <div className="text-start hidden sm:block">
-            <div className="text-xs font-black leading-tight flex items-center gap-1">
-              <span>{isAr ? "المساعد الذكي & دليل المستخدم" : "AI Copilot & User Guide"}</span>
-              <Sparkles className="w-3 h-3 text-amber-300" />
+          <button
+            type="button"
+            data-testid="uas-ai-copilot-minimized-btn"
+            onClick={() => {
+              handleToggleMinimize(false);
+              setOpen(true);
+            }}
+            className="p-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-xl shadow-emerald-900/30 border border-emerald-400/30 hover:scale-105 transition-all flex items-center gap-2"
+            title={
+              isAr
+                ? "إظهار المساعد المحاسبي الذكي (UAS AI Copilot)"
+                : "Restore UAS AI ERP Copilot"
+            }
+          >
+            <div className="relative flex items-center justify-center">
+              <Bot className="w-5 h-5" />
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-400" />
             </div>
-            <div className="text-[10px] text-emerald-100 opacity-90">
-              {isAr ? "أوامر صوتية • قيود • دعم دون إنترنت" : "Voice + Text • Offline Ready"}
+            <span className="text-xs font-black hidden sm:inline">
+              {isAr ? "المساعد الذكي" : "AI Copilot"}
+            </span>
+          </button>
+        </div>
+      ) : (
+        <div
+          className={
+            isAr
+              ? "fixed bottom-5 left-4 sm:left-6 z-40 flex items-center gap-1.5"
+              : "fixed bottom-5 right-4 sm:right-6 z-40 flex items-center gap-1.5"
+          }
+        >
+          <button
+            type="button"
+            data-testid="uas-ai-copilot-fab"
+            onClick={() => setOpen((v) => !v)}
+            className="group flex items-center gap-2.5 px-4 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-xl shadow-emerald-900/30 border border-emerald-400/30 transition-all"
+            title={
+              isAr
+                ? "المساعد المحاسبي الذكي ودليل المستخدم (صوت + نص)"
+                : "UAS AI ERP Copilot & User Manual (Voice + Text)"
+            }
+          >
+            <div className="relative flex items-center justify-center">
+              <Bot className="w-5 h-5" />
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-300 animate-ping" />
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-400" />
             </div>
-          </div>
-        </button>
-      </div>
+            <div className="text-start hidden sm:block">
+              <div className="text-xs font-black leading-tight flex items-center gap-1">
+                <span>{isAr ? "المساعد الذكي & دليل المستخدم" : "AI Copilot & User Guide"}</span>
+                <Sparkles className="w-3 h-3 text-amber-300" />
+              </div>
+              <div className="text-[10px] text-emerald-100 opacity-90">
+                {isAr ? "أوامر صوتية • قيود • دعم دون إنترنت" : "Voice + Text • Offline Ready"}
+              </div>
+            </div>
+          </button>
+
+          {/* Minimize / Hide Button on Floating Pill */}
+          <button
+            type="button"
+            data-testid="uas-ai-copilot-hide-pill-btn"
+            onClick={() => handleToggleMinimize(true)}
+            className="p-2.5 rounded-2xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700/60 shadow-lg transition text-xs flex items-center gap-1"
+            title={isAr ? "إخفاء المساعد (تصغير إلى الزاوية)" : "Minimize / Hide Copilot"}
+          >
+            <ChevronDown className="w-4 h-4" />
+            <span className="text-[10px] font-bold hidden md:inline">
+              {isAr ? "إخفاء المساعد" : "Hide"}
+            </span>
+          </button>
+        </div>
+      )}
 
       {/* Floating Copilot Drawer */}
       {open && (
         <div
           dir={isAr ? "rtl" : "ltr"}
-          className="fixed bottom-20 right-3 sm:right-5 z-50 w-[calc(100vw-1.5rem)] sm:w-[470px] max-h-[82vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-900 dark:text-slate-100"
+          className={
+            isAr
+              ? "fixed bottom-20 left-3 sm:left-5 z-50 w-[calc(100vw-1.5rem)] sm:w-[470px] max-h-[82vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-900 dark:text-slate-100"
+              : "fixed bottom-20 right-3 sm:right-5 z-50 w-[calc(100vw-1.5rem)] sm:w-[470px] max-h-[82vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-900 dark:text-slate-100"
+          }
         >
           {/* Header */}
           <div className="p-4 bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 text-white flex items-center justify-between gap-3">
@@ -540,6 +794,15 @@ export function UasAiCopilot({
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
+                data-testid="uas-ai-copilot-clear-history-btn"
+                onClick={handleClearHistory}
+                className="p-1.5 rounded-xl border border-white/10 text-slate-300 hover:text-rose-300 hover:bg-white/10 transition"
+                title={isAr ? "مسح سجل المحادثة بالكامل" : "Clear Chat History"}
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
                 onClick={() => setTtsEnabled((v) => !v)}
                 className={`p-1.5 rounded-xl border text-xs transition ${
                   ttsEnabled
@@ -550,10 +813,24 @@ export function UasAiCopilot({
               >
                 {ttsEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
               </button>
+              {/* Minimize / Hide Button in Drawer Header */}
+              <button
+                type="button"
+                data-testid="uas-ai-copilot-header-hide-btn"
+                onClick={() => {
+                  setOpen(false);
+                  handleToggleMinimize(true);
+                }}
+                className="p-1.5 rounded-xl border border-white/10 text-slate-300 hover:text-white hover:bg-white/10 transition"
+                title={isAr ? "إخفاء المساعد (تصغير)" : "Minimize / Hide Copilot"}
+              >
+                <ChevronDown className="w-4 h-4" />
+              </button>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
                 className="p-1.5 rounded-xl border border-white/10 text-slate-300 hover:text-white hover:bg-white/10 transition"
+                title={isAr ? "إغلاق النافذة" : "Close Window"}
               >
                 <X className="w-4 h-4" />
               </button>
@@ -627,18 +904,77 @@ export function UasAiCopilot({
                 {messages.map((msg) => (
                   <div
                     key={msg.id}
-                    className={`flex flex-col ${
+                    className={`group relative flex flex-col ${
                       msg.role === "user" ? "items-end" : "items-start"
                     }`}
                   >
                     <div
-                      className={`max-w-[94%] rounded-2xl p-3 text-xs space-y-2 ${
+                      className={`relative max-w-[94%] rounded-2xl p-3 text-xs space-y-2 ${
                         msg.role === "user"
                           ? "bg-emerald-600 text-white rounded-br-none"
                           : "bg-slate-100 dark:bg-slate-800/90 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-bl-none"
                       }`}
                     >
-                      <div className="whitespace-pre-line leading-relaxed">{msg.text}</div>
+                      {/* Bubble Action Bar: Edit (user) & Delete */}
+                      <div
+                        className={`absolute -top-2.5 ${
+                          msg.role === "user" ? "left-2" : "right-2"
+                        } flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10`}
+                      >
+                        {msg.role === "user" && editingMessageId !== msg.id && (
+                          <button
+                            type="button"
+                            data-testid={`edit-msg-${msg.id}`}
+                            onClick={() => {
+                              setEditingMessageId(msg.id);
+                              setEditingText(msg.text);
+                            }}
+                            className="p-1 rounded-lg bg-slate-900/80 hover:bg-slate-900 text-slate-200 hover:text-white border border-slate-700/60 shadow-md transition"
+                            title={isAr ? "تعديل الأمر وإعادة المعالجة" : "Edit prompt and re-run"}
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          data-testid={`delete-msg-${msg.id}`}
+                          onClick={() => handleDeleteMessage(msg.id)}
+                          className="p-1 rounded-lg bg-slate-900/80 hover:bg-rose-700 text-slate-200 hover:text-white border border-slate-700/60 shadow-md transition"
+                          title={isAr ? "حذف الرسالة" : "Delete message"}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+
+                      {editingMessageId === msg.id ? (
+                        <div className="space-y-2 pt-1">
+                          <textarea
+                            value={editingText}
+                            onChange={(e) => setEditingText(e.target.value)}
+                            rows={2}
+                            className="w-full rounded-xl bg-emerald-700/80 text-white border border-emerald-400/50 p-2 text-xs focus:outline-none focus:ring-1 focus:ring-white font-sans"
+                          />
+                          <div className="flex items-center gap-1.5 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => setEditingMessageId(null)}
+                              className="px-2 py-1 rounded-lg bg-black/20 hover:bg-black/40 text-white text-[10px] font-bold"
+                            >
+                              {isAr ? "إلغاء" : "Cancel"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditMessage(msg.id)}
+                              className="px-2.5 py-1 rounded-lg bg-white text-emerald-800 hover:bg-emerald-50 text-[10px] font-black flex items-center gap-1 shadow-sm"
+                            >
+                              <Check className="w-3 h-3" />
+                              <span>{isAr ? "حفظ وإعادة الإرسال" : "Save & Re-run"}</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="whitespace-pre-line leading-relaxed">{msg.text}</div>
+                      )}
 
                       {/* Collapsible Reasoning Trace */}
                       {msg.reasoningTrace && msg.reasoningTrace.length > 0 && (
@@ -754,30 +1090,69 @@ export function UasAiCopilot({
                             </table>
                           </div>
 
-                          {msg.confirmedResult?.executed ? (
+                          {msg.dismissed ? (
+                            <div className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-500 dark:text-slate-400 text-[11px] font-bold flex items-center gap-1.5">
+                              <Ban className="w-4 h-4 shrink-0 text-slate-400" />
+                              <span>
+                                {isAr
+                                  ? "🚫 تم تجاهل هذا الاقتراح المحاسبي دون ترحيل."
+                                  : "🚫 Accounting proposal dismissed without posting."}
+                              </span>
+                            </div>
+                          ) : msg.confirmedResult?.executed ? (
                             <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-[11px] font-bold flex items-center gap-1.5">
                               <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
                               <span>{msg.confirmedResult.summary}</span>
                             </div>
                           ) : (
-                            <button
-                              type="button"
-                              data-testid="ai-confirm-execute-btn"
-                              disabled={confirmingId === msg.id}
-                              onClick={() =>
-                                handleConfirmAndExecute(msg.id, msg.confirmationCard!)
-                              }
-                              className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-sm flex items-center justify-center gap-1.5 disabled:opacity-50 transition"
-                            >
-                              <CheckCircle2 className="w-4 h-4" />
-                              <span>
-                                {confirmingId === msg.id
-                                  ? isAr
-                                    ? "جاري الترحيل..."
-                                    : "Posting..."
-                                  : "تأكيد وترحيل / Confirm & Execute"}
-                              </span>
-                            </button>
+                            <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                              <button
+                                type="button"
+                                data-testid="ai-confirm-execute-btn"
+                                disabled={confirmingId === msg.id}
+                                onClick={() =>
+                                  handleConfirmAndExecute(msg.id, msg.confirmationCard!)
+                                }
+                                className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-sm flex items-center justify-center gap-1.5 disabled:opacity-50 transition"
+                              >
+                                <CheckCircle2 className="w-4 h-4" />
+                                <span>
+                                  {confirmingId === msg.id
+                                    ? isAr
+                                      ? "جاري الترحيل..."
+                                      : "Posting..."
+                                    : isAr
+                                    ? "تنفيذ وترحيل"
+                                    : "Execute & Post"}
+                                </span>
+                              </button>
+
+                              <button
+                                type="button"
+                                data-testid="ai-save-draft-btn"
+                                disabled={confirmingId === msg.id}
+                                onClick={() =>
+                                  handleSaveAsDraft(msg.id, msg.confirmationCard!)
+                                }
+                                className="py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-sm flex items-center justify-center gap-1.5 disabled:opacity-50 transition"
+                                title={isAr ? "حفظ كمسودة عمل لمراجعتها لاحقاً" : "Save as workspace draft"}
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                                <span>{isAr ? "حفظ كمسودة" : "Save Draft"}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                data-testid="ai-dismiss-btn"
+                                disabled={confirmingId === msg.id}
+                                onClick={() => handleDismissAction(msg.id)}
+                                className="py-2 px-3 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs shadow-sm flex items-center justify-center gap-1.5 transition"
+                                title={isAr ? "تجاهل الاقتراح دون كتابة على قاعدة البيانات" : "Dismiss proposal without posting"}
+                              >
+                                <Ban className="w-3.5 h-3.5 text-slate-400" />
+                                <span>{isAr ? "تجاهل" : "Dismiss"}</span>
+                              </button>
+                            </div>
                           )}
                         </div>
                       )}

@@ -235,6 +235,13 @@ export interface GranularActionPermissions {
   canManageTreasury: boolean;
   canManageLandingCms: boolean;
   canManageUsers: boolean;
+  canCloseFiscalYear: boolean;
+  canFxRevalue: boolean;
+  canDecideApprovals: boolean;
+  canConfigureApprovals: boolean;
+  canManageAllDrafts: boolean;
+  canCustomUom: boolean;
+  canArchiveDeleteRecords: boolean;
 }
 
 export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermissions> = {
@@ -249,6 +256,13 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageTreasury: true,
     canManageLandingCms: true,
     canManageUsers: true,
+    canCloseFiscalYear: true,
+    canFxRevalue: true,
+    canDecideApprovals: true,
+    canConfigureApprovals: true,
+    canManageAllDrafts: true,
+    canCustomUom: true,
+    canArchiveDeleteRecords: true,
   },
   PROJECT_MANAGER: {
     canCreate: true,
@@ -261,6 +275,13 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageTreasury: false,
     canManageLandingCms: false,
     canManageUsers: false,
+    canCloseFiscalYear: false,
+    canFxRevalue: false,
+    canDecideApprovals: true,
+    canConfigureApprovals: false,
+    canManageAllDrafts: true,
+    canCustomUom: true,
+    canArchiveDeleteRecords: false,
   },
   CHIEF_ACCOUNTANT: {
     canCreate: true,
@@ -273,6 +294,13 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageTreasury: true,
     canManageLandingCms: false,
     canManageUsers: false,
+    canCloseFiscalYear: true,
+    canFxRevalue: true,
+    canDecideApprovals: true,
+    canConfigureApprovals: true,
+    canManageAllDrafts: true,
+    canCustomUom: true,
+    canArchiveDeleteRecords: true,
   },
   PROCUREMENT_OFFICER: {
     canCreate: true,
@@ -285,6 +313,13 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageTreasury: false,
     canManageLandingCms: false,
     canManageUsers: false,
+    canCloseFiscalYear: false,
+    canFxRevalue: false,
+    canDecideApprovals: false,
+    canConfigureApprovals: false,
+    canManageAllDrafts: false,
+    canCustomUom: true,
+    canArchiveDeleteRecords: false,
   },
   SALES_COLLECTOR: {
     canCreate: true,
@@ -297,6 +332,13 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageTreasury: false,
     canManageLandingCms: false,
     canManageUsers: false,
+    canCloseFiscalYear: false,
+    canFxRevalue: false,
+    canDecideApprovals: false,
+    canConfigureApprovals: false,
+    canManageAllDrafts: false,
+    canCustomUom: false,
+    canArchiveDeleteRecords: false,
   },
   FIELD_ACCOUNTANT: {
     canCreate: true,
@@ -309,6 +351,13 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageTreasury: false,
     canManageLandingCms: false,
     canManageUsers: false,
+    canCloseFiscalYear: false,
+    canFxRevalue: false,
+    canDecideApprovals: false,
+    canConfigureApprovals: false,
+    canManageAllDrafts: false,
+    canCustomUom: false,
+    canArchiveDeleteRecords: false,
   },
   EXTERNAL_AUDITOR: {
     canCreate: false,
@@ -321,6 +370,13 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageTreasury: false,
     canManageLandingCms: false,
     canManageUsers: false,
+    canCloseFiscalYear: false,
+    canFxRevalue: false,
+    canDecideApprovals: false,
+    canConfigureApprovals: false,
+    canManageAllDrafts: false,
+    canCustomUom: false,
+    canArchiveDeleteRecords: false,
   },
 };
 
@@ -395,6 +451,13 @@ export function resolveCustomOverrides(user: UasUser): UasUserCustomOverrides {
     canManageTreasury: actions.canManageTreasury,
     canManageLandingCms: actions.canManageLandingCms,
     canManageUsers: actions.canManageUsers,
+    canCloseFiscalYear: actions.canCloseFiscalYear,
+    canFxRevalue: actions.canFxRevalue,
+    canDecideApprovals: actions.canDecideApprovals,
+    canConfigureApprovals: actions.canConfigureApprovals,
+    canManageAllDrafts: actions.canManageAllDrafts,
+    canCustomUom: actions.canCustomUom,
+    canArchiveDeleteRecords: actions.canArchiveDeleteRecords,
     ...actions,
   };
 }
@@ -545,6 +608,61 @@ export function canLockPeriod(userOrRole?: UasUser | string | null): boolean {
 export function canManageUsers(userOrRole?: UasUser | string | null): boolean {
   // SUPER_ADMIN always retains recovery access to user management
   return evaluateActionRight(userOrRole, "canManageUsers", true);
+}
+
+export function canCloseFiscalYear(userOrRole?: UasUser | string | null): boolean {
+  return evaluateActionRight(userOrRole, "canCloseFiscalYear", true);
+}
+
+export function canFxRevalue(userOrRole?: UasUser | string | null): boolean {
+  return evaluateActionRight(userOrRole, "canFxRevalue", true);
+}
+
+export function canDecideApprovals(userOrRole?: UasUser | string | null): boolean {
+  return evaluateActionRight(userOrRole, "canDecideApprovals", true);
+}
+
+export function canConfigureApprovals(userOrRole?: UasUser | string | null): boolean {
+  return evaluateActionRight(userOrRole, "canConfigureApprovals", true);
+}
+
+export function canManageAllDrafts(userOrRole?: UasUser | string | null): boolean {
+  return evaluateActionRight(userOrRole, "canManageAllDrafts", true);
+}
+
+export function canCustomUom(userOrRole?: UasUser | string | null): boolean {
+  return evaluateActionRight(userOrRole, "canCustomUom", true);
+}
+
+export function canArchiveDeleteRecords(userOrRole?: UasUser | string | null): boolean {
+  return evaluateActionRight(userOrRole, "canArchiveDeleteRecords", true);
+}
+
+export type GranularPermissionCode =
+  | "accounting.close_year"
+  | "accounting.fx_revalue"
+  | "approvals.decide"
+  | "approvals.configure"
+  | "drafts.manage_all"
+  | "inventory.custom_uom"
+  | "records.archive_delete"
+  | keyof GranularActionPermissions;
+
+export function hasGranularPermission(
+  userOrRole: UasUser | string | null | undefined,
+  permission: GranularPermissionCode
+): boolean {
+  const map: Record<string, keyof GranularActionPermissions> = {
+    "accounting.close_year": "canCloseFiscalYear",
+    "accounting.fx_revalue": "canFxRevalue",
+    "approvals.decide": "canDecideApprovals",
+    "approvals.configure": "canConfigureApprovals",
+    "drafts.manage_all": "canManageAllDrafts",
+    "inventory.custom_uom": "canCustomUom",
+    "records.archive_delete": "canArchiveDeleteRecords",
+  };
+  const key = (map[permission] || permission) as keyof GranularActionPermissions;
+  return evaluateActionRight(userOrRole, key, true);
 }
 
 export function canAccessProject(user: UasUser | null | undefined, projectId: string): boolean {

@@ -324,14 +324,21 @@ export async function decideApprovalRequest(
   client: typeof prisma = prisma
 ) {
   return client.$transaction(async (tx) => {
-    const req = await tx.approvalRequest.findUnique({
+    // Concurrency State Guard: Atomically lock request with WHERE status = 'PENDING'
+    const guarded = await tx.approvalRequest.updateMany({
+      where: { id: input.requestId, status: "PENDING" },
+      data: { status: input.decision },
+    });
+    if (guarded.count === 0) {
+      const existing = await tx.approvalRequest.findUnique({ where: { id: input.requestId } });
+      if (!existing) throw new Error("APPROVAL_REQUEST_NOT_FOUND");
+      throw new Error(`APPROVAL_ALREADY_DECIDED: تم البت في هذا الطلب مسبقاً (${existing.status})`);
+    }
+
+    const req = await tx.approvalRequest.findUniqueOrThrow({
       where: { id: input.requestId },
       include: { rule: true },
     });
-    if (!req) throw new Error("APPROVAL_REQUEST_NOT_FOUND");
-    if (req.status !== "PENDING") {
-      throw new Error(`APPROVAL_ALREADY_DECIDED: تم البت في هذا الطلب مسبقاً (${req.status})`);
-    }
 
     const allowSelf = req.rule?.allowSelfApproval ?? false;
     if (!allowSelf && input.reviewer.userId === req.requestedById) {

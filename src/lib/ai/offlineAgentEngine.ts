@@ -83,15 +83,87 @@ export function normalizeDigits(input: string): string {
   return String(input ?? "").replace(/[٠-٩]/g, (d) => ARABIC_INDIC_MAP[d] ?? d);
 }
 
-export function extractCurrencyFromPrompt(prompt: string): "YER" | "SAR" | "USD" {
-  const norm = normalizeSupportText(prompt);
-  if (norm.includes("sar") || norm.includes("سعودي")) return "SAR";
+export function extractCurrencyFromPrompt(prompt: string): string {
+  const norm = normalizeSupportText(prompt).toLowerCase();
+  if (norm.includes("sar") || norm.includes("سعودي") || norm.includes("ريال سعودي")) return "SAR";
   if (norm.includes("usd") || norm.includes("دولار") || prompt.includes("$")) return "USD";
+  if (norm.includes("aed") || norm.includes("درهم") || norm.includes("اماراتي") || norm.includes("إماراتي")) return "AED";
+  if (norm.includes("omr") || norm.includes("عماني") || norm.includes("ريال عماني")) return "OMR";
+  if (norm.includes("kwd") || norm.includes("كويتي") || norm.includes("دينار كويتي")) return "KWD";
+  if (norm.includes("eur") || norm.includes("يورو") || prompt.includes("€")) return "EUR";
+  if (norm.includes("gbp") || norm.includes("استرليني") || prompt.includes("£")) return "GBP";
+
+  // Explicit uppercase 3-letter currency code in prompt (e.g. QAR, BHD, JOD)
+  const explicitMatch = prompt.match(/\b([A-Z]{3})\b/);
+  if (explicitMatch && !["UAS", "COA", "ERP", "POS", "VCH", "INV", "NOT", "FOR"].includes(explicitMatch[1])) {
+    return explicitMatch[1];
+  }
+
   return "YER";
 }
 
+export function extractExchangeRateFromPrompt(prompt: string): number | undefined {
+  const clean = normalizeDigits(prompt);
+  // Match "بسعر صرف" or "سعر صرف" or "سعر الصرف" or "معامل صرف" or "exchange rate" or "rate: 530"
+  // Avoid matching "سند صرف 500" where "صرف" means payment voucher!
+  const match = clean.match(/(?:(?:ب?سعر|معامل)\s+(?:ال)?صرف|(?:exchange|fx)\s*rate|\brate)\s*[:=]?\s*(\d+(?:\.\d+)?)/i);
+  if (match && match[1]) {
+    const val = Number(match[1]);
+    if (Number.isFinite(val) && val > 0) return val;
+  }
+  return undefined;
+}
+
+export function extractCostCenterFromPrompt(prompt: string): string | undefined {
+  const clean = normalizeDigits(prompt);
+  const match = clean.match(/(?:مركز\s+تكلفة|مركز\s+التكلفة|مركز|cost\s*center|cc)\s*[:=]?\s*([A-Za-z0-9_\u0600-\u06FF-]+)/i);
+  if (match && match[1]) {
+    const val = match[1].trim();
+    if (val && !["اليومية", "الرئيسي", "العام", "قيد", "سند", "فاتورة"].includes(val)) return val;
+  }
+  return undefined;
+}
+
+export function extractMultiUnitQuantityFromPrompt(prompt: string): {
+  quantity: number;
+  unitName: string;
+  factorToBase: number;
+  baseQuantity: number;
+} | null {
+  const clean = normalizeDigits(prompt);
+  const match = clean.match(
+    /(\d+(?:\.\d+)?)\s*(كرتون|كراتين|درزن|درازن|كيس|أكياس|اكياس|كيلو|كجم|حبة|حبات|قطعة|قطع|box|boxes|carton|cartons|dozen|dozens|bag|bags|kg|pcs|piece|pieces)(?:[\s،,.]|$)/iu
+  );
+  if (!match) return null;
+
+  const quantity = Number(match[1]);
+  if (!Number.isFinite(quantity) || quantity <= 0) return null;
+
+  const unitWord = match[2].toLowerCase();
+  let factorToBase = 1;
+
+  if (["كرتون", "كراتين", "box", "boxes", "carton", "cartons"].includes(unitWord)) {
+    factorToBase = 12; // Standard carton = 12 base units
+  } else if (["درزن", "درازن", "dozen", "dozens"].includes(unitWord)) {
+    factorToBase = 12;
+  } else if (["كيس", "أكياس", "اكياس", "bag", "bags"].includes(unitWord)) {
+    factorToBase = 50; // Standard agricultural bag = 50 kg/units
+  } else if (["كيلو", "كجم", "kg"].includes(unitWord)) {
+    factorToBase = 1;
+  } else {
+    factorToBase = 1;
+  }
+
+  return {
+    quantity,
+    unitName: match[2],
+    factorToBase,
+    baseQuantity: quantity * factorToBase,
+  };
+}
+
 /**
- * Extracts monetary numbers (ignoring 6-digit COA codes like 111101, 411101, 521101).
+ * Extracts monetary numbers (ignoring 6- to 9-digit COA codes like 111101, 411101, 112190001).
  */
 export function extractMonetaryAmounts(prompt: string, coaCodesToExclude: string[] = []): number[] {
   const clean = normalizeDigits(prompt).replace(/,/g, "");
@@ -101,8 +173,8 @@ export function extractMonetaryAmounts(prompt: string, coaCodesToExclude: string
 
   for (const m of matches) {
     if (excludeSet.has(m)) continue;
-    // Standard COA codes are 6 or 8 digits starting with 1..5 and ending with 00..09
-    if (/^[1-5]\d{5}$/.test(m) || /^[1-5]\d{7}$/.test(m)) {
+    // Standard COA codes are 6 to 9 digits starting with 1..5
+    if (/^[1-5]\d{5,8}$/.test(m)) {
       // Only treat as COA code if it matches COA pattern AND isn't preceded by amount keywords
       const idx = clean.indexOf(m);
       const before = clean.slice(Math.max(0, idx - 18), idx).toLowerCase();
@@ -131,7 +203,7 @@ export function extractMonetaryAmounts(prompt: string, coaCodesToExclude: string
 
 export function extractCoaCodes(prompt: string): string[] {
   const clean = normalizeDigits(prompt);
-  const matches = clean.match(/\b[1-5]\d{5}(?:\d{2})?\b/g) ?? [];
+  const matches = clean.match(/\b[1-5]\d{5,8}\b/g) ?? [];
   return matches;
 }
 
@@ -190,6 +262,9 @@ export function parseBilingualAgentIntent(prompt: string): ParsedAgentIntent {
   const norm = normalizeSupportText(normalizeDigits(raw));
   const lang = detectSupportLanguage(raw, "ar");
   const currency = extractCurrencyFromPrompt(raw);
+  const exchangeRate = extractExchangeRateFromPrompt(raw);
+  const costCenterId = extractCostCenterFromPrompt(raw);
+  const multiUnit = extractMultiUnitQuantityFromPrompt(raw);
 
   // 1. Check explicit navigation intent ("افتح قسم ...", "انتقل إلى ...", "open ...", "navigate to ...", "go to ...")
   const navMatch = raw.match(
@@ -236,13 +311,15 @@ export function parseBilingualAgentIntent(prompt: string): ParsedAgentIntent {
         narrationAr: raw,
         narrationEn: raw,
         currency,
+        exchangeRate,
+        costCenterId,
         lines: [
-          { accountCode: debitAcc, debit: debitAmount, credit: 0 },
-          { accountCode: creditAcc, debit: 0, credit: creditAmount },
+          { accountCode: debitAcc, debit: debitAmount, credit: 0, costCenterId, currency, exchangeRate },
+          { accountCode: creditAcc, debit: 0, credit: creditAmount, costCenterId, currency, exchangeRate },
         ],
       },
-      thoughtAr: `تحليل النية: طلب إنشاء مسودة قيد يومية مزدوج (حساب مدين: ${debitAcc} بمبلغ ${debitAmount}، حساب دائن: ${creditAcc} بمبلغ ${creditAmount}). سيتم التحقق من صلاحية الدور وتوازن القيد وإرجاع بطاقة المعاينة للتأكيد.`,
-      thoughtEn: `Intent parsed: Draft double-entry journal voucher (Debit ${debitAcc} = ${debitAmount}, Credit ${creditAcc} = ${creditAmount}). Enforcing RBAC, 5-level COA leaf check, and Confirmation Preview Card gate.`,
+      thoughtAr: `تحليل النية: طلب إنشاء مسودة قيد يومية مزدوج (حساب مدين: ${debitAcc} بمبلغ ${debitAmount}، حساب دائن: ${creditAcc} بمبلغ ${creditAmount}${exchangeRate ? `، بسعر صرف ${exchangeRate}` : ""}${costCenterId ? `، مركز تكلفة ${costCenterId}` : ""}). سيتم التحقق من صلاحية الدور وتوازن القيد وإرجاع بطاقة المعاينة للتأكيد.`,
+      thoughtEn: `Intent parsed: Draft double-entry journal voucher (Debit ${debitAcc} = ${debitAmount}, Credit ${creditAcc} = ${creditAmount}${exchangeRate ? `, FX rate ${exchangeRate}` : ""}${costCenterId ? `, CC ${costCenterId}` : ""}). Enforcing RBAC, 5-level COA leaf check, and Confirmation Preview Card gate.`,
     };
   }
 
@@ -270,10 +347,12 @@ export function parseBilingualAgentIntent(prompt: string): ParsedAgentIntent {
         partyName,
         amount,
         currency,
+        exchangeRate,
+        costCenterId,
         narration: raw,
       },
-      thoughtAr: `تحليل النية: طلب إعداد مسودة ${isReceiptVoucher ? "سند قبض" : "سند صرف"} بمبلغ ${amount} ${currency} للطرف (${partyName}).`,
-      thoughtEn: `Intent parsed: Draft ${isReceiptVoucher ? "Receipt Voucher" : "Payment Voucher"} for ${amount} ${currency} (${partyName}).`,
+      thoughtAr: `تحليل النية: طلب إعداد مسودة ${isReceiptVoucher ? "سند قبض" : "سند صرف"} بمبلغ ${amount} ${currency}${exchangeRate ? ` بسعر صرف ${exchangeRate}` : ""} للطرف (${partyName})${costCenterId ? ` [مركز ${costCenterId}]` : ""}.`,
+      thoughtEn: `Intent parsed: Draft ${isReceiptVoucher ? "Receipt Voucher" : "Payment Voucher"} for ${amount} ${currency}${exchangeRate ? ` at rate ${exchangeRate}` : ""} (${partyName})${costCenterId ? ` [CC ${costCenterId}]` : ""}.`,
     };
   }
 
@@ -289,7 +368,7 @@ export function parseBilingualAgentIntent(prompt: string): ParsedAgentIntent {
 
   if (isSalesInvoice || isPurchaseInvoice) {
     const amounts = extractMonetaryAmounts(raw);
-    const amount = amounts[0] ?? 0;
+    const rawAmount = amounts[0] ?? 0;
     const partyName = extractPartyName(
       raw,
       isPurchaseInvoice ? "مورد معتمد" : "عميل تجاري",
@@ -298,17 +377,27 @@ export function parseBilingualAgentIntent(prompt: string): ParsedAgentIntent {
     );
     const isCash = /(?:نقد|نقدا|نقدي|cash)/i.test(norm);
 
+    const qty = multiUnit ? multiUnit.quantity : 1;
+    const factorToBase = multiUnit ? multiUnit.factorToBase : 1;
+    const amount = rawAmount > 0 ? rawAmount : (qty * 100);
+
     return {
       toolName: "draft_invoice",
       args: {
         invoiceType: isPurchaseInvoice ? "PURCHASE" : "SALES",
         partyName,
         amount,
+        quantity: qty,
+        unitPrice: qty > 1 ? Number((amount / qty).toFixed(2)) : amount,
         paymentMethod: isCash ? "CASH" : "CREDIT",
         currency,
+        exchangeRate,
+        costCenterId,
+        factorToBase,
+        unitName: multiUnit?.unitName,
       },
-      thoughtAr: `تحليل النية: طلب إعداد مسودة ${isPurchaseInvoice ? "فاتورة مشتريات" : "فاتورة مبيعات"} بمبلغ ${amount} ${currency} (${partyName}).`,
-      thoughtEn: `Intent parsed: Draft ${isPurchaseInvoice ? "Purchase Bill" : "Sales Invoice"} for ${amount} ${currency} (${partyName}).`,
+      thoughtAr: `تحليل النية: طلب إعداد مسودة ${isPurchaseInvoice ? "فاتورة مشتريات" : "فاتورة مبيعات"} بمبلغ ${amount} ${currency}${multiUnit ? ` (${qty} ${multiUnit.unitName} × معامل تحويل ${factorToBase})` : ""} (${partyName})${costCenterId ? ` [مركز ${costCenterId}]` : ""}.`,
+      thoughtEn: `Intent parsed: Draft ${isPurchaseInvoice ? "Purchase Bill" : "Sales Invoice"} for ${amount} ${currency}${multiUnit ? ` (${qty} ${multiUnit.unitName} × factor ${factorToBase})` : ""} (${partyName})${costCenterId ? ` [CC ${costCenterId}]` : ""}.`,
     };
   }
 

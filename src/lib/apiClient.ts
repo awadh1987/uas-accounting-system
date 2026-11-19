@@ -30,6 +30,17 @@ export const CLOUD_URL_STORAGE_KEY = "uas_cloud_server_url";
 export const DEFAULT_CLOUD_API_URL = "https://qat.world";
 export const DEFAULT_LAN_API_URL = "http://192.168.1.10:3000";
 
+export function generateClientUuid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 export type ClientRuntimeMode = "local" | "lan" | "cloud";
 
 export interface StorageLike {
@@ -253,7 +264,19 @@ export async function safeFetchJson<T = Record<string, unknown>>(
     };
   }
   try {
-    const res = await fn(url, init);
+    const method = (init?.method || "GET").toUpperCase();
+    const isMutating = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
+    let finalInit = init;
+
+    if (isMutating) {
+      const headers = new Headers(init?.headers || {});
+      if (!headers.has("x-idempotency-key") && !headers.has("X-Idempotency-Key")) {
+        headers.set("X-Idempotency-Key", generateClientUuid());
+      }
+      finalInit = { ...init, headers };
+    }
+
+    const res = await fn(url, finalInit);
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
     const text = await res.text();
     const trimmed = text.trim();
@@ -314,14 +337,24 @@ export function installGlobalApiFetchInterceptor(): void {
     const isLocalhostApi = /^https?:\/\/localhost(?::\d+)?\/api\//i.test(urlStr);
 
     if (isRelativeApi || isLocalhostApi) {
+      const method = (init?.method || "GET").toUpperCase();
+      let patchedInit = init;
+      if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+        const headers = new Headers(init?.headers || {});
+        if (!headers.has("x-idempotency-key") && !headers.has("X-Idempotency-Key")) {
+          headers.set("X-Idempotency-Key", generateClientUuid());
+        }
+        patchedInit = { ...init, headers };
+      }
+
       // On Android in `"local"` mode, route all local `/api/*` calls to on-device localStorage adapter
       // (never reaching https://qat.world or Capacitor's HTML fallback).
       if (isAndroidLocalIsolatedMode()) {
-        return handleOfflineAndroidApiRequest(urlStr, init);
+        return handleOfflineAndroidApiRequest(urlStr, patchedInit);
       }
       const base = resolveApiBaseUrl();
       if (base && isRelativeApi) {
-        return originalFetch(`${base}${urlStr}`, init);
+        return originalFetch(`${base}${urlStr}`, patchedInit);
       }
     }
     return originalFetch(input, init);
@@ -781,7 +814,10 @@ export async function executeMutation(opts: {
     const base = getApiBaseUrl();
     const res = await fetch(`${base}${opts.endpoint}`, {
       method: opts.method,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": generateClientUuid(),
+      },
       body: JSON.stringify(bodyWithActor),
     });
     const data = (await res.json().catch(() => ({}))) as {

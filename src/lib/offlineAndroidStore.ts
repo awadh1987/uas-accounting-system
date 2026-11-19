@@ -60,6 +60,7 @@ export const OFFLINE_DB_FISCAL_YEARS_KEY = "uas_offline_db_fiscal_years";
 export const OFFLINE_DB_DRAFTS_KEY = "uas_offline_db_drafts";
 export const OFFLINE_DB_APPROVAL_RULES_KEY = "uas_offline_db_approval_rules";
 export const OFFLINE_DB_APPROVAL_REQUESTS_KEY = "uas_offline_db_approval_requests";
+export const OFFLINE_DB_IDEMPOTENCY_KEY = "uas_offline_db_idempotency";
 export const OFFLINE_SYNC_QUEUE_KEY = "uas_offline_sync_queue";
 
 export const DEFAULT_LOCAL_ADMIN_EMAIL = "admin@uas-ye.com";
@@ -206,6 +207,79 @@ function writePasswordMap(map: Record<string, string>, storage?: OfflineStorageL
 
 export function getOfflineSyncQueue(storage?: OfflineStorageLike | null): OfflineSyncQueueEntry[] {
   return readCollection<OfflineSyncQueueEntry>(OFFLINE_SYNC_QUEUE_KEY, storage);
+}
+
+/**
+ * Resolves replay priority tier for an offline mutation endpoint (lower number = earlier replay).
+ * Ensures parent master models (Currencies, Cost Centers, UOMs, Categories, Items, Accounts)
+ * sync before child transactions, movements, drafts, and approval decisions.
+ */
+export function getEndpointSyncPriority(endpoint: string, _method = "POST"): number {
+  const ep = endpoint.toLowerCase();
+
+  // Tier 1: Currencies, Exchange Rates, Fiscal Years, System Settings
+  if (ep.includes("/api/currencies") || ep.includes("/api/exchange-rates") || ep.includes("/api/fiscal-years") || ep.includes("/api/system")) {
+    return 10;
+  }
+  // Tier 2: Cost Centers
+  if (ep.includes("/api/cost-centers") || ep.includes("/api/accounting/cost-centers")) {
+    return 20;
+  }
+  // Tier 3: Inventory Lookups (UOMs, Categories, Warehouses)
+  if (ep.includes("/api/inventory/uoms") || ep.includes("/api/inventory/categories") || ep.includes("/api/inventory/warehouses")) {
+    return 30;
+  }
+  // Tier 4: Master Entities & Catalog (COA Accounts, Customers, Vendors, Workers, Projects, Items, Conversions)
+  if (
+    ep.includes("/api/coa") ||
+    ep.includes("/api/accounting/coa") ||
+    ep.includes("/api/customers") ||
+    ep.includes("/api/vendors") ||
+    ep.includes("/api/workers") ||
+    ep.includes("/api/projects") ||
+    ep.includes("/api/inventory/items") ||
+    ep.includes("/api/inventory/conversions")
+  ) {
+    return 40;
+  }
+  // Tier 5: Rules & Drafts Creation
+  if (ep.includes("/api/approvals/rules") || (ep.includes("/api/drafts") && !ep.includes("/promote"))) {
+    return 50;
+  }
+  // Tier 6: Core Operational Transactions & Movements
+  if (
+    ep.includes("/api/sales") ||
+    ep.includes("/api/procurement") ||
+    ep.includes("/api/treasury") ||
+    ep.includes("/api/expenses") ||
+    ep.includes("/api/inventory/movements") ||
+    ep.includes("/api/ledger") ||
+    ep.includes("/api/installment-vouchers")
+  ) {
+    return 60;
+  }
+  // Tier 7: Approval Decisions & Draft Promotions
+  if (ep.includes("/api/approvals/decide") || ep.includes("/api/approvals") || ep.includes("/api/drafts/promote")) {
+    return 70;
+  }
+
+  // Tier 8: Catch-all
+  return 80;
+}
+
+export function sortSyncQueueTopologically(queue: OfflineSyncQueueEntry[]): OfflineSyncQueueEntry[] {
+  return [...queue].sort((a, b) => {
+    const prioA = getEndpointSyncPriority(a.endpoint, a.method);
+    const prioB = getEndpointSyncPriority(b.endpoint, b.method);
+    if (prioA !== prioB) return prioA - prioB;
+    // Maintain FIFO for identical priority
+    return (a.createdAt || "").localeCompare(b.createdAt || "");
+  });
+}
+
+export function getPrioritizedOfflineSyncQueue(storage?: OfflineStorageLike | null): OfflineSyncQueueEntry[] {
+  const queue = getOfflineSyncQueue(storage);
+  return sortSyncQueueTopologically(queue);
 }
 
 export function appendOfflineSyncQueue(
@@ -445,12 +519,408 @@ async function releaseLocalSeatsForEmail(email: string, storage?: OfflineStorage
   }
 }
 
+export function extractOfflineIdempotencyKey(init?: RequestInit): string | null {
+  if (!init || !init.headers) return null;
+  const headers = new Headers(init.headers);
+  return (
+    headers.get("x-idempotency-key") ||
+    headers.get("X-Idempotency-Key") ||
+    headers.get("X-IDEMPOTENCY-KEY")
+  );
+}
+
+export function handleLocalMasterLifecycle(
+  entityType: string,
+  id: string,
+  action: string,
+  actor: { userId: string; userDisplay: string; userRole: string },
+  s: OfflineStorageLike | null
+): Response {
+  const normAction = action.toUpperCase();
+  const state = loadOfflineAndroidState(s);
+  const now = new Date().toISOString();
+
+  if (entityType === "Customer") {
+    const customers = readCollection<Record<string, unknown>>(OFFLINE_DB_CUSTOMERS_KEY, s);
+    const idx = customers.findIndex((c) => c.id === id || c.code === id);
+    if (idx < 0) return jsonResponse({ ok: false, status: 404, message: "العميل غير موجود" }, 404);
+
+    if (normAction === "RESTORE") {
+      customers[idx].isActive = true;
+      customers[idx].archivedAt = null;
+      writeCollection(OFFLINE_DB_CUSTOMERS_KEY, customers, s);
+      addLocalAudit(state, actor.userDisplay, "استعادة عميل (محلي)", String(customers[idx].name || id));
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({ ok: true, restored: true, message: "تمت استعادة العميل بنجاح", entityType, id });
+    }
+
+    if (normAction === "ARCHIVE") {
+      customers[idx].isActive = false;
+      customers[idx].archivedAt = now;
+      writeCollection(OFFLINE_DB_CUSTOMERS_KEY, customers, s);
+      addLocalAudit(state, actor.userDisplay, "أرشفة عميل (محلي)", String(customers[idx].name || id));
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({ ok: true, archived: true, message: "تمت أرشفة العميل بنجاح", entityType, id });
+    }
+
+    const journals = readCollection<Record<string, unknown>>(OFFLINE_DB_JOURNALS_KEY, s);
+    const invoices = readCollection<Record<string, unknown>>(OFFLINE_DB_INVOICES_KEY, s);
+    const hasLinked =
+      state.sales.some((sale) => sale.customerId === id || sale.customer === customers[idx].name) ||
+      invoices.some((inv) => inv.customerId === id) ||
+      journals.some((j) => JSON.stringify(j).includes(id));
+
+    if (hasLinked) {
+      customers[idx].isActive = false;
+      customers[idx].archivedAt = now;
+      writeCollection(OFFLINE_DB_CUSTOMERS_KEY, customers, s);
+      addLocalAudit(state, actor.userDisplay, "أرشفة آلية لعميل لوجود حركات (محلي)", String(customers[idx].name || id));
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({
+        ok: true,
+        deleted: false,
+        archived: true,
+        linkedCount: 1,
+        message: "تم أرشفة العميل لوجود حركات مالية وتاريخية مرتبطة",
+        entityType,
+        id,
+      });
+    }
+
+    customers.splice(idx, 1);
+    writeCollection(OFFLINE_DB_CUSTOMERS_KEY, customers, s);
+    addLocalAudit(state, actor.userDisplay, "حذف نهائي لعميل (محلي)", id);
+    saveOfflineAndroidState(state, s);
+    return jsonResponse({
+      ok: true,
+      deleted: true,
+      archived: false,
+      linkedCount: 0,
+      message: "تم حذف العميل نهائياً لعدم وجود حركات مرتبطة",
+      entityType,
+      id,
+    });
+  }
+
+  if (entityType === "Vendor") {
+    const vendors = readCollection<Record<string, unknown>>(OFFLINE_DB_VENDORS_KEY, s);
+    const idx = vendors.findIndex((v) => v.id === id || v.code === id);
+    if (idx < 0) return jsonResponse({ ok: false, status: 404, message: "المورد غير موجود" }, 404);
+
+    if (normAction === "RESTORE") {
+      vendors[idx].isActive = true;
+      vendors[idx].archivedAt = null;
+      writeCollection(OFFLINE_DB_VENDORS_KEY, vendors, s);
+      addLocalAudit(state, actor.userDisplay, "استعادة مورد (محلي)", String(vendors[idx].nameAr || id));
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({ ok: true, restored: true, message: "تمت استعادة المورد بنجاح", entityType, id });
+    }
+
+    if (normAction === "ARCHIVE") {
+      vendors[idx].isActive = false;
+      vendors[idx].archivedAt = now;
+      writeCollection(OFFLINE_DB_VENDORS_KEY, vendors, s);
+      addLocalAudit(state, actor.userDisplay, "أرشفة مورد (محلي)", String(vendors[idx].nameAr || id));
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({ ok: true, archived: true, message: "تمت أرشفة المورد بنجاح", entityType, id });
+    }
+
+    const bills = readCollection<Record<string, unknown>>(OFFLINE_DB_BILLS_KEY, s);
+    const pos = readCollection<Record<string, unknown>>(OFFLINE_DB_POS_KEY, s);
+    const journals = readCollection<Record<string, unknown>>(OFFLINE_DB_JOURNALS_KEY, s);
+    const hasLinked =
+      bills.some((b) => b.vendorId === id) ||
+      pos.some((p) => p.vendorId === id) ||
+      journals.some((j) => JSON.stringify(j).includes(id));
+
+    if (hasLinked) {
+      vendors[idx].isActive = false;
+      vendors[idx].archivedAt = now;
+      writeCollection(OFFLINE_DB_VENDORS_KEY, vendors, s);
+      addLocalAudit(state, actor.userDisplay, "أرشفة آلية لمورد لوجود حركات (محلي)", String(vendors[idx].nameAr || id));
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({
+        ok: true,
+        deleted: false,
+        archived: true,
+        linkedCount: 1,
+        message: "تم أرشفة المورد لوجود حركات مالية وتاريخية مرتبطة",
+        entityType,
+        id,
+      });
+    }
+
+    vendors.splice(idx, 1);
+    writeCollection(OFFLINE_DB_VENDORS_KEY, vendors, s);
+    addLocalAudit(state, actor.userDisplay, "حذف نهائي لمورد (محلي)", id);
+    saveOfflineAndroidState(state, s);
+    return jsonResponse({
+      ok: true,
+      deleted: true,
+      archived: false,
+      linkedCount: 0,
+      message: "تم حذف المورد نهائياً لعدم وجود حركات مرتبطة",
+      entityType,
+      id,
+    });
+  }
+
+  if (entityType === "Worker") {
+    const idx = state.workers.findIndex((w) => w.id === id || w.name === id);
+    if (idx < 0) return jsonResponse({ ok: false, status: 404, message: "العامل غير موجود" }, 404);
+
+    if (normAction === "RESTORE") {
+      state.workers[idx].isActive = true;
+      state.workers[idx].archivedAt = null;
+      addLocalAudit(state, actor.userDisplay, "استعادة عامل (محلي)", state.workers[idx].name);
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({ ok: true, restored: true, message: "تمت استعادة العامل بنجاح", entityType, id });
+    }
+
+    if (normAction === "ARCHIVE") {
+      state.workers[idx].isActive = false;
+      state.workers[idx].archivedAt = now;
+      addLocalAudit(state, actor.userDisplay, "أرشفة عامل (محلي)", state.workers[idx].name);
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({ ok: true, archived: true, message: "تمت أرشفة العامل بنجاح", entityType, id });
+    }
+
+    const journals = readCollection<Record<string, unknown>>(OFFLINE_DB_JOURNALS_KEY, s);
+    const hasLinked =
+      (state.workers[idx].days || 0) > 0 ||
+      (state.workers[idx].total || 0) > 0 ||
+      journals.some((j) => JSON.stringify(j).includes(id));
+
+    if (hasLinked) {
+      state.workers[idx].isActive = false;
+      state.workers[idx].archivedAt = now;
+      addLocalAudit(state, actor.userDisplay, "أرشفة آلية لعامل لوجود حركات (محلي)", state.workers[idx].name);
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({
+        ok: true,
+        deleted: false,
+        archived: true,
+        linkedCount: 1,
+        message: "تم أرشفة العامل لوجود حركات مرتبطة",
+        entityType,
+        id,
+      });
+    }
+
+    state.workers.splice(idx, 1);
+    addLocalAudit(state, actor.userDisplay, "حذف نهائي لعامل (محلي)", id);
+    saveOfflineAndroidState(state, s);
+    return jsonResponse({
+      ok: true,
+      deleted: true,
+      archived: false,
+      linkedCount: 0,
+      message: "تم حذف العامل نهائياً لعدم وجود حركات مرتبطة",
+      entityType,
+      id,
+    });
+  }
+
+  if (entityType === "Warehouse") {
+    const warehouses = readCollection<Record<string, unknown>>(OFFLINE_DB_WAREHOUSES_KEY, s);
+    const idx = warehouses.findIndex((w) => w.id === id || w.code === id);
+    if (idx < 0) return jsonResponse({ ok: false, status: 404, message: "المستودع غير موجود" }, 404);
+
+    if (normAction === "RESTORE") {
+      warehouses[idx].isActive = true;
+      warehouses[idx].archivedAt = null;
+      writeCollection(OFFLINE_DB_WAREHOUSES_KEY, warehouses, s);
+      addLocalAudit(state, actor.userDisplay, "استعادة مستودع (محلي)", String(warehouses[idx].nameAr || id));
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({ ok: true, restored: true, message: "تمت استعادة المستودع بنجاح", entityType, id });
+    }
+
+    if (normAction === "ARCHIVE") {
+      warehouses[idx].isActive = false;
+      warehouses[idx].archivedAt = now;
+      writeCollection(OFFLINE_DB_WAREHOUSES_KEY, warehouses, s);
+      addLocalAudit(state, actor.userDisplay, "أرشفة مستودع (محلي)", String(warehouses[idx].nameAr || id));
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({ ok: true, archived: true, message: "تمت أرشفة المستودع بنجاح", entityType, id });
+    }
+
+    const movements = readCollection<Record<string, unknown>>(OFFLINE_DB_MOVEMENTS_KEY, s);
+    const inUse = movements.some((m) => m.warehouseId === id);
+
+    if (inUse) {
+      warehouses[idx].isActive = false;
+      warehouses[idx].archivedAt = now;
+      writeCollection(OFFLINE_DB_WAREHOUSES_KEY, warehouses, s);
+      addLocalAudit(state, actor.userDisplay, "أرشفة آلية لمستودع لوجود حركات (محلي)", String(warehouses[idx].nameAr || id));
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({
+        ok: true,
+        deleted: false,
+        archived: true,
+        linkedCount: 1,
+        message: "تم أرشفة المستودع لوجود حركات مخزنية مرتبطة",
+        entityType,
+        id,
+      });
+    }
+
+    warehouses.splice(idx, 1);
+    writeCollection(OFFLINE_DB_WAREHOUSES_KEY, warehouses, s);
+    addLocalAudit(state, actor.userDisplay, "حذف نهائي لمستودع (محلي)", id);
+    saveOfflineAndroidState(state, s);
+    return jsonResponse({
+      ok: true,
+      deleted: true,
+      archived: false,
+      linkedCount: 0,
+      message: "تم حذف المستودع نهائياً لعدم وجود حركات مرتبطة",
+      entityType,
+      id,
+    });
+  }
+
+  if (entityType === "InventoryItem") {
+    const items = readCollection<Record<string, unknown>>(OFFLINE_DB_ITEMS_KEY, s);
+    const idx = items.findIndex((i) => i.id === id || i.sku === id);
+    if (idx < 0) return jsonResponse({ ok: false, status: 404, message: "الصنف غير موجود" }, 404);
+
+    if (normAction === "RESTORE") {
+      items[idx].isActive = true;
+      items[idx].archivedAt = null;
+      writeCollection(OFFLINE_DB_ITEMS_KEY, items, s);
+      addLocalAudit(state, actor.userDisplay, "استعادة صنف (محلي)", String(items[idx].nameAr || id));
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({ ok: true, restored: true, message: "تمت استعادة الصنف بنجاح", entityType, id });
+    }
+
+    if (normAction === "ARCHIVE") {
+      items[idx].isActive = false;
+      items[idx].archivedAt = now;
+      writeCollection(OFFLINE_DB_ITEMS_KEY, items, s);
+      addLocalAudit(state, actor.userDisplay, "أرشفة صنف (محلي)", String(items[idx].nameAr || id));
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({ ok: true, archived: true, message: "تمت أرشفة الصنف بنجاح", entityType, id });
+    }
+
+    const movements = readCollection<Record<string, unknown>>(OFFLINE_DB_MOVEMENTS_KEY, s);
+    const inUse = movements.some((m) => m.itemId === id);
+
+    if (inUse) {
+      items[idx].isActive = false;
+      items[idx].archivedAt = now;
+      writeCollection(OFFLINE_DB_ITEMS_KEY, items, s);
+      addLocalAudit(state, actor.userDisplay, "أرشفة آلية لصنف لوجود حركات (محلي)", String(items[idx].nameAr || id));
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({
+        ok: true,
+        deleted: false,
+        archived: true,
+        linkedCount: 1,
+        message: "تم أرشفة الصنف لوجود حركات مخزنية مرتبطة",
+        entityType,
+        id,
+      });
+    }
+
+    items.splice(idx, 1);
+    writeCollection(OFFLINE_DB_ITEMS_KEY, items, s);
+    addLocalAudit(state, actor.userDisplay, "حذف نهائي لصنف (محلي)", id);
+    saveOfflineAndroidState(state, s);
+    return jsonResponse({
+      ok: true,
+      deleted: true,
+      archived: false,
+      linkedCount: 0,
+      message: "تم حذف الصنف نهائياً لعدم وجود حركات مرتبطة",
+      entityType,
+      id,
+    });
+  }
+
+  if (entityType === "WorkspaceDraft") {
+    const drafts = readCollection<Record<string, unknown>>(OFFLINE_DB_DRAFTS_KEY, s);
+    const idx = drafts.findIndex((d) => d.id === id || d.draftNumber === id);
+    if (idx >= 0) {
+      drafts[idx].status = "DISCARDED";
+      writeCollection(OFFLINE_DB_DRAFTS_KEY, drafts, s);
+      return jsonResponse({ ok: true, deleted: true, message: "تم إلغاء المسودة", entityType, id });
+    }
+    return jsonResponse({ ok: false, status: 404, message: "المسودة غير موجودة" }, 404);
+  }
+
+  return jsonResponse({ ok: true, message: "تمت معالجة السجل محلياً", entityType, id });
+}
+
 /**
  * Handles any relative `/api/*` request locally on Android in `"local"` mode.
  * Returns a standard `Response` with `application/json` — never touches `https://qat.world`
  * and never falls through to Capacitor's `<!DOCTYPE html>` SPA fallback.
  */
 export async function handleOfflineAndroidApiRequest(
+  rawUrl: string,
+  init?: RequestInit,
+  storage?: OfflineStorageLike | null
+): Promise<Response> {
+  const s = storage ?? getDefaultStorage();
+  const method = (init?.method || "GET").toUpperCase();
+  const isMutating = method !== "GET" && method !== "HEAD";
+  const idempotencyKey = extractOfflineIdempotencyKey(init);
+
+  if (idempotencyKey && isMutating) {
+    const cached = readCollection<{
+      idempotencyKey: string;
+      statusCode: number;
+      responseJson: string;
+      expiresAt: number;
+    }>(OFFLINE_DB_IDEMPOTENCY_KEY, s);
+
+    const hit = cached.find(
+      (r) => r.idempotencyKey === idempotencyKey && r.expiresAt > Date.now()
+    );
+    if (hit) {
+      return new Response(hit.responseJson, {
+        status: hit.statusCode,
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-UAS-Offline-Local": "1",
+          "X-Idempotency-Hit": "true",
+          "X-Idempotency-Key": idempotencyKey,
+        },
+      });
+    }
+  }
+
+  const res = await handleOfflineAndroidApiRequestCore(rawUrl, init, s);
+
+  if (idempotencyKey && isMutating && res.status < 500) {
+    try {
+      const cloned = res.clone();
+      const text = await cloned.text();
+      const cached = readCollection<{
+        idempotencyKey: string;
+        statusCode: number;
+        responseJson: string;
+        expiresAt: number;
+      }>(OFFLINE_DB_IDEMPOTENCY_KEY, s);
+      const next = cached.filter(
+        (r) => r.expiresAt > Date.now() && r.idempotencyKey !== idempotencyKey
+      );
+      next.push({
+        idempotencyKey,
+        statusCode: res.status,
+        responseJson: text,
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+      });
+      writeCollection(OFFLINE_DB_IDEMPOTENCY_KEY, next, s);
+    } catch {
+      // Ignore cache persistence error
+    }
+  }
+
+  return res;
+}
+
+async function handleOfflineAndroidApiRequestCore(
   rawUrl: string,
   init?: RequestInit,
   storage?: OfflineStorageLike | null
@@ -466,6 +936,13 @@ export async function handleOfflineAndroidApiRequest(
     pathname = u.pathname;
   } catch {
     pathname = rawUrl.split("?")[0];
+  }
+
+  if (pathname === "/api/system/lifecycle" && method === "POST") {
+    const entityType = String(body.entityType || "");
+    const id = String(body.id || "");
+    const action = String(body.action || "SAFE_DELETE").toUpperCase();
+    return handleLocalMasterLifecycle(entityType, id, action, actor, s);
   }
 
   // -------------------------------------------------------------------------
@@ -1196,7 +1673,20 @@ export async function handleOfflineAndroidApiRequest(
         appendOfflineSyncQueue(pathname, method, body, s);
         return jsonResponse({ success: true, item: record, [col.listProp]: rows, offline: true }, 201);
       }
-      if (method === "PUT" || method === "PATCH" || method === "DELETE") {
+      if (method === "DELETE") {
+        const id = String(body.id || "");
+        if (id) {
+          if (col.prefix === "/api/sales/customers") {
+            return handleLocalMasterLifecycle("Customer", id, String(body.action || "SAFE_DELETE"), actor, s);
+          }
+          if (col.prefix === "/api/procurement/vendors") {
+            return handleLocalMasterLifecycle("Vendor", id, String(body.action || "SAFE_DELETE"), actor, s);
+          }
+        }
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, [col.listProp]: rows, offline: true }, 200);
+      }
+      if (method === "PUT" || method === "PATCH") {
         appendOfflineSyncQueue(pathname, method, body, s);
         return jsonResponse({ success: true, [col.listProp]: rows, offline: true }, 200);
       }

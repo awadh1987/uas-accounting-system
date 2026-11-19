@@ -5,6 +5,12 @@ import {
   recordAuditDiffTx,
 } from "@/lib/accounting/ledgerService";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
+import { withIdempotency } from "@/lib/idempotencyGuard";
+import {
+  archiveMasterRecord,
+  restoreMasterRecord,
+  safeDeleteOrArchiveMasterRecord,
+} from "@/lib/masterLifecycle";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +46,8 @@ export async function GET() {
         totalBilled,
         totalPaid,
         totalDue,
+        isActive: v.isActive ?? true,
+        archivedAt: v.archivedAt ? v.archivedAt.toISOString() : null,
       };
     });
 
@@ -51,51 +59,53 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    const body = (await req.json()) as Record<string, unknown>;
-    const auth = await authorizeApiAction(body, req, {
-      moduleId: "procurement",
-      action: "create",
-    });
-    if (!auth.ok) return auth.response;
+  return withIdempotency(req, async (r) => {
+    try {
+      const body = (await r.json()) as Record<string, unknown>;
+      const auth = await authorizeApiAction(body, r, {
+        moduleId: "procurement",
+        action: "create",
+      });
+      if (!auth.ok) return auth.response;
 
-    const nameAr = String(body.nameAr || "").trim();
-    const nameEn = body.nameEn ? String(body.nameEn).trim() : undefined;
-    const phone = String(body.phone || "").trim();
-    const email = body.email ? String(body.email).trim() : undefined;
-    const taxRegistration = body.taxRegistration ? String(body.taxRegistration).trim() : undefined;
-    const address = body.address ? String(body.address).trim() : undefined;
+      const nameAr = String(body.nameAr || "").trim();
+      const nameEn = body.nameEn ? String(body.nameEn).trim() : undefined;
+      const phone = String(body.phone || "").trim();
+      const email = body.email ? String(body.email).trim() : undefined;
+      const taxRegistration = body.taxRegistration ? String(body.taxRegistration).trim() : undefined;
+      const address = body.address ? String(body.address).trim() : undefined;
 
-    if (!nameAr) {
-      return jsonError("يرجى إدخال اسم المورد", 400);
+      if (!nameAr) {
+        return jsonError("يرجى إدخال اسم المورد", 400);
+      }
+
+      const vendor = await prisma.$transaction(async (tx) => {
+        const created = await createVendorWithAccountTx(tx, {
+          nameAr,
+          nameEn,
+          phone,
+          email,
+          taxRegistration,
+          address,
+          costCenterId: body.costCenterId ? String(body.costCenterId).trim() : undefined,
+        });
+        await recordAuditDiffTx(tx, {
+          userId: auth.actor.userId,
+          action: "CREATE",
+          entity: "Vendor",
+          entityId: created.id,
+          before: null,
+          after: { code: created.code, nameAr: created.nameAr, phone: created.phone },
+        });
+        return created;
+      });
+
+      return NextResponse.json({ vendor }, { status: 201 });
+    } catch (error) {
+      console.error("POST /api/procurement/vendors error:", error);
+      return jsonError("تعذر إنشاء ملف المورد", 500);
     }
-
-    const vendor = await prisma.$transaction(async (tx) => {
-      const created = await createVendorWithAccountTx(tx, {
-        nameAr,
-        nameEn,
-        phone,
-        email,
-        taxRegistration,
-        address,
-        costCenterId: body.costCenterId ? String(body.costCenterId).trim() : undefined,
-      });
-      await recordAuditDiffTx(tx, {
-        userId: auth.actor.userId,
-        action: "CREATE",
-        entity: "Vendor",
-        entityId: created.id,
-        before: null,
-        after: { code: created.code, nameAr: created.nameAr, phone: created.phone },
-      });
-      return created;
-    });
-
-    return NextResponse.json({ vendor }, { status: 201 });
-  } catch (error) {
-    console.error("POST /api/procurement/vendors error:", error);
-    return jsonError("تعذر إنشاء ملف المورد", 500);
-  }
+  });
 }
 
 async function handleVendorUpdate(req: NextRequest) {
@@ -176,5 +186,46 @@ export async function PATCH(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   return handleVendorUpdate(req);
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      body = {};
+    }
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "procurement",
+      action: "delete",
+    });
+    if (!auth.ok) return auth.response;
+
+    const id = searchParams.get("id") || String(body.id || "");
+    const action = String(body.action || searchParams.get("action") || "SAFE_DELETE").toUpperCase();
+    if (!id) return jsonError("معرف المورد مطلوب للحذف", 400);
+
+    const actor = {
+      userId: auth.actor.userId,
+      userRole: auth.actor.userRole,
+      userDisplay: auth.actor.userDisplay,
+    };
+
+    let result;
+    if (action === "ARCHIVE") {
+      result = await archiveMasterRecord("Vendor", id, actor);
+    } else if (action === "RESTORE") {
+      result = await restoreMasterRecord("Vendor", id, actor);
+    } else {
+      result = await safeDeleteOrArchiveMasterRecord("Vendor", id, actor);
+    }
+
+    return NextResponse.json(result, { status: result.status });
+  } catch (error) {
+    console.error("DELETE /api/procurement/vendors error:", error);
+    return jsonError("تعذر حذف أو أرشفة المورد", 500);
+  }
 }
 

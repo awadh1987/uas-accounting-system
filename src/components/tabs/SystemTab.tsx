@@ -178,6 +178,48 @@ const ACTION_PERM_DEFINITIONS: {
     labelEn: "Manage Users & Security",
     descAr: "إضافة المستخدمين، ضبط الصلاحيات، وإعادة تعيين كلمات المرور",
   },
+  {
+    key: "canCloseFiscalYear",
+    labelAr: "إقفال السنة المالية وترحيل الأرصدة (accounting.close_year)",
+    labelEn: "Close Fiscal Year & Rollover",
+    descAr: "صلاحية ترحيل أرباح العام وإقفال السنة المحاسبية المنتهية",
+  },
+  {
+    key: "canFxRevalue",
+    labelAr: "إعادة تقييم فروق العملات (accounting.fx_revalue)",
+    labelEn: "Foreign Currency Revaluation",
+    descAr: "احتساب وترحيل قيود فروق تقييم العملات الأجنبية غير المحققة",
+  },
+  {
+    key: "canDecideApprovals",
+    labelAr: "اتخاذ قرارات الاعتماد (approvals.decide)",
+    labelEn: "Decide Approval Requests",
+    descAr: "اعتماد أو رفض المعاملات المالية وأوامر الصرف والشراء",
+  },
+  {
+    key: "canConfigureApprovals",
+    labelAr: "تهيئة مسارات وقواعد الاعتماد (approvals.configure)",
+    labelEn: "Configure Approval Rules",
+    descAr: "تحديد السقوف المالية وشروط طلب الاعتماد المسبق",
+  },
+  {
+    key: "canManageAllDrafts",
+    labelAr: "إدارة كافة مسودات العمل (drafts.manage_all)",
+    labelEn: "Manage All Workspace Drafts",
+    descAr: "الاطلاع على مسودات العمل المشتركة والخاصة وحذفها وترقيتها",
+  },
+  {
+    key: "canCustomUom",
+    labelAr: "إضافة وحدات قياس مخصصة (inventory.custom_uom)",
+    labelEn: "Create Custom Units of Measure",
+    descAr: "إدخال وحدات قياس ومعاملات تحويل ديناميكية مخصصة",
+  },
+  {
+    key: "canArchiveDeleteRecords",
+    labelAr: "أرشفة وحذف السجلات الأساسية (records.archive_delete)",
+    labelEn: "Archive / Safe-Delete Master Records",
+    descAr: "أرشفة أو حذف العملاء والموردين والعمال والأصناف والمراكز",
+  },
 ];
 
 interface SystemTabProps {
@@ -648,6 +690,13 @@ export function SystemTab({
     canManageTreasury: false,
     canManageLandingCms: false,
     canManageUsers: false,
+    canCloseFiscalYear: false,
+    canFxRevalue: false,
+    canDecideApprovals: false,
+    canConfigureApprovals: false,
+    canManageAllDrafts: false,
+    canCustomUom: false,
+    canArchiveDeleteRecords: false,
   });
   const [permAssignedProjects, setPermAssignedProjects] = useState<string[]>([]);
   const [permIsActive, setPermIsActive] = useState(true);
@@ -696,6 +745,13 @@ export function SystemTab({
         canManageTreasury: u.customOverrides.canManageTreasury ?? roleDefaults.canManageTreasury,
         canManageLandingCms: u.customOverrides.canManageLandingCms ?? roleDefaults.canManageLandingCms,
         canManageUsers: u.customOverrides.canManageUsers ?? roleDefaults.canManageUsers,
+        canCloseFiscalYear: u.customOverrides.canCloseFiscalYear ?? roleDefaults.canCloseFiscalYear,
+        canFxRevalue: u.customOverrides.canFxRevalue ?? roleDefaults.canFxRevalue,
+        canDecideApprovals: u.customOverrides.canDecideApprovals ?? roleDefaults.canDecideApprovals,
+        canConfigureApprovals: u.customOverrides.canConfigureApprovals ?? roleDefaults.canConfigureApprovals,
+        canManageAllDrafts: u.customOverrides.canManageAllDrafts ?? roleDefaults.canManageAllDrafts,
+        canCustomUom: u.customOverrides.canCustomUom ?? roleDefaults.canCustomUom,
+        canArchiveDeleteRecords: u.customOverrides.canArchiveDeleteRecords ?? roleDefaults.canArchiveDeleteRecords,
       });
     } else {
       setPermAllowedGroups([...defaultGroups]);

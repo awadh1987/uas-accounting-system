@@ -126,6 +126,9 @@ export function exportFullWorkbookToExcel(
   const saleRows = filteredSales.map((s) => ({
     "المشروع": projectNameById(s.projectId),
     "القطاع الفرعي": subProjectNameById(s.projectId, s.subProjectId) || "—",
+    "مركز التكلفة / Cost Center": (s as any).costCenterCode || (s as any).costCenterId || "—",
+    "العملة / Currency": (s as any).currencyCode || (s as any).currency || "YER",
+    "سعر الصرف / FX Rate": Number((s as any).exchangeRate || 1),
     "القطفة": s.harvest,
     "رقم العملية التسلسلي": s.sequenceNumber || s.batch,
     "الوردية / الدفعة": s.dailyBatchLabel || s.batch,
@@ -133,7 +136,9 @@ export function exportFullWorkbookToExcel(
     "اسم العميل": s.customer,
     "رقم الهاتف": s.phone,
     "النوع / الدرجة": s.grade,
-    "عدد العلاقيات": Number(s.bundles),
+    "الكمية": Number(s.bundles),
+    "كود الوحدة / Unit Code": (s as any).unitCode || "BUNDLE",
+    "معامل التحويل / Factor": Number((s as any).factorToBase || 1),
     "السعر": Number(s.price),
     "الإجمالي": Number(s.total),
     "دائن (مقبوض)": Number(s.credit),
@@ -146,7 +151,9 @@ export function exportFullWorkbookToExcel(
   XLSX.utils.book_append_sheet(
     wb,
     createRtlSheet(saleRows, [
-      "عدد العلاقيات",
+      "الكمية",
+      "معامل التحويل / Factor",
+      "سعر الصرف / FX Rate",
       "السعر",
       "الإجمالي",
       "دائن (مقبوض)",
@@ -183,10 +190,15 @@ export function exportFullWorkbookToExcel(
   const expRows = state.expenses.map((e) => ({
     "المشروع": projectNameById(e.projectId),
     "القطاع الفرعي": subProjectNameById(e.projectId, e.subProjectId) || "—",
+    "مركز التكلفة / Cost Center": (e as any).costCenterCode || (e as any).costCenterId || "—",
+    "العملة / Currency": (e as any).currencyCode || (e as any).currency || "YER",
+    "سعر الصرف / FX Rate": Number((e as any).exchangeRate || 1),
     "القطفة": e.harvest,
     "الفئة": e.category,
     "البيان": e.subType,
-    "الكمية/اللتر": Number(e.qty),
+    "الكمية": Number(e.qty),
+    "كود الوحدة / Unit Code": (e as any).unitCode || "QTY",
+    "معامل التحويل / Factor": Number((e as any).factorToBase || 1),
     "قيمة الوحدة": Number(e.unitPrice),
     "الإجمالي": Number(e.total),
     "التاريخ": e.date,
@@ -194,7 +206,13 @@ export function exportFullWorkbookToExcel(
   }));
   XLSX.utils.book_append_sheet(
     wb,
-    createRtlSheet(expRows, ["الكمية/اللتر", "قيمة الوحدة", "الإجمالي"]),
+    createRtlSheet(expRows, [
+      "الكمية",
+      "معامل التحويل / Factor",
+      "سعر الصرف / FX Rate",
+      "قيمة الوحدة",
+      "الإجمالي",
+    ]),
     "Operating Expenses"
   );
 
@@ -436,5 +454,129 @@ export function exportFinancialStatementsToExcel(data: FinancialExportPayload): 
   }
 
   void saveOrShareWorkbook(wb, "UAS_Enterprise_Financial_Statements.xlsx");
+}
+
+export type TemplateModule = "sales" | "expenses" | "items" | "customers" | "vendors" | "journal";
+
+export async function exportUasModuleTemplate(module: TemplateModule): Promise<void> {
+  const wb = XLSX.utils.book_new();
+  wb.Workbook = { Views: [{ RTL: true }] };
+
+  let sampleRows: Record<string, unknown>[] = [];
+  let filename = `UAS_Template_${module.toUpperCase()}.xlsx`;
+
+  if (module === "sales") {
+    sampleRows = [
+      {
+        "اسم العميل / CustomerName": "شركة الأمل للتجارة",
+        "كود مركز التكلفة / CostCenterCode": "CC-MAIN",
+        "كود العملة / CurrencyCode": "YER",
+        "سعر الصرف / ExchangeRate": 1,
+        "الكمية / Quantity": 50,
+        "كود الوحدة / UnitCode": "BUNDLE",
+        "معامل التحويل / FactorToBase": 1,
+        "سعر الوحدة / UnitPrice": 1200,
+        "دائن مقبوض / PaidCredit": 60000,
+        "مدين متبقي / RemainingDebit": 0,
+        "البيان / Notes": "فاتورة مبيعات محصول",
+        "التاريخ / Date": new Date().toISOString().slice(0, 10),
+      },
+    ];
+  } else if (module === "expenses") {
+    sampleRows = [
+      {
+        "الفئة / Category": "وقود/محروقات",
+        "البيان / SubType": "ديزل للري",
+        "كود مركز التكلفة / CostCenterCode": "CC-MAIN",
+        "كود العملة / CurrencyCode": "YER",
+        "سعر الصرف / ExchangeRate": 1,
+        "الكمية / Quantity": 100,
+        "كود الوحدة / UnitCode": "LITER",
+        "معامل التحويل / FactorToBase": 1,
+        "سعر الوحدة / UnitPrice": 850,
+        "الإجمالي / Total": 85000,
+        "التاريخ / Date": new Date().toISOString().slice(0, 10),
+        "ملاحظات / Notes": "توريد محروقات",
+      },
+    ];
+  } else if (module === "items") {
+    sampleRows = [
+      {
+        "كود الصنف / ItemCode": "ITEM-DIESEL-01",
+        "اسم الصنف عربي / NameAr": "ديزل ممتاز",
+        "اسم الصنف إنجليزي / NameEn": "Premium Diesel",
+        "الفئة / Category": "محروقات ووقود",
+        "كود الوحدة الأساسية / BaseUnitCode": "LITER",
+        "كود وحدة الشراء / PurchaseUnitCode": "BARREL",
+        "معامل التحويل / FactorToBase": 200,
+        "سعر الشراء الافتراضي / DefaultCost": 850,
+        "سعر البيع الافتراضي / DefaultPrice": 950,
+      },
+    ];
+  } else if (module === "customers") {
+    sampleRows = [
+      {
+        "كود العميل / CustomerCode": "CUST-001",
+        "الاسم / Name": "مؤسسة النور الزراعية",
+        "رقم الهاتف / Phone": "+967 777 000 111",
+        "البريد / Email": "alnoor@example.com",
+        "الحد الائتماني / CreditLimit": 500000,
+        "كود مركز التكلفة / CostCenterCode": "CC-MAIN",
+        "كود الحساب المالي / AccountCode": "112190001",
+      },
+    ];
+  } else if (module === "vendors") {
+    sampleRows = [
+      {
+        "كود المورد / VendorCode": "VEND-001",
+        "الاسم / Name": "شركة سبأ للمستلزمات",
+        "رقم الهاتف / Phone": "+967 771 222 333",
+        "الرقم الضريبي / TaxNumber": "TAX-998877",
+        "كود مركز التكلفة / CostCenterCode": "CC-MAIN",
+        "كود الحساب المالي / AccountCode": "211190001",
+      },
+    ];
+  } else {
+    // journal
+    sampleRows = [
+      {
+        "رقم القيد / EntryNumber": "JV-2026-0001",
+        "التاريخ / Date": new Date().toISOString().slice(0, 10),
+        "كود الحساب / AccountCode": "521101",
+        "كود مركز التكلفة / CostCenterCode": "CC-MAIN",
+        "كود العملة / CurrencyCode": "YER",
+        "سعر الصرف / ExchangeRate": 1,
+        "مدين / Debit": 25000,
+        "دائن / Credit": 0,
+        "البيان / Narration": "شراء وقود ديزل للري",
+      },
+      {
+        "رقم القيد / EntryNumber": "JV-2026-0001",
+        "التاريخ / Date": new Date().toISOString().slice(0, 10),
+        "كود الحساب / AccountCode": "111101",
+        "كود مركز التكلفة / CostCenterCode": "CC-MAIN",
+        "كود العملة / CurrencyCode": "YER",
+        "سعر الصرف / ExchangeRate": 1,
+        "مدين / Debit": 0,
+        "دائن / Credit": 25000,
+        "البيان / Narration": "صرف نقدي من الصندوق الرئيسي",
+      },
+    ];
+  }
+
+  const ws = createRtlSheet(sampleRows);
+  XLSX.utils.book_append_sheet(wb, ws, "Template");
+  await saveOrShareWorkbook(wb, filename);
+}
+
+export function parseExcelImport<T = Record<string, unknown>>(
+  fileBuffer: ArrayBuffer | Uint8Array,
+  _moduleName?: string
+): T[] {
+  const wb = XLSX.read(fileBuffer, { type: "array" });
+  const sheetName = wb.SheetNames[0];
+  if (!sheetName) return [];
+  const ws = wb.Sheets[sheetName];
+  return XLSX.utils.sheet_to_json<T>(ws, { defval: "" });
 }
 

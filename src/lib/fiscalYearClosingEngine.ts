@@ -497,11 +497,21 @@ export async function executeFiscalYearCloseAndRollover(
   client: typeof prisma = prisma
 ) {
   return client.$transaction(async (tx) => {
-    const fy = await tx.fiscalYear.findUnique({ where: { id: fiscalYearId } });
-    if (!fy) throw new Error("FISCAL_YEAR_NOT_FOUND");
-    if (fy.status === "CLOSED") {
-      throw new Error(`FISCAL_YEAR_ALREADY_CLOSED: السنة المالية ${fy.code} مقفلة بالفعل.`);
+    // Concurrency State Guard: Atomically lock fiscal year with WHERE status = 'OPEN'
+    const guarded = await tx.fiscalYear.updateMany({
+      where: { id: fiscalYearId, status: "OPEN" },
+      data: { status: "CLOSING_IN_PROGRESS" },
+    });
+    if (guarded.count === 0) {
+      const existing = await tx.fiscalYear.findUnique({ where: { id: fiscalYearId } });
+      if (!existing) throw new Error("FISCAL_YEAR_NOT_FOUND");
+      if (existing.status === "CLOSED") {
+        throw new Error(`FISCAL_YEAR_ALREADY_CLOSED: السنة المالية ${existing.code} مقفلة بالفعل.`);
+      }
+      throw new Error(`FISCAL_YEAR_NOT_OPEN: السنة المالية في حالة (${existing.status}) ولا يمكن إقفالها`);
     }
+
+    const fy = await tx.fiscalYear.findUniqueOrThrow({ where: { id: fiscalYearId } });
 
     const precheck = await runFiscalYearPrecheck(fiscalYearId, tx);
     if (!precheck.canClose) {
