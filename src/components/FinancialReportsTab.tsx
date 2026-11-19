@@ -14,7 +14,10 @@ import { Bar } from "react-chartjs-2";
 import { BarChart3, CheckCircle2, FileSpreadsheet, Printer, Scale, AlertTriangle } from "lucide-react";
 import { exportFinancialStatementsToExcel } from "@/lib/excelExport";
 import { fmtNum } from "@/lib/formulas";
-import { triggerNativePrint } from "@/lib/nativeBridge";
+import {
+  printUasDocument,
+  resolveLetterheadFromProfile,
+} from "@/lib/print/uasDocumentPrinter";
 import type { UasEnterpriseProfile, UasProject } from "@/types/uas";
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend);
@@ -106,6 +109,21 @@ interface BalanceSheetPayload {
   isBalanced: boolean;
 }
 
+interface CostCenterReportRow {
+  costCenterId: string | null;
+  code: string;
+  nameAr: string;
+  nameEn: string;
+  revenue: number;
+  expense: number;
+  net: number;
+}
+
+interface CostCenterReportPayload {
+  rows: CostCenterReportRow[];
+  totals: { revenue: number; expense: number; net: number };
+}
+
 interface FinancialReportsTabProps {
   projects: UasProject[];
   selectedProjectId: string;
@@ -121,7 +139,10 @@ export function FinancialReportsTab({
   enterpriseProfile,
   onToast,
 }: FinancialReportsTabProps) {
-  const [reportTab, setReportTab] = useState<"tb" | "pl" | "bs" | "budget">("tb");
+  const [reportTab, setReportTab] = useState<"tb" | "pl" | "bs" | "budget" | "cc">("tb");
+  const [costCenterFilter, setCostCenterFilter] = useState("ALL");
+  const [costCenterList, setCostCenterList] = useState<Array<{ id: string; code: string; nameAr: string; generation: number }>>([]);
+  const [ccReport, setCcReport] = useState<CostCenterReportPayload | null>(null);
   const [currencyDisplayMode, setCurrencyDisplayMode] = useState<"BASE_YER" | "TX_CURRENCY">("BASE_YER");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
@@ -152,18 +173,21 @@ export function FinancialReportsTab({
     if (toDate) qs.set("toDate", toDate);
     if (localProjectId && localProjectId !== "ALL") qs.set("projectId", localProjectId);
     if (localSubProjectId && localSubProjectId !== "ALL") qs.set("subProjectId", localSubProjectId);
+    if (costCenterFilter && costCenterFilter !== "ALL") qs.set("costCenterId", costCenterFilter);
     qs.set("level", String(coaLevel));
 
     Promise.all([
       fetch(`/api/accounting/reports/trial-balance?${qs.toString()}`, { cache: "no-store" }),
       fetch(`/api/accounting/reports/income-statement?${qs.toString()}`, { cache: "no-store" }),
       fetch(`/api/accounting/reports/balance-sheet?${qs.toString()}`, { cache: "no-store" }),
+      fetch(`/api/accounting/reports/cost-centers?${qs.toString()}`, { cache: "no-store" }),
     ])
-      .then(async ([tbRes, plRes, bsRes]) => {
+      .then(async ([tbRes, plRes, bsRes, ccRes]) => {
         if (!active) return;
         if (tbRes.ok) setTb((await tbRes.json()) as TrialBalancePayload);
         if (plRes.ok) setPl((await plRes.json()) as IncomeStatementPayload);
         if (bsRes.ok) setBs((await bsRes.json()) as BalanceSheetPayload);
+        if (ccRes.ok) setCcReport((await ccRes.json()) as CostCenterReportPayload);
         setLoading(false);
       })
       .catch(() => {
@@ -175,7 +199,16 @@ export function FinancialReportsTab({
     return () => {
       active = false;
     };
-  }, [fromDate, toDate, localProjectId, localSubProjectId, coaLevel, onToast]);
+  }, [fromDate, toDate, localProjectId, localSubProjectId, costCenterFilter, coaLevel, onToast]);
+
+  useEffect(() => {
+    fetch("/api/accounting/cost-centers", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { costCenters: [] }))
+      .then((d: { costCenters?: Array<{ id: string; code: string; nameAr: string; generation: number }> }) =>
+        setCostCenterList(d.costCenters || [])
+      )
+      .catch(() => setCostCenterList([]));
+  }, []);
 
   function handleExportExcel() {
     if (!tb || !pl || !bs) return;
@@ -284,7 +317,187 @@ export function FinancialReportsTab({
               <span>تصدير Excel (RTL + Formulas)</span>
             </button>
             <button
-              onClick={() => void triggerNativePrint({ title: "UAS-Financial-Statements" })}
+              onClick={() => {
+                const letterhead = resolveLetterheadFromProfile(enterpriseProfile);
+                const selectedCc = costCenterList.find((c) => c.id === costCenterFilter);
+                const ccLabel = selectedCc ? `${selectedCc.code} • ${selectedCc.nameAr}` : undefined;
+                if (reportTab === "cc" && ccReport) {
+                  void printUasDocument({
+                    titleAr: "تقرير أرباح وخسائر مراكز التكلفة",
+                    titleEn: "Cost Center Profit & Loss Report",
+                    documentNumber: `RPT-CC-${new Date().toISOString().slice(0, 10)}`,
+                    costCenter: ccLabel,
+                    currency: "YER",
+                    status: "POSTED",
+                    format: "A4_PORTRAIT",
+                    letterhead,
+                    summaryCards: [
+                      { labelAr: "إجمالي الإيرادات", labelEn: "Revenue", value: `${fmtNum(ccReport.totals.revenue)} YER`, tone: "emerald" },
+                      { labelAr: "إجمالي المصروفات", labelEn: "Expenses", value: `${fmtNum(ccReport.totals.expense)} YER`, tone: "rose" },
+                      { labelAr: "صافي النتيجة", labelEn: "Net Profit", value: `${fmtNum(ccReport.totals.net)} YER`, tone: ccReport.totals.net >= 0 ? "indigo" : "rose" },
+                    ],
+                    tables: [
+                      {
+                        headingAr: "تفصيل مراكز التكلفة",
+                        headingEn: "Cost Center Breakdown",
+                        columns: [
+                          { key: "code", labelAr: "الرمز", labelEn: "Code" },
+                          { key: "nameAr", labelAr: "مركز التكلفة", labelEn: "Cost Center" },
+                          { key: "revenue", labelAr: "الإيرادات", labelEn: "Revenue", numeric: true },
+                          { key: "expense", labelAr: "المصروفات", labelEn: "Expenses", numeric: true },
+                          { key: "net", labelAr: "الصافي", labelEn: "Net", numeric: true },
+                        ],
+                        rows: ccReport.rows.map((r) => ({
+                          code: r.code,
+                          nameAr: r.nameAr,
+                          revenue: fmtNum(r.revenue),
+                          expense: fmtNum(r.expense),
+                          net: fmtNum(r.net),
+                        })),
+                        totalsRow: {
+                          code: "الإجمالي",
+                          revenue: fmtNum(ccReport.totals.revenue),
+                          expense: fmtNum(ccReport.totals.expense),
+                          net: fmtNum(ccReport.totals.net),
+                        },
+                      },
+                    ],
+                  });
+                } else if (reportTab === "pl" && pl) {
+                  void printUasDocument({
+                    titleAr: "قائمة الدخل (الأرباح والخسائر)",
+                    titleEn: "Income Statement (Profit & Loss)",
+                    documentNumber: `RPT-PL-${new Date().toISOString().slice(0, 10)}`,
+                    costCenter: ccLabel,
+                    currency: "YER",
+                    status: "POSTED",
+                    format: "A4_PORTRAIT",
+                    letterhead,
+                    summaryCards: [
+                      { labelAr: "إجمالي الإيرادات", labelEn: "Total Revenue", value: `${fmtNum(pl.totalRevenue)} YER`, tone: "emerald" },
+                      { labelAr: "إجمالي المصروفات", labelEn: "Total Expenses", value: `${fmtNum(pl.totalExpenses)} YER`, tone: "rose" },
+                      { labelAr: "صافي الربح / الخسارة", labelEn: "Net Income", value: `${fmtNum(pl.netProfit)} YER`, tone: pl.netProfit >= 0 ? "indigo" : "rose" },
+                    ],
+                    tables: [
+                      {
+                        headingAr: "الإيرادات",
+                        headingEn: "Revenues",
+                        columns: [
+                          { key: "code", labelAr: "الرمز", labelEn: "Code" },
+                          { key: "nameAr", labelAr: "الحساب", labelEn: "Account" },
+                          { key: "balance", labelAr: "الرصيد", labelEn: "Amount", numeric: true },
+                        ],
+                        rows: pl.revenueLines.map((l) => ({ code: l.code, nameAr: l.nameAr, balance: fmtNum(l.balance) })),
+                        totalsRow: { code: "إجمالي الإيرادات", balance: fmtNum(pl.totalRevenue) },
+                      },
+                      {
+                        headingAr: "التكاليف والمصروفات",
+                        headingEn: "COGS & Expenses",
+                        columns: [
+                          { key: "code", labelAr: "الرمز", labelEn: "Code" },
+                          { key: "nameAr", labelAr: "الحساب", labelEn: "Account" },
+                          { key: "balance", labelAr: "الرصيد", labelEn: "Amount", numeric: true },
+                        ],
+                        rows: [...pl.cogsLines, ...pl.operatingExpenseLines, ...pl.adminExpenseLines].map((l) => ({
+                          code: l.code,
+                          nameAr: l.nameAr,
+                          balance: fmtNum(l.balance),
+                        })),
+                        totalsRow: { code: "إجمالي المصروفات", balance: fmtNum(pl.totalExpenses) },
+                      },
+                    ],
+                  });
+                } else if (reportTab === "bs" && bs) {
+                  void printUasDocument({
+                    titleAr: "الميزانية العمومية (قائمة المركز المالي)",
+                    titleEn: "Balance Sheet",
+                    documentNumber: `RPT-BS-${new Date().toISOString().slice(0, 10)}`,
+                    costCenter: ccLabel,
+                    currency: "YER",
+                    status: "POSTED",
+                    format: "A4_PORTRAIT",
+                    letterhead,
+                    summaryCards: [
+                      { labelAr: "إجمالي الأصول", labelEn: "Total Assets", value: `${fmtNum(bs.totalAssets)} YER`, tone: "emerald" },
+                      { labelAr: "إجمالي الالتزامات", labelEn: "Total Liabilities", value: `${fmtNum(bs.totalLiabilities)} YER`, tone: "amber" },
+                      { labelAr: "حقوق الملكية", labelEn: "Total Equity", value: `${fmtNum(bs.totalEquity)} YER`, tone: "indigo" },
+                    ],
+                    tables: [
+                      {
+                        headingAr: "الأصول",
+                        headingEn: "Assets",
+                        columns: [
+                          { key: "code", labelAr: "الرمز", labelEn: "Code" },
+                          { key: "nameAr", labelAr: "الحساب", labelEn: "Account" },
+                          { key: "balance", labelAr: "الرصيد", labelEn: "Balance", numeric: true },
+                        ],
+                        rows: bs.assetLines.map((l) => ({ code: l.code, nameAr: l.nameAr, balance: fmtNum(l.balance) })),
+                        totalsRow: { code: "إجمالي الأصول", balance: fmtNum(bs.totalAssets) },
+                      },
+                      {
+                        headingAr: "الالتزامات وحقوق الملكية",
+                        headingEn: "Liabilities & Equity",
+                        columns: [
+                          { key: "code", labelAr: "الرمز", labelEn: "Code" },
+                          { key: "nameAr", labelAr: "الحساب", labelEn: "Account" },
+                          { key: "balance", labelAr: "الرصيد", labelEn: "Balance", numeric: true },
+                        ],
+                        rows: [...bs.liabilityLines, ...bs.equityLines].map((l) => ({
+                          code: l.code,
+                          nameAr: l.nameAr,
+                          balance: fmtNum(l.balance),
+                        })),
+                        totalsRow: { code: "إجمالي الالتزامات وحقوق الملكية", balance: fmtNum(bs.liabilitiesPlusEquity) },
+                      },
+                    ],
+                  });
+                } else if (tb) {
+                  void printUasDocument({
+                    titleAr: "ميزان المراجعة العام",
+                    titleEn: "General Trial Balance",
+                    documentNumber: `RPT-TB-${new Date().toISOString().slice(0, 10)}`,
+                    costCenter: ccLabel,
+                    currency: "YER",
+                    status: "POSTED",
+                    format: "A4_LANDSCAPE",
+                    letterhead,
+                    summaryCards: [
+                      { labelAr: "إجمالي المدين", labelEn: "Total Debits", value: `${fmtNum(tb.totalDebits)} YER`, tone: "emerald" },
+                      { labelAr: "إجمالي الدائن", labelEn: "Total Credits", value: `${fmtNum(tb.totalCredits)} YER`, tone: "indigo" },
+                      { labelAr: "الحالة", labelEn: "Status", value: tb.isBalanced ? "متوازن ✔" : `فرق ${fmtNum(tb.difference)}`, tone: tb.isBalanced ? "emerald" : "rose" },
+                    ],
+                    tables: [
+                      {
+                        headingAr: "أرصدة الحسابات",
+                        headingEn: "Account Balances",
+                        columns: [
+                          { key: "code", labelAr: "الرمز", labelEn: "Code" },
+                          { key: "nameAr", labelAr: "اسم الحساب", labelEn: "Account" },
+                          { key: "level", labelAr: "الجيل", labelEn: "Gen", align: "center" },
+                          { key: "totalDebit", labelAr: "مدين", labelEn: "Debit", numeric: true },
+                          { key: "totalCredit", labelAr: "دائن", labelEn: "Credit", numeric: true },
+                          { key: "netDebit", labelAr: "رصيد مدين", labelEn: "Net DR", numeric: true },
+                          { key: "netCredit", labelAr: "رصيد دائن", labelEn: "Net CR", numeric: true },
+                        ],
+                        rows: tb.rows.map((r) => ({
+                          code: r.code,
+                          nameAr: r.nameAr,
+                          level: `G${r.level}`,
+                          totalDebit: fmtNum(r.totalDebit),
+                          totalCredit: fmtNum(r.totalCredit),
+                          netDebit: fmtNum(r.netDebit),
+                          netCredit: fmtNum(r.netCredit),
+                        })),
+                        totalsRow: {
+                          code: "الإجمالي",
+                          totalDebit: fmtNum(tb.totalDebits),
+                          totalCredit: fmtNum(tb.totalCredits),
+                        },
+                      },
+                    ],
+                  });
+                }
+              }}
               className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold flex items-center gap-1.5"
             >
               <Printer className="w-4 h-4" />
@@ -294,7 +507,19 @@ export function FinancialReportsTab({
         </div>
 
         {/* Filters */}
-        <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 text-xs no-print">
+        <div className="grid grid-cols-1 sm:grid-cols-6 gap-3 text-xs no-print">
+          <select
+            value={costCenterFilter}
+            onChange={(e) => setCostCenterFilter(e.target.value)}
+            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-bold"
+          >
+            <option value="ALL">كافة مراكز التكلفة / All Cost Centers</option>
+            {costCenterList.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.code} • {c.nameAr}
+              </option>
+            ))}
+          </select>
           <select
             value={localProjectId}
             onChange={(e) => {
@@ -355,6 +580,7 @@ export function FinancialReportsTab({
             { id: "pl" as const, label: "قائمة الدخل (Profit & Loss)" },
             { id: "bs" as const, label: "الميزانية العمومية (Balance Sheet)" },
             { id: "budget" as const, label: "الموازنة مقابل الفعلي (Budget Variance)" },
+            { id: "cc" as const, label: "تقرير مراكز التكلفة (Cost Center P&L)" },
           ].map((t) => (
             <button
               key={t.id}
@@ -369,6 +595,47 @@ export function FinancialReportsTab({
         </div>
 
         {loading && <div className="py-10 text-center text-xs text-slate-500">جاري احتساب القوائم المالية...</div>}
+
+        {/* 5. COST CENTER P&L (تقرير مراكز التكلفة) */}
+        {!loading && reportTab === "cc" && ccReport && (
+          <div className="space-y-3" dir="rtl">
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full text-right text-xs">
+                <thead className="bg-slate-100 dark:bg-slate-800 font-extrabold">
+                  <tr>
+                    <th className="px-3 py-2">الرمز / Code</th>
+                    <th className="px-3 py-2">مركز التكلفة / Cost Center</th>
+                    <th className="px-3 py-2">الإيرادات / Revenue</th>
+                    <th className="px-3 py-2">المصروفات / Expenses</th>
+                    <th className="px-3 py-2">صافي الربح / Net</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ccReport.rows.map((r) => (
+                    <tr key={r.costCenterId ?? "none"} className="border-t border-slate-200">
+                      <td className="px-3 py-2 font-mono">{r.code}</td>
+                      <td className="px-3 py-2 font-bold"><bdi>{r.nameAr}</bdi> <span className="text-slate-500">(<bdi>{r.nameEn}</bdi>)</span></td>
+                      <td className="px-3 py-2 tabular-nums">{fmtNum(r.revenue)}</td>
+                      <td className="px-3 py-2 tabular-nums">{fmtNum(r.expense)}</td>
+                      <td className={`px-3 py-2 tabular-nums font-extrabold ${r.net >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{fmtNum(r.net)}</td>
+                    </tr>
+                  ))}
+                  {ccReport.rows.length === 0 && (
+                    <tr><td colSpan={5} className="px-3 py-6 text-center text-slate-500">لا توجد حركات على مراكز التكلفة / No cost-center activity</td></tr>
+                  )}
+                </tbody>
+                <tfoot className="bg-slate-50 dark:bg-slate-900 font-black">
+                  <tr>
+                    <td className="px-3 py-2" colSpan={2}>الإجمالي / Total</td>
+                    <td className="px-3 py-2 tabular-nums">{fmtNum(ccReport.totals.revenue)}</td>
+                    <td className="px-3 py-2 tabular-nums">{fmtNum(ccReport.totals.expense)}</td>
+                    <td className="px-3 py-2 tabular-nums">{fmtNum(ccReport.totals.net)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        )}
 
         {/* 1. TRIAL BALANCE */}
         {!loading && reportTab === "tb" && tb && (

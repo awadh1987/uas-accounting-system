@@ -164,8 +164,10 @@ export async function POST(req: NextRequest) {
         },
       });
 
+      const whForCc = await tx.warehouse.findUnique({ where: { id: warehouseId }, select: { costCenterId: true } });
       const movement = await tx.stockMovement.create({
         data: {
+          costCenterId: body.costCenterId ? String(body.costCenterId) : whForCc?.costCenterId ?? null,
           itemId: item.id,
           warehouseId,
           movementType,

@@ -16,6 +16,8 @@ import {
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
+import { CostCenterSelector } from "@/components/CostCenterSelector";
+import { SaveDraftButton } from "@/components/SaveDraftButton";
 import { SelectWithOther } from "@/components/SelectWithOther";
 import {
   AccountingDirectionSelector,
@@ -23,7 +25,7 @@ import {
   type AccountingDirectionValue,
 } from "@/components/AccountingDirectionSelector";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
-import { triggerNativePrint } from "@/lib/nativeBridge";
+import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
 import type {
   UasProject,
   UasSaleTransaction,
@@ -59,6 +61,7 @@ export type SalePayload = {
   date: string;
   voucherNo: string;
   notes: string;
+  costCenterId?: string | null;
 };
 
 interface SalesTabProps {
@@ -131,6 +134,7 @@ export function SalesTab({
   const [date, setDate] = useState("2026-11-10");
   const [voucherNo, setVoucherNo] = useState("RV-101");
   const [notes, setNotes] = useState("");
+  const [costCenterId, setCostCenterId] = useState("");
 
   // Filters
   const [filterProject, setFilterProject] = useState("ALL");
@@ -280,6 +284,7 @@ export function SalesTab({
       date: date || new Date().toISOString().slice(0, 10),
       voucherNo: voucherNo.trim() || `RV-${Math.floor(100 + Math.random() * 900)}`,
       notes: notes.trim(),
+      costCenterId: costCenterId || undefined,
     };
 
     const ok =
@@ -291,6 +296,7 @@ export function SalesTab({
       setEditingId(null);
       setCustomer("");
       setNotes("");
+      setCostCenterId("");
       setDrawerOpen(false);
     }
   }
@@ -773,6 +779,18 @@ export function SalesTab({
             />
           </div>
 
+          <CostCenterSelector value={costCenterId} onChange={setCostCenterId} />
+          <SaveDraftButton
+            module="SALES"
+            formType="SALES_INVOICE"
+            entityId={editingId}
+            getTitleAr={() => `مسودة بيع — ${customer.trim() || "عميل"}`}
+            getPayload={() => ({ projectId, subProjectId, harvest, customer, phone, grade: selectedGradePreset === "أخرى (تحديد مخصص)" ? customGradeText.trim() || "درجة مخصصة" : selectedGradePreset, bundles: Number(bundles) || 0, price: Number(price) || 0, credit: Number(credit) || 0, date, voucherNo, notes, costCenterId: costCenterId || null })}
+            getTotalAmount={() => (Number(bundles) || 0) * (Number(price) || 0)}
+            actor={currentUser ? { userId: currentUser.id, userDisplay: currentUser.name, userRole: currentUser.role } : undefined}
+            onToast={onToast}
+            className="w-full"
+          />
           <button
             type="submit"
             className="w-full py-2.5 rounded-xl accent-bg font-extrabold shadow-sm flex items-center justify-center gap-1.5"
@@ -794,7 +812,57 @@ export function SalesTab({
           </div>
           <div className="flex flex-wrap items-center gap-2 no-print">
             <button
-              onClick={() => void triggerNativePrint({ title: "UAS-Sales-Report" })}
+              onClick={() =>
+                void printUasDocument({
+                  titleAr: "تقرير سجل المبيعات والإيرادات اليومية",
+                  titleEn: "Sales Ledger & Daily Revenue Report",
+                  documentNumber: `RPT-SALES-${new Date().toISOString().slice(0, 10)}`,
+                  currency: "YER",
+                  status: "POSTED",
+                  format: "A4_LANDSCAPE",
+                  summaryCards: [
+                    { labelAr: "إجمالي المبيعات", labelEn: "Total Sales", value: `${fmtNum(sumTotal)} YER`, tone: "indigo" },
+                    { labelAr: "التحصيل النقدي", labelEn: "Cash Collected", value: `${fmtNum(sumCredit)} YER`, tone: "emerald" },
+                    { labelAr: "المتبقي الآجل", labelEn: "Receivable", value: `${fmtNum(sumDebit)} YER`, tone: "rose" },
+                    { labelAr: "إجمالي العلاقيات", labelEn: "Bundles", value: `${fmtNum(sumBundles)} (${visibleSales.length})`, tone: "amber" },
+                  ],
+                  tables: [
+                    {
+                      headingAr: "تفاصيل عمليات البيع",
+                      headingEn: "Sales Transactions",
+                      columns: [
+                        { key: "date", labelAr: "التاريخ", labelEn: "Date" },
+                        { key: "voucherNo", labelAr: "رقم السند", labelEn: "Voucher" },
+                        { key: "customer", labelAr: "العميل", labelEn: "Customer" },
+                        { key: "grade", labelAr: "الصنف", labelEn: "Grade" },
+                        { key: "bundles", labelAr: "الكمية", labelEn: "Qty", numeric: true },
+                        { key: "price", labelAr: "السعر", labelEn: "Price", numeric: true },
+                        { key: "total", labelAr: "الإجمالي", labelEn: "Total", numeric: true },
+                        { key: "credit", labelAr: "المدفوع", labelEn: "Paid", numeric: true },
+                        { key: "debit", labelAr: "المتبقي", labelEn: "Due", numeric: true },
+                      ],
+                      rows: visibleSales.map((s) => ({
+                        date: s.date,
+                        voucherNo: s.voucherNo || s.sequenceNumber || "—",
+                        customer: s.customer,
+                        grade: s.grade,
+                        bundles: fmtNum(s.bundles),
+                        price: fmtNum(s.price),
+                        total: fmtNum(s.total),
+                        credit: fmtNum(s.credit),
+                        debit: fmtNum(s.debit),
+                      })),
+                      totalsRow: {
+                        date: "الإجمالي",
+                        bundles: fmtNum(sumBundles),
+                        total: fmtNum(sumTotal),
+                        credit: fmtNum(sumCredit),
+                        debit: fmtNum(sumDebit),
+                      },
+                    },
+                  ],
+                })
+              }
               className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold inline-flex items-center gap-1"
             >
               <Printer className="w-3.5 h-3.5" />

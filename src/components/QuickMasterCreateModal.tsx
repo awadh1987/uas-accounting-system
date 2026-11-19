@@ -5,6 +5,8 @@ import { createPortal } from "react-dom";
 import { BookOpen, Plus, Store, UserPlus, X } from "lucide-react";
 import type { UasUser } from "@/types/uas";
 import { SelectWithOther } from "@/components/SelectWithOther";
+import { CostCenterSelector } from "@/components/CostCenterSelector";
+import { SaveDraftButton } from "@/components/SaveDraftButton";
 
 export type MasterCreateMode = "vendor" | "customer" | "coa";
 
@@ -123,6 +125,7 @@ export function QuickMasterCreateModal({
   const [taxReg, setTaxReg] = useState("");
   const [address, setAddress] = useState("");
   const [creditLimit, setCreditLimit] = useState("500000");
+  const [costCenterId, setCostCenterId] = useState("");
 
   // 6-Generation COA fields
   const [coaParents, setCoaParents] = useState<CoaParentOption[]>([]);
@@ -213,6 +216,7 @@ export function QuickMasterCreateModal({
             email: email.trim() || undefined,
             taxRegistration: taxReg.trim() || undefined,
             address: address.trim() || undefined,
+            costCenterId: costCenterId || undefined,
             actor,
           }),
         });
@@ -237,6 +241,7 @@ export function QuickMasterCreateModal({
             phone: phone.trim() || "777000000",
             address: address.trim() || undefined,
             creditLimit: Number(creditLimit) || 0,
+            costCenterId: costCenterId || undefined,
             actor,
           }),
         });
@@ -540,10 +545,21 @@ export function QuickMasterCreateModal({
                   </div>
                 )}
               </div>
+              <CostCenterSelector value={costCenterId} onChange={setCostCenterId} />
             </>
           )}
 
           <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+            {mode !== "coa" && (
+              <SaveDraftButton
+                module={mode === "vendor" ? "PROCUREMENT" : "SALES"}
+                formType={mode === "vendor" ? "VENDOR" : "CUSTOMER"}
+                getTitleAr={() => `مسودة ${mode === "vendor" ? "مورد" : "عميل"}: ${nameAr.trim() || "جديد"}`}
+                getPayload={() => ({ nameAr, nameEn, phone, email, taxRegistration: taxReg, address, creditLimit: Number(creditLimit) || 0, costCenterId: costCenterId || null })}
+                actor={actor}
+                onToast={onToast}
+              />
+            )}
             <button
               type="button"
               onClick={resetAndClose}

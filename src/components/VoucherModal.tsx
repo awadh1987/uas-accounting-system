@@ -4,7 +4,10 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { fmtNum, formatCurrencyVal, type CurrencyCode } from "@/lib/formulas";
 import { getDict } from "@/lib/i18n";
-import { triggerNativePrint } from "@/lib/nativeBridge";
+import {
+  printUasDocument,
+  resolveLetterheadFromProfile,
+} from "@/lib/print/uasDocumentPrinter";
 import type { LanguageCode, UasEnterpriseProfile, VoucherModalPayload } from "@/types/uas";
 import { QrVerificationBlock } from "./QrVerificationBlock";
 
@@ -180,13 +183,96 @@ export function VoucherModal({
           </button>
           <button
             onClick={() =>
-              void triggerNativePrint({
-                title: `${voucher.title}-${voucher.voucherNo || "Voucher"}`,
+              void printUasDocument({
+                titleAr: voucher.title,
+                titleEn: voucher.subtitle || "Accounting Voucher",
+                documentNumber: voucher.voucherNo || "VCH",
+                issueDate: voucher.date,
+                currency,
+                status: "POSTED",
+                format: "A4_PORTRAIT",
+                letterhead: resolveLetterheadFromProfile(enterpriseProfile),
+                metadata: [
+                  { labelAr: voucher.partyLabel, value: voucher.partyName },
+                  { labelAr: "الهاتف", labelEn: "Phone", value: voucher.phone || "—" },
+                  { labelAr: "المشروع / القطفة", labelEn: "Project", value: voucher.projectHarvest },
+                  { labelAr: voucher.detailLineLabel, value: voucher.detailLineValue },
+                  ...(voucher.treasuryName
+                    ? [{ labelAr: "الخزينة / البنك", labelEn: "Treasury", value: voucher.treasuryName }]
+                    : []),
+                ],
+                summaryCards:
+                  (voucher.kind === "installment" || voucher.kind === "vendor_payment") &&
+                  voucher.singleAmountYER !== undefined
+                    ? [
+                        {
+                          labelAr: `قيمة السند (${voucher.voucherNo})`,
+                          labelEn: "Voucher Amount",
+                          value: formatCurrencyVal(voucher.singleAmountYER, currency, exchangeRates),
+                          tone: "emerald",
+                        },
+                      ]
+                    : [
+                        {
+                          labelAr: voucher.kind === "worker" ? "إجمالي الأجر المستحق" : "الإجمالي الكلي",
+                          labelEn: "Total",
+                          value: `${fmtNum(voucher.totalAmount)} YER`,
+                          tone: "neutral",
+                        },
+                        {
+                          labelAr: voucher.kind === "worker" ? "المسلم للعامل (دائن)" : "مقبوض دائن",
+                          labelEn: "Credit",
+                          value: `${fmtNum(voucher.creditAmount)} YER`,
+                          tone: "emerald",
+                        },
+                        {
+                          labelAr: voucher.kind === "worker" ? "المتبقي للعامل (مدين)" : "متبقي مدين",
+                          labelEn: "Debit",
+                          value: `${fmtNum(voucher.debitAmount)} YER`,
+                          tone: "rose",
+                        },
+                      ],
+                notes: voucher.notes,
+                qrHash: voucher.qrPayload,
               })
             }
             className="px-4 py-2 rounded-lg accent-bg text-xs font-bold"
           >
             {dict.printPdfBtn}
+          </button>
+          <button
+            onClick={() =>
+              void printUasDocument({
+                titleAr: voucher.title,
+                titleEn: voucher.subtitle || "POS Receipt",
+                documentNumber: voucher.voucherNo || "POS",
+                issueDate: voucher.date,
+                currency,
+                status: "POSTED",
+                format: "THERMAL_80MM",
+                letterhead: resolveLetterheadFromProfile(enterpriseProfile),
+                metadata: [
+                  { labelAr: voucher.partyLabel, value: voucher.partyName },
+                  { labelAr: voucher.detailLineLabel, value: voucher.detailLineValue },
+                ],
+                summaryCards: [
+                  {
+                    labelAr: "المبلغ",
+                    labelEn: "Amount",
+                    value:
+                      voucher.singleAmountYER !== undefined
+                        ? formatCurrencyVal(voucher.singleAmountYER, currency, exchangeRates)
+                        : `${fmtNum(voucher.totalAmount)} YER`,
+                    tone: "emerald",
+                  },
+                ],
+                notes: voucher.notes,
+                qrHash: voucher.qrPayload,
+              })
+            }
+            className="px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold"
+          >
+            🖨️ 80mm POS
           </button>
           <button
             onClick={onClose}

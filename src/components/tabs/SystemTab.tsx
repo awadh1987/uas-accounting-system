@@ -43,6 +43,7 @@ import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl, safeFetchJson } from "@/
 import { exportOrShareBinaryFile } from "@/lib/nativeBridge";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { AccountingSettingsPanel } from "@/components/AccountingSettingsPanel";
+import { ApprovalRulesMatrixPanel } from "@/components/ApprovalRulesMatrixPanel";
 import {
   ALL_USER_ROLES,
   ROLE_DEFAULT_PERMISSIONS,
@@ -960,9 +961,15 @@ export function SystemTab({
       </div>
 
       {activeSubTab === "accounting" && (
-        <div className="card-surface rounded-2xl p-5">
-          <AccountingSettingsPanel
-            lang={lang}
+        <div className="space-y-5">
+          <div className="card-surface rounded-2xl p-5">
+            <AccountingSettingsPanel
+              lang={lang}
+              readOnly={readOnly || !canManageUsers}
+              onToast={onToast}
+            />
+          </div>
+          <ApprovalRulesMatrixPanel
             readOnly={readOnly || !canManageUsers}
             onToast={onToast}
           />

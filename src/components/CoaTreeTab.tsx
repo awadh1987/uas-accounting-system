@@ -13,6 +13,10 @@ export interface CoaNodeItem {
   level: number;
   type: string;
   isPosting: boolean;
+  generation?: number;
+  isPostable?: boolean;
+  subLedgerType?: string | null;
+  defaultCostCenterId?: string | null;
   parentId: string | null;
   directDebit: number;
   directCredit: number;
@@ -58,6 +62,18 @@ export function CoaTreeTab({
   const [tree, setTree] = useState<CoaNodeItem[]>([]);
   const [flat, setFlat] = useState<Omit<CoaNodeItem, "children">[]>([]);
   const [loading, setLoading] = useState(true);
+  const [costCenterNames, setCostCenterNames] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    fetch("/api/accounting/cost-centers", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { costCenters: [] }))
+      .then((d: { costCenters?: Array<{ id: string; code: string; nameAr: string }> }) => {
+        const m: Record<string, string> = {};
+        for (const c of d.costCenters || []) m[c.id] = `${c.code} ${c.nameAr}`;
+        setCostCenterNames(m);
+      })
+      .catch(() => undefined);
+  }, []);
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [addingParent, setAddingParent] = useState<CoaNodeItem | null>(null);
@@ -332,6 +348,26 @@ export function CoaTreeTab({
                   >
                     {node.isPosting ? "حساب ترحيل عمليات (Posting)" : "حساب تجميعي (Summary)"}
                   </span>
+                  <span
+                    className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
+                      (node.isPostable ?? node.isPosting)
+                        ? "border-emerald-400 text-emerald-700"
+                        : "border-slate-300 text-slate-500"
+                    }`}
+                    title="isPostable"
+                  >
+                    {(node.isPostable ?? node.isPosting) ? "✔ isPostable" : "✖ roll-up"}
+                  </span>
+                  {node.subLedgerType && node.subLedgerType !== "NONE" && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-300">
+                      {node.subLedgerType}
+                    </span>
+                  )}
+                  {node.defaultCostCenterId && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-300" title="مركز التكلفة / Cost Center">
+                      💠 {costCenterNames[node.defaultCostCenterId] || "مركز تكلفة"}
+                    </span>
+                  )}
                 </div>
               );
             })()}

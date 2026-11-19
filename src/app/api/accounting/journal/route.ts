@@ -182,6 +182,7 @@ export async function POST(req: NextRequest) {
       narrationEn,
       projectId,
       subProjectId,
+      costCenterId: body.costCenterId ? String(body.costCenterId) : null,
       createdById: actor.userId ?? undefined,
       sourceType: "MANUAL",
       status: "POSTED",

@@ -14,6 +14,9 @@ import { ProcurementTab } from "@/components/ProcurementTab";
 import { ProjectsManagerTab } from "@/components/ProjectsManagerTab";
 import { SidebarNav } from "@/components/SidebarNav";
 import { TopCommandBar } from "@/components/TopCommandBar";
+import { SharedDraftsCenterDrawer } from "@/components/SharedDraftsCenterDrawer";
+import { ApprovalsCenter, APPROVALS_CHANGED_EVENT } from "@/components/ApprovalsCenter";
+import { DRAFTS_CHANGED_EVENT } from "@/hooks/useFormDraft";
 import { UasAiCopilot } from "@/components/UasAiCopilot";
 import { UserProfileDrawer } from "@/components/UserProfileDrawer";
 import { VoucherModal } from "@/components/VoucherModal";
@@ -108,6 +111,10 @@ export function UasAppShell() {
 
   const [currentUser, setCurrentUser] = useState<UasUser | null>(null);
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
+  const [draftsDrawerOpen, setDraftsDrawerOpen] = useState(false);
+  const [draftsCount, setDraftsCount] = useState(0);
+  const [approvalsDrawerOpen, setApprovalsDrawerOpen] = useState(false);
+  const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
   const [licenseStatus, setLicenseStatus] = useState<LicenseStatusData | null>(null);
   const [licenseModalOpen, setLicenseModalOpen] = useState(false);
   const [quickSheetOpen, setQuickSheetOpen] = useState(false);
@@ -117,6 +124,36 @@ export function UasAppShell() {
     useState<BeforeInstallPromptEvent | null>(null);
 
   const hydratedRef = useRef(false);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const refreshDraftCount = () => {
+      fetch(`/api/drafts?userId=${encodeURIComponent(currentUser.id)}&userRole=${encodeURIComponent(currentUser.role)}`, {
+        cache: "no-store",
+      })
+        .then((r) => (r.ok ? r.json() : { activeCount: 0 }))
+        .then((d: { activeCount?: number; drafts?: unknown[] }) =>
+          setDraftsCount(d.activeCount ?? d.drafts?.length ?? 0)
+        )
+        .catch(() => undefined);
+    };
+    refreshDraftCount();
+    window.addEventListener(DRAFTS_CHANGED_EVENT, refreshDraftCount);
+    const refreshApprovalsCount = () => {
+      fetch("/api/approvals?status=PENDING", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : { pendingCount: 0 }))
+        .then((d: { pendingCount?: number; requests?: unknown[] }) =>
+          setPendingApprovalsCount(d.pendingCount ?? d.requests?.length ?? 0)
+        )
+        .catch(() => undefined);
+    };
+    refreshApprovalsCount();
+    window.addEventListener(APPROVALS_CHANGED_EVENT, refreshApprovalsCount);
+    return () => {
+      window.removeEventListener(DRAFTS_CHANGED_EVENT, refreshDraftCount);
+      window.removeEventListener(APPROVALS_CHANGED_EVENT, refreshApprovalsCount);
+    };
+  }, [currentUser]);
 
   const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
@@ -987,6 +1024,19 @@ export function UasAppShell() {
                 : ""
             }`}
           >
+            <SharedDraftsCenterDrawer
+              open={draftsDrawerOpen}
+              onClose={() => setDraftsDrawerOpen(false)}
+              currentUser={currentUser}
+              onNavigateTab={(tab) => setActiveTab(tab)}
+              onToast={showToast}
+            />
+            <ApprovalsCenter
+              open={approvalsDrawerOpen}
+              onClose={() => setApprovalsDrawerOpen(false)}
+              currentUser={currentUser}
+              onToast={showToast}
+            />
             <TopCommandBar
               lang={lang}
               theme={theme}
@@ -1008,6 +1058,10 @@ export function UasAppShell() {
               onToggleSidebarCollapse={() => setSidebarCollapsed((c) => !c)}
               onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
               onOpenSearch={() => setSearchModalOpen(true)}
+              onOpenDraftsCenter={() => setDraftsDrawerOpen(true)}
+              draftsCount={draftsCount}
+              onOpenApprovalsCenter={() => setApprovalsDrawerOpen(true)}
+              pendingApprovalsCount={pendingApprovalsCount}
               onProjectChange={handleProjectFilterChange}
               onSubProjectChange={handleSubProjectFilterChange}
               onHarvestChange={setSelectedHarvest}

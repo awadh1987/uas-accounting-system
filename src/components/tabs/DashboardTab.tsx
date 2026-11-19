@@ -13,7 +13,7 @@ import {
 import { Bar, Doughnut } from "react-chartjs-2";
 import { computeNetOperatingProfit, fmtNum, formatCurrencyVal, type CurrencyCode } from "@/lib/formulas";
 import { getDict } from "@/lib/i18n";
-import { triggerNativePrint } from "@/lib/nativeBridge";
+import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
 import type {
   LanguageCode,
   TabId,
@@ -195,7 +195,38 @@ export function DashboardTab({
             📥 <span>{dict.btnExportExcel}</span>
           </button>
           <button
-            onClick={() => void triggerNativePrint({ title: "UAS-Executive-Dashboard" })}
+            onClick={() =>
+              void printUasDocument({
+                titleAr: "التقرير التنفيذي الموحد للمشاريع والأرباح",
+                titleEn: "Executive Financial Dashboard Summary",
+                documentNumber: `RPT-EXEC-${new Date().toISOString().slice(0, 10)}`,
+                currency: "YER",
+                status: "POSTED",
+                format: "A4_LANDSCAPE",
+                summaryCards: [
+                  { labelAr: "قيمة المشاريع", labelEn: "Projects Value", value: formatAmt(totalProjVal), tone: "indigo" },
+                  { labelAr: "إجمالي المبيعات", labelEn: "Total Sales", value: formatAmt(totalSales), tone: "emerald" },
+                  { labelAr: "إجمالي المصروفات والأجور", labelEn: "Total Costs", value: formatAmt(totalOpExp + totalWrkWages), tone: "amber" },
+                  { labelAr: "صافي الربح", labelEn: "Net Profit", value: formatAmt(netProfit), tone: netProfit >= 0 ? "emerald" : "rose" },
+                ],
+                tables: [
+                  {
+                    headingAr: "ملخص المشاريع النشطة",
+                    headingEn: "Active Projects Overview",
+                    columns: [
+                      { key: "name", labelAr: "المشروع", labelEn: "Project" },
+                      { key: "type", labelAr: "النوع", labelEn: "Type" },
+                      { key: "est", labelAr: "القيمة التقديرية", labelEn: "Estimated Value", numeric: true },
+                    ],
+                    rows: filteredProjects.map((p) => ({
+                      name: p.name,
+                      type: p.type,
+                      est: formatAmt(p.estimatedValue || 0),
+                    })),
+                  },
+                ],
+              })
+            }
             className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1.5"
           >
             🖨️ <span>{dict.btnExportPDF}</span>

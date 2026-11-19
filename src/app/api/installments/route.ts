@@ -70,6 +70,7 @@ export async function POST(req: NextRequest) {
           narrationEn: `Customer Receipt ${voucherNo} - ${sale.customerName}`,
           sourceType: "CUSTOMER_RECEIPT",
           projectId: sale.projectId,
+          costCenterId: body.costCenterId ? String(body.costCenterId).trim() : sale.customer.costCenterId ?? null,
           createdById: actor.userId ?? undefined,
           lines: [
             {

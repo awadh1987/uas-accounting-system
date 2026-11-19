@@ -15,17 +15,17 @@ datasource db {
 // ---------------------------------------------------------
 
 model Account {
-  id           String             @id @default(cuid())
-  code         String             @unique // e.g. "111101"
-  nameAr       String
-  nameEn       String
-  level        Int                // 1 (Class / Gen 1) to 6 (Operational Posting Leaf / Gen 6)
-  type         String             // ASSET | LIABILITY | EQUITY | REVENUE | EXPENSE
-  isPosting    Boolean            @default(false) // False for Gen 1-4 & branched Gen 5, True for leaf Gen 5 & Gen 6
-  parentCode   String?            // Optional recursive parentCode for fast hierarchical lineage
-  parentId     String?
-  parent       Account?           @relation("AccountHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
-  children     Account[]          @relation("AccountHierarchy")
+  id         String    @id @default(cuid())
+  code       String    @unique // e.g. "111101"
+  nameAr     String
+  nameEn     String
+  level      Int // 1 (Class / Gen 1) to 6 (Operational Posting Leaf / Gen 6)
+  type       String // ASSET | LIABILITY | EQUITY | REVENUE | EXPENSE
+  isPosting  Boolean   @default(false) // False for Gen 1-4 & branched Gen 5, True for leaf Gen 5 & Gen 6
+  parentCode String? // Optional recursive parentCode for fast hierarchical lineage
+  parentId   String?
+  parent     Account?  @relation("AccountHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children   Account[] @relation("AccountHierarchy")
 
   journalLines JournalEntryLine[]
   vendors      Vendor[]
@@ -33,54 +33,73 @@ model Account {
   workers      Worker[]
   treasury     TreasuryAccount?
 
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // === Phase 1: 6-Generation COA / sub-ledger binding ===
+  generation          Int         @default(1) // mirrors level (1..6)
+  parentAccountId     String? // mirrors parentId
+  isPostable          Boolean     @default(false) // mirrors isPosting (self-healed on first post)
+  subLedgerType       String? // CUSTOMER | VENDOR | WORKER | TREASURY | WAREHOUSE | PROJECT | NONE
+  subLedgerEntityId   String?
+  defaultCostCenterId String?
+  defaultCostCenter   CostCenter? @relation("AccountDefaultCostCenter", fields: [defaultCostCenterId], references: [id], onDelete: SetNull)
+  glCustomers         Customer[]  @relation("CustomerGlAccount")
+  glVendors           Vendor[]    @relation("VendorGlAccount")
+  glWorkers           Worker[]    @relation("WorkerGlAccount")
+  glWarehouses        Warehouse[] @relation("WarehouseGlAccount")
+  glProjects          Project[]   @relation("ProjectGlAccount")
 }
 
 model JournalEntry {
-  id          String             @id @default(cuid())
-  entryNumber String             @unique // e.g. "JV-2026-0001"
-  date        DateTime
-  reference   String?            // External ref, PO#, Bill#, Invoice#, Voucher#
-  narrationAr String
-  narrationEn String?
-  status      String             @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | VOIDED
-  sourceType  String?            // OPENING | VENDOR_BILL | VENDOR_PAYMENT | SALES_INVOICE | CUSTOMER_RECEIPT | EXPENSE | WORKER_ACCRUAL | WORKER_PAYOUT | ADJUSTMENT | MANUAL
-  sourceId    String?
-  projectId   String?
-  project     Project?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  id           String      @id @default(cuid())
+  entryNumber  String      @unique // e.g. "JV-2026-0001"
+  date         DateTime
+  reference    String? // External ref, PO#, Bill#, Invoice#, Voucher#
+  narrationAr  String
+  narrationEn  String?
+  status       String      @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | VOIDED
+  sourceType   String? // OPENING | VENDOR_BILL | VENDOR_PAYMENT | SALES_INVOICE | CUSTOMER_RECEIPT | EXPENSE | WORKER_ACCRUAL | WORKER_PAYOUT | ADJUSTMENT | MANUAL | YEAR_END_CLOSING
+  sourceId     String?
+  entryType    String      @default("NORMAL") // NORMAL | OPENING | ADJUSTMENT | YEAR_END_CLOSING
+  fiscalYearId String?
+  fiscalYear   FiscalYear? @relation(fields: [fiscalYearId], references: [id], onDelete: SetNull)
+  projectId    String?
+  project      Project?    @relation(fields: [projectId], references: [id], onDelete: SetNull)
   subProjectId String?
-  subProject   SubProject?       @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
+  subProject   SubProject? @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
 
   lines       JournalEntryLine[]
   attachments Attachment[]
   createdById String
   createdBy   User               @relation(fields: [createdById], references: [id], onDelete: Restrict)
 
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  documentStatus String   @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | AMENDMENT_PENDING | REJECTED | VOIDED
+  revisionNumber Int      @default(1)
 }
 
 model JournalEntryLine {
-  id             String        @id @default(cuid())
+  id             String       @id @default(cuid())
   journalEntryId String
-  journalEntry   JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
   accountId      String
-  account        Account       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  account        Account      @relation(fields: [accountId], references: [id], onDelete: Restrict)
 
-  debit          Decimal       @default(0)
-  credit         Decimal       @default(0)
-  currency       String        @default("YER")
-  currencyCode   String        @default("YER")
-  exchangeRate   Decimal       @default(1.0)
+  debit        Decimal @default(0)
+  credit       Decimal @default(0)
+  currency     String  @default("YER")
+  currencyCode String  @default("YER")
+  exchangeRate Decimal @default(1.0)
 
   // Multi-Currency Normalized amounts (Foreign + Base YER)
-  foreignDebit   Decimal       @default(0)
-  foreignCredit  Decimal       @default(0)
-  debitBase      Decimal       @default(0)
-  creditBase     Decimal       @default(0)
-  baseDebit      Decimal       @default(0)
-  baseCredit     Decimal       @default(0)
+  foreignDebit  Decimal @default(0)
+  foreignCredit Decimal @default(0)
+  debitBase     Decimal @default(0)
+  creditBase    Decimal @default(0)
+  baseDebit     Decimal @default(0)
+  baseCredit    Decimal @default(0)
 
   memo           String?
   projectId      String?
@@ -89,6 +108,9 @@ model JournalEntryLine {
   subProject     SubProject?   @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
   harvestCycleId String?
   harvestCycle   HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
+
+  costCenterId String?
+  costCenter   CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
 }
 
 model Attachment {
@@ -106,45 +128,45 @@ model Attachment {
 // ---------------------------------------------------------
 
 model EnterpriseProfile {
-  id                     String   @id @default("default")
-  legalNameAr            String
-  legalNameEn            String
-  taxNumber              String?
-  commercialReg          String?
-  currencyCode           String   @default("YER")
-  isConfigured           Boolean  @default(false)
-  address                String?
-  phone                  String?
-  email                  String?
-  logoUrl                String?
-  brandColor             String   @default("#059669")
+  id            String  @id @default("default")
+  legalNameAr   String
+  legalNameEn   String
+  taxNumber     String?
+  commercialReg String?
+  currencyCode  String  @default("YER")
+  isConfigured  Boolean @default(false)
+  address       String?
+  phone         String?
+  email         String?
+  logoUrl       String?
+  brandColor    String  @default("#059669")
 
   // Dual Logo Generator & Toggle Settings
-  showUasLogo            Boolean  @default(true)
-  uasLogoStyle           String   @default("emerald-shield")
-  uasLogoCustomUrl       String?
-  showEnterpriseLogo     Boolean  @default(true)
-  enterpriseLogoStyle    String   @default("agri-leaf")
+  showUasLogo             Boolean @default(true)
+  uasLogoStyle            String  @default("emerald-shield")
+  uasLogoCustomUrl        String?
+  showEnterpriseLogo      Boolean @default(true)
+  enterpriseLogoStyle     String  @default("agri-leaf")
   enterpriseLogoCustomUrl String?
 
   // Landing Page CMS
-  heroBadgeAr            String   @default("منصة محاسبة وتخطيط موارد المؤسسات الزراعية | UAS ERP 2026")
-  heroBadgeEn            String   @default("Enterprise Agricultural Accounting & ERP | UAS 2026")
-  heroTitleAr            String   @default("النظام المحاسبي الموحد لإدارة المشاريع الزراعية والقطفات والمخزون")
-  heroTitleEn            String   @default("Unified Accounting System for Agricultural Projects, Harvests & Supply Chain")
-  heroSubtitleAr         String   @default("دفتر يومية مزدوج القيد، شجرة حسابات خماسية، متابعة المشتريات والموردين، وإدارة الخزينة والبنوك والمحافظ الإلكترونية بدقة لحظية.")
-  heroSubtitleEn         String   @default("Double-entry General Ledger, 5-tier COA, procurement & 3-way matching, and multi-currency vaults, banks & digital wallets.")
-  aboutMissionAr         String   @default("تمكين المؤسسات الزراعية والتجارية من إدارة مشاريعها وقطفاتها ومستحقات الموردين والعملاء بشفافية مالية كاملة وتقارير فورية.")
-  aboutMissionEn         String   @default("Empowering agricultural enterprises with full financial transparency, harvest-cycle control, and audit-ready reporting.")
-  contactPhone           String   @default("")
-  contactWhatsApp        String   @default("")
-  contactAddress         String   @default("الجمهورية اليمنية - صنعاء")
-  showPublicMetrics      Boolean  @default(true)
-  showPublicVerify       Boolean  @default(true)
-  ctaPrimaryTextAr       String   @default("دخول النظام المحاسبي")
-  ctaPrimaryTextEn       String   @default("Enter ERP Workspace")
+  heroBadgeAr       String  @default("منصة محاسبة وتخطيط موارد المؤسسات الزراعية | UAS ERP 2026")
+  heroBadgeEn       String  @default("Enterprise Agricultural Accounting & ERP | UAS 2026")
+  heroTitleAr       String  @default("النظام المحاسبي الموحد لإدارة المشاريع الزراعية والقطفات والمخزون")
+  heroTitleEn       String  @default("Unified Accounting System for Agricultural Projects, Harvests & Supply Chain")
+  heroSubtitleAr    String  @default("دفتر يومية مزدوج القيد، شجرة حسابات خماسية، متابعة المشتريات والموردين، وإدارة الخزينة والبنوك والمحافظ الإلكترونية بدقة لحظية.")
+  heroSubtitleEn    String  @default("Double-entry General Ledger, 5-tier COA, procurement & 3-way matching, and multi-currency vaults, banks & digital wallets.")
+  aboutMissionAr    String  @default("تمكين المؤسسات الزراعية والتجارية من إدارة مشاريعها وقطفاتها ومستحقات الموردين والعملاء بشفافية مالية كاملة وتقارير فورية.")
+  aboutMissionEn    String  @default("Empowering agricultural enterprises with full financial transparency, harvest-cycle control, and audit-ready reporting.")
+  contactPhone      String  @default("")
+  contactWhatsApp   String  @default("")
+  contactAddress    String  @default("الجمهورية اليمنية - صنعاء")
+  showPublicMetrics Boolean @default(true)
+  showPublicVerify  Boolean @default(true)
+  ctaPrimaryTextAr  String  @default("دخول النظام المحاسبي")
+  ctaPrimaryTextEn  String  @default("Enter ERP Workspace")
 
-  updatedAt              DateTime @updatedAt
+  updatedAt DateTime @updatedAt
 }
 
 model SystemSettings {
@@ -159,10 +181,10 @@ model SystemSettings {
   periodLockDate          String?
   requireApprovalWorkflow Boolean  @default(false)
   costingMethod           String   @default("WEIGHTED_AVERAGE") // WEIGHTED_AVERAGE | FIFO
-  negativeStockPolicy     String   @default("BLOCK")            // BLOCK | WARN
-  printLayout             String   @default("A4")               // A4 | 80MM | CUSTOM
-  controlAccountsJson     String   @default("{}")               // JSON map of default GL control accounts
-  documentSequencesJson   String   @default("{}")               // JSON map of JV-/RV-/PV-/INV-/BILL-/TRN- prefixes & counters
+  negativeStockPolicy     String   @default("BLOCK") // BLOCK | WARN
+  printLayout             String   @default("A4") // A4 | 80MM | CUSTOM
+  controlAccountsJson     String   @default("{}") // JSON map of default GL control accounts
+  documentSequencesJson   String   @default("{}") // JSON map of JV-/RV-/PV-/INV-/BILL-/TRN- prefixes & counters
   updatedAt               DateTime @updatedAt
 }
 
@@ -203,77 +225,82 @@ model ExchangeRate {
 }
 
 model Project {
-  id                  String                    @id @default(cuid())
-  code                String                    @unique
-  name                String                    // Kept for compatibility with operational tabs
+  id                  String    @id @default(cuid())
+  code                String    @unique
+  name                String // Kept for compatibility with operational tabs
   nameAr              String
   nameEn              String
-  type                String                    @default("مشروع رئيسي") // مشروع رئيسي | مشروع فرعي
+  type                String    @default("مشروع رئيسي") // مشروع رئيسي | مشروع فرعي
   parentProjectId     String?
-  parentProject       Project?                  @relation("ProjectHierarchy", fields: [parentProjectId], references: [id], onDelete: SetNull)
-  childProjects       Project[]                 @relation("ProjectHierarchy")
+  parentProject       Project?  @relation("ProjectHierarchy", fields: [parentProjectId], references: [id], onDelete: SetNull)
+  childProjects       Project[] @relation("ProjectHierarchy")
   vendorId            String?
-  ownerVendor         Vendor?                   @relation("ProjectOwnerVendor", fields: [vendorId], references: [id], onDelete: SetNull)
-  budgetTotal         Decimal                   @default(0)
-  estimatedValue      Float                     @default(0)
-  plannedHarvestCount Int                       @default(1)
-  status              String                    @default("ACTIVE")
+  ownerVendor         Vendor?   @relation("ProjectOwnerVendor", fields: [vendorId], references: [id], onDelete: SetNull)
+  budgetTotal         Decimal   @default(0)
+  estimatedValue      Float     @default(0)
+  plannedHarvestCount Int       @default(1)
+  status              String    @default("ACTIVE")
   startDate           DateTime?
   endDate             DateTime?
-  notes               String                    @default("")
+  notes               String    @default("")
 
-  subProjects         SubProject[]
-  harvestCycles       HarvestCycle[]
-  acquisitions        ProjectAcquisitionCycle[]
-  journalEntries      JournalEntry[]
-  journalLines        JournalEntryLine[]
-  purchaseOrders      PurchaseOrder[]
-  vendorBills         VendorBill[]
-  paymentVouchers     PaymentVoucher[]
-  salesInvoices       SalesInvoice[]
-  inventoryLots       InventoryLot[]
-  expenses            OperatingExpense[]
-  workerWages         WorkerWageEntry[]
-  sales               SaleTransaction[]
-  inventoryBatches    HarvestInventoryBatch[]
-  adjustments         AdjustmentEntry[]
+  subProjects      SubProject[]
+  harvestCycles    HarvestCycle[]
+  acquisitions     ProjectAcquisitionCycle[]
+  journalEntries   JournalEntry[]
+  journalLines     JournalEntryLine[]
+  purchaseOrders   PurchaseOrder[]
+  vendorBills      VendorBill[]
+  paymentVouchers  PaymentVoucher[]
+  salesInvoices    SalesInvoice[]
+  inventoryLots    InventoryLot[]
+  expenses         OperatingExpense[]
+  workerWages      WorkerWageEntry[]
+  sales            SaleTransaction[]
+  inventoryBatches HarvestInventoryBatch[]
+  adjustments      AdjustmentEntry[]
 
-  createdAt           DateTime                  @default(now())
-  updatedAt           DateTime                  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  glAccountId  String?
+  glAccount    Account?    @relation("ProjectGlAccount", fields: [glAccountId], references: [id], onDelete: SetNull)
+  costCenterId String?
+  costCenter   CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
 }
 
 model ProjectAcquisitionCycle {
-  id              String           @id @default(cuid())
-  projectId       String
-  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  cycleTitle      String
-  startDate       DateTime
-  endDate         DateTime
-  contractAmount  Decimal          @default(0)
-  currency        String           @default("YER")
-  status          String           @default("ACTIVE") // DRAFT | ACTIVE | PARTIALLY_PAID | PAID | COMPLETED | VOIDED
-  notes           String?
+  id             String   @id @default(cuid())
+  projectId      String
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  cycleTitle     String
+  startDate      DateTime
+  endDate        DateTime
+  contractAmount Decimal  @default(0)
+  currency       String   @default("YER")
+  status         String   @default("ACTIVE") // DRAFT | ACTIVE | PARTIALLY_PAID | PAID | COMPLETED | VOIDED
+  notes          String?
 
   purchaseOrders  PurchaseOrder[]
   vendorBills     VendorBill[]
   paymentVouchers PaymentVoucher[]
 
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model SubProject {
-  id               String                  @id @default(cuid())
-  projectId        String
-  project          Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  code             String
-  nameAr           String
-  nameEn           String
-  budget           Decimal                 @default(0)
-  status           String                  @default("ACTIVE") // ACTIVE | PAUSED | COMPLETED
-  notes            String                  @default("")
-  vendorId         String?
-  vendor           Vendor?                 @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  code      String
+  nameAr    String
+  nameEn    String
+  budget    Decimal @default(0)
+  status    String  @default("ACTIVE") // ACTIVE | PAUSED | COMPLETED
+  notes     String  @default("")
+  vendorId  String?
+  vendor    Vendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
 
   journalEntries   JournalEntry[]
   journalLines     JournalEntryLine[]
@@ -287,24 +314,24 @@ model SubProject {
   workerWages      WorkerWageEntry[]
   inventoryBatches HarvestInventoryBatch[]
 
-  createdAt        DateTime                @default(now())
-  updatedAt        DateTime                @default(now()) @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@unique([projectId, code])
 }
 
 model HarvestCycle {
-  id               String                  @id @default(cuid())
-  projectId        String
-  project          Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  cycleNumber      Int                     @default(1)
-  name             String
-  sortOrder        Int                     @default(0)
-  isLocked         Boolean                 @default(false)
-  lockedByUserId   String?
-  lockedById       String?
-  lockedAt         DateTime?
-  createdAt        DateTime                @default(now())
+  id             String    @id @default(cuid())
+  projectId      String
+  project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  cycleNumber    Int       @default(1)
+  name           String
+  sortOrder      Int       @default(0)
+  isLocked       Boolean   @default(false)
+  lockedByUserId String?
+  lockedById     String?
+  lockedAt       DateTime?
+  createdAt      DateTime  @default(now())
 
   inventoryLots    InventoryLot[]
   journalLines     JournalEntryLine[]
@@ -323,8 +350,8 @@ model HarvestCycle {
 // ---------------------------------------------------------
 
 model Vendor {
-  id              String           @id @default(cuid())
-  code            String           @unique
+  id              String  @id @default(cuid())
+  code            String  @unique
   nameAr          String
   nameEn          String?
   phone           String
@@ -332,17 +359,22 @@ model Vendor {
   taxRegistration String?
   address         String?
 
-  accountId       String           @unique // Linked Tier 5 Payables Account (2111xx)
-  account         Account          @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  accountId String  @unique // Linked Tier 5 Payables Account (2111xx)
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
 
-  ownedProjects   Project[]        @relation("ProjectOwnerVendor")
-  subProjects     SubProject[]
-  purchaseOrders  PurchaseOrder[]
-  bills           VendorBill[]
-  payments        PaymentVoucher[]
+  ownedProjects  Project[]        @relation("ProjectOwnerVendor")
+  subProjects    SubProject[]
+  purchaseOrders PurchaseOrder[]
+  bills          VendorBill[]
+  payments       PaymentVoucher[]
 
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  glAccountId  String?
+  glAccount    Account?    @relation("VendorGlAccount", fields: [glAccountId], references: [id], onDelete: SetNull)
+  costCenterId String?
+  costCenter   CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
 }
 
 model PurchaseOrder {
@@ -357,20 +389,20 @@ model PurchaseOrder {
   acquisitionCycleId String?
   acquisitionCycle   ProjectAcquisitionCycle? @relation(fields: [acquisitionCycleId], references: [id], onDelete: SetNull)
 
-  date               DateTime                 @default(now())
-  status        String              @default("DRAFT") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | PAID | VOIDED
-  subTotal      Decimal             @default(0)
-  taxTotal      Decimal             @default(0)
-  grandTotal    Decimal             @default(0)
-  currency      String              @default("YER")
-  notes         String?
+  date       DateTime @default(now())
+  status     String   @default("DRAFT") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | PAID | VOIDED
+  subTotal   Decimal  @default(0)
+  taxTotal   Decimal  @default(0)
+  grandTotal Decimal  @default(0)
+  currency   String   @default("YER")
+  notes      String?
 
   items         PurchaseOrderItem[]
   bills         VendorBill[]
   goodsReceipts GoodsReceipt[]
 
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model PurchaseOrderItem {
@@ -392,7 +424,7 @@ model GoodsReceipt {
   receivedDate    DateTime      @default(now())
   receivedTotal   Decimal       @default(0)
   hasVariance     Boolean       @default(false)
-  itemsSummary    String?       // JSON summary of received quantities vs ordered
+  itemsSummary    String? // JSON summary of received quantities vs ordered
   warehouseNotes  String?
   createdAt       DateTime      @default(now())
 }
@@ -411,36 +443,41 @@ model VendorBill {
   acquisitionCycleId String?
   acquisitionCycle   ProjectAcquisitionCycle? @relation(fields: [acquisitionCycleId], references: [id], onDelete: SetNull)
 
-  date               DateTime
-  dueDate         DateTime?
-  status          String           @default("APPROVED") // DRAFT | APPROVED | POSTED | PARTIALLY_PAID | PAID | VOIDED
-  totalAmount     Decimal
-  paidAmount      Decimal          @default(0)
-  balanceDue      Decimal
-  currency        String           @default("YER")
-  currencyCode    String           @default("YER")
-  exchangeRate    Float            @default(1.0)
-  foreignAmount   Float            @default(0)
-  baseAmount      Float            @default(0)
-  isInventory     Boolean          @default(false)
-  debitAccountId  String?
-  journalEntryId  String?
-  notes           String?
+  date           DateTime
+  dueDate        DateTime?
+  status         String    @default("APPROVED") // DRAFT | APPROVED | POSTED | PARTIALLY_PAID | PAID | VOIDED
+  totalAmount    Decimal
+  paidAmount     Decimal   @default(0)
+  balanceDue     Decimal
+  currency       String    @default("YER")
+  currencyCode   String    @default("YER")
+  exchangeRate   Float     @default(1.0)
+  foreignAmount  Float     @default(0)
+  baseAmount     Float     @default(0)
+  isInventory    Boolean   @default(false)
+  debitAccountId String?
+  journalEntryId String?
+  notes          String?
 
   paymentVouchers PaymentVoucher[]
   createdAt       DateTime         @default(now())
+
+  costCenterId   String?
+  costCenter     CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
+  documentStatus String      @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | AMENDMENT_PENDING | REJECTED | VOIDED
+  revisionNumber Int         @default(1)
 }
 
 model PaymentVoucher {
-  id                 String                   @id @default(cuid())
-  voucherNumber      String                   @unique // e.g. "PV-2026-0034"
-  date               DateTime                 @default(now())
-  vendorId           String
-  vendor             Vendor                   @relation(fields: [vendorId], references: [id], onDelete: Restrict)
-  billId             String?
-  bill               VendorBill?              @relation(fields: [billId], references: [id], onDelete: SetNull)
-  treasuryId         String
-  treasury           TreasuryAccount          @relation(fields: [treasuryId], references: [id], onDelete: Restrict)
+  id            String          @id @default(cuid())
+  voucherNumber String          @unique // e.g. "PV-2026-0034"
+  date          DateTime        @default(now())
+  vendorId      String
+  vendor        Vendor          @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  billId        String?
+  bill          VendorBill?     @relation(fields: [billId], references: [id], onDelete: SetNull)
+  treasuryId    String
+  treasury      TreasuryAccount @relation(fields: [treasuryId], references: [id], onDelete: Restrict)
 
   amount             Decimal
   transferFee        Decimal                  @default(0)
@@ -460,7 +497,12 @@ model PaymentVoucher {
   journalEntryId     String?
   qrVerificationHash String?
 
-  createdAt          DateTime                 @default(now())
+  createdAt DateTime @default(now())
+
+  costCenterId   String?
+  costCenter     CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
+  documentStatus String      @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | AMENDMENT_PENDING | REJECTED | VOIDED
+  revisionNumber Int         @default(1)
 }
 
 // ---------------------------------------------------------
@@ -468,37 +510,42 @@ model PaymentVoucher {
 // ---------------------------------------------------------
 
 model Customer {
-  id          String            @id @default(cuid())
-  code        String            @unique
-  name        String            @unique
+  id          String  @id @default(cuid())
+  code        String  @unique
+  name        String  @unique
   nameAr      String
   nameEn      String?
-  phone       String            @default("")
+  phone       String  @default("")
   address     String?
-  creditLimit Decimal           @default(0)
+  creditLimit Decimal @default(0)
 
-  accountId   String            @unique // Linked Tier 5 Receivables Account (1121xx)
-  account     Account           @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  accountId String  @unique // Linked Tier 5 Receivables Account (1121xx)
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
 
-  invoices    SalesInvoice[]
-  receipts    ReceiptVoucher[]
-  sales       SaleTransaction[]
-  createdAt   DateTime          @default(now())
+  invoices  SalesInvoice[]
+  receipts  ReceiptVoucher[]
+  sales     SaleTransaction[]
+  createdAt DateTime          @default(now())
+
+  glAccountId  String?
+  glAccount    Account?    @relation("CustomerGlAccount", fields: [glAccountId], references: [id], onDelete: SetNull)
+  costCenterId String?
+  costCenter   CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
 }
 
 model SalesInvoice {
-  id                 String           @id @default(cuid())
-  invoiceNumber      String           @unique
-  customerId         String
-  customer           Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  projectId          String
-  project            Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
-  subProjectId       String?
-  subProject         SubProject?      @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
-  harvestCycleId     String?
-  harvestCycle       HarvestCycle?    @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
+  id             String        @id @default(cuid())
+  invoiceNumber  String        @unique
+  customerId     String
+  customer       Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  projectId      String
+  project        Project       @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  subProjectId   String?
+  subProject     SubProject?   @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
+  harvestCycleId String?
+  harvestCycle   HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
 
-  sequenceNumber     String?          // e.g. "SO-2026-0001"
+  sequenceNumber     String? // e.g. "SO-2026-0001"
   dailyBatchLabel    String?
   salesOfficerId     String?
   salesOfficerTitle  String?
@@ -506,47 +553,57 @@ model SalesInvoice {
   treasuryAccountId  String?
   treasuryAccount    TreasuryAccount? @relation(fields: [treasuryAccountId], references: [id], onDelete: SetNull)
 
-  date               DateTime         @default(now())
+  date               DateTime @default(now())
   totalAmount        Decimal
-  paidAmount         Decimal          @default(0)
+  paidAmount         Decimal  @default(0)
   balanceDue         Decimal
-  status             String           @default("POSTED") // DRAFT | POSTED | PARTIALLY_PAID | PAID | VOIDED
-  currency           String           @default("YER")
-  currencyCode       String           @default("YER")
-  exchangeRate       Float            @default(1.0)
-  foreignAmount      Float            @default(0)
-  baseAmount         Float            @default(0)
+  status             String   @default("POSTED") // DRAFT | POSTED | PARTIALLY_PAID | PAID | VOIDED
+  currency           String   @default("YER")
+  currencyCode       String   @default("YER")
+  exchangeRate       Float    @default(1.0)
+  foreignAmount      Float    @default(0)
+  baseAmount         Float    @default(0)
   notes              String?
   journalEntryId     String?
   qrVerificationHash String?
 
-  receipts           ReceiptVoucher[]
-  createdAt          DateTime         @default(now())
+  receipts  ReceiptVoucher[]
+  createdAt DateTime         @default(now())
+
+  costCenterId   String?
+  costCenter     CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
+  documentStatus String      @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | AMENDMENT_PENDING | REJECTED | VOIDED
+  revisionNumber Int         @default(1)
 }
 
 model ReceiptVoucher {
-  id                 String          @id @default(cuid())
-  voucherNumber      String          @unique
-  date               DateTime        @default(now())
-  customerId         String
-  customer           Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  invoiceId          String?
-  invoice            SalesInvoice?   @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  treasuryId         String
-  treasury           TreasuryAccount @relation(fields: [treasuryId], references: [id], onDelete: Restrict)
-  subProjectId       String?
-  subProject         SubProject?     @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
+  id            String          @id @default(cuid())
+  voucherNumber String          @unique
+  date          DateTime        @default(now())
+  customerId    String
+  customer      Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  invoiceId     String?
+  invoice       SalesInvoice?   @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  treasuryId    String
+  treasury      TreasuryAccount @relation(fields: [treasuryId], references: [id], onDelete: Restrict)
+  subProjectId  String?
+  subProject    SubProject?     @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
 
   amount             Decimal
-  currency           String          @default("YER")
-  currencyCode       String          @default("YER")
-  exchangeRate       Float           @default(1.0)
-  foreignAmount      Float           @default(0)
-  baseAmount         Float           @default(0)
+  currency           String   @default("YER")
+  currencyCode       String   @default("YER")
+  exchangeRate       Float    @default(1.0)
+  foreignAmount      Float    @default(0)
+  baseAmount         Float    @default(0)
   notes              String?
   journalEntryId     String?
   qrVerificationHash String?
-  createdAt          DateTime        @default(now())
+  createdAt          DateTime @default(now())
+
+  costCenterId   String?
+  costCenter     CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
+  documentStatus String      @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | AMENDMENT_PENDING | REJECTED | VOIDED
+  revisionNumber Int         @default(1)
 }
 
 // ---------------------------------------------------------
@@ -560,7 +617,7 @@ model InventoryLot {
   project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   harvestCycleId  String?
   harvestCycle    HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
-  grade           String        // "صنف 1", "صنف 2", "روس", "بزغة"
+  grade           String // "صنف 1", "صنف 2", "روس", "بزغة"
   initialQuantity Decimal
   currentQuantity Decimal
   shrinkageCount  Decimal       @default(0)
@@ -589,37 +646,37 @@ model HarvestInventoryBatch {
 // ---------------------------------------------------------
 
 model TreasuryAccount {
-  id                 String               @id @default(cuid())
-  code               String               @unique
+  id                 String   @id @default(cuid())
+  code               String   @unique
   name               String
   nameAr             String
   nameEn             String
-  type               String               @default("VAULT") // VAULT | BANK | WALLET
-  providerNameAr     String               @default("")
-  providerNameEn     String               @default("")
-  accountHolderName  String               @default("")
+  type               String   @default("VAULT") // VAULT | BANK | WALLET
+  providerNameAr     String   @default("")
+  providerNameEn     String   @default("")
+  accountHolderName  String   @default("")
   accountNumber      String
-  ibanOrSwift        String               @default("")
-  branchOrAgent      String               @default("")
-  transferFeePercent Float                @default(0)
-  dailyLimit         Decimal              @default(0)
-  isDefaultReceipts  Boolean              @default(false)
-  isDefaultPayments  Boolean              @default(false)
-  isActive           Boolean              @default(true)
-  notes              String               @default("")
-  accountId          String               @unique
-  account            Account              @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  balance            Decimal              @default(0)
-  balanceYER         Float                @default(0)
-  currency           String               @default("YER")
-  currencyCode       String               @default("YER")
-  updatedAt          DateTime             @updatedAt
+  ibanOrSwift        String   @default("")
+  branchOrAgent      String   @default("")
+  transferFeePercent Float    @default(0)
+  dailyLimit         Decimal  @default(0)
+  isDefaultReceipts  Boolean  @default(false)
+  isDefaultPayments  Boolean  @default(false)
+  isActive           Boolean  @default(true)
+  notes              String   @default("")
+  accountId          String   @unique
+  account            Account  @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  balance            Decimal  @default(0)
+  balanceYER         Float    @default(0)
+  currency           String   @default("YER")
+  currencyCode       String   @default("YER")
+  updatedAt          DateTime @updatedAt
 
-  paymentVouchers    PaymentVoucher[]
-  receiptVouchers    ReceiptVoucher[]
-  installments       InstallmentVoucher[]
-  salesInvoices      SalesInvoice[]
-  salesTransactions  SaleTransaction[]
+  paymentVouchers   PaymentVoucher[]
+  receiptVouchers   ReceiptVoucher[]
+  installments      InstallmentVoucher[]
+  salesInvoices     SalesInvoice[]
+  salesTransactions SaleTransaction[]
 }
 
 model OperatingExpense {
@@ -631,7 +688,7 @@ model OperatingExpense {
   harvestCycleId String?
   harvestCycle   HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
   harvestName    String
-  category       String        // وقود/محروقات | وجبات غذائية | مواد غذائية | أجور نقل | أخرى
+  category       String // وقود/محروقات | وجبات غذائية | مواد غذائية | أجور نقل | أخرى
   subType        String
   quantity       Float         @default(1)
   unitPrice      Float         @default(0)
@@ -651,6 +708,11 @@ model Worker {
   account          Account?          @relation(fields: [accountId], references: [id], onDelete: SetNull)
   createdAt        DateTime          @default(now())
   wageEntries      WorkerWageEntry[]
+
+  glAccountId  String?
+  glAccount    Account?    @relation("WorkerGlAccount", fields: [glAccountId], references: [id], onDelete: SetNull)
+  costCenterId String?
+  costCenter   CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
 }
 
 model WorkerWageEntry {
@@ -678,45 +740,45 @@ model WorkerWageEntry {
 }
 
 model SaleTransaction {
-  id                 String               @id @default(cuid())
-  sequenceNumber     String?              // e.g. "SO-2026-0001"
-  dailyBatchLabel    String?              // e.g. "عملية بيع #5" / "دفعة صباحية"
+  id                 String           @id @default(cuid())
+  sequenceNumber     String? // e.g. "SO-2026-0001"
+  dailyBatchLabel    String? // e.g. "عملية بيع #5" / "دفعة صباحية"
   salesOfficerId     String?
   salesOfficerTitle  String?
-  revenueAccountCode String               @default("411101")
+  revenueAccountCode String           @default("411101")
   treasuryAccountId  String?
-  treasuryAccount    TreasuryAccount?     @relation(fields: [treasuryAccountId], references: [id], onDelete: SetNull)
+  treasuryAccount    TreasuryAccount? @relation(fields: [treasuryAccountId], references: [id], onDelete: SetNull)
 
-  projectId          String
-  project            Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  subProjectId       String?
-  subProject         SubProject?          @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
-  harvestCycleId     String?
-  harvestCycle       HarvestCycle?        @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
-  harvestName        String
-  saleBatchLabel     String
-  customerId         String
-  customer           Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  customerName       String
-  customerPhone      String
-  productGrade       String
-  bundlesCount       Int
-  unitPrice          Float
-  totalAmount        Float
-  creditPaid         Float                @default(0)
-  debitReceivable    Float
-  saleDate           String
-  receiptVoucherNo   String
-  notes              String               @default("")
-  journalEntryId     String?
-  createdAt          DateTime             @default(now())
-  installments       InstallmentVoucher[]
+  projectId        String
+  project          Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  subProjectId     String?
+  subProject       SubProject?          @relation(fields: [subProjectId], references: [id], onDelete: SetNull)
+  harvestCycleId   String?
+  harvestCycle     HarvestCycle?        @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
+  harvestName      String
+  saleBatchLabel   String
+  customerId       String
+  customer         Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  customerName     String
+  customerPhone    String
+  productGrade     String
+  bundlesCount     Int
+  unitPrice        Float
+  totalAmount      Float
+  creditPaid       Float                @default(0)
+  debitReceivable  Float
+  saleDate         String
+  receiptVoucherNo String
+  notes            String               @default("")
+  journalEntryId   String?
+  createdAt        DateTime             @default(now())
+  installments     InstallmentVoucher[]
 }
 
 model InstallmentVoucher {
   id                 String           @id @default(cuid())
   voucherNo          String           @unique
-  type               String           // CUSTOMER_RECEIPT | WORKER_PAYOUT
+  type               String // CUSTOMER_RECEIPT | WORKER_PAYOUT
   saleTransactionId  String?
   saleTransaction    SaleTransaction? @relation(fields: [saleTransactionId], references: [id], onDelete: SetNull)
   workerWageEntryId  String?
@@ -744,46 +806,46 @@ enum Role {
 }
 
 model User {
-  id                    String         @id @default(cuid())
-  username              String         @unique
+  id                    String    @id @default(cuid())
+  username              String    @unique
   name                  String
   fullName              String
-  displayName           String?        // Optional personal display name (defaults to empty so system displays title-only role)
-  phone                 String?        // Optional personal mobile phone
-  email                 String         @unique
+  displayName           String? // Optional personal display name (defaults to empty so system displays title-only role)
+  phone                 String? // Optional personal mobile phone
+  email                 String    @unique
   passwordHash          String
-  role                  Role           @default(FIELD_ACCOUNTANT)
-  department            String         @default("المالية والعمليات")
-  active                Boolean        @default(true)
-  isActive              Boolean        @default(true)
-  archivedAt            DateTime?      // Soft-archive timestamp when user has linked accounting/audit records
-  avatarChar            String         @default("م")
-  avatarUrl             String?        // Profile photo URL
-  avatarColor           String         @default("#059669")
-  preferredLang         String         @default("ar")
-  preferredCurrency     String         @default("YER")
-  preferredTheme        String         @default("emerald")
-  defaultModule         String?        // Default home module tab id
+  role                  Role      @default(FIELD_ACCOUNTANT)
+  department            String    @default("المالية والعمليات")
+  active                Boolean   @default(true)
+  isActive              Boolean   @default(true)
+  archivedAt            DateTime? // Soft-archive timestamp when user has linked accounting/audit records
+  avatarChar            String    @default("م")
+  avatarUrl             String? // Profile photo URL
+  avatarColor           String    @default("#059669")
+  preferredLang         String    @default("ar")
+  preferredCurrency     String    @default("YER")
+  preferredTheme        String    @default("emerald")
+  defaultModule         String? // Default home module tab id
   lastLoginAt           DateTime?
-  useCustomPermissions  Boolean        @default(false)
-  customAllowedGroups   String         @default("[]") // JSON array of allowed ErpGroupId strings
-  customPermissionsJson String         @default("{}") // JSON object of granular overrides
-  mustChangePassword    Boolean        @default(false)
+  useCustomPermissions  Boolean   @default(false)
+  customAllowedGroups   String    @default("[]") // JSON array of allowed ErpGroupId strings
+  customPermissionsJson String    @default("{}") // JSON object of granular overrides
+  mustChangePassword    Boolean   @default(false)
   passwordUpdatedAt     DateTime?
-  assignedProjects      String         @default("[]") // JSON array of project IDs for row-level access
-  createdAt             DateTime       @default(now())
-  updatedAt             DateTime       @updatedAt
+  assignedProjects      String    @default("[]") // JSON array of project IDs for row-level access
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-  journalEntries        JournalEntry[]
-  auditLogs             AuditLog[]
+  journalEntries JournalEntry[]
+  auditLogs      AuditLog[]
 }
 
 model AuditLog {
   id        String   @id @default(cuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Restrict)
-  action    String   // CREATE, UPDATE, POST, VOID, LOCK
-  entity    String   // "JournalEntry", "VendorBill", "HarvestCycle"
+  action    String // CREATE, UPDATE, POST, VOID, LOCK
+  entity    String // "JournalEntry", "VendorBill", "HarvestCycle"
   entityId  String
   details   Json
   ipAddress String?
@@ -818,16 +880,16 @@ model AdjustmentEntry {
 }
 
 model LicenseState {
-  id               String    @id @default("active")
-  licenseId        String?   @map("license_id")
-  customerName     String?   @map("customer_name")
-  hwidHash         String?   @map("hwid_hash")
-  lastVerifiedUtc  DateTime  @default(now()) @map("last_verified_utc")
-  status           String    @default("UNLICENSED") // UNLICENSED | ACTIVE | EXPIRED | HWID_MISMATCH | CLOCK_TAMPER
-  seatRegistryJson String    @default("[]") @map("seat_registry_json")
-  licenseDataJson  String?   @map("license_data_json")
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id               String   @id @default("active")
+  licenseId        String?  @map("license_id")
+  customerName     String?  @map("customer_name")
+  hwidHash         String?  @map("hwid_hash")
+  lastVerifiedUtc  DateTime @default(now()) @map("last_verified_utc")
+  status           String   @default("UNLICENSED") // UNLICENSED | ACTIVE | EXPIRED | HWID_MISMATCH | CLOCK_TAMPER
+  seatRegistryJson String   @default("[]") @map("seat_registry_json")
+  licenseDataJson  String?  @map("license_data_json")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 // Company-locked multi-seat licensing: one row per (license, user, platform) device seat.
@@ -852,18 +914,18 @@ model LicenseDeviceBinding {
 // ---------------------------------------------------------
 
 model TreasuryTransaction {
-  id             String   @id @default(cuid())
-  treasuryId     String
-  direction      String   // IN | OUT | TRANSFER
-  currencyCode   String   @default("YER")
-  exchangeRate   Float    @default(1.0)
-  foreignAmount  Float    @default(0)
-  baseAmount     Float    @default(0)
-  referenceType  String?  // RECEIPT | PAYMENT | TRANSFER | FX_REVALUATION
-  referenceId    String?
-  notes          String?
-  date           DateTime @default(now())
-  createdAt      DateTime @default(now())
+  id            String   @id @default(cuid())
+  treasuryId    String
+  direction     String // IN | OUT | TRANSFER
+  currencyCode  String   @default("YER")
+  exchangeRate  Float    @default(1.0)
+  foreignAmount Float    @default(0)
+  baseAmount    Float    @default(0)
+  referenceType String? // RECEIPT | PAYMENT | TRANSFER | FX_REVALUATION
+  referenceId   String?
+  notes         String?
+  date          DateTime @default(now())
+  createdAt     DateTime @default(now())
 
   @@index([treasuryId, date])
 }
@@ -907,6 +969,11 @@ model Warehouse {
   stockBalances StockBalance[]
   movements     StockMovement[]
   createdAt     DateTime        @default(now())
+
+  glAccountId  String?
+  glAccount    Account?    @relation("WarehouseGlAccount", fields: [glAccountId], references: [id], onDelete: SetNull)
+  costCenterId String?
+  costCenter   CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
 }
 
 model InventoryItem {
@@ -918,8 +985,8 @@ model InventoryItem {
   categoryId         String?
   category           ItemCategory?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   itemType           String               @default("STOCKABLE") // STOCKABLE | SERVICE | CONSUMABLE | or custom type
-  grade              String?              // Open string supporting custom grades
-  origin             String?              // Open string supporting custom origins
+  grade              String? // Open string supporting custom grades
+  origin             String? // Open string supporting custom origins
   baseUnitId         String
   baseUnit           UnitOfMeasure        @relation("ItemBaseUnit", fields: [baseUnitId], references: [id], onDelete: Restrict)
   defaultWarehouseId String?
@@ -948,7 +1015,7 @@ model ItemUnitConversion {
   unitId                String
   unit                  UnitOfMeasure @relation(fields: [unitId], references: [id], onDelete: Restrict)
   customUnitLabel       String?
-  factorToBase          Float         // Must be > 0, e.g. 1 bundle = 10 pieces, 1 carton = 240 pieces
+  factorToBase          Float // Must be > 0, e.g. 1 bundle = 10 pieces, 1 carton = 240 pieces
   barcode               String?
   purchasePrice         Float?
   sellPrice             Float?
@@ -977,17 +1044,146 @@ model StockMovement {
   item          InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
   warehouseId   String
   warehouse     Warehouse     @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
-  movementType  String        // PURCHASE_IN | SALE_OUT | ADJUSTMENT_IN | ADJUSTMENT_OUT | TRANSFER_IN | TRANSFER_OUT | OPENING
+  movementType  String // PURCHASE_IN | SALE_OUT | ADJUSTMENT_IN | ADJUSTMENT_OUT | TRANSFER_IN | TRANSFER_OUT | OPENING
   enteredQty    Float
   enteredUnitId String
   enteredUnit   UnitOfMeasure @relation(fields: [enteredUnitId], references: [id], onDelete: Restrict)
   factorToBase  Float         @default(1)
-  baseQtyDelta  Float         // Positive for IN, negative for OUT
+  baseQtyDelta  Float // Positive for IN, negative for OUT
   unitCostBase  Float         @default(0)
-  referenceType String?       // INVOICE | BILL | ADJUSTMENT | TRANSFER
+  referenceType String? // INVOICE | BILL | ADJUSTMENT | TRANSFER
   referenceId   String?
   notes         String?
   createdAt     DateTime      @default(now())
 
+  costCenterId   String?
+  costCenter     CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
+  documentStatus String      @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | AMENDMENT_PENDING | REJECTED | VOIDED
+  revisionNumber Int         @default(1)
+
   @@index([itemId, warehouseId, createdAt])
+}
+
+model CostCenter {
+  id          String       @id @default(cuid())
+  code        String       @unique
+  nameAr      String
+  nameEn      String
+  parentId    String?
+  parent      CostCenter?  @relation("CostCenterHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children    CostCenter[] @relation("CostCenterHierarchy")
+  generation  Int          @default(1)
+  centerType  String       @default("OTHER") // BRANCH | PROJECT | FARM | DEPARTMENT | FLEET | OTHER
+  customLabel String?
+  isCustom    Boolean      @default(false)
+  isActive    Boolean      @default(true)
+
+  accountsDefault Account[]          @relation("AccountDefaultCostCenter")
+  customers       Customer[]
+  vendors         Vendor[]
+  workers         Worker[]
+  warehouses      Warehouse[]
+  projects        Project[]
+  journalLines    JournalEntryLine[]
+  salesInvoices   SalesInvoice[]
+  vendorBills     VendorBill[]
+  receipts        ReceiptVoucher[]
+  payments        PaymentVoucher[]
+  stockMovements  StockMovement[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FiscalYear {
+  id                        String         @id @default(cuid())
+  code                      String         @unique // e.g., "FY-2026", "FY-2027"
+  nameAr                    String
+  nameEn                    String
+  startDate                 DateTime
+  endDate                   DateTime
+  status                    String         @default("OPEN") // OPEN | CLOSING_IN_PROGRESS | CLOSED
+  closingJournalEntryId     String?
+  openingJournalEntryId     String?
+  retainedEarningsAccountId String?
+  netProfitLossBase         Decimal?
+  closedById                String?
+  closedByName              String?
+  closedAt                  DateTime?
+  journalEntries            JournalEntry[]
+  createdAt                 DateTime       @default(now())
+  updatedAt                 DateTime       @updatedAt
+}
+
+model WorkspaceDraft {
+  id                String   @id @default(cuid())
+  draftNumber       String   @unique // e.g., "DRF-2026-0001"
+  module            String // ACCOUNTING | SALES | PROCUREMENT | TREASURY | INVENTORY | PROJECTS | WORKERS | SYSTEM
+  formType          String // JOURNAL_VOUCHER | SALES_INVOICE | PURCHASE_BILL | RECEIPT_VOUCHER | PAYMENT_VOUCHER | STOCK_MOVEMENT | ITEM_MASTER | VENDOR | CUSTOMER | PROJECT | WORKER_WAGE
+  entityId          String? // Optional target record ID when drafting an amendment
+  titleAr           String
+  titleEn           String   @default("")
+  payloadJson       String // Full serialized form + subform line items + cost center + currency
+  totalAmount       Float?
+  currencyCode      String   @default("YER")
+  visibility        String   @default("SHARED_WORKSPACE") // SHARED_WORKSPACE | PRIVATE
+  status            String   @default("ACTIVE_DRAFT") // ACTIVE_DRAFT | SUBMITTED_FOR_APPROVAL | CONVERTED | DISCARDED
+  convertedEntityId String?
+  createdById       String
+  createdByName     String
+  updatedById       String?
+  updatedByName     String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([module, status])
+  @@index([createdById, visibility])
+}
+
+model ApprovalRule {
+  id                  String            @id @default(cuid())
+  module              String // ACCOUNTING | SALES | PROCUREMENT | TREASURY | INVENTORY | PROJECTS | WORKERS | FISCAL_YEAR
+  actionType          String // CREATE_AND_POST | GL_POSTING | AMEND_POSTED_RECORD | VOID_RECORD | HIGH_VALUE_TRANSACTION | FISCAL_YEAR_CLOSE
+  minAmountBase       Float             @default(0)
+  currencyCode        String            @default("YER")
+  requiredRole        String            @default("CHIEF_ACCOUNTANT")
+  approverUserIdsJson String            @default("[]")
+  allowSelfApproval   Boolean           @default(false)
+  isActive            Boolean           @default(true)
+  requests            ApprovalRequest[]
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  @@index([module, actionType, isActive])
+}
+
+model ApprovalRequest {
+  id                 String        @id @default(cuid())
+  requestNumber      String        @unique // e.g., "APR-2026-0001"
+  ruleId             String?
+  rule               ApprovalRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  module             String
+  actionType         String // CREATE_AND_POST | GL_POSTING | AMEND_POSTED_RECORD | VOID_RECORD | HIGH_VALUE_TRANSACTION | FISCAL_YEAR_CLOSE
+  targetType         String // JournalEntry | SalesInvoice | VendorBill | ReceiptVoucher | PaymentVoucher | StockMovement | FiscalYear
+  targetId           String
+  documentNumber     String
+  summaryAr          String
+  summaryEn          String        @default("")
+  amountBase         Float         @default(0)
+  currencyCode       String        @default("YER")
+  beforeSnapshotJson String?
+  afterSnapshotJson  String
+  reasonAr           String?
+  status             String        @default("PENDING") // PENDING | APPROVED | REJECTED | RETURNED_FOR_EDIT
+  requestedById      String
+  requestedByName    String
+  reviewedById       String?
+  reviewedByName     String?
+  reviewNotes        String?
+  reviewedAt         DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  @@index([status, module])
+  @@index([targetType, targetId])
 }

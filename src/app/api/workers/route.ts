@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
         name,
         defaultDailyWage: dailyWage,
         phone: body.phone ? String(body.phone).trim() : "",
+        costCenterId: body.costCenterId ? String(body.costCenterId).trim() : undefined,
       });
 
       const entry = await tx.workerWageEntry.create({
@@ -88,6 +89,7 @@ export async function POST(req: NextRequest) {
           expenseAccountId,
           expenseAccountCode,
           customAccount,
+          costCenterId: body.costCenterId ? String(body.costCenterId).trim() : worker.costCenterId ?? undefined,
           createdById: actor.userId ?? undefined,
         });
         if (je) {

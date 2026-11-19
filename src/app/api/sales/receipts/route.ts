@@ -65,6 +65,7 @@ export async function POST(req: NextRequest) {
       currency,
       date: body.date ? String(body.date) : new Date(),
       notes,
+      costCenterId: body.costCenterId ? String(body.costCenterId) : null,
       createdById: actor.userId ?? undefined,
     });
     return NextResponse.json(result, { status: 201 });

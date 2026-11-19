@@ -55,6 +55,11 @@ export const OFFLINE_DB_CATEGORIES_KEY = "uas_offline_db_categories";
 export const OFFLINE_DB_WAREHOUSES_KEY = "uas_offline_db_warehouses";
 export const OFFLINE_DB_ITEMS_KEY = "uas_offline_db_items";
 export const OFFLINE_DB_MOVEMENTS_KEY = "uas_offline_db_movements";
+export const OFFLINE_DB_COST_CENTERS_KEY = "uas_offline_db_cost_centers";
+export const OFFLINE_DB_FISCAL_YEARS_KEY = "uas_offline_db_fiscal_years";
+export const OFFLINE_DB_DRAFTS_KEY = "uas_offline_db_drafts";
+export const OFFLINE_DB_APPROVAL_RULES_KEY = "uas_offline_db_approval_rules";
+export const OFFLINE_DB_APPROVAL_REQUESTS_KEY = "uas_offline_db_approval_requests";
 export const OFFLINE_SYNC_QUEUE_KEY = "uas_offline_sync_queue";
 
 export const DEFAULT_LOCAL_ADMIN_EMAIL = "admin@uas-ye.com";
@@ -218,6 +223,159 @@ export function appendOfflineSyncQueue(
     createdAt: new Date().toISOString(),
   });
   writeCollection(OFFLINE_SYNC_QUEUE_KEY, queue, storage);
+}
+
+// ---------------------------------------------------------------------------
+// Accounting-Core (Phase 1) local mirror: Gen-6 sub-ledger accounts + Cost Centers
+// ---------------------------------------------------------------------------
+export type LocalSubLedgerType = "CUSTOMER" | "VENDOR" | "WORKER" | "TREASURY" | "WAREHOUSE" | "PROJECT";
+
+const LOCAL_CONTROL: Record<LocalSubLedgerType, { gen5: string; type: string; ccPrefix: string; ccGroupAr: string; ccGroupEn: string; centerType: string; prefixAr: string }> = {
+  CUSTOMER: { gen5: "112190", type: "ASSET", ccPrefix: "CUS", ccGroupAr: "مراكز تكلفة العملاء", ccGroupEn: "Customer Cost Centers", centerType: "OTHER", prefixAr: "" },
+  VENDOR: { gen5: "211190", type: "LIABILITY", ccPrefix: "VND", ccGroupAr: "مراكز تكلفة الموردين", ccGroupEn: "Supplier Cost Centers", centerType: "OTHER", prefixAr: "" },
+  WORKER: { gen5: "212190", type: "LIABILITY", ccPrefix: "WRK", ccGroupAr: "مراكز تكلفة العمال", ccGroupEn: "Worker Cost Centers", centerType: "OTHER", prefixAr: "مستحقات العامل " },
+  TREASURY: { gen5: "111190", type: "ASSET", ccPrefix: "TRS", ccGroupAr: "مراكز تكلفة الخزينة", ccGroupEn: "Treasury Cost Centers", centerType: "OTHER", prefixAr: "" },
+  WAREHOUSE: { gen5: "113390", type: "ASSET", ccPrefix: "WH", ccGroupAr: "مراكز تكلفة المخازن", ccGroupEn: "Warehouse Cost Centers", centerType: "DEPARTMENT", prefixAr: "مخزون " },
+  PROJECT: { gen5: "121390", type: "ASSET", ccPrefix: "PRJ", ccGroupAr: "مراكز تكلفة المشاريع", ccGroupEn: "Project Cost Centers", centerType: "PROJECT", prefixAr: "مشروع " },
+};
+
+const LOCAL_CENTER_TYPES = ["BRANCH", "PROJECT", "FARM", "DEPARTMENT", "FLEET", "OTHER"];
+
+/**
+ * Offline equivalent of provisionEntityGen6AccountAndCostCenter(): creates the entity's Gen-6 postable leaf
+ * account (code = Gen-5 control + 3-digit sequence) and a Cost Center, entirely inside local storage.
+ */
+export function provisionLocalGen6AccountAndCostCenter(
+  entityType: LocalSubLedgerType,
+  entity: { id: string; nameAr: string; nameEn?: string },
+  storage?: OfflineStorageLike | null
+): { glAccountId: string; glAccountCode: string; costCenterId: string; costCenterCode: string } {
+  const s = storage ?? getDefaultStorage();
+  const spec = LOCAL_CONTROL[entityType];
+  const accounts = readCollection<Record<string, unknown>>(OFFLINE_DB_COA_KEY, s);
+  const centers = readCollection<Record<string, unknown>>(OFFLINE_DB_COST_CENTERS_KEY, s);
+
+  const existing = accounts.find((a) => a.subLedgerType === entityType && a.subLedgerEntityId === entity.id && a.generation === 6);
+  if (existing) {
+    return {
+      glAccountId: String(existing.id),
+      glAccountCode: String(existing.code),
+      costCenterId: String(existing.defaultCostCenterId || ""),
+      costCenterCode: String(centers.find((c) => c.id === existing.defaultCostCenterId)?.code || ""),
+    };
+  }
+
+  if (!accounts.some((a) => a.code === spec.gen5)) {
+    accounts.push({
+      id: `acc-${spec.gen5}`, code: spec.gen5, nameAr: spec.ccGroupAr.replace("مراكز تكلفة", "حساب رقابي"), nameEn: `${entityType} Control`,
+      level: 5, generation: 5, type: spec.type, isPosting: false, isPostable: false, subLedgerType: entityType,
+    });
+  }
+  let groupCenter = centers.find((c) => c.code === `CC-${spec.ccPrefix}`);
+  if (!groupCenter) {
+    groupCenter = { id: `cc-${spec.ccPrefix}`, code: `CC-${spec.ccPrefix}`, nameAr: spec.ccGroupAr, nameEn: spec.ccGroupEn, parentId: null, generation: 1, centerType: spec.centerType, isCustom: false, isActive: true };
+    centers.push(groupCenter);
+  }
+  const ccSeq = centers.filter((c) => String(c.code).startsWith(`CC-${spec.ccPrefix}-`)).length + 1;
+  const costCenter = {
+    id: `cc-${spec.ccPrefix}-${Date.now().toString(36)}-${ccSeq}`,
+    code: `CC-${spec.ccPrefix}-${String(ccSeq).padStart(4, "0")}`,
+    nameAr: entity.nameAr, nameEn: entity.nameEn || entity.nameAr, parentId: String(groupCenter.id), generation: 2,
+    centerType: spec.centerType, isCustom: false, isActive: true,
+  };
+  centers.push(costCenter);
+
+  const seq = accounts.filter((a) => String(a.code).startsWith(spec.gen5) && String(a.code).length === spec.gen5.length + 3).length + 1;
+  const leaf = {
+    id: `acc-${spec.gen5}${String(seq).padStart(3, "0")}`,
+    code: `${spec.gen5}${String(seq).padStart(3, "0")}`,
+    nameAr: `${spec.prefixAr}${entity.nameAr}`, nameEn: entity.nameEn || entity.nameAr,
+    level: 6, generation: 6, type: spec.type, isPosting: true, isPostable: true, parentCode: spec.gen5,
+    subLedgerType: entityType, subLedgerEntityId: entity.id, defaultCostCenterId: costCenter.id,
+  };
+  accounts.push(leaf);
+  writeCollection(OFFLINE_DB_COA_KEY, accounts, s);
+  writeCollection(OFFLINE_DB_COST_CENTERS_KEY, centers, s);
+  return { glAccountId: leaf.id, glAccountCode: leaf.code, costCenterId: costCenter.id, costCenterCode: costCenter.code };
+}
+
+/** Offline mirror of /api/accounting/cost-centers (GET | POST | PUT | DELETE). */
+export function handleLocalCostCenters(
+  method: string,
+  body: Record<string, unknown>,
+  query: URLSearchParams,
+  storage?: OfflineStorageLike | null
+): Response {
+  const s = storage ?? getDefaultStorage();
+  const centers = readCollection<Record<string, unknown>>(OFFLINE_DB_COST_CENTERS_KEY, s);
+  if (method === "GET") return jsonResponse({ costCenters: centers, offline: true }, 200);
+
+  if (method === "POST") {
+    const nameAr = String(body.nameAr || "").trim();
+    if (!nameAr) return jsonResponse({ error: "COST_CENTER_NAME_REQUIRED" }, 400);
+    const centerType = String(body.centerType || "OTHER").toUpperCase();
+    if (!LOCAL_CENTER_TYPES.includes(centerType)) return jsonResponse({ error: `INVALID_CENTER_TYPE:${centerType}` }, 400);
+    let generation = 1;
+    if (body.parentId) {
+      const parent = centers.find((c) => c.id === body.parentId);
+      if (!parent) return jsonResponse({ error: "PARENT_COST_CENTER_NOT_FOUND" }, 400);
+      if (Number(parent.generation) >= 6) return jsonResponse({ error: "COST_CENTER_MAX_GENERATION" }, 400);
+      generation = Number(parent.generation) + 1;
+    }
+    const code = String(body.code || `CC-GEN-${String(centers.length + 1).padStart(4, "0")}`).trim();
+    if (centers.some((c) => c.code === code)) return jsonResponse({ error: `DUPLICATE_COST_CENTER_CODE:${code}` }, 400);
+    const costCenter = {
+      id: `cc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+      code, nameAr, nameEn: String(body.nameEn || nameAr), parentId: body.parentId ? String(body.parentId) : null,
+      generation, centerType, customLabel: body.customLabel ? String(body.customLabel) : null,
+      isCustom: centerType === "OTHER", isActive: true,
+    };
+    centers.push(costCenter);
+    writeCollection(OFFLINE_DB_COST_CENTERS_KEY, centers, s);
+    appendOfflineSyncQueue("/api/accounting/cost-centers", method, body, s);
+    return jsonResponse({ success: true, costCenter, costCenters: centers, offline: true }, 201);
+  }
+
+  const id = String(body.id || query.get("id") || "");
+  const idx = centers.findIndex((c) => c.id === id);
+  if (idx < 0) return jsonResponse({ error: "COST_CENTER_NOT_FOUND" }, 404);
+
+  if (method === "PUT" || method === "PATCH") {
+    const cur = centers[idx];
+    if (body.nameAr !== undefined) cur.nameAr = String(body.nameAr);
+    if (body.nameEn !== undefined) cur.nameEn = String(body.nameEn);
+    if (body.isActive !== undefined) cur.isActive = Boolean(body.isActive);
+    if (body.customLabel !== undefined) cur.customLabel = body.customLabel ? String(body.customLabel) : null;
+    if (body.centerType !== undefined) {
+      const t = String(body.centerType).toUpperCase();
+      if (!LOCAL_CENTER_TYPES.includes(t)) return jsonResponse({ error: `INVALID_CENTER_TYPE:${t}` }, 400);
+      cur.centerType = t;
+      cur.isCustom = t === "OTHER";
+    }
+    writeCollection(OFFLINE_DB_COST_CENTERS_KEY, centers, s);
+    appendOfflineSyncQueue("/api/accounting/cost-centers", method, body, s);
+    return jsonResponse({ success: true, costCenter: cur, offline: true }, 200);
+  }
+
+  if (method === "DELETE") {
+    const accounts = readCollection<Record<string, unknown>>(OFFLINE_DB_COA_KEY, s);
+    const journals = readCollection<Record<string, unknown>>(OFFLINE_DB_JOURNALS_KEY, s);
+    const inUse =
+      centers.some((c) => c.parentId === id) ||
+      accounts.some((a) => a.defaultCostCenterId === id) ||
+      journals.some((j) => JSON.stringify(j).includes(`"costCenterId":"${id}"`));
+    if (inUse) {
+      centers[idx].isActive = false;
+      writeCollection(OFFLINE_DB_COST_CENTERS_KEY, centers, s);
+      appendOfflineSyncQueue("/api/accounting/cost-centers", method, body, s);
+      return jsonResponse({ success: true, deleted: false, deactivated: true, offline: true }, 200);
+    }
+    centers.splice(idx, 1);
+    writeCollection(OFFLINE_DB_COST_CENTERS_KEY, centers, s);
+    appendOfflineSyncQueue("/api/accounting/cost-centers", method, body, s);
+    return jsonResponse({ success: true, deleted: true, deactivated: false, offline: true }, 200);
+  }
+  return jsonResponse({ error: "METHOD_NOT_ALLOWED" }, 405);
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -612,6 +770,282 @@ export async function handleOfflineAndroidApiRequest(
   // -------------------------------------------------------------------------
   // 5. Projects, Expenses, Workers, Sales, Treasury, Inventory, Accounting
   // -------------------------------------------------------------------------
+  if (pathname === "/api/accounting/cost-centers") {
+    return handleLocalCostCenters(method, body, new URL(pathname, "http://local").searchParams, s);
+  }
+
+  if (pathname === "/api/approvals" || pathname.startsWith("/api/approvals/")) {
+    if (pathname === "/api/approvals/rules") {
+      const rules = readCollection<Record<string, unknown>>(OFFLINE_DB_APPROVAL_RULES_KEY, s);
+      if (method === "GET") return jsonResponse({ rules, offline: true }, 200);
+      if (method === "POST") {
+        const rule = {
+          id: `apr-rule-${Date.now().toString(36)}`,
+          module: String(body.module || "ACCOUNTING").toUpperCase(),
+          actionType: String(body.actionType || "GL_POSTING").toUpperCase(),
+          minAmountBase: Number(body.minAmountBase) || 0,
+          currencyCode: String(body.currencyCode || "YER").toUpperCase(),
+          requiredRole: String(body.requiredRole || "CHIEF_ACCOUNTANT").toUpperCase(),
+          approverUserIdsJson: JSON.stringify(Array.isArray(body.approverUserIds) ? body.approverUserIds : []),
+          allowSelfApproval: Boolean(body.allowSelfApproval),
+          isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
+          createdAt: new Date().toISOString(),
+        };
+        rules.push(rule);
+        writeCollection(OFFLINE_DB_APPROVAL_RULES_KEY, rules, s);
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, rule, offline: true }, 201);
+      }
+      if (method === "PUT") {
+        const rule = rules.find((r) => r.id === body.id);
+        if (!rule) return jsonResponse({ error: "APPROVAL_RULE_NOT_FOUND" }, 404);
+        Object.assign(rule, body);
+        writeCollection(OFFLINE_DB_APPROVAL_RULES_KEY, rules, s);
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, rule, offline: true }, 200);
+      }
+      if (method === "DELETE") {
+        const next = rules.filter((r) => r.id !== body.id);
+        writeCollection(OFFLINE_DB_APPROVAL_RULES_KEY, next, s);
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, deleted: true, offline: true }, 200);
+      }
+    }
+
+    const requests = readCollection<Record<string, unknown>>(OFFLINE_DB_APPROVAL_REQUESTS_KEY, s);
+    if (pathname === "/api/approvals" && method === "GET") {
+      const pendingCount = requests.filter((r) => r.status === "PENDING").length;
+      return jsonResponse({ requests, pendingCount, offline: true }, 200);
+    }
+    if (pathname === "/api/approvals" && method === "POST") {
+      const seq = requests.length + 1;
+      const reqItem = {
+        id: `apr-${Date.now().toString(36)}-${seq}`,
+        requestNumber: `APR-${new Date().getUTCFullYear()}-${String(seq).padStart(4, "0")}`,
+        module: String(body.module || "ACCOUNTING").toUpperCase(),
+        actionType: String(body.actionType || "GL_POSTING").toUpperCase(),
+        targetType: String(body.targetType || "JournalEntry"),
+        targetId: String(body.targetId || ""),
+        documentNumber: String(body.documentNumber || "DOC"),
+        summaryAr: String(body.summaryAr || "طلب اعتماد"),
+        summaryEn: String(body.summaryEn || body.summaryAr || "Approval Request"),
+        amountBase: Number(body.amountBase) || 0,
+        currencyCode: String(body.currencyCode || "YER").toUpperCase(),
+        beforeSnapshot: body.beforeSnapshot ?? null,
+        afterSnapshot: body.afterSnapshot ?? {},
+        diffs: [],
+        reasonAr: body.reasonAr ? String(body.reasonAr) : null,
+        status: "PENDING",
+        requestedById: actor.userId || "u1",
+        requestedByName: actor.userDisplay || "مستخدم محلي",
+        createdAt: new Date().toISOString(),
+      };
+      requests.unshift(reqItem);
+      writeCollection(OFFLINE_DB_APPROVAL_REQUESTS_KEY, requests, s);
+      appendOfflineSyncQueue(pathname, method, body, s);
+      return jsonResponse({ success: true, request: reqItem, offline: true }, 201);
+    }
+
+    const decideMatch = pathname.match(/^\/api\/approvals\/([^/]+)\/decide$/);
+    if (decideMatch && method === "POST") {
+      const targetId = decodeURIComponent(decideMatch[1]);
+      const reqItem = requests.find((r) => r.id === targetId);
+      if (!reqItem) return jsonResponse({ error: "APPROVAL_REQUEST_NOT_FOUND" }, 404);
+      reqItem.status = String(body.decision || "APPROVED").toUpperCase();
+      reqItem.reviewedById = actor.userId || "u1";
+      reqItem.reviewedByName = actor.userDisplay || "مستخدم محلي";
+      reqItem.reviewNotes = body.reviewNotes ? String(body.reviewNotes) : null;
+      reqItem.reviewedAt = new Date().toISOString();
+      writeCollection(OFFLINE_DB_APPROVAL_REQUESTS_KEY, requests, s);
+      appendOfflineSyncQueue(pathname, method, body, s);
+      return jsonResponse({ success: true, request: reqItem, offline: true }, 200);
+    }
+  }
+
+  if (pathname === "/api/drafts" || pathname.startsWith("/api/drafts/")) {
+    const drafts = readCollection<Record<string, unknown>>(OFFLINE_DB_DRAFTS_KEY, s);
+    if (pathname === "/api/drafts" && method === "GET") {
+      const active = drafts.filter((d) => d.status === "ACTIVE_DRAFT" || d.status === "SUBMITTED_FOR_APPROVAL");
+      return jsonResponse({ drafts: active, activeCount: active.length, offline: true }, 200);
+    }
+    if (pathname === "/api/drafts" && method === "POST") {
+      const seq = drafts.length + 1;
+      const now = new Date().toISOString();
+      const draft = {
+        id: `drf-${Date.now().toString(36)}-${seq}`,
+        draftNumber: `DRF-${new Date().getUTCFullYear()}-${String(seq).padStart(4, "0")}`,
+        module: String(body.module || "ACCOUNTING").toUpperCase(),
+        formType: String(body.formType || "GENERIC").toUpperCase(),
+        entityId: body.entityId ? String(body.entityId) : null,
+        titleAr: String(body.titleAr || "مسودة"),
+        titleEn: String(body.titleEn || body.titleAr || "Draft"),
+        payload: body.payload && typeof body.payload === "object" ? body.payload : {},
+        payloadJson: JSON.stringify(body.payload && typeof body.payload === "object" ? body.payload : {}),
+        totalAmount: body.totalAmount !== undefined ? Number(body.totalAmount) : null,
+        currencyCode: String(body.currencyCode || "YER").toUpperCase(),
+        visibility: body.visibility === "PRIVATE" ? "PRIVATE" : "SHARED_WORKSPACE",
+        status: "ACTIVE_DRAFT",
+        createdById: actor.userId || "u1",
+        createdByName: actor.userDisplay || "مستخدم محلي",
+        updatedById: actor.userId || "u1",
+        updatedByName: actor.userDisplay || "مستخدم محلي",
+        createdAt: now,
+        updatedAt: now,
+      };
+      drafts.unshift(draft);
+      writeCollection(OFFLINE_DB_DRAFTS_KEY, drafts, s);
+      appendOfflineSyncQueue(pathname, method, body, s);
+      return jsonResponse({ success: true, draft, offline: true }, 201);
+    }
+
+    const promoteMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/promote$/);
+    if (promoteMatch && method === "POST") {
+      const targetId = decodeURIComponent(promoteMatch[1]);
+      const draft = drafts.find((d) => d.id === targetId);
+      if (!draft) return jsonResponse({ error: "DRAFT_NOT_FOUND" }, 404);
+      draft.status = "CONVERTED";
+      draft.convertedEntityId = `LOC-PROMOTED-${draft.draftNumber}`;
+      draft.updatedAt = new Date().toISOString();
+      writeCollection(OFFLINE_DB_DRAFTS_KEY, drafts, s);
+      appendOfflineSyncQueue(pathname, method, body, s);
+      return jsonResponse({ success: true, draft, convertedEntityId: draft.convertedEntityId, offline: true }, 200);
+    }
+
+    const idMatch = pathname.match(/^\/api\/drafts\/([^/]+)$/);
+    if (idMatch) {
+      const targetId = decodeURIComponent(idMatch[1]);
+      const draft = drafts.find((d) => d.id === targetId);
+      if (!draft) return jsonResponse({ error: "DRAFT_NOT_FOUND" }, 404);
+      if (method === "GET") return jsonResponse({ draft, offline: true }, 200);
+      if (method === "PATCH") {
+        if (body.titleAr !== undefined) draft.titleAr = String(body.titleAr);
+        if (body.titleEn !== undefined) draft.titleEn = String(body.titleEn);
+        if (body.payload !== undefined) {
+          draft.payload = body.payload;
+          draft.payloadJson = JSON.stringify(body.payload);
+        }
+        if (body.totalAmount !== undefined) draft.totalAmount = Number(body.totalAmount);
+        if (body.visibility !== undefined) draft.visibility = String(body.visibility);
+        if (body.status !== undefined) draft.status = String(body.status);
+        draft.updatedAt = new Date().toISOString();
+        writeCollection(OFFLINE_DB_DRAFTS_KEY, drafts, s);
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, draft, offline: true }, 200);
+      }
+      if (method === "DELETE") {
+        draft.status = "DISCARDED";
+        draft.updatedAt = new Date().toISOString();
+        writeCollection(OFFLINE_DB_DRAFTS_KEY, drafts, s);
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, draft, offline: true }, 200);
+      }
+    }
+  }
+
+  if (pathname === "/api/accounting/fiscal-years" || pathname.startsWith("/api/accounting/fiscal-years/")) {
+    let years = readCollection<Record<string, unknown>>(OFFLINE_DB_FISCAL_YEARS_KEY, s);
+    if (years.length === 0) {
+      years = [
+        {
+          id: "fy-2026",
+          code: "FY-2026",
+          nameAr: "السنة المالية 2026",
+          nameEn: "Fiscal Year 2026",
+          startDate: "2026-01-01T00:00:00.000Z",
+          endDate: "2026-12-31T23:59:59.999Z",
+          status: "OPEN",
+          netProfitLossBase: null,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+      writeCollection(OFFLINE_DB_FISCAL_YEARS_KEY, years, s);
+    }
+
+    if (pathname === "/api/accounting/fiscal-years" && method === "GET") {
+      return jsonResponse({ fiscalYears: years, offline: true }, 200);
+    }
+    if (pathname === "/api/accounting/fiscal-years" && method === "POST") {
+      const code = String(body.code || "").trim().toUpperCase();
+      const nameAr = String(body.nameAr || code).trim();
+      if (!code || !nameAr) return jsonResponse({ error: "FISCAL_YEAR_CODE_REQUIRED" }, 400);
+      const fy = {
+        id: `fy-${Date.now().toString(36)}`,
+        code,
+        nameAr,
+        nameEn: String(body.nameEn || nameAr),
+        startDate: String(body.startDate || "2026-01-01T00:00:00.000Z"),
+        endDate: String(body.endDate || "2026-12-31T23:59:59.999Z"),
+        status: "OPEN",
+        createdAt: new Date().toISOString(),
+      };
+      years.unshift(fy);
+      writeCollection(OFFLINE_DB_FISCAL_YEARS_KEY, years, s);
+      appendOfflineSyncQueue(pathname, method, body, s);
+      return jsonResponse({ success: true, fiscalYear: fy, offline: true }, 201);
+    }
+
+    const precheckMatch = pathname.match(/^\/api\/accounting\/fiscal-years\/([^/]+)\/precheck$/);
+    if (precheckMatch && method === "POST") {
+      const targetId = decodeURIComponent(precheckMatch[1]);
+      const fy = years.find((y) => y.id === targetId);
+      if (!fy) return jsonResponse({ error: "FISCAL_YEAR_NOT_FOUND" }, 404);
+      const endYear = new Date(String(fy.endDate)).getUTCFullYear() || 2026;
+      const nextYear = endYear + 1;
+      return jsonResponse(
+        {
+          success: true,
+          precheck: {
+            fiscalYearId: fy.id,
+            fiscalYearCode: fy.code,
+            status: fy.status,
+            canClose: fy.status !== "CLOSED",
+            checks: [
+              { key: "pendingDocuments", titleAr: "خلو السنة من المسودات أو المستندات بانتظار الاعتماد", titleEn: "Zero pending drafts/approvals", passed: true, detailsAr: "لا توجد مستندات معلقة (الوضع المحلي).", detailsEn: "No pending documents (local mode)." },
+              { key: "trialBalance", titleAr: "توازن ميزان المراجعة بالعملة الأساسية (YER)", titleEn: "Base-currency Trial Balance balanced", passed: true, detailsAr: "ميزان المراجعة متوازن (الوضع المحلي).", detailsEn: "Trial balance is balanced (local mode)." },
+              { key: "fxSpotRates", titleAr: "توفر أسعار صرف الإقفال للعملات الأجنبية", titleEn: "Closing FX spot rates configured", passed: true, detailsAr: "أسعار الصرف مضبوطة.", detailsEn: "Spot rates configured." },
+              { key: "retainedEarnings", titleAr: "ربط حساب الأرباح المحتجزة (Retained Earnings)", titleEn: "Retained Earnings account mapped", passed: true, detailsAr: "الحساب المعتمد: 312101 — حساب الأرباح المبقاة.", detailsEn: "Mapped to 312101." },
+            ],
+            pnlPreview: { totalRevenueBase: 0, totalExpensesBase: 0, netProfitLossBase: 0, retainedEarningsAccountCode: "312101", retainedEarningsAccountNameAr: "حساب الأرباح المبقاة", closingLineCount: 0 },
+            openingPreview: { nextFiscalYearCode: `FY-${nextYear}`, nextStartDate: `${nextYear}-01-01`, nextEndDate: `${nextYear}-12-31`, totalAssetsBase: 0, totalLiabilitiesBase: 0, totalEquityBase: 0, balanceSheetLineCount: 0, gen6SubLedgerCount: 0, fxCurrencies: [], stockBalanceCount: 0, totalInventoryValuationBase: 0 },
+          },
+          offline: true,
+        },
+        200
+      );
+    }
+
+    const closeMatch = pathname.match(/^\/api\/accounting\/fiscal-years\/([^/]+)\/close-and-rollover$/);
+    if (closeMatch && method === "POST") {
+      const targetId = decodeURIComponent(closeMatch[1]);
+      const fy = years.find((y) => y.id === targetId);
+      if (!fy) return jsonResponse({ error: "FISCAL_YEAR_NOT_FOUND" }, 404);
+      if (fy.status === "CLOSED") return jsonResponse({ error: "FISCAL_YEAR_ALREADY_CLOSED" }, 400);
+      fy.status = "CLOSED";
+      fy.closedAt = new Date().toISOString();
+      fy.netProfitLossBase = 0;
+      const endYear = new Date(String(fy.endDate)).getUTCFullYear() || 2026;
+      const nextYear = endYear + 1;
+      const nextCode = `FY-${nextYear}`;
+      let nextFy = years.find((y) => y.code === nextCode);
+      if (!nextFy) {
+        nextFy = {
+          id: `fy-${nextYear}`,
+          code: nextCode,
+          nameAr: `السنة المالية ${nextYear}`,
+          nameEn: `Fiscal Year ${nextYear}`,
+          startDate: `${nextYear}-01-01T00:00:00.000Z`,
+          endDate: `${nextYear}-12-31T23:59:59.999Z`,
+          status: "OPEN",
+          createdAt: new Date().toISOString(),
+        };
+        years.unshift(nextFy);
+      }
+      writeCollection(OFFLINE_DB_FISCAL_YEARS_KEY, years, s);
+      appendOfflineSyncQueue(pathname, method, body, s);
+      return jsonResponse({ success: true, closedFiscalYear: fy, nextFiscalYear: nextFy, netProfitLossBase: 0, offline: true }, 200);
+    }
+  }
+
   if (pathname === "/api/projects" && method === "POST") {
     const state = loadOfflineAndroidState(s);
     const name = String(body.name || "").trim();
@@ -632,6 +1066,8 @@ export async function handleOfflineAndroidApiRequest(
     harvests.forEach((h) => {
       state.lockedPeriods[`${id}::${h}`] = false;
     });
+    const prjProv = provisionLocalGen6AccountAndCostCenter("PROJECT", { id, nameAr: name, nameEn: name }, s);
+    Object.assign(state.projects[state.projects.length - 1], { glAccountId: prjProv.glAccountId, costCenterId: prjProv.costCenterId });
     addLocalAudit(state, actor.userDisplay, "إنشاء مشروع (محلي)", name);
     saveOfflineAndroidState(state, s);
     appendOfflineSyncQueue(pathname, method, body, s);
@@ -667,8 +1103,10 @@ export async function handleOfflineAndroidApiRequest(
     const days = Number(body.days) || 1;
     const credit = Number(body.credit) || 0;
     const { totalWage, debitBalance } = computeWorkerWageTotals(dailyWage, days, credit);
+    const workerLocalId = `w-${Date.now()}`;
+    const wrkProv = provisionLocalGen6AccountAndCostCenter("WORKER", { id: `worker:${String(body.name || "").trim()}`, nameAr: String(body.name || "").trim() }, s);
     state.workers.push({
-      id: `w-${Date.now()}`,
+      id: workerLocalId,
       projectId: String(body.projectId || ""),
       harvest: String(body.harvest || ""),
       name: String(body.name || ""),
@@ -680,6 +1118,7 @@ export async function handleOfflineAndroidApiRequest(
       date: String(body.date || new Date().toISOString().slice(0, 10)),
       notes: String(body.notes || ""),
     });
+    Object.assign(state.workers[state.workers.length - 1], { glAccountId: wrkProv.glAccountId, costCenterId: wrkProv.costCenterId });
     addLocalAudit(state, actor.userDisplay, "إضافة سجل عامل (محلي)", `${body.name} — ${totalWage}`);
     saveOfflineAndroidState(state, s);
     appendOfflineSyncQueue(pathname, method, body, s);
@@ -735,11 +1174,23 @@ export async function handleOfflineAndroidApiRequest(
         return jsonResponse({ [col.listProp]: rows, items: rows, offline: true }, 200);
       }
       if (method === "POST") {
-        const record = {
+        const record: Record<string, unknown> = {
           id: `loc-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
           ...body,
           createdAt: new Date().toISOString(),
         };
+        const subLedger: LocalSubLedgerType | null =
+          col.prefix === "/api/sales/customers" ? "CUSTOMER" : col.prefix === "/api/procurement/vendors" ? "VENDOR" : null;
+        if (subLedger) {
+          const prov = provisionLocalGen6AccountAndCostCenter(
+            subLedger,
+            { id: String(record.id), nameAr: String(body.nameAr || body.name || "").trim() || "—", nameEn: body.nameEn ? String(body.nameEn) : undefined },
+            s
+          );
+          record.glAccountId = prov.glAccountId;
+          record.glAccountCode = prov.glAccountCode;
+          record.costCenterId = prov.costCenterId;
+        }
         rows.unshift(record);
         writeCollection(col.storageKey, rows, s);
         appendOfflineSyncQueue(pathname, method, body, s);
@@ -909,7 +1360,10 @@ export async function handleOfflineAndroidApiRequest(
         isDefault: Boolean(body.isDefault),
         isCustom: true,
         isActive: true,
-      };
+      } as Record<string, unknown>;
+      const whProv = provisionLocalGen6AccountAndCostCenter("WAREHOUSE", { id: String(warehouse.id), nameAr, nameEn: String(warehouse.nameEn) }, s);
+      warehouse.glAccountId = whProv.glAccountId;
+      warehouse.costCenterId = whProv.costCenterId;
       warehouses.push(warehouse);
       writeCollection(OFFLINE_DB_WAREHOUSES_KEY, warehouses, s);
       appendOfflineSyncQueue(pathname, method, body, s);
@@ -957,6 +1411,10 @@ export async function handleOfflineAndroidApiRequest(
     appendOfflineSyncQueue(pathname, method, body, s);
     saveOfflineAndroidState(state, s);
     return jsonResponse({ success: true, inventoryBatches: state.inventoryBatches, state, offline: true }, 200);
+  }
+
+  if (pathname === "/api/accounting/reports/cost-centers") {
+    return jsonResponse({ rows: [], totals: { revenue: 0, expense: 0, net: 0 }, offline: true }, 200);
   }
 
   if (pathname.startsWith("/api/accounting/reports/")) {

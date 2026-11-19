@@ -78,6 +78,7 @@ export async function POST(req: NextRequest) {
         email,
         taxRegistration,
         address,
+        costCenterId: body.costCenterId ? String(body.costCenterId).trim() : undefined,
       });
       await recordAuditDiffTx(tx, {
         userId: auth.actor.userId,
@@ -135,6 +136,9 @@ async function handleVendorUpdate(req: NextRequest) {
             : {}),
           ...(body.address !== undefined
             ? { address: body.address ? String(body.address).trim() : null }
+            : {}),
+          ...(body.costCenterId !== undefined
+            ? { costCenterId: body.costCenterId ? String(body.costCenterId).trim() : null }
             : {}),
         },
         include: { account: { select: { id: true, code: true, nameAr: true, nameEn: true } } },

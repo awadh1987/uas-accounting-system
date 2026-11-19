@@ -332,6 +332,9 @@ async function seedDefaultBaselineRecords(): Promise<void> {
             isPosting: node.isPosting,
             parentCode: node.parentCode,
             parentId,
+            generation: node.level,
+            isPostable: node.isPosting,
+            parentAccountId: parentId,
           },
         });
         accountIdByCode.set(node.code, created.id);

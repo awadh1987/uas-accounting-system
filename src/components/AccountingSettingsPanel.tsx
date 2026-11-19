@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Calendar, FileText, Lock, RefreshCw, Save, Settings2 } from "lucide-react";
 import { safeFetchJson } from "@/lib/apiClient";
+import { FiscalYearClosingModal } from "@/components/FiscalYearClosingModal";
 import {
   DEFAULT_ACCOUNTING_SETTINGS,
   type AccountingSettingsConfig,
@@ -56,6 +57,7 @@ export function AccountingSettingsPanel({
   const [customPrintLayout, setCustomPrintLayout] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [closingModalOpen, setClosingModalOpen] = useState(false);
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -149,6 +151,16 @@ export function AccountingSettingsPanel({
           </button>
           {!readOnly && (
             <button
+              type="button"
+              onClick={() => setClosingModalOpen(true)}
+              className="px-3.5 py-2 rounded-xl border border-amber-500 text-amber-700 dark:text-amber-300 bg-amber-50/60 dark:bg-amber-950/30 font-extrabold inline-flex items-center gap-1.5"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>{isAr ? "إقفال السنة وفتح سنة جديدة" : "Year-End Close & Rollover"}</span>
+            </button>
+          )}
+          {!readOnly && (
+            <button
               type="submit"
               disabled={saving}
               className="px-4 py-2 rounded-xl accent-bg font-black inline-flex items-center gap-1.5 disabled:opacity-50"
@@ -159,6 +171,13 @@ export function AccountingSettingsPanel({
           )}
         </div>
       </div>
+
+      <FiscalYearClosingModal
+        open={closingModalOpen}
+        onClose={() => setClosingModalOpen(false)}
+        onCompleted={() => void loadSettings()}
+        onToast={onToast}
+      />
 
       {/* Section 1: Fiscal Year, Period Lock Date & Operational Policies */}
       <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 space-y-3">

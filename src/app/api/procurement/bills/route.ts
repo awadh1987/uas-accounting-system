@@ -126,6 +126,7 @@ export async function POST(req: NextRequest) {
       debitAccountId,
       customAccount,
       notes,
+      costCenterId: body.costCenterId ? String(body.costCenterId) : null,
       createdById: actor.userId ?? undefined,
     });
 

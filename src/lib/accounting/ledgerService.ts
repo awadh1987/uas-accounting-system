@@ -9,6 +9,13 @@ import {
 } from "@/lib/formulas";
 import type { AccountType } from "./coaCatalog";
 import { mapExpenseCategoryToCoaCode, mapProjectIdToSalesRevenueCode } from "./coaCatalog";
+import {
+  assertPostableAccount,
+  deriveGenFields,
+  provisionEntityGen6AccountAndCostCenter,
+  resolveLineCostCenter,
+} from "@/lib/accountingCoreEngine";
+import { assertDateNotInClosedFiscalYear } from "@/lib/fiscalYearClosingEngine";
 
 export type DbClient = Prisma.TransactionClient | typeof prisma;
 
@@ -23,6 +30,7 @@ export interface JournalLineInput {
   projectId?: string | null;
   subProjectId?: string | null;
   harvestCycleId?: string | null;
+  costCenterId?: string | null;
 }
 
 export interface AttachmentInput {
@@ -38,8 +46,11 @@ export interface PostJournalEntryInput {
   narrationEn?: string;
   sourceType?: string;
   sourceId?: string;
+  entryType?: "NORMAL" | "OPENING" | "ADJUSTMENT" | "YEAR_END_CLOSING";
+  fiscalYearId?: string | null;
   projectId?: string | null;
   subProjectId?: string | null;
+  costCenterId?: string | null;
   createdById?: string;
   status?: "DRAFT" | "PENDING_APPROVAL" | "APPROVED" | "POSTED" | "VOIDED";
   lines: JournalLineInput[];
@@ -71,6 +82,7 @@ export interface PostVendorBillInput {
   debitAccountCode?: string | null;
   customAccount?: CustomAccountInput | null;
   notes?: string;
+  costCenterId?: string | null;
   createdById?: string;
   tx?: Prisma.TransactionClient;
 }
@@ -88,6 +100,7 @@ export interface PostVendorPaymentInput {
   date?: Date | string;
   referenceNumber?: string;
   notes?: string;
+  costCenterId?: string | null;
   createdById?: string;
   tx?: Prisma.TransactionClient;
 }
@@ -109,6 +122,7 @@ export interface PostSalesInvoiceInput {
   salesOfficerId?: string | null;
   salesOfficerTitle?: string | null;
   treasuryAccountId?: string | null;
+  costCenterId?: string | null;
   createdById?: string;
   tx?: Prisma.TransactionClient;
 }
@@ -123,6 +137,7 @@ export interface PostCustomerReceiptInput {
   currency?: string;
   date?: Date | string;
   notes?: string;
+  costCenterId?: string | null;
   createdById?: string;
   tx?: Prisma.TransactionClient;
 }
@@ -132,6 +147,7 @@ export interface FinancialReportFilters {
   toDate?: string | Date;
   projectId?: string;
   subProjectId?: string;
+  costCenterId?: string;
   maxLevel?: number;
 }
 
@@ -232,11 +248,7 @@ async function resolvePostingAccount(
   if (!account) {
     throw new Error(`ACCOUNT_NOT_FOUND:${line.accountCode || line.accountId || "unknown"}`);
   }
-  if (!account.isPosting) {
-    throw new Error(
-      `NON_POSTING_ACCOUNT: Account ${account.code} (${account.nameAr}) is Tier-${account.level}. Only operational posting leaf accounts (isPosting = true) accept direct journal postings.`
-    );
-  }
+  await assertPostableAccount(client, account);
   return account;
 }
 
@@ -286,7 +298,7 @@ export async function resolveOrCreatePostingAccountTx(
   });
 }
 
-async function ensureChildPostingAccount(
+export async function ensureChildPostingAccount(
   tx: Prisma.TransactionClient,
   parentCode: string,
   nameAr: string,
@@ -318,6 +330,7 @@ async function ensureChildPostingAccount(
       type,
       isPosting: true,
       parentId: parent.id,
+      ...deriveGenFields(5, true, parent.id),
     },
   });
   return created.id;
@@ -325,7 +338,7 @@ async function ensureChildPostingAccount(
 
 export async function ensureCustomerWithAccountTx(
   tx: Prisma.TransactionClient,
-  input: { name: string; phone?: string; nameEn?: string; address?: string }
+  input: { name: string; phone?: string; nameEn?: string; address?: string; costCenterId?: string | null }
 ) {
   const cleanName = input.name.trim();
   const existing = await tx.customer.findUnique({ where: { name: cleanName } });
@@ -335,16 +348,18 @@ export async function ensureCustomerWithAccountTx(
     }
     return existing;
   }
-  const accountId = await ensureChildPostingAccount(
-    tx,
-    "112100",
-    cleanName,
-    input.nameEn || cleanName,
-    "ASSET"
+  const customerId = crypto.randomUUID();
+  const prov = await provisionEntityGen6AccountAndCostCenter(
+    { entityType: "CUSTOMER", entityId: customerId, nameAr: cleanName, nameEn: input.nameEn || cleanName, costCenterId: input.costCenterId ?? null },
+    tx
   );
+  const accountId = prov.account.id;
   const count = await tx.customer.count();
   return tx.customer.create({
     data: {
+      id: customerId,
+      glAccountId: accountId,
+      costCenterId: prov.costCenterId,
       code: `CUST-${String(count + 1).padStart(3, "0")}-${Date.now().toString().slice(-3)}`,
       name: cleanName,
       nameAr: cleanName,
@@ -358,38 +373,42 @@ export async function ensureCustomerWithAccountTx(
 
 export async function ensureWorkerWithAccountTx(
   tx: Prisma.TransactionClient,
-  input: { name: string; defaultDailyWage?: number; phone?: string }
+  input: { name: string; defaultDailyWage?: number; phone?: string; costCenterId?: string | null }
 ) {
   const cleanName = input.name.trim();
   const existing = await tx.worker.findUnique({ where: { name: cleanName } });
   if (existing) {
     let accountId = existing.accountId;
-    if (!accountId) {
-      accountId = await ensureChildPostingAccount(
-        tx,
-        "212100",
-        `مستحقات العامل ${cleanName}`,
-        `${cleanName} Labor Payable`,
-        "LIABILITY"
+    let costCenterId = input.costCenterId || existing.costCenterId;
+    if (!accountId || !existing.glAccountId || !costCenterId) {
+      const prov = await provisionEntityGen6AccountAndCostCenter(
+        { entityType: "WORKER", entityId: existing.id, nameAr: cleanName, nameEn: cleanName, costCenterId },
+        tx
       );
+      accountId = accountId || prov.account.id;
+      costCenterId = prov.costCenterId;
     }
     return tx.worker.update({
       where: { id: existing.id },
       data: {
         defaultDailyWage: input.defaultDailyWage ?? existing.defaultDailyWage,
         accountId,
+        glAccountId: existing.glAccountId ?? accountId,
+        costCenterId,
       },
     });
   }
-  const accountId = await ensureChildPostingAccount(
-    tx,
-    "212100",
-    `مستحقات العامل ${cleanName}`,
-    `${cleanName} Labor Payable`,
-    "LIABILITY"
+  const workerId = crypto.randomUUID();
+  const prov = await provisionEntityGen6AccountAndCostCenter(
+    { entityType: "WORKER", entityId: workerId, nameAr: cleanName, nameEn: cleanName, costCenterId: input.costCenterId ?? null },
+    tx
   );
+  const accountId = prov.account.id;
   return tx.worker.create({
     data: {
+      id: workerId,
+      glAccountId: accountId,
+      costCenterId: prov.costCenterId,
       name: cleanName,
       phone: input.phone || "",
       defaultDailyWage: input.defaultDailyWage ?? 0,
@@ -407,18 +426,21 @@ export async function createVendorWithAccountTx(
     email?: string;
     taxRegistration?: string;
     address?: string;
+    costCenterId?: string | null;
   }
 ) {
-  const accountId = await ensureChildPostingAccount(
-    tx,
-    "211100",
-    input.nameAr.trim(),
-    input.nameEn?.trim() || input.nameAr.trim(),
-    "LIABILITY"
+  const vendorId = crypto.randomUUID();
+  const prov = await provisionEntityGen6AccountAndCostCenter(
+    { entityType: "VENDOR", entityId: vendorId, nameAr: input.nameAr.trim(), nameEn: input.nameEn?.trim() || input.nameAr.trim(), costCenterId: input.costCenterId ?? null },
+    tx
   );
+  const accountId = prov.account.id;
   const count = await tx.vendor.count();
   return tx.vendor.create({
     data: {
+      id: vendorId,
+      glAccountId: accountId,
+      costCenterId: prov.costCenterId,
       code: `VND-${String(count + 1).padStart(3, "0")}-${Date.now().toString().slice(-3)}`,
       nameAr: input.nameAr.trim(),
       nameEn: input.nameEn?.trim() || null,
@@ -449,6 +471,24 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
     const createdById = await resolveActorId(tx, input.createdById);
     const entryNumber = await nextSequenceCode(tx, "journalEntry", "JV");
     const entryDate = input.date ? new Date(input.date) : new Date();
+    const entryType = input.entryType || "NORMAL";
+
+    if (
+      !input.allowLockedAdjustment &&
+      entryType !== "YEAR_END_CLOSING" &&
+      entryType !== "OPENING"
+    ) {
+      await assertDateNotInClosedFiscalYear(tx, entryDate);
+    }
+
+    let resolvedFiscalYearId = input.fiscalYearId ?? null;
+    if (!resolvedFiscalYearId) {
+      const matchingFy = await tx.fiscalYear.findFirst({
+        where: { startDate: { lte: entryDate }, endDate: { gte: entryDate } },
+        select: { id: true },
+      });
+      resolvedFiscalYearId = matchingFy?.id ?? null;
+    }
 
     let totalDebitBase = 0;
     let totalCreditBase = 0;
@@ -458,13 +498,19 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
       debit: number;
       credit: number;
       currency: string;
+      currencyCode: string;
       exchangeRate: number;
+      foreignDebit: number;
+      foreignCredit: number;
       debitBase: number;
       creditBase: number;
+      baseDebit: number;
+      baseCredit: number;
       memo: string;
       projectId: string | null;
       subProjectId: string | null;
       harvestCycleId: string | null;
+      costCenterId: string | null;
     }> = [];
 
     for (const line of input.lines) {
@@ -504,9 +550,14 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
         debit,
         credit,
         currency,
+        currencyCode: currency,
         exchangeRate: rate,
+        foreignDebit: debit,
+        foreignCredit: credit,
         debitBase,
         creditBase,
+        baseDebit: debitBase,
+        baseCredit: creditBase,
         memo: line.memo || input.narrationAr,
         projectId: line.projectId !== undefined ? line.projectId : input.projectId ?? null,
         subProjectId:
@@ -514,6 +565,11 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
             ? line.subProjectId
             : input.subProjectId ?? null,
         harvestCycleId: line.harvestCycleId ?? null,
+        costCenterId: resolveLineCostCenter({
+          line: line.costCenterId,
+          entry: input.costCenterId,
+          accountDefault: account.defaultCostCenterId,
+        }),
       });
     }
 
@@ -533,6 +589,8 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
         status: input.status || "POSTED",
         sourceType: input.sourceType || "MANUAL",
         sourceId: input.sourceId || null,
+        entryType,
+        fiscalYearId: resolvedFiscalYearId,
         projectId: input.projectId || null,
         subProjectId: input.subProjectId || null,
         createdById,
@@ -674,9 +732,12 @@ export async function postVendorBill(input: PostVendorBillInput) {
       userId: input.createdById,
     });
 
+    const costCenterId = input.costCenterId ?? project.costCenterId ?? vendor.costCenterId ?? null;
+
     const je = await postJournalEntry({
       tx,
       date: billDate,
+      costCenterId,
       reference: billNumber,
       narrationAr: `فاتورة مورد ${billNumber} - ${vendor.nameAr} (${project.nameAr})`,
       narrationEn: `Vendor Bill ${billNumber} - ${vendor.nameEn || vendor.nameAr}`,
@@ -724,6 +785,7 @@ export async function postVendorBill(input: PostVendorBillInput) {
         currency,
         isInventory: Boolean(input.isInventory),
         debitAccountId: debitAccount.id,
+        costCenterId,
         journalEntryId: je.id,
         notes: input.notes || null,
       },
@@ -847,9 +909,12 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
       },
     ];
 
+    const costCenterId = input.costCenterId ?? vendor.costCenterId ?? null;
+
     const je = await postJournalEntry({
       tx,
       date: payDate,
+      costCenterId,
       reference: voucherNumber,
       narrationAr: `سند صرف ${voucherNumber} للمورد ${vendor.nameAr} من ${treasury.nameAr}`,
       narrationEn: `Payment Voucher ${voucherNumber} to ${vendor.nameEn || vendor.nameAr}`,
@@ -880,6 +945,7 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
         projectId,
         subProjectId,
         acquisitionCycleId,
+        costCenterId,
         journalEntryId: je.id,
         qrVerificationHash,
       },
@@ -935,9 +1001,12 @@ export async function postSalesInvoice(input: PostSalesInvoiceInput) {
       userId: input.createdById,
     });
 
+    const costCenterId = input.costCenterId ?? project.costCenterId ?? customer.costCenterId ?? null;
+
     const je = await postJournalEntry({
       tx,
       date: invDate,
+      costCenterId,
       reference: invoiceNumber,
       narrationAr: `فاتورة مبيعات ${invoiceNumber} للعميل ${customer.nameAr} (${project.nameAr})`,
       narrationEn: `Sales Invoice ${invoiceNumber} - ${customer.nameEn || customer.nameAr}`,
@@ -994,6 +1063,7 @@ export async function postSalesInvoice(input: PostSalesInvoiceInput) {
         status: "POSTED",
         currency,
         notes: input.notes || null,
+        costCenterId,
         journalEntryId: je.id,
         qrVerificationHash,
       },
@@ -1062,9 +1132,12 @@ export async function postCustomerReceipt(input: PostCustomerReceiptInput) {
       },
     });
 
+    const costCenterId = input.costCenterId ?? customer.costCenterId ?? null;
+
     const je = await postJournalEntry({
       tx,
       date: rcpDate,
+      costCenterId,
       reference: voucherNumber,
       narrationAr: `سند قبض ${voucherNumber} من العميل ${customer.nameAr} إلى ${treasury.nameAr}`,
       narrationEn: `Receipt Voucher ${voucherNumber} from ${customer.nameEn || customer.nameAr}`,
@@ -1112,6 +1185,7 @@ export async function postCustomerReceipt(input: PostCustomerReceiptInput) {
         amount,
         currency,
         notes: input.notes || null,
+        costCenterId,
         journalEntryId: je.id,
         qrVerificationHash,
       },
@@ -1163,8 +1237,11 @@ export async function postOperatingExpenseJournalTx(
     creditAccountId = defaultTreasury?.accountId;
   }
 
+  const expProject = await tx.project.findUnique({ where: { id: input.projectId }, select: { costCenterId: true } });
+
   return postJournalEntry({
     tx,
+    costCenterId: expProject?.costCenterId ?? null,
     date: new Date(`${input.date}T10:00:00Z`),
     reference: `EXP-${input.expenseId.slice(-6).toUpperCase()}`,
     narrationAr: `مصروف تشغيلي (${input.category}): ${input.subType}`,
@@ -1214,6 +1291,7 @@ export async function postWorkerWageJournalTx(
     expenseAccountId?: string | null;
     expenseAccountCode?: string | null;
     customAccount?: CustomAccountInput | null;
+    costCenterId?: string | null;
   }
 ) {
   if (input.totalWage <= 0) return null;
@@ -1226,8 +1304,13 @@ export async function postWorkerWageJournalTx(
     userId: input.createdById,
   });
 
+  const wageProject = await tx.project.findUnique({ where: { id: input.projectId }, select: { costCenterId: true } });
+  const wageWorkerAcc = await tx.account.findUnique({ where: { id: input.workerAccountId }, select: { defaultCostCenterId: true } });
+  const wageCostCenterId = input.costCenterId ?? wageProject?.costCenterId ?? wageWorkerAcc?.defaultCostCenterId ?? null;
+
   const accrual = await postJournalEntry({
     tx,
+    costCenterId: wageCostCenterId,
     date: new Date(`${input.date}T10:00:00Z`),
     reference: `WRK-ACC-${input.wageEntryId.slice(-6).toUpperCase()}`,
     narrationAr: `استحقاق أجر العامل ${input.workerName}`,
@@ -1261,6 +1344,7 @@ export async function postWorkerWageJournalTx(
   if (input.creditAmount > 0) {
     await postJournalEntry({
       tx,
+      costCenterId: wageCostCenterId,
       date: new Date(`${input.date}T10:05:00Z`),
       reference: `WRK-PAY-${input.wageEntryId.slice(-6).toUpperCase()}`,
       narrationAr: `صرف دفعة للعامل ${input.workerName}`,
@@ -1302,6 +1386,10 @@ export interface CoaTreeNode {
   level: number;
   type: string;
   isPosting: boolean;
+  generation: number;
+  isPostable: boolean;
+  subLedgerType: string | null;
+  defaultCostCenterId: string | null;
   parentId: string | null;
   directDebit: number;
   directCredit: number;
@@ -1338,6 +1426,8 @@ export function buildHierarchicalCoaTree(
     type: string;
     isPosting: boolean;
     parentId: string | null;
+    subLedgerType?: string | null;
+    defaultCostCenterId?: string | null;
   }>,
   journalLines: Array<{
     accountId: string;
@@ -1372,6 +1462,10 @@ export function buildHierarchicalCoaTree(
       level: acc.level,
       type: acc.type,
       isPosting: acc.isPosting,
+      generation: acc.level,
+      isPostable: acc.isPosting,
+      subLedgerType: acc.subLedgerType ?? null,
+      defaultCostCenterId: acc.defaultCostCenterId ?? null,
       parentId: acc.parentId,
       directDebit: round4(direct.dr),
       directCredit: round4(direct.cr),
@@ -1608,7 +1702,7 @@ export async function createHierarchicalAccount(
         // Auto-promote parent from posting leaf to summary header
         await tx.account.update({
           where: { id: parent.id },
-          data: { isPosting: false },
+          data: { isPosting: false, isPostable: false },
         });
       }
 
@@ -1660,6 +1754,7 @@ export async function createHierarchicalAccount(
         isPosting,
         parentCode: parent ? parent.code : input.parentCode ?? null,
         parentId: parent ? parent.id : null,
+        ...deriveGenFields(level, isPosting, parent ? parent.id : null),
       },
     });
 
@@ -1729,6 +1824,7 @@ function buildPostedLineWhere(filters: FinancialReportFilters): Prisma.JournalEn
   return {
     ...(filters.projectId && filters.projectId !== "ALL" ? { projectId: filters.projectId } : {}),
     ...(filters.subProjectId && filters.subProjectId !== "ALL" ? { subProjectId: filters.subProjectId } : {}),
+    ...(filters.costCenterId && filters.costCenterId !== "ALL" ? { costCenterId: filters.costCenterId } : {}),
     journalEntry: {
       status: "POSTED",
       ...(filters.fromDate || filters.toDate ? { date: dateFilter } : {}),
@@ -2000,6 +2096,7 @@ export interface CreateTreasuryAccountInput {
   isDefaultPayments?: boolean;
   isActive?: boolean;
   notes?: string;
+  costCenterId?: string | null;
   createdById?: string;
   tx?: Prisma.TransactionClient;
 }
@@ -2018,8 +2115,20 @@ export async function createTreasuryAccount(input: CreateTreasuryAccountInput) {
     const openingBalance = Math.max(0, round4(Number(input.openingBalance) || 0));
     const openingYER = round4(openingBalance * rate);
 
-    const parentCode = type === "VAULT" ? "111100" : "111200";
-    const accountId = await ensureChildPostingAccount(tx, parentCode, nameAr, nameEn, "ASSET");
+    const treasuryId = crypto.randomUUID();
+    const parentControlCode = type === "VAULT" ? "111190" : "111290";
+    const prov = await provisionEntityGen6AccountAndCostCenter(
+      {
+        entityType: "TREASURY",
+        entityId: treasuryId,
+        nameAr,
+        nameEn,
+        parentControlCode,
+        costCenterId: input.costCenterId ?? null,
+      },
+      tx
+    );
+    const accountId = prov.account.id;
 
     const count = await tx.treasuryAccount.count();
     const prefix = type === "VAULT" ? "TR-VAULT" : type === "BANK" ? "TR-BANK" : "TR-WAL";
@@ -2034,6 +2143,7 @@ export async function createTreasuryAccount(input: CreateTreasuryAccountInput) {
 
     const created = await tx.treasuryAccount.create({
       data: {
+        id: treasuryId,
         code,
         name: `${nameAr} (${nameEn})`,
         nameAr,

@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
+import { CostCenterSelector } from "@/components/CostCenterSelector";
+import { SaveDraftButton } from "@/components/SaveDraftButton";
 import { SelectWithOther } from "@/components/SelectWithOther";
 import { fmtNum, formatCurrencyVal, type CurrencyCode } from "@/lib/formulas";
 import type {
@@ -73,6 +75,7 @@ interface TreasuryTabProps {
     voucherNo: string;
     date: string;
     notes: string;
+    costCenterId?: string | null;
   }) => Promise<boolean>;
   onRefreshState?: () => Promise<void>;
   onOpenInstallmentModal: (inst: UasInstallmentVoucher) => void;
@@ -124,6 +127,7 @@ export function TreasuryTab({
   const [treasuryId, setTreasuryId] = useState(treasuryAccounts[0]?.id || "t1");
   const [amount, setAmount] = useState("25000");
   const [voucherNo, setVoucherNo] = useState("RV-INST-201");
+  const [costCenterId, setCostCenterId] = useState("");
   const [date, setDate] = useState("2026-11-10");
   const [notes, setNotes] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -203,9 +207,11 @@ export function TreasuryTab({
       voucherNo: voucherNo.trim() || `RV-INST-${Math.floor(100 + Math.random() * 900)}`,
       date: date || "2026-11-10",
       notes: notes.trim() || "دفعة مسجلة",
+      costCenterId: costCenterId || undefined,
     });
     if (ok) {
       setNotes("");
+      setCostCenterId("");
       setDrawerOpen(false);
     }
   }
@@ -1167,6 +1173,17 @@ export function TreasuryTab({
               />
             </div>
           </div>
+          <CostCenterSelector value={costCenterId} onChange={setCostCenterId} />
+          <SaveDraftButton
+            module="TREASURY"
+            formType={type === "CUSTOMER_RECEIPT" ? "RECEIPT_VOUCHER" : "PAYMENT_VOUCHER"}
+            getTitleAr={() => `مسودة سند ${voucherNo}`}
+            getPayload={() => ({ type, targetId, treasuryId, amount: Number(amount) || 0, voucherNo, date, notes, costCenterId: costCenterId || null })}
+            getTotalAmount={() => Number(amount) || null}
+            actor={actor}
+            onToast={onToast}
+            className="w-full"
+          />
           <button type="submit" className="w-full py-2.5 rounded-xl accent-bg font-bold shadow-sm">
             + حفظ السند وتحديث الحساب والخزينة
           </button>

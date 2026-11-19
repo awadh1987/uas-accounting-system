@@ -5,13 +5,15 @@ import { Pencil, Plus, Printer } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { computeWorkerWageTotals, fmtNum } from "@/lib/formulas";
-import { triggerNativePrint } from "@/lib/nativeBridge";
+import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
 import type { UasProject, UasWorkerWage } from "@/types/uas";
 import {
   AccountingDirectionSelector,
   type AccountingDirectionValue,
 } from "@/components/AccountingDirectionSelector";
 import { SelectWithOther } from "@/components/SelectWithOther";
+import { CostCenterSelector } from "@/components/CostCenterSelector";
+import { SaveDraftButton } from "@/components/SaveDraftButton";
 
 type WorkerPayload = {
   projectId: string;
@@ -23,6 +25,7 @@ type WorkerPayload = {
   credit: number;
   date: string;
   notes: string;
+  costCenterId?: string | null;
   expenseAccountId?: string | null;
   expenseAccountCode?: string | null;
   customAccount?: { nameAr: string; nameEn?: string; parentCode: string; code?: string } | null;
@@ -67,6 +70,7 @@ export function WorkersTab({
   const [credit, setCredit] = useState("10000");
   const [date, setDate] = useState("2026-11-10");
   const [notes, setNotes] = useState("");
+  const [costCenterId, setCostCenterId] = useState("");
   const [filterWorker, setFilterWorker] = useState("ALL");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -151,6 +155,7 @@ export function WorkersTab({
       credit: Number(credit) || 0,
       date: date || new Date().toISOString().slice(0, 10),
       notes: notes.trim(),
+      costCenterId: costCenterId || undefined,
       expenseAccountId: accountingDir.accountId,
       expenseAccountCode: accountingDir.accountCode || "511101",
       customAccount: accountingDir.isCustom ? accountingDir.customAccount : undefined,
@@ -163,6 +168,7 @@ export function WorkersTab({
       setEditingId(null);
       setName("");
       setNotes("");
+      setCostCenterId("");
       setDrawerOpen(false);
     }
   }
@@ -323,6 +329,17 @@ export function WorkersTab({
             onChange={setAccountingDir}
           />
 
+          <CostCenterSelector value={costCenterId} onChange={setCostCenterId} />
+          <SaveDraftButton
+            module="WORKERS"
+            formType="WORKER_WAGE"
+            entityId={editingId}
+            getTitleAr={() => `مسودة أجر عامل: ${name.trim() || "جديد"}`}
+            getPayload={() => ({ projectId, subProjectId, harvest, name, dailyWage: Number(dailyWage) || 0, days: Number(days) || 1, credit: Number(credit) || 0, date, notes, costCenterId: costCenterId || null })}
+            getTotalAmount={() => preview.totalWage}
+            onToast={onToast}
+            className="w-full"
+          />
           <button type="submit" className="w-full py-2.5 rounded-xl accent-bg font-bold shadow-sm">
             {editingId ? "حفظ تعديلات سجل العامل" : "+ إضافة سجل أجر العامل"}
           </button>
@@ -355,7 +372,62 @@ export function WorkersTab({
               تصدير Excel
             </button>
             <button
-              onClick={() => void triggerNativePrint({ title: "UAS-Workers-Wages-Report" })}
+              onClick={() =>
+                void printUasDocument({
+                  titleAr: "كشف حساب وأجور العمال",
+                  titleEn: "Worker Account Report",
+                  documentNumber: `RPT-WRK-${new Date().toISOString().slice(0, 10)}`,
+                  currency: "YER",
+                  status: "POSTED",
+                  format: "A4_PORTRAIT",
+                  metadata: [
+                    {
+                      labelAr: "نطاق التقرير",
+                      labelEn: "Filter",
+                      value: filterWorker === "ALL" ? "جميع العمال / All Workers" : filterWorker,
+                    },
+                  ],
+                  summaryCards: [
+                    { labelAr: "إجمالي الأيام", labelEn: "Total Days", value: fmtNum(sumDays), tone: "neutral" },
+                    { labelAr: "إجمالي الأجور", labelEn: "Total Wages", value: `${fmtNum(sumTotal)} YER`, tone: "indigo" },
+                    { labelAr: "المسلم (دائن)", labelEn: "Paid", value: `${fmtNum(sumCredit)} YER`, tone: "emerald" },
+                    { labelAr: "المتبقي (مدين)", labelEn: "Balance Due", value: `${fmtNum(sumDebit)} YER`, tone: "rose" },
+                  ],
+                  tables: [
+                    {
+                      headingAr: "تفاصيل مستحقات العمال",
+                      headingEn: "Worker Wage Entries",
+                      columns: [
+                        { key: "date", labelAr: "التاريخ", labelEn: "Date" },
+                        { key: "name", labelAr: "اسم العامل", labelEn: "Worker" },
+                        { key: "harvest", labelAr: "القطفة", labelEn: "Harvest" },
+                        { key: "dailyWage", labelAr: "الأجر اليومي", labelEn: "Daily Wage", numeric: true },
+                        { key: "days", labelAr: "الأيام", labelEn: "Days", numeric: true },
+                        { key: "total", labelAr: "الإجمالي", labelEn: "Total", numeric: true },
+                        { key: "credit", labelAr: "المسلم", labelEn: "Paid", numeric: true },
+                        { key: "debit", labelAr: "المتبقي", labelEn: "Due", numeric: true },
+                      ],
+                      rows: visibleWorkers.map((w) => ({
+                        date: w.date,
+                        name: w.name,
+                        harvest: w.harvest,
+                        dailyWage: fmtNum(w.dailyWage),
+                        days: fmtNum(w.days),
+                        total: fmtNum(w.total),
+                        credit: fmtNum(w.credit),
+                        debit: fmtNum(w.debit),
+                      })),
+                      totalsRow: {
+                        date: "الإجمالي",
+                        days: fmtNum(sumDays),
+                        total: fmtNum(sumTotal),
+                        credit: fmtNum(sumCredit),
+                        debit: fmtNum(sumDebit),
+                      },
+                    },
+                  ],
+                })
+              }
               className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold inline-flex items-center gap-1"
             >
               <Printer className="w-3.5 h-3.5" />

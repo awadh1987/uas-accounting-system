@@ -11,8 +11,9 @@ export async function GET(req: NextRequest) {
     const toDate = searchParams.get("toDate") || undefined;
     const projectId = searchParams.get("projectId") || undefined;
     const subProjectId = searchParams.get("subProjectId") || undefined;
+    const costCenterId = searchParams.get("costCenterId") || undefined;
 
-    const reports = await generateFinancialReports({ fromDate, toDate, projectId, subProjectId });
+    const reports = await generateFinancialReports({ fromDate, toDate, projectId, costCenterId, subProjectId });
     return NextResponse.json({
       filters: reports.filters,
       ...reports.balanceSheet,

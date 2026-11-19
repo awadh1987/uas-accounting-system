@@ -11,7 +11,14 @@ CREATE TABLE "Account" (
     "parentId" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "Account_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "generation" INTEGER NOT NULL DEFAULT 1,
+    "parentAccountId" TEXT,
+    "isPostable" BOOLEAN NOT NULL DEFAULT false,
+    "subLedgerType" TEXT,
+    "subLedgerEntityId" TEXT,
+    "defaultCostCenterId" TEXT,
+    CONSTRAINT "Account_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Account_defaultCostCenterId_fkey" FOREIGN KEY ("defaultCostCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -25,11 +32,16 @@ CREATE TABLE "JournalEntry" (
     "status" TEXT NOT NULL DEFAULT 'POSTED',
     "sourceType" TEXT,
     "sourceId" TEXT,
+    "entryType" TEXT NOT NULL DEFAULT 'NORMAL',
+    "fiscalYearId" TEXT,
     "projectId" TEXT,
     "subProjectId" TEXT,
     "createdById" TEXT NOT NULL,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
+    "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
+    "revisionNumber" INTEGER NOT NULL DEFAULT 1,
+    CONSTRAINT "JournalEntry_fiscalYearId_fkey" FOREIGN KEY ("fiscalYearId") REFERENCES "FiscalYear" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "JournalEntry_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "JournalEntry_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "JournalEntry_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
@@ -55,11 +67,13 @@ CREATE TABLE "JournalEntryLine" (
     "projectId" TEXT,
     "subProjectId" TEXT,
     "harvestCycleId" TEXT,
+    "costCenterId" TEXT,
     CONSTRAINT "JournalEntryLine_journalEntryId_fkey" FOREIGN KEY ("journalEntryId") REFERENCES "JournalEntry" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "JournalEntryLine_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "JournalEntryLine_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "JournalEntryLine_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "JournalEntryLine_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    CONSTRAINT "JournalEntryLine_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "JournalEntryLine_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -186,8 +200,12 @@ CREATE TABLE "Project" (
     "notes" TEXT NOT NULL DEFAULT '',
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
+    "glAccountId" TEXT,
+    "costCenterId" TEXT,
     CONSTRAINT "Project_parentProjectId_fkey" FOREIGN KEY ("parentProjectId") REFERENCES "Project" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "Project_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    CONSTRAINT "Project_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Project_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Project_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -251,7 +269,11 @@ CREATE TABLE "Vendor" (
     "accountId" TEXT NOT NULL,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "Vendor_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    "glAccountId" TEXT,
+    "costCenterId" TEXT,
+    CONSTRAINT "Vendor_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "Vendor_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Vendor_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -328,11 +350,15 @@ CREATE TABLE "VendorBill" (
     "journalEntryId" TEXT,
     "notes" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "costCenterId" TEXT,
+    "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
+    "revisionNumber" INTEGER NOT NULL DEFAULT 1,
     CONSTRAINT "VendorBill_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "VendorBill_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "VendorBill_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "VendorBill_purchaseOrderId_fkey" FOREIGN KEY ("purchaseOrderId") REFERENCES "PurchaseOrder" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "VendorBill_acquisitionCycleId_fkey" FOREIGN KEY ("acquisitionCycleId") REFERENCES "ProjectAcquisitionCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    CONSTRAINT "VendorBill_acquisitionCycleId_fkey" FOREIGN KEY ("acquisitionCycleId") REFERENCES "ProjectAcquisitionCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "VendorBill_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -358,12 +384,16 @@ CREATE TABLE "PaymentVoucher" (
     "journalEntryId" TEXT,
     "qrVerificationHash" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "costCenterId" TEXT,
+    "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
+    "revisionNumber" INTEGER NOT NULL DEFAULT 1,
     CONSTRAINT "PaymentVoucher_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "PaymentVoucher_billId_fkey" FOREIGN KEY ("billId") REFERENCES "VendorBill" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "PaymentVoucher_treasuryId_fkey" FOREIGN KEY ("treasuryId") REFERENCES "TreasuryAccount" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "PaymentVoucher_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "PaymentVoucher_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "PaymentVoucher_acquisitionCycleId_fkey" FOREIGN KEY ("acquisitionCycleId") REFERENCES "ProjectAcquisitionCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    CONSTRAINT "PaymentVoucher_acquisitionCycleId_fkey" FOREIGN KEY ("acquisitionCycleId") REFERENCES "ProjectAcquisitionCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "PaymentVoucher_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -378,7 +408,11 @@ CREATE TABLE "Customer" (
     "creditLimit" DECIMAL NOT NULL DEFAULT 0,
     "accountId" TEXT NOT NULL,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "Customer_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    "glAccountId" TEXT,
+    "costCenterId" TEXT,
+    CONSTRAINT "Customer_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "Customer_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Customer_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -409,11 +443,15 @@ CREATE TABLE "SalesInvoice" (
     "journalEntryId" TEXT,
     "qrVerificationHash" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "costCenterId" TEXT,
+    "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
+    "revisionNumber" INTEGER NOT NULL DEFAULT 1,
     CONSTRAINT "SalesInvoice_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "SalesInvoice_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "SalesInvoice_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "SalesInvoice_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "SalesInvoice_treasuryAccountId_fkey" FOREIGN KEY ("treasuryAccountId") REFERENCES "TreasuryAccount" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    CONSTRAINT "SalesInvoice_treasuryAccountId_fkey" FOREIGN KEY ("treasuryAccountId") REFERENCES "TreasuryAccount" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "SalesInvoice_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -435,10 +473,14 @@ CREATE TABLE "ReceiptVoucher" (
     "journalEntryId" TEXT,
     "qrVerificationHash" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "costCenterId" TEXT,
+    "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
+    "revisionNumber" INTEGER NOT NULL DEFAULT 1,
     CONSTRAINT "ReceiptVoucher_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "ReceiptVoucher_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "SalesInvoice" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "ReceiptVoucher_treasuryId_fkey" FOREIGN KEY ("treasuryId") REFERENCES "TreasuryAccount" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "ReceiptVoucher_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    CONSTRAINT "ReceiptVoucher_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "ReceiptVoucher_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -532,7 +574,11 @@ CREATE TABLE "Worker" (
     "defaultDailyWage" REAL NOT NULL DEFAULT 0,
     "accountId" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "Worker_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "glAccountId" TEXT,
+    "costCenterId" TEXT,
+    CONSTRAINT "Worker_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Worker_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Worker_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -766,7 +812,11 @@ CREATE TABLE "Warehouse" (
     "isDefault" BOOLEAN NOT NULL DEFAULT false,
     "isCustom" BOOLEAN NOT NULL DEFAULT false,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "glAccountId" TEXT,
+    "costCenterId" TEXT,
+    CONSTRAINT "Warehouse_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Warehouse_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -842,9 +892,117 @@ CREATE TABLE "StockMovement" (
     "referenceId" TEXT,
     "notes" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "costCenterId" TEXT,
+    "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
+    "revisionNumber" INTEGER NOT NULL DEFAULT 1,
     CONSTRAINT "StockMovement_itemId_fkey" FOREIGN KEY ("itemId") REFERENCES "InventoryItem" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "StockMovement_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "StockMovement_enteredUnitId_fkey" FOREIGN KEY ("enteredUnitId") REFERENCES "UnitOfMeasure" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    CONSTRAINT "StockMovement_enteredUnitId_fkey" FOREIGN KEY ("enteredUnitId") REFERENCES "UnitOfMeasure" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "StockMovement_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "CostCenter" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "code" TEXT NOT NULL,
+    "nameAr" TEXT NOT NULL,
+    "nameEn" TEXT NOT NULL,
+    "parentId" TEXT,
+    "generation" INTEGER NOT NULL DEFAULT 1,
+    "centerType" TEXT NOT NULL DEFAULT 'OTHER',
+    "customLabel" TEXT,
+    "isCustom" BOOLEAN NOT NULL DEFAULT false,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "CostCenter_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "FiscalYear" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "code" TEXT NOT NULL,
+    "nameAr" TEXT NOT NULL,
+    "nameEn" TEXT NOT NULL,
+    "startDate" DATETIME NOT NULL,
+    "endDate" DATETIME NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'OPEN',
+    "closingJournalEntryId" TEXT,
+    "openingJournalEntryId" TEXT,
+    "retainedEarningsAccountId" TEXT,
+    "netProfitLossBase" DECIMAL,
+    "closedById" TEXT,
+    "closedByName" TEXT,
+    "closedAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "WorkspaceDraft" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "draftNumber" TEXT NOT NULL,
+    "module" TEXT NOT NULL,
+    "formType" TEXT NOT NULL,
+    "entityId" TEXT,
+    "titleAr" TEXT NOT NULL,
+    "titleEn" TEXT NOT NULL DEFAULT '',
+    "payloadJson" TEXT NOT NULL,
+    "totalAmount" REAL,
+    "currencyCode" TEXT NOT NULL DEFAULT 'YER',
+    "visibility" TEXT NOT NULL DEFAULT 'SHARED_WORKSPACE',
+    "status" TEXT NOT NULL DEFAULT 'ACTIVE_DRAFT',
+    "convertedEntityId" TEXT,
+    "createdById" TEXT NOT NULL,
+    "createdByName" TEXT NOT NULL,
+    "updatedById" TEXT,
+    "updatedByName" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "ApprovalRule" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "module" TEXT NOT NULL,
+    "actionType" TEXT NOT NULL,
+    "minAmountBase" REAL NOT NULL DEFAULT 0,
+    "currencyCode" TEXT NOT NULL DEFAULT 'YER',
+    "requiredRole" TEXT NOT NULL DEFAULT 'CHIEF_ACCOUNTANT',
+    "approverUserIdsJson" TEXT NOT NULL DEFAULT '[]',
+    "allowSelfApproval" BOOLEAN NOT NULL DEFAULT false,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "ApprovalRequest" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "requestNumber" TEXT NOT NULL,
+    "ruleId" TEXT,
+    "module" TEXT NOT NULL,
+    "actionType" TEXT NOT NULL,
+    "targetType" TEXT NOT NULL,
+    "targetId" TEXT NOT NULL,
+    "documentNumber" TEXT NOT NULL,
+    "summaryAr" TEXT NOT NULL,
+    "summaryEn" TEXT NOT NULL DEFAULT '',
+    "amountBase" REAL NOT NULL DEFAULT 0,
+    "currencyCode" TEXT NOT NULL DEFAULT 'YER',
+    "beforeSnapshotJson" TEXT,
+    "afterSnapshotJson" TEXT NOT NULL,
+    "reasonAr" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "requestedById" TEXT NOT NULL,
+    "requestedByName" TEXT NOT NULL,
+    "reviewedById" TEXT,
+    "reviewedByName" TEXT,
+    "reviewNotes" TEXT,
+    "reviewedAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "ApprovalRequest_ruleId_fkey" FOREIGN KEY ("ruleId") REFERENCES "ApprovalRule" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateIndex
@@ -951,3 +1109,30 @@ CREATE UNIQUE INDEX "StockBalance_itemId_warehouseId_key" ON "StockBalance"("ite
 
 -- CreateIndex
 CREATE INDEX "StockMovement_itemId_warehouseId_createdAt_idx" ON "StockMovement"("itemId", "warehouseId", "createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "CostCenter_code_key" ON "CostCenter"("code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "FiscalYear_code_key" ON "FiscalYear"("code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "WorkspaceDraft_draftNumber_key" ON "WorkspaceDraft"("draftNumber");
+
+-- CreateIndex
+CREATE INDEX "WorkspaceDraft_module_status_idx" ON "WorkspaceDraft"("module", "status");
+
+-- CreateIndex
+CREATE INDEX "WorkspaceDraft_createdById_visibility_idx" ON "WorkspaceDraft"("createdById", "visibility");
+
+-- CreateIndex
+CREATE INDEX "ApprovalRule_module_actionType_isActive_idx" ON "ApprovalRule"("module", "actionType", "isActive");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ApprovalRequest_requestNumber_key" ON "ApprovalRequest"("requestNumber");
+
+-- CreateIndex
+CREATE INDEX "ApprovalRequest_status_module_idx" ON "ApprovalRequest"("status", "module");
+
+-- CreateIndex
+CREATE INDEX "ApprovalRequest_targetType_targetId_idx" ON "ApprovalRequest"("targetType", "targetId");

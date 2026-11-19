@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { provisionEntityGen6AccountAndCostCenter } from "@/lib/accountingCoreEngine";
 import { prisma } from "@/lib/prisma";
 import { generateFinancialReports, recordAuditDiffTx } from "@/lib/accounting/ledgerService";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
@@ -178,6 +179,12 @@ export async function POST(req: NextRequest) {
           },
         },
       });
+
+      // Accounting-Core: Gen-6 project GL leaf + Cost Center
+      await provisionEntityGen6AccountAndCostCenter(
+        { entityType: "PROJECT", entityId: project.id, nameAr: name, nameEn },
+        tx
+      );
 
       await appendAuditLogTx(tx, {
         ...actor,

@@ -91,6 +91,7 @@ export async function POST(req: NextRequest) {
       salesOfficerId,
       salesOfficerTitle,
       treasuryAccountId,
+      costCenterId: body.costCenterId ? String(body.costCenterId) : null,
       createdById: actor.userId ?? undefined,
     });
     return NextResponse.json(result, { status: 201 });

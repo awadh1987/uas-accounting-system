@@ -3,8 +3,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Edit3, Plus, Users } from "lucide-react";
 import { fmtNum } from "@/lib/formulas";
-import { triggerNativePrint } from "@/lib/nativeBridge";
+import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
+import { CostCenterSelector } from "@/components/CostCenterSelector";
+import { SaveDraftButton } from "@/components/SaveDraftButton";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import type { UasProject, UasSaleTransaction, UasUser } from "@/types/uas";
 
@@ -59,6 +61,7 @@ export function CustomersTab({
   const [editPhone, setEditPhone] = useState("");
   const [editAddress, setEditAddress] = useState("");
   const [editCreditLimit, setEditCreditLimit] = useState("0");
+  const [editCostCenterId, setEditCostCenterId] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
 
   const loadCustomers = useCallback(async () => {
@@ -108,6 +111,7 @@ export function CustomersTab({
     setEditPhone(c.phone);
     setEditAddress(c.address || "");
     setEditCreditLimit(String(c.creditLimit || 0));
+    setEditCostCenterId((c as unknown as { costCenterId?: string }).costCenterId || "");
   }
 
   async function handleSaveCustomerEdit(e: React.FormEvent) {
@@ -125,6 +129,7 @@ export function CustomersTab({
           phone: editPhone.trim() || undefined,
           address: editAddress.trim() || null,
           creditLimit: Number(editCreditLimit) || 0,
+          costCenterId: editCostCenterId || null,
           actor: currentUser
             ? { userId: currentUser.id, userDisplay: currentUser.name, userRole: currentUser.role }
             : undefined,
@@ -212,6 +217,17 @@ export function CustomersTab({
               className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
             />
           </div>
+          <CostCenterSelector value={editCostCenterId} onChange={setEditCostCenterId} />
+          <SaveDraftButton
+            module="SALES"
+            formType="CUSTOMER"
+            entityId={editingCustomer?.id || null}
+            getTitleAr={() => `مسودة تعديل عميل: ${editNameAr.trim()}`}
+            getPayload={() => ({ id: editingCustomer?.id, nameAr: editNameAr, nameEn: editNameEn, phone: editPhone, address: editAddress, creditLimit: Number(editCreditLimit) || 0, costCenterId: editCostCenterId || null })}
+            actor={currentUser ? { userId: currentUser.id, userDisplay: currentUser.name, userRole: currentUser.role } : undefined}
+            onToast={onToast}
+            className="w-full"
+          />
           <button
             type="submit"
             disabled={savingEdit}
@@ -262,7 +278,59 @@ export function CustomersTab({
               تصدير كشف العملاء Excel
             </button>
             <button
-              onClick={() => void triggerNativePrint({ title: "UAS-Customers-Statement" })}
+              onClick={() => {
+                const totSales = visibleRows.reduce((s, r) => s + Number(r.total), 0);
+                const totPaid = visibleRows.reduce((s, r) => s + Number(r.credit), 0);
+                const totDue = visibleRows.reduce((s, r) => s + Number(r.debit), 0);
+                void printUasDocument({
+                  titleAr: "كشف حساب وفواتير العملاء",
+                  titleEn: "Customer Account Statement",
+                  documentNumber: `RPT-CUST-${new Date().toISOString().slice(0, 10)}`,
+                  currency: "YER",
+                  status: "POSTED",
+                  format: "A4_PORTRAIT",
+                  metadata: [
+                    {
+                      labelAr: "العميل",
+                      labelEn: "Customer",
+                      value: selectedCustomer === "ALL" ? "جميع العملاء / All Customers" : selectedCustomer,
+                    },
+                  ],
+                  summaryCards: [
+                    { labelAr: "إجمالي المبيعات", labelEn: "Total Billed", value: `${fmtNum(totSales)} YER`, tone: "indigo" },
+                    { labelAr: "المقبوض (دائن)", labelEn: "Collected", value: `${fmtNum(totPaid)} YER`, tone: "emerald" },
+                    { labelAr: "الرصيد المستحق (مدين)", labelEn: "Receivable", value: `${fmtNum(totDue)} YER`, tone: "rose" },
+                  ],
+                  tables: [
+                    {
+                      headingAr: "حركات وفواتير العميل",
+                      headingEn: "Statement Lines",
+                      columns: [
+                        { key: "date", labelAr: "التاريخ", labelEn: "Date" },
+                        { key: "voucherNo", labelAr: "السند", labelEn: "Voucher" },
+                        { key: "customer", labelAr: "العميل", labelEn: "Customer" },
+                        { key: "total", labelAr: "الإجمالي", labelEn: "Total", numeric: true },
+                        { key: "credit", labelAr: "المدفوع", labelEn: "Paid", numeric: true },
+                        { key: "debit", labelAr: "المتبقي", labelEn: "Balance", numeric: true },
+                      ],
+                      rows: visibleRows.map((r) => ({
+                        date: r.date,
+                        voucherNo: r.voucherNo || "—",
+                        customer: r.customer,
+                        total: fmtNum(r.total),
+                        credit: fmtNum(r.credit),
+                        debit: fmtNum(r.debit),
+                      })),
+                      totalsRow: {
+                        date: "الإجمالي",
+                        total: fmtNum(totSales),
+                        credit: fmtNum(totPaid),
+                        debit: fmtNum(totDue),
+                      },
+                    },
+                  ],
+                });
+              }}
               className="px-3.5 py-1.5 rounded-xl border border-slate-300 text-xs font-bold"
             >
               طباعة الفاتورة / الكشف PDF

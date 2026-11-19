@@ -1,6 +1,11 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { CostCenterSelector } from "@/components/CostCenterSelector";
+import { FiscalYearClosingModal } from "@/components/FiscalYearClosingModal";
+import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
+import { SaveDraftButton } from "@/components/SaveDraftButton";
+import { useFormDraft } from "@/hooks/useFormDraft";
 import { BookOpen, CheckCircle2, Pencil, Plus, RotateCcw, Search, Trash2, AlertTriangle } from "lucide-react";
 import { fmtNum } from "@/lib/formulas";
 import type { UasProject, UasUser } from "@/types/uas";
@@ -94,6 +99,7 @@ export function GeneralLedgerTab({
   const [summary, setSummary] = useState({ count: 0, totalDebitBase: 0, totalCreditBase: 0, isLedgerBalanced: true });
   const [loading, setLoading] = useState(true);
   const [showFxPanel, setShowFxPanel] = useState(false);
+  const [showYearEndWizard, setShowYearEndWizard] = useState(false);
 
   const [filterAccountId, setFilterAccountId] = useState("ALL");
   const [filterFrom, setFilterFrom] = useState("");
@@ -109,12 +115,29 @@ export function GeneralLedgerTab({
   const [headerProjectId, setHeaderProjectId] = useState(projects[0]?.id || "");
   const [headerSubProjectId, setHeaderSubProjectId] = useState("");
   const [attachmentName, setAttachmentName] = useState("");
+  const [costCenterId, setCostCenterId] = useState("");
   const [quickCoaOpen, setQuickCoaOpen] = useState(false);
   const [draftLines, setDraftLines] = useState<DraftLine[]>([
     { accountId: "", debit: "10000", credit: "0", currency: "YER", memo: "", projectId: projects[0]?.id || "", subProjectId: "" },
     { accountId: "", debit: "0", credit: "10000", currency: "YER", memo: "", projectId: projects[0]?.id || "", subProjectId: "" },
   ]);
   const [submitting, setSubmitting] = useState(false);
+
+  useFormDraft({
+    module: "ACCOUNTING",
+    formType: "JOURNAL_VOUCHER",
+    getFormState: () => ({ date, reference, narrationAr, headerProjectId, headerSubProjectId, costCenterId, lines: draftLines }),
+    setFormState: (st) => {
+      if (typeof st.date === "string") setDate(st.date);
+      if (typeof st.reference === "string") setReference(st.reference);
+      if (typeof st.narrationAr === "string") setNarrationAr(st.narrationAr);
+      if (typeof st.costCenterId === "string") setCostCenterId(st.costCenterId);
+      if (Array.isArray(st.lines) && st.lines.length >= 2) setDraftLines(st.lines as DraftLine[]);
+      setShowBuilder(true);
+    },
+    actor: { userId: currentUser.id, userDisplay: currentUser.name, userRole: currentUser.role },
+    onToast,
+  });
 
   const fetchJournalAndCoa = useCallback(async () => {
     const params = new URLSearchParams();
@@ -283,6 +306,7 @@ export function GeneralLedgerTab({
           date,
           reference: reference.trim() || undefined,
           narrationAr: narrationAr.trim(),
+          costCenterId: costCenterId || undefined,
           projectId: headerProjectId || (selectedProjectId !== "ALL" ? selectedProjectId : draftLines[0]?.projectId || null),
           subProjectId: headerSubProjectId || (selectedSubProjectId !== "ALL" ? selectedSubProjectId : draftLines[0]?.subProjectId || null),
           actor: {
@@ -323,6 +347,7 @@ export function GeneralLedgerTab({
       setNarrationAr("");
       setReference("");
       setAttachmentName("");
+      setCostCenterId("");
       setShowBuilder(false);
       await loadData();
     } finally {
@@ -359,6 +384,17 @@ export function GeneralLedgerTab({
       {showFxPanel && (
         <MultiCurrencyFxPanel readOnly={readOnly} onToast={onToast} />
       )}
+      <FiscalYearClosingModal
+        open={showYearEndWizard}
+        onClose={() => setShowYearEndWizard(false)}
+        onCompleted={() => void loadData()}
+        onToast={onToast}
+        actor={{
+          userId: currentUser.id,
+          userDisplay: `${currentUser.name} (${currentUser.role})`,
+          userRole: currentUser.role,
+        }}
+      />
       <div className="card-surface rounded-2xl p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
@@ -386,6 +422,64 @@ export function GeneralLedgerTab({
               }`}
             >
               💱 العملات وإعادة التقييم (FX)
+            </button>
+            {canPost && !readOnly && (
+              <button
+                type="button"
+                onClick={() => setShowYearEndWizard(true)}
+                className="px-3 py-1.5 rounded-xl text-xs font-extrabold border border-amber-500 text-amber-700 dark:text-amber-300 bg-amber-50/50 dark:bg-amber-950/30 hover:bg-amber-100/70 transition"
+              >
+                🔒 إقفال السنة المالية
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() =>
+                void printUasDocument({
+                  titleAr: "دفتر اليومية العام والقيود المحاسبية",
+                  titleEn: "General Ledger Journal Vouchers",
+                  documentNumber: `RPT-JV-${new Date().toISOString().slice(0, 10)}`,
+                  currency: "YER",
+                  status: "POSTED",
+                  format: "A4_LANDSCAPE",
+                  printedBy: currentUser.name,
+                  summaryCards: [
+                    { labelAr: "عدد القيود", labelEn: "Entries", value: String(summary.count), tone: "neutral" },
+                    { labelAr: "إجمالي المدين", labelEn: "Total Debit", value: `${fmtNum(summary.totalDebitBase)} YER`, tone: "emerald" },
+                    { labelAr: "إجمالي الدائن", labelEn: "Total Credit", value: `${fmtNum(summary.totalCreditBase)} YER`, tone: "indigo" },
+                  ],
+                  tables: [
+                    {
+                      headingAr: "القيود المرحلة",
+                      headingEn: "Posted Journal Entries",
+                      columns: [
+                        { key: "entryNumber", labelAr: "رقم القيد", labelEn: "JV No" },
+                        { key: "date", labelAr: "التاريخ", labelEn: "Date" },
+                        { key: "narrationAr", labelAr: "البيان", labelEn: "Narration" },
+                        { key: "status", labelAr: "الحالة", labelEn: "Status" },
+                        { key: "debit", labelAr: "مدين", labelEn: "Debit", numeric: true },
+                        { key: "credit", labelAr: "دائن", labelEn: "Credit", numeric: true },
+                      ],
+                      rows: entries.map((e) => ({
+                        entryNumber: e.entryNumber,
+                        date: String(e.date).slice(0, 10),
+                        narrationAr: e.narrationAr,
+                        status: e.status,
+                        debit: fmtNum(e.lines.reduce((s, l) => s + Number(l.debitBase || l.debit || 0), 0)),
+                        credit: fmtNum(e.lines.reduce((s, l) => s + Number(l.creditBase || l.credit || 0), 0)),
+                      })),
+                      totalsRow: {
+                        entryNumber: "الإجمالي",
+                        debit: fmtNum(summary.totalDebitBase),
+                        credit: fmtNum(summary.totalCreditBase),
+                      },
+                    },
+                  ],
+                })
+              }
+              className="px-3 py-1.5 rounded-xl text-xs font-extrabold border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+            >
+              🖨️ طباعة اليومية PDF
             </button>
             <span
               className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 ${
@@ -512,6 +606,10 @@ export function GeneralLedgerTab({
                   className="w-full rounded-xl border border-slate-300 bg-white dark:bg-slate-900 px-3 py-2"
                 />
               </div>
+            </div>
+
+            <div className="max-w-md">
+              <CostCenterSelector value={costCenterId} onChange={setCostCenterId} label="مركز التكلفة الافتراضي للقيد / Entry Cost Center" />
             </div>
 
             <div className="space-y-2 overflow-x-auto">
@@ -704,6 +802,30 @@ export function GeneralLedgerTab({
                 <div className={`font-extrabold ${totals.balanced ? "text-emerald-600" : "text-rose-600"}`}>
                   مدين: {fmtNum(totals.drBase)} | دائن: {fmtNum(totals.crBase)} | الفرق: {fmtNum(totals.diff)} YER
                 </div>
+                <SaveDraftButton
+                  module="ACCOUNTING"
+                  formType="JOURNAL_VOUCHER"
+                  entityId={editingEntryId}
+                  getTitleAr={() => narrationAr.trim() || `مسودة قيد يومية (${date})`}
+                  getPayload={() => ({
+                    date,
+                    reference,
+                    narrationAr,
+                    projectId: headerProjectId || null,
+                    subProjectId: headerSubProjectId || null,
+                    costCenterId: costCenterId || null,
+                    lines: draftLines.map((l) => ({
+                      accountId: l.accountId,
+                      debit: Number(l.debit) || 0,
+                      credit: Number(l.credit) || 0,
+                      currency: l.currency,
+                      memo: l.memo,
+                    })),
+                  })}
+                  getTotalAmount={() => totals.drBase || null}
+                  actor={{ userId: currentUser.id, userDisplay: currentUser.name, userRole: currentUser.role }}
+                  onToast={onToast}
+                />
                 <button
                   type="submit"
                   disabled={!totals.balanced || submitting}

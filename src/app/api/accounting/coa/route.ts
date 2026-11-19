@@ -6,6 +6,7 @@ import {
   recordAuditDiffTx,
 } from "@/lib/accounting/ledgerService";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
+import { ensure6GenerationCoaHierarchy } from "@/lib/accountingCoreEngine";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,7 @@ export async function GET(req: NextRequest) {
     const fromDate = searchParams.get("fromDate") || undefined;
     const toDate = searchParams.get("toDate") || undefined;
 
+    await ensure6GenerationCoaHierarchy();
     const result = await getCoaTreeWithBalances({ projectId, fromDate, toDate });
     return NextResponse.json(result);
   } catch (error) {

@@ -11,10 +11,11 @@ export async function GET(req: NextRequest) {
     const toDate = searchParams.get("toDate") || undefined;
     const projectId = searchParams.get("projectId") || undefined;
     const subProjectId = searchParams.get("subProjectId") || undefined;
+    const costCenterId = searchParams.get("costCenterId") || undefined;
     const levelParam = Number(searchParams.get("level") || 6);
     const maxLevel = Number.isFinite(levelParam) ? Math.min(6, Math.max(1, levelParam)) : 6;
 
-    const reports = await generateFinancialReports({ fromDate, toDate, projectId, subProjectId, maxLevel });
+    const reports = await generateFinancialReports({ fromDate, toDate, projectId, costCenterId, subProjectId, maxLevel });
     return NextResponse.json({
       filters: reports.filters,
       ...reports.trialBalance,

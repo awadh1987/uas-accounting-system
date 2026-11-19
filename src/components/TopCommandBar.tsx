@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
+  FileClock,
   Globe2,
   Home,
   LogOut,
@@ -11,6 +12,7 @@ import {
   PanelLeftOpen,
   RefreshCw,
   Search,
+  ShieldCheck,
   Smartphone,
   User,
   UserCheck,
@@ -65,6 +67,10 @@ interface TopCommandBarProps {
   onOpenLogin: () => void;
   onOpenLanding: () => void;
   onOpenProfileDrawer?: () => void;
+  onOpenDraftsCenter?: () => void;
+  draftsCount?: number;
+  onOpenApprovalsCenter?: () => void;
+  pendingApprovalsCount?: number;
   onLogout?: () => void;
 }
 
@@ -101,6 +107,10 @@ export function TopCommandBar({
   onOpenLogin,
   onOpenLanding,
   onOpenProfileDrawer,
+  onOpenDraftsCenter,
+  draftsCount = 0,
+  onOpenApprovalsCenter,
+  pendingApprovalsCount = 0,
   onLogout,
 }: TopCommandBarProps) {
   const isAr = lang === "ar";
@@ -238,6 +248,42 @@ export function TopCommandBar({
               ))}
             </select>
           </div>
+        )}
+
+        {/* Pending Approvals Counter Badge */}
+        {onOpenApprovalsCenter && (
+          <button
+            type="button"
+            onClick={onOpenApprovalsCenter}
+            title={isAr ? "مركز الاعتمادات والمراجعة" : "Approvals & Amendments Center"}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-indigo-400/70 bg-indigo-50/70 dark:bg-indigo-950/30 hover:bg-indigo-100/80 text-indigo-800 dark:text-indigo-200 text-xs font-extrabold transition shrink-0"
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span className="hidden lg:inline text-[11px]">
+              {isAr ? "بانتظار الاعتماد" : "Approvals"}
+            </span>
+            <span className="px-1.5 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] font-black tabular-nums leading-none">
+              {pendingApprovalsCount}
+            </span>
+          </button>
+        )}
+
+        {/* Shared Drafts Center Counter Badge */}
+        {onOpenDraftsCenter && (
+          <button
+            type="button"
+            onClick={onOpenDraftsCenter}
+            title={isAr ? "مركز المسودات المشتركة" : "Shared Drafts Center"}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-amber-400/70 bg-amber-50/70 dark:bg-amber-950/30 hover:bg-amber-100/80 text-amber-800 dark:text-amber-200 text-xs font-extrabold transition shrink-0"
+          >
+            <FileClock className="w-3.5 h-3.5" />
+            <span className="hidden lg:inline text-[11px]">
+              {isAr ? "المسودات" : "Drafts"}
+            </span>
+            <span className="px-1.5 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-black tabular-nums leading-none">
+              {draftsCount}
+            </span>
+          </button>
         )}
 
         {/* Ctrl+K Quick Search Trigger */}

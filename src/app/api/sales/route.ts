@@ -87,9 +87,11 @@ export async function POST(req: NextRequest) {
         : actor.userDisplay || "مسؤول المبيعات";
 
       const cycle = await findHarvestCycle(tx, projectId, harvestName);
+      const costCenterId = body.costCenterId ? String(body.costCenterId).trim() : null;
       const customer = await ensureCustomerWithAccountTx(tx, {
         name: customerName,
         phone: customerPhone,
+        costCenterId,
       });
 
       let journalEntryId: string | null = null;
@@ -114,6 +116,7 @@ export async function POST(req: NextRequest) {
           revenueAccountCode,
           customAccount,
           treasuryAccountId,
+          costCenterId,
           createdById: actor.userId ?? undefined,
         });
         journalEntryId = invRes.journalEntry.id;

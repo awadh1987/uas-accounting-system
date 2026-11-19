@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { DEFAULT_WAREHOUSES, slugifyLookupCode } from "@/lib/multiUnitInventoryEngine";
 import { jsonError } from "@/lib/apiHelpers";
+import { provisionEntityGen6AccountAndCostCenter } from "@/lib/accountingCoreEngine";
 
 export const dynamic = "force-dynamic";
 
@@ -64,7 +65,19 @@ export async function POST(req: NextRequest) {
         isActive: true,
       },
     });
-    return NextResponse.json({ success: true, warehouse }, { status: 201 });
+    // Accounting-Core: every warehouse owns a Gen-6 inventory GL leaf + Cost Center
+    const prov = await provisionEntityGen6AccountAndCostCenter({
+      entityType: "WAREHOUSE",
+      entityId: warehouse.id,
+      nameAr: warehouse.nameAr,
+      nameEn: warehouse.nameEn,
+      costCenterId: warehouse.costCenterId,
+    });
+    const linked = await prisma.warehouse.findUnique({ where: { id: warehouse.id } });
+    return NextResponse.json(
+      { success: true, warehouse: linked ?? warehouse, glAccount: prov.account, costCenterId: prov.costCenterId },
+      { status: 201 }
+    );
   } catch (error) {
     console.error("POST /api/inventory/warehouses error:", error);
     return jsonError("تعذر حفظ المستودع / Failed to save warehouse", 500);

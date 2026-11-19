@@ -1,5 +1,8 @@
 "use client";
 
+import { CostCenterSelector } from "@/components/CostCenterSelector";
+import { SaveDraftButton } from "@/components/SaveDraftButton";
+
 import React, { useCallback, useEffect, useState } from "react";
 import { ArrowDownUp, Boxes, Layers, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { safeFetchJson } from "@/lib/apiClient";
@@ -124,6 +127,7 @@ export function MultiUnitInventoryPanel({
   const [movCustomFactor, setMovCustomFactor] = useState("1");
   const [movQty, setMovQty] = useState("1");
   const [movUnitCost, setMovUnitCost] = useState("0");
+  const [movCostCenterId, setMovCostCenterId] = useState("");
   const [savingMov, setSavingMov] = useState(false);
 
   const loadAll = useCallback(async () => {
@@ -280,6 +284,7 @@ export function MultiUnitInventoryPanel({
           factorToBase: resolvedFactor,
           enteredQty: Number(movQty) || 0,
           unitCost: Number(movUnitCost) || 0,
+          costCenterId: movCostCenterId || undefined,
         }),
       });
       if (!res.ok || !res.data?.success) {
@@ -775,6 +780,16 @@ export function MultiUnitInventoryPanel({
                 onChange={(e) => setMovUnitCost(e.target.value)}
                 placeholder={isAr ? "تكلفة الوحدة" : "Unit Cost"}
                 className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 font-mono"
+              />
+
+              <CostCenterSelector value={movCostCenterId} onChange={setMovCostCenterId} />
+              <SaveDraftButton
+                module="INVENTORY"
+                formType="STOCK_MOVEMENT"
+                getTitleAr={() => `مسودة حركة مخزنية (${movType})`}
+                getPayload={() => ({ itemId: movItemId, warehouseId: movWarehouseId, movementType: movType, enteredUnitId: movUnitId, enteredQty: Number(movQty) || 0, unitCost: Number(movUnitCost) || 0, costCenterId: movCostCenterId || null })}
+                getTotalAmount={() => (Number(movQty) || 0) * (Number(movUnitCost) || 0)}
+                onToast={onToast}
               />
 
               <button

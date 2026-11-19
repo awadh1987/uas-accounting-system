@@ -69,6 +69,7 @@ export async function POST(req: NextRequest) {
         nameEn: body.nameEn ? String(body.nameEn).trim() : undefined,
         phone: body.phone ? String(body.phone).trim() : undefined,
         address: body.address ? String(body.address).trim() : undefined,
+        costCenterId: body.costCenterId ? String(body.costCenterId).trim() : undefined,
       });
 
       if (body.creditLimit !== undefined) {
@@ -137,6 +138,9 @@ async function handleUpdateCustomer(req: NextRequest) {
             : {}),
           ...(body.address !== undefined
             ? { address: body.address ? String(body.address).trim() : null }
+            : {}),
+          ...(body.costCenterId !== undefined
+            ? { costCenterId: body.costCenterId ? String(body.costCenterId).trim() : null }
             : {}),
         },
         include: { account: { select: { id: true, code: true, nameAr: true, nameEn: true } } },

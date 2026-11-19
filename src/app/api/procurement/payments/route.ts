@@ -105,6 +105,7 @@ export async function POST(req: NextRequest) {
       date: body.date ? String(body.date) : new Date(),
       referenceNumber,
       notes,
+      costCenterId: body.costCenterId ? String(body.costCenterId) : null,
       createdById: actor.userId ?? undefined,
     });
 

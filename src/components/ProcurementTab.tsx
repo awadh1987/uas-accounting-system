@@ -1,5 +1,8 @@
 "use client";
 
+import { CostCenterSelector } from "@/components/CostCenterSelector";
+import { SaveDraftButton } from "@/components/SaveDraftButton";
+
 import React, { useCallback, useEffect, useState } from "react";
 import {
   CheckCircle2,
@@ -150,6 +153,7 @@ export function ProcurementTab({
   const [vNameEn, setVNameEn] = useState("");
   const [vPhone, setVPhone] = useState("");
   const [vTax, setVTax] = useState("");
+  const [vCostCenterId, setVCostCenterId] = useState("");
   const [quickVendorTarget, setQuickVendorTarget] = useState<null | "po" | "bill" | "payment">(null);
 
   // Create PO state
@@ -174,6 +178,8 @@ export function ProcurementTab({
   const [billDebitAccountId, setBillDebitAccountId] = useState<string | undefined>(undefined);
   const [billCustomAccount, setBillCustomAccount] = useState<CustomAccountPayload | undefined>(undefined);
   const [billNotes, setBillNotes] = useState("");
+  const [billCostCenterId, setBillCostCenterId] = useState("");
+  const [payCostCenterId, setPayCostCenterId] = useState("");
 
   // Create Payment Voucher state
   const [payVendorId, setPayVendorId] = useState("");
@@ -276,6 +282,7 @@ export function ProcurementTab({
         nameEn: vNameEn.trim() || undefined,
         phone: vPhone.trim() || undefined,
         taxRegistration: vTax.trim() || undefined,
+        costCenterId: vCostCenterId || undefined,
         actor: actorPayload,
       }),
     });
@@ -289,6 +296,7 @@ export function ProcurementTab({
     setVNameEn("");
     setVPhone("");
     setVTax("");
+    setVCostCenterId("");
     setDrawerKind(null);
     onToast(
       isEdit
@@ -393,6 +401,7 @@ export function ProcurementTab({
               debitAccountId: billDebitAccountId || undefined,
               customAccount: billCustomAccount || undefined,
               notes: billNotes.trim() || undefined,
+              costCenterId: billCostCenterId || undefined,
               actor: actorPayload,
             }
       ),
@@ -448,6 +457,7 @@ export function ProcurementTab({
               amount: amt,
               referenceNumber: payRef.trim() || undefined,
               notes: payNotes.trim() || undefined,
+              costCenterId: payCostCenterId || undefined,
               actor: actorPayload,
             }
       ),
@@ -1260,6 +1270,18 @@ export function ProcurementTab({
               className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 tabular-nums"
             />
           </div>
+          <CostCenterSelector value={billCostCenterId} onChange={setBillCostCenterId} />
+          <SaveDraftButton
+            module="PROCUREMENT"
+            formType="PURCHASE_BILL"
+            entityId={editingBillId}
+            getTitleAr={() => `مسودة فاتورة مورد (${billDate})`}
+            getPayload={() => ({ vendorId: billVendorId, projectId: billProjectId, subProjectId: billSubProjectId, date: billDate, totalAmount: Number(billAmount) || 0, notes: billNotes, costCenterId: billCostCenterId || null })}
+            getTotalAmount={() => Number(billAmount) || null}
+            actor={actorPayload}
+            onToast={onToast}
+            className="w-full"
+          />
           <input
             value={billNotes}
             onChange={(e) => setBillNotes(e.target.value)}
@@ -1419,6 +1441,18 @@ export function ProcurementTab({
             placeholder="رقم الحوالة / المرجع البنكي"
             className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
           />
+          <CostCenterSelector value={payCostCenterId} onChange={setPayCostCenterId} />
+          <SaveDraftButton
+            module="PROCUREMENT"
+            formType="PAYMENT_VOUCHER"
+            entityId={editingPaymentId}
+            getTitleAr={() => `مسودة سند صرف مورد (${payDate})`}
+            getPayload={() => ({ vendorId: payVendorId, billId: payBillId, treasuryId: payTreasuryId, date: payDate, amount: Number(payAmount) || 0, referenceNumber: payRef, notes: payNotes, costCenterId: payCostCenterId || null })}
+            getTotalAmount={() => Number(payAmount) || null}
+            actor={actorPayload}
+            onToast={onToast}
+            className="w-full"
+          />
           <input
             value={payNotes}
             onChange={(e) => setPayNotes(e.target.value)}
@@ -1465,6 +1499,17 @@ export function ProcurementTab({
             onChange={(e) => setVTax(e.target.value)}
             placeholder="الرقم الضريبي (اختياري)"
             className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+          />
+          <CostCenterSelector value={vCostCenterId} onChange={setVCostCenterId} />
+          <SaveDraftButton
+            module="PROCUREMENT"
+            formType="VENDOR"
+            entityId={editingVendorId}
+            getTitleAr={() => `مسودة مورد: ${vNameAr.trim() || "جديد"}`}
+            getPayload={() => ({ nameAr: vNameAr, nameEn: vNameEn, phone: vPhone, taxRegistration: vTax, costCenterId: vCostCenterId || null })}
+            actor={actorPayload}
+            onToast={onToast}
+            className="w-full"
           />
           <button type="submit" className="w-full py-2.5 rounded-xl accent-bg font-extrabold">
             {editingVendorId ? "حفظ تعديلات المورد" : "حفظ المورد وإنشاء حساب أستاذ فرعي"}
