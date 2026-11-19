@@ -125,11 +125,25 @@ export function LicenseActivationModal({
   const [activeTab, setActiveTab] = useState<"activate" | "seats" | "request" | "mode">("activate");
   const [copiedCode, setCopiedCode] = useState(false);
   const [serialKey, setSerialKey] = useState("");
-  const [companyNameInput, setCompanyNameInput] = useState("");
-  const [userEmailInput, setUserEmailInput] = useState("");
+  const [companyNameDraft, setCompanyNameInput] = useState<string | null>(null);
+  const [userEmailDraft, setUserEmailInput] = useState<string | null>(null);
   const [activating, setActivating] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Derived default values (avoids synchronous setState inside useEffect)
+  const defaultCompanyCandidate =
+    statusData?.company_name ||
+    (enterpriseProfile?.isConfigured ? enterpriseProfile.legalNameAr : "") ||
+    "";
+  const defaultCompanyName =
+    defaultCompanyCandidate &&
+    defaultCompanyCandidate !== "اسم المنشأة" &&
+    defaultCompanyCandidate !== "Enterprise Name"
+      ? defaultCompanyCandidate
+      : "";
+  const companyNameInput = companyNameDraft ?? defaultCompanyName;
+  const userEmailInput = userEmailDraft ?? (currentUser?.email || "");
 
   // Seat usage & SUPER_ADMIN seat release state
   const [seatDetails, setSeatDetails] = useState<SeatDetailsResponse | null>(null);
@@ -139,12 +153,13 @@ export function LicenseActivationModal({
   const [manualReleasePlatform, setManualReleasePlatform] = useState<SeatPlatform | "all">("all");
 
   // Runtime Mode Switcher State (persisted client-side even while UNLICENSED)
-  const [selectedMode, setSelectedMode] = useState<"local" | "lan" | "cloud">(() => {
-    if (typeof window !== "undefined") {
-      return getStoredRuntimeMode();
-    }
-    return statusData?.active_mode || "local";
-  });
+  const [modeOverride, setSelectedMode] = useState<"local" | "lan" | "cloud" | null>(null);
+  const selectedMode: "local" | "lan" | "cloud" =
+    modeOverride ??
+    (typeof window !== "undefined" && isNativeAndroid()
+      ? getStoredRuntimeMode()
+      : statusData?.active_mode || (typeof window !== "undefined" ? getStoredRuntimeMode() : "local"));
+
   const [lanUrlInput, setLanUrlInput] = useState<string>(() => {
     if (typeof window !== "undefined") {
       return getStoredServerUrls().lanUrl;
@@ -159,56 +174,25 @@ export function LicenseActivationModal({
   });
   const [switchingMode, setSwitchingMode] = useState(false);
 
+  const currentUserId = currentUser?.id;
+  const currentUserRole = currentUser?.role ? String(currentUser.role) : "";
+
   const isSuperAdmin =
-    String(currentUser?.role || "").trim().toUpperCase() === "SUPER_ADMIN" ||
+    currentUserRole.trim().toUpperCase() === "SUPER_ADMIN" ||
     Boolean(seatDetails?.can_manage);
 
-  // Sync defaults when modal opens or status changes (never override an explicitly persisted Android/client mode back to local)
-  useEffect(() => {
-    if (typeof window !== "undefined" && isNativeAndroid()) {
-      setSelectedMode(getStoredRuntimeMode());
-      const urls = getStoredServerUrls();
-      setLanUrlInput(urls.lanUrl);
-      setCloudUrlInput(urls.cloudUrl);
-      return;
-    }
-    if (statusData?.active_mode) {
-      setSelectedMode(statusData.active_mode);
-    }
-  }, [statusData?.active_mode, open]);
-
-  useEffect(() => {
-    if (!companyNameInput) {
-      const candidate =
-        statusData?.company_name ||
-        (enterpriseProfile?.isConfigured ? enterpriseProfile.legalNameAr : "") ||
-        "";
-      if (candidate && candidate !== "اسم المنشأة" && candidate !== "Enterprise Name") {
-        setCompanyNameInput(candidate);
-      }
-    }
-  }, [statusData?.company_name, enterpriseProfile?.isConfigured, enterpriseProfile?.legalNameAr, companyNameInput]);
-
-  useEffect(() => {
-    if (currentUser?.email && !userEmailInput) {
-      setUserEmailInput(currentUser.email);
-    }
-  }, [currentUser?.email, userEmailInput]);
-
-  const fetchSeatDetails = useCallback(async () => {
-    setLoadingSeats(true);
+  const loadSeatDetailsAsync = useCallback(async (): Promise<SeatDetailsResponse | null> => {
     try {
       const onAndroid = isNativeAndroid();
       const base = resolveApiBaseUrl();
       // On Android in Local mode (no remote server configured), read offline seat store directly
       if (!onAndroid || base) {
         const headers: Record<string, string> = {};
-        if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
-        if (currentUser?.role) headers["x-uas-role"] = String(currentUser.role);
+        if (currentUserId) headers["x-uas-user-id"] = currentUserId;
+        if (currentUserRole) headers["x-uas-role"] = currentUserRole;
         const res = await safeFetchJson<SeatDetailsResponse>(`${base}/api/licensing/seats`, { headers });
         if (res.ok && !res.isHtmlFallback && res.data) {
-          setSeatDetails(res.data);
-          return;
+          return res.data;
         }
       }
     } catch {
@@ -216,21 +200,36 @@ export function LicenseActivationModal({
     }
     try {
       const offline = await getOfflineClientSeatUsage({
-        actorRole: currentUser?.role ? String(currentUser.role) : "SUPER_ADMIN",
+        actorRole: currentUserRole || "SUPER_ADMIN",
       });
-      setSeatDetails(offline as SeatDetailsResponse);
+      return offline as SeatDetailsResponse;
     } catch {
-      // ignore
+      return null;
+    }
+  }, [currentUserId, currentUserRole]);
+
+  const fetchSeatDetails = useCallback(async () => {
+    setLoadingSeats(true);
+    try {
+      const data = await loadSeatDetailsAsync();
+      if (data) setSeatDetails(data);
     } finally {
       setLoadingSeats(false);
     }
-  }, [currentUser?.id, currentUser?.role]);
+  }, [loadSeatDetailsAsync]);
 
   useEffect(() => {
-    if (open) {
-      fetchSeatDetails();
-    }
-  }, [open, fetchSeatDetails]);
+    if (!open) return;
+    let cancelled = false;
+    void loadSeatDetailsAsync().then((data) => {
+      if (!cancelled && data) {
+        setSeatDetails(data);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, loadSeatDetailsAsync]);
 
   if (!open) return null;
 
