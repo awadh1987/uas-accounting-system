@@ -216,7 +216,7 @@ export function UasAppShell() {
   useEffect(() => {
     installGlobalApiFetchInterceptor();
     const isClientApp = isInstalledClientApp();
-    checkLicensingStatus();
+    void Promise.resolve().then(() => checkLicensingStatus());
     let active = true;
     (async () => {
       const res = await fetchBootstrapState();

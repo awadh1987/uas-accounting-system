@@ -496,7 +496,7 @@ export function SystemTab({
 
   useEffect(() => {
     if (activeSubTab === "security" && (currentUser.role === "SUPER_ADMIN" || canManageUsers)) {
-      fetchBackups();
+      void Promise.resolve().then(() => fetchBackups());
     }
   }, [activeSubTab, currentUser.role, canManageUsers, fetchBackups]);
 
