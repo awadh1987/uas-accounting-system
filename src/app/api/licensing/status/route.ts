@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
     per_user_devices: seatPolicy?.companyLocked ? seatPolicy.perUserDevices : null,
     seats,
     license_id: license?.license_id || null,
-    allowed_modes: license?.allowed_modes || ["local"],
+    allowed_modes: license?.allowed_modes || ["local", "lan", "cloud"],
     max_branches: license?.max_branches || 1,
     max_lan_seats: license?.max_lan_seats || 1,
     active_seats: guardResult.activeSeatsCount || 1,

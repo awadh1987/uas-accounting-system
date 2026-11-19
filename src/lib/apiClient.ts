@@ -19,15 +19,169 @@ import { INITIAL_FALLBACK_STATE } from "@/lib/seedFallback";
 import type { UasBootstrapState, UasUser } from "@/types/uas";
 
 export const SERVER_URL_STORAGE_KEY = "uas_server_url";
+export const RUNTIME_MODE_STORAGE_KEY = "uas_runtime_mode";
+export const LAN_URL_STORAGE_KEY = "uas_lan_server_url";
+export const CLOUD_URL_STORAGE_KEY = "uas_cloud_server_url";
+export const DEFAULT_CLOUD_API_URL = "https://qat.world";
+export const DEFAULT_LAN_API_URL = "http://192.168.1.10:3000";
 
-export function getApiBaseUrl(): string {
-  if (typeof window !== "undefined") {
-    const saved = window.localStorage.getItem(SERVER_URL_STORAGE_KEY);
+export type ClientRuntimeMode = "local" | "lan" | "cloud";
+
+export interface StorageLike {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+export interface BrowserEnvLike {
+  UasAndroidNative?: unknown;
+  Capacitor?: {
+    isNativePlatform?: () => boolean;
+    getPlatform?: () => string;
+  };
+  location?: { protocol?: string; hostname?: string; origin?: string };
+  navigator?: { userAgent?: string };
+  localStorage?: StorageLike;
+}
+
+function getStorage(storage?: Pick<StorageLike, "getItem"> | null): Pick<StorageLike, "getItem"> | null {
+  if (storage !== undefined) return storage;
+  if (typeof window !== "undefined" && window.localStorage) return window.localStorage;
+  return null;
+}
+
+function getWritableStorage(storage?: StorageLike | null): StorageLike | null {
+  if (storage !== undefined) return storage;
+  if (typeof window !== "undefined" && window.localStorage) return window.localStorage;
+  return null;
+}
+
+export function isNativeAndroid(winOverride?: BrowserEnvLike): boolean {
+  const win: BrowserEnvLike | undefined =
+    winOverride ?? (typeof window !== "undefined" ? (window as unknown as BrowserEnvLike) : undefined);
+  if (!win) return false;
+  if (win.UasAndroidNative) return true;
+  if (win.Capacitor?.isNativePlatform?.()) return true;
+  if (win.Capacitor?.getPlatform?.()?.toLowerCase() === "android") return true;
+  const proto = (win.location?.protocol || "").toLowerCase();
+  if (proto === "capacitor:" || proto === "file:") return true;
+  const host = (win.location?.hostname || "").toLowerCase();
+  const ua = win.navigator?.userAgent || (typeof navigator !== "undefined" ? navigator.userAgent : "");
+  if (host === "localhost" && /android/i.test(ua)) return true;
+  return false;
+}
+
+export function normalizeServerUrl(url: string): string {
+  const trimmed = url.trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `http://${trimmed}`;
+}
+
+export function getStoredServerUrls(
+  storage?: Pick<StorageLike, "getItem"> | null
+): { lanUrl: string; cloudUrl: string } {
+  const s = getStorage(storage);
+  const savedLan = s?.getItem(LAN_URL_STORAGE_KEY)?.trim() || "";
+  const savedCloud = s?.getItem(CLOUD_URL_STORAGE_KEY)?.trim() || "";
+  return {
+    lanUrl: savedLan ? savedLan.replace(/\/+$/, "") : DEFAULT_LAN_API_URL,
+    cloudUrl: savedCloud ? savedCloud.replace(/\/+$/, "") : DEFAULT_CLOUD_API_URL,
+  };
+}
+
+export function getStoredRuntimeMode(
+  storage?: Pick<StorageLike, "getItem"> | null
+): ClientRuntimeMode {
+  const s = getStorage(storage);
+  if (s) {
+    const raw = (s.getItem(RUNTIME_MODE_STORAGE_KEY) || "").trim().toLowerCase();
+    if (raw === "local" || raw === "lan" || raw === "cloud") {
+      return raw;
+    }
+    const savedUrl = (s.getItem(SERVER_URL_STORAGE_KEY) || "").trim().toLowerCase();
+    if (savedUrl.startsWith("https://")) return "cloud";
+    if (savedUrl.startsWith("http://")) return "lan";
+  }
+  return "local";
+}
+
+export function setStoredRuntimeMode(
+  mode: ClientRuntimeMode,
+  customUrl?: string,
+  storage?: StorageLike | null
+): { mode: ClientRuntimeMode; serverUrl: string } {
+  const s = getWritableStorage(storage);
+  const existing = getStoredServerUrls(s);
+  let serverUrl = "";
+
+  if (mode === "cloud") {
+    serverUrl = normalizeServerUrl(customUrl || existing.cloudUrl || DEFAULT_CLOUD_API_URL);
+    if (s) {
+      s.setItem(RUNTIME_MODE_STORAGE_KEY, "cloud");
+      s.setItem(CLOUD_URL_STORAGE_KEY, serverUrl);
+      s.setItem(SERVER_URL_STORAGE_KEY, serverUrl);
+    }
+  } else if (mode === "lan") {
+    serverUrl = normalizeServerUrl(customUrl || existing.lanUrl || DEFAULT_LAN_API_URL);
+    if (s) {
+      s.setItem(RUNTIME_MODE_STORAGE_KEY, "lan");
+      s.setItem(LAN_URL_STORAGE_KEY, serverUrl);
+      s.setItem(SERVER_URL_STORAGE_KEY, serverUrl);
+    }
+  } else {
+    serverUrl = "";
+    if (s) {
+      s.setItem(RUNTIME_MODE_STORAGE_KEY, "local");
+      s.removeItem(SERVER_URL_STORAGE_KEY);
+    }
+  }
+
+  return { mode, serverUrl };
+}
+
+export function resolveApiBaseUrl(opts?: {
+  preferCloudFallback?: boolean;
+  storage?: Pick<StorageLike, "getItem"> | null;
+  win?: BrowserEnvLike;
+}): string {
+  const s = getStorage(opts?.storage);
+  if (s) {
+    const saved = s.getItem(SERVER_URL_STORAGE_KEY);
     if (saved && saved.trim()) {
       return saved.trim().replace(/\/+$/, "");
     }
   }
-  return (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
+
+  const win: BrowserEnvLike | undefined =
+    opts?.win ?? (typeof window !== "undefined" ? (window as unknown as BrowserEnvLike) : undefined);
+  const onAndroid = isNativeAndroid(win);
+  const host = (win?.location?.hostname || "").toLowerCase();
+  const proto = (win?.location?.protocol || "").toLowerCase();
+  const isCapacitorLocalOrigin = onAndroid && (host === "localhost" || proto === "capacitor:" || proto === "file:" || !host);
+
+  if (isCapacitorLocalOrigin) {
+    const mode = getStoredRuntimeMode(s);
+    const urls = getStoredServerUrls(s);
+    if (mode === "cloud") {
+      return urls.cloudUrl || DEFAULT_CLOUD_API_URL;
+    }
+    if (mode === "lan" && s?.getItem(LAN_URL_STORAGE_KEY)?.trim()) {
+      return urls.lanUrl;
+    }
+    if (opts?.preferCloudFallback) {
+      return urls.cloudUrl || DEFAULT_CLOUD_API_URL;
+    }
+  }
+
+  const envBase = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
+  if (envBase) return envBase;
+  if (opts?.preferCloudFallback) return DEFAULT_CLOUD_API_URL;
+  return "";
+}
+
+export function getApiBaseUrl(): string {
+  return resolveApiBaseUrl();
 }
 
 export function setApiBaseUrl(url: string): void {
@@ -45,6 +199,85 @@ export function resetApiBaseUrl(): void {
   window.localStorage.removeItem(SERVER_URL_STORAGE_KEY);
 }
 
+export interface SafeFetchJsonResult<T = Record<string, unknown>> {
+  ok: boolean;
+  status: number;
+  isHtmlFallback: boolean;
+  data: T | null;
+  rawText?: string;
+  error?: string;
+}
+
+/**
+ * Safely fetches JSON and detects Capacitor/static-export HTML fallbacks
+ * (e.g. `<!DOCTYPE html>...` returned with HTTP 200 on `https://localhost`)
+ * so callers never throw `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`.
+ */
+export async function safeFetchJson<T = Record<string, unknown>>(
+  url: string,
+  init?: RequestInit,
+  fetchImpl?: typeof fetch
+): Promise<SafeFetchJsonResult<T>> {
+  const fn = fetchImpl ?? (typeof fetch !== "undefined" ? fetch : undefined);
+  if (!fn) {
+    return {
+      ok: false,
+      status: 0,
+      isHtmlFallback: false,
+      data: null,
+      error: "Fetch API unavailable",
+    };
+  }
+  try {
+    const res = await fn(url, init);
+    const contentType = (res.headers.get("content-type") || "").toLowerCase();
+    const text = await res.text();
+    const trimmed = text.trim();
+    const looksLikeHtml =
+      /^<!doctype\s+html/i.test(trimmed) ||
+      /^<html[\s>]/i.test(trimmed) ||
+      (trimmed.startsWith("<") && !contentType.includes("application/json"));
+
+    if (looksLikeHtml || (!contentType.includes("application/json") && !trimmed.startsWith("{") && !trimmed.startsWith("["))) {
+      return {
+        ok: false,
+        status: res.status,
+        isHtmlFallback: true,
+        data: null,
+        rawText: trimmed.slice(0, 160),
+        error: "STATIC_HTML_FALLBACK",
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed) as T;
+      return {
+        ok: res.ok,
+        status: res.status,
+        isHtmlFallback: false,
+        data: parsed,
+      };
+    } catch {
+      return {
+        ok: false,
+        status: res.status,
+        isHtmlFallback: false,
+        data: null,
+        rawText: trimmed.slice(0, 160),
+        error: "INVALID_JSON_RESPONSE",
+      };
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      isHtmlFallback: false,
+      data: null,
+      error: err instanceof Error ? err.message : "Network request failed",
+    };
+  }
+}
+
 let fetchInterceptorInstalled = false;
 
 export function installGlobalApiFetchInterceptor(): void {
@@ -52,7 +285,7 @@ export function installGlobalApiFetchInterceptor(): void {
   fetchInterceptorInstalled = true;
   const originalFetch = window.fetch.bind(window);
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
-    const base = getApiBaseUrl();
+    const base = resolveApiBaseUrl();
     if (base && typeof input === "string" && input.startsWith("/api/")) {
       return originalFetch(`${base}${input}`, init);
     }

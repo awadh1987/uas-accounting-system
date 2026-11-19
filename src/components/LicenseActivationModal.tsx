@@ -27,11 +27,23 @@ import {
 import { generateQrMatrix } from "@/lib/formulas";
 import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
 import {
+  DEFAULT_CLOUD_API_URL,
+  DEFAULT_LAN_API_URL,
+  getStoredRuntimeMode,
+  getStoredServerUrls,
+  isNativeAndroid,
+  resolveApiBaseUrl,
+  safeFetchJson,
+  setStoredRuntimeMode,
+} from "@/lib/apiClient";
+import {
   activateOfflineClientLicense,
+  activateOnlineKeyOnClient,
   detectClientPlatform,
   getClientDeviceHwid,
   getOfflineClientSeatUsage,
   releaseOfflineClientSeat,
+  syncOfflineSeatInBackground,
   type SeatPlatform,
   type SeatUsage,
   type SeatUserUsage,
@@ -126,22 +138,44 @@ export function LicenseActivationModal({
   const [manualReleaseEmail, setManualReleaseEmail] = useState("");
   const [manualReleasePlatform, setManualReleasePlatform] = useState<SeatPlatform | "all">("all");
 
-  // Runtime Mode Switcher State
-  const [selectedMode, setSelectedMode] = useState<"local" | "lan" | "cloud">(
-    statusData?.active_mode || "local"
-  );
+  // Runtime Mode Switcher State (persisted client-side even while UNLICENSED)
+  const [selectedMode, setSelectedMode] = useState<"local" | "lan" | "cloud">(() => {
+    if (typeof window !== "undefined") {
+      return getStoredRuntimeMode();
+    }
+    return statusData?.active_mode || "local";
+  });
+  const [lanUrlInput, setLanUrlInput] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return getStoredServerUrls().lanUrl;
+    }
+    return statusData?.lan_url || DEFAULT_LAN_API_URL;
+  });
+  const [cloudUrlInput, setCloudUrlInput] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return getStoredServerUrls().cloudUrl;
+    }
+    return statusData?.cloud_url || DEFAULT_CLOUD_API_URL;
+  });
   const [switchingMode, setSwitchingMode] = useState(false);
 
   const isSuperAdmin =
     String(currentUser?.role || "").trim().toUpperCase() === "SUPER_ADMIN" ||
     Boolean(seatDetails?.can_manage);
 
-  // Sync defaults when modal opens or status changes
+  // Sync defaults when modal opens or status changes (never override an explicitly persisted Android/client mode back to local)
   useEffect(() => {
+    if (typeof window !== "undefined" && isNativeAndroid()) {
+      setSelectedMode(getStoredRuntimeMode());
+      const urls = getStoredServerUrls();
+      setLanUrlInput(urls.lanUrl);
+      setCloudUrlInput(urls.cloudUrl);
+      return;
+    }
     if (statusData?.active_mode) {
       setSelectedMode(statusData.active_mode);
     }
-  }, [statusData?.active_mode]);
+  }, [statusData?.active_mode, open]);
 
   useEffect(() => {
     if (!companyNameInput) {
@@ -164,14 +198,18 @@ export function LicenseActivationModal({
   const fetchSeatDetails = useCallback(async () => {
     setLoadingSeats(true);
     try {
-      const headers: Record<string, string> = {};
-      if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
-      if (currentUser?.role) headers["x-uas-role"] = String(currentUser.role);
-      const res = await fetch("/api/licensing/seats", { headers });
-      if (res.ok) {
-        const data = (await res.json()) as SeatDetailsResponse;
-        setSeatDetails(data);
-        return;
+      const onAndroid = isNativeAndroid();
+      const base = resolveApiBaseUrl();
+      // On Android in Local mode (no remote server configured), read offline seat store directly
+      if (!onAndroid || base) {
+        const headers: Record<string, string> = {};
+        if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
+        if (currentUser?.role) headers["x-uas-role"] = String(currentUser.role);
+        const res = await safeFetchJson<SeatDetailsResponse>(`${base}/api/licensing/seats`, { headers });
+        if (res.ok && !res.isHtmlFallback && res.data) {
+          setSeatDetails(res.data);
+          return;
+        }
       }
     } catch {
       // Fall back to offline Capacitor seat store
@@ -249,40 +287,29 @@ export function LicenseActivationModal({
     const clientHwid = getClientDeviceHwid();
     const effectiveEmail = (userEmailInput || currentUser?.email || "").trim();
     const effectiveCompany = companyNameInput.trim();
+    const onAndroid = isNativeAndroid();
 
     try {
-      let handledByServer = false;
-      try {
-        const headers: Record<string, string> = { "Content-Type": "application/json" };
-        if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
-        if (currentUser?.role) headers["x-uas-role"] = String(currentUser.role);
-
-        const res = await fetch("/api/licensing/activate", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            ...payload,
-            companyName: effectiveCompany || undefined,
-            userEmail: effectiveEmail || undefined,
-            platform,
-          }),
+      // 1. Android APK online UASKEY-... flow: verify against Cloud/LAN server (defaults to https://qat.world)
+      //    and persist verified license + seat binding into localStorage immediately.
+      if (onAndroid && payload.activationKey) {
+        const targetServer = resolveApiBaseUrl({ preferCloudFallback: true });
+        const onlineRes = await activateOnlineKeyOnClient({
+          activationKey: payload.activationKey,
+          confirmCompanyName: effectiveCompany || undefined,
+          userEmail: effectiveEmail || undefined,
+          platform,
+          hwid: clientHwid,
+          serverBaseUrl: targetServer,
         });
-        const isJson = (res.headers.get("content-type") || "").includes("application/json");
-        if ((res.status === 404 || res.status === 405) && !isJson) {
-          throw new Error("STATIC_EXPORT_OFFLINE_ACTIVATE");
+        if (!onlineRes.success) {
+          throw new Error(onlineRes.error);
         }
-        handledByServer = true;
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(data.error || (isAr ? "فشل تفعيل الترخيص" : "Failed to activate license"));
-        }
-      } catch (serverErr: any) {
-        if (handledByServer) {
-          throw serverErr;
-        }
-        // Offline / Capacitor static export fallback
+      } else if (onAndroid && payload.licenseFileContent) {
+        // 2. Android APK `.uas` file flow: verify Ed25519 signature, expiry & company_name client-side
+        //    and persist directly to localStorage; optionally sync seat registration in the background.
         const offlineRes = await activateOfflineClientLicense({
-          ...payload,
+          licenseFileContent: payload.licenseFileContent,
           confirmCompanyName: effectiveCompany || undefined,
           userEmail: effectiveEmail || undefined,
           platform,
@@ -290,6 +317,62 @@ export function LicenseActivationModal({
         });
         if (!offlineRes.success) {
           throw new Error(offlineRes.error);
+        }
+        const syncBase = resolveApiBaseUrl({ preferCloudFallback: true });
+        void syncOfflineSeatInBackground(offlineRes.license, {
+          companyName: effectiveCompany || offlineRes.license.company_name,
+          userEmail: effectiveEmail || undefined,
+          platform,
+          hwid: clientHwid,
+          serverBaseUrl: syncBase,
+        });
+      } else {
+        // 3. Desktop / Web / LAN server flow (with safe JSON parsing + static HTML fallback)
+        const base = resolveApiBaseUrl();
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
+        if (currentUser?.role) headers["x-uas-role"] = String(currentUser.role);
+
+        const res = await safeFetchJson<{ success?: boolean; error?: string }>(
+          `${base}/api/licensing/activate`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              ...payload,
+              companyName: effectiveCompany || undefined,
+              userEmail: effectiveEmail || undefined,
+              platform,
+              hwid: clientHwid,
+            }),
+          }
+        );
+
+        if (res.isHtmlFallback || res.status === 0) {
+          // Static export or unreachable local API -> run client-side WebCrypto verification
+          const fallbackRes = payload.activationKey
+            ? await activateOnlineKeyOnClient({
+                activationKey: payload.activationKey,
+                confirmCompanyName: effectiveCompany || undefined,
+                userEmail: effectiveEmail || undefined,
+                platform,
+                hwid: clientHwid,
+                serverBaseUrl: resolveApiBaseUrl({ preferCloudFallback: true }),
+              })
+            : await activateOfflineClientLicense({
+                ...payload,
+                confirmCompanyName: effectiveCompany || undefined,
+                userEmail: effectiveEmail || undefined,
+                platform,
+                hwid: clientHwid,
+              });
+          if (!fallbackRes.success) {
+            throw new Error(fallbackRes.error);
+          }
+        } else if (!res.ok || !res.data?.success) {
+          throw new Error(
+            res.data?.error || (isAr ? "فشل تفعيل الترخيص" : "Failed to activate license")
+          );
         }
       }
 
@@ -302,8 +385,9 @@ export function LicenseActivationModal({
       if (payload.activationKey) setSerialKey("");
       onRefreshStatus();
       await fetchSeatDetails();
-    } catch (err: any) {
-      setErrorMsg(err?.message || (isAr ? "فشل التفعيل" : "Activation failed"));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "";
+      setErrorMsg(message || (isAr ? "فشل التفعيل" : "Activation failed"));
     } finally {
       setActivating(false);
     }
@@ -336,37 +420,42 @@ export function LicenseActivationModal({
     setSuccessMsg(null);
 
     try {
+      const onAndroid = isNativeAndroid();
+      const base = resolveApiBaseUrl();
       let handledByServer = false;
-      try {
+
+      if (!onAndroid || base) {
         const headers: Record<string, string> = { "Content-Type": "application/json" };
         if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
         if (currentUser?.role) headers["x-uas-role"] = String(currentUser.role);
 
-        const res = await fetch("/api/licensing/seats/release", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            userEmail: cleanEmail,
-            platform: targetPlatform,
-            actor: {
-              userId: currentUser?.id || "u1",
-              userRole: currentUser?.role || "SUPER_ADMIN",
-            },
-          }),
-        });
-        const isJson = (res.headers.get("content-type") || "").includes("application/json");
-        if ((res.status === 404 || res.status === 405) && !isJson) {
-          throw new Error("STATIC_EXPORT_OFFLINE_RELEASE");
+        const res = await safeFetchJson<{ success?: boolean; error?: string }>(
+          `${base}/api/licensing/seats/release`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              userEmail: cleanEmail,
+              platform: targetPlatform,
+              actor: {
+                userId: currentUser?.id || "u1",
+                userRole: currentUser?.role || "SUPER_ADMIN",
+              },
+            }),
+          }
+        );
+
+        if (!res.isHtmlFallback && res.status !== 0) {
+          handledByServer = true;
+          if (!res.ok || !res.data?.success) {
+            throw new Error(
+              res.data?.error || (isAr ? "فشل إلغاء ربط الجهاز" : "Failed to release device seat")
+            );
+          }
         }
-        handledByServer = true;
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(
-            data.error || (isAr ? "فشل إلغاء ربط الجهاز" : "Failed to release device seat")
-          );
-        }
-      } catch (serverErr: any) {
-        if (handledByServer) throw serverErr;
+      }
+
+      if (!handledByServer) {
         const offlineRes = await releaseOfflineClientSeat({
           userEmail: cleanEmail,
           platform: targetPlatform,
@@ -385,35 +474,67 @@ export function LicenseActivationModal({
       setManualReleaseEmail("");
       await fetchSeatDetails();
       onRefreshStatus();
-    } catch (err: any) {
-      setErrorMsg(err?.message || (isAr ? "تعذر إلغاء ربط الجهاز" : "Could not release seat"));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "";
+      setErrorMsg(message || (isAr ? "تعذر إلغاء ربط الجهاز" : "Could not release seat"));
     } finally {
       setReleasingKey(null);
     }
   }
 
-  async function handleSwitchMode(targetMode: "local" | "lan" | "cloud") {
+  async function handleSwitchMode(targetMode: "local" | "lan" | "cloud", customUrl?: string) {
     setSwitchingMode(true);
     setErrorMsg(null);
+    setSuccessMsg(null);
     try {
-      const res = await fetch("/api/system/runtime", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: targetMode }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        throw new Error(data.error || "Failed to switch mode");
+      const chosenUrl =
+        targetMode === "cloud"
+          ? (customUrl ?? cloudUrlInput).trim() || DEFAULT_CLOUD_API_URL
+          : targetMode === "lan"
+          ? (customUrl ?? lanUrlInput).trim() || DEFAULT_LAN_API_URL
+          : "";
+
+      // 1. Always persist mode & server URL immediately to localStorage (works even when UNLICENSED)
+      const persisted = setStoredRuntimeMode(targetMode, chosenUrl);
+      setSelectedMode(persisted.mode);
+      if (targetMode === "cloud") setCloudUrlInput(persisted.serverUrl);
+      if (targetMode === "lan") setLanUrlInput(persisted.serverUrl);
+
+      // 2. Best-effort sync to backend /api/system/runtime on Desktop/Server (never fail or snap back on Android)
+      const onAndroid = isNativeAndroid();
+      if (!onAndroid) {
+        const res = await safeFetchJson<{ success?: boolean; error?: string }>("/api/system/runtime", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: targetMode,
+            ...(targetMode === "cloud" ? { cloudUrl: persisted.serverUrl } : {}),
+          }),
+        });
+        if (!res.isHtmlFallback && res.status !== 0 && (!res.ok || res.data?.error)) {
+          throw new Error(res.data?.error || "Failed to switch mode");
+        }
       }
-      setSelectedMode(targetMode);
-      onToast(
-        isAr
-          ? `تم تفعيل وضع: ${targetMode.toUpperCase()}`
-          : `Switched to ${targetMode.toUpperCase()} mode`
-      );
+
+      const label =
+        targetMode === "cloud"
+          ? isAr
+            ? `تم تفعيل الوضع السحابي (${persisted.serverUrl})`
+            : `Switched to Cloud mode (${persisted.serverUrl})`
+          : targetMode === "lan"
+          ? isAr
+            ? `تم تفعيل وضع الشبكة المحلية (${persisted.serverUrl})`
+            : `Switched to LAN mode (${persisted.serverUrl})`
+          : isAr
+          ? "تم تفعيل الوضع المحلي (Local)"
+          : "Switched to Local mode";
+
+      setSuccessMsg(label);
+      onToast(label);
       onRefreshStatus();
-    } catch (err: any) {
-      setErrorMsg(err?.message || "Failed to switch runtime mode");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "";
+      setErrorMsg(message || "Failed to switch runtime mode");
     } finally {
       setSwitchingMode(false);
     }
@@ -421,7 +542,10 @@ export function LicenseActivationModal({
 
   const status = statusData?.license_status || "UNLICENSED";
   const isValid = Boolean(statusData?.is_valid);
-  const allowedModes = statusData?.allowed_modes || ["local"];
+  // Allow switching between Local, LAN, and Cloud BEFORE activation (when UNLICENSED)
+  const allowedModes: ("local" | "lan" | "cloud")[] = isValid
+    ? statusData?.allowed_modes || ["local", "lan", "cloud"]
+    : ["local", "lan", "cloud"];
   const lockedCompanyName =
     statusData?.company_name ||
     seatDetails?.company_name ||
@@ -1066,17 +1190,62 @@ export function LicenseActivationModal({
               </button>
             </div>
 
-            {/* Mode Details Box */}
+            {/* Mode Details & Server URL Configuration Box */}
             {selectedMode === "lan" && (
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 space-y-2 text-xs">
-                <div className="font-bold flex items-center justify-between">
-                  <span>{isAr ? "رابط الوصول عبر الشبكة المحلية:" : "Office LAN URL:"}</span>
-                  <span className="font-mono text-emerald-600 font-black">{statusData?.lan_url}</span>
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 space-y-3 text-xs">
+                <div className="font-bold flex items-center justify-between gap-2">
+                  <span>{isAr ? "رابط خادم الشبكة المحلية (Office LAN URL):" : "Office LAN Server URL:"}</span>
+                  <span className="font-mono text-emerald-600 font-black">{lanUrlInput || statusData?.lan_url}</span>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="url"
+                    dir="ltr"
+                    value={lanUrlInput}
+                    onChange={(e) => setLanUrlInput(e.target.value)}
+                    placeholder="http://192.168.1.10:3000"
+                    className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono font-bold"
+                  />
+                  <button
+                    type="button"
+                    disabled={switchingMode || !lanUrlInput.trim()}
+                    onClick={() => handleSwitchMode("lan", lanUrlInput)}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black disabled:opacity-50 transition"
+                  >
+                    {isAr ? "حفظ والاتصال بالشبكة" : "Save & Connect LAN"}
+                  </button>
                 </div>
                 <div className="text-slate-500 dark:text-slate-400 text-[11px]">
                   {isAr
                     ? `الأجهزة المتصلة حالياً: ${statusData?.active_seats || 1} من أصل ${statusData?.max_lan_seats || 10} مقاعد مسموحة.`
                     : `Active Workstations: ${statusData?.active_seats || 1} of ${statusData?.max_lan_seats || 10} allowed LAN seats.`}
+                </div>
+              </div>
+            )}
+
+            {selectedMode === "cloud" && (
+              <div className="p-4 rounded-2xl bg-amber-50/40 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 space-y-3 text-xs">
+                <div className="font-bold flex items-center justify-between gap-2">
+                  <span>{isAr ? "رابط الخادم السحابي (Cloud Server URL):" : "Cloud Server URL:"}</span>
+                  <span className="font-mono text-amber-700 dark:text-amber-300 font-black">{cloudUrlInput || DEFAULT_CLOUD_API_URL}</span>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="url"
+                    dir="ltr"
+                    value={cloudUrlInput}
+                    onChange={(e) => setCloudUrlInput(e.target.value)}
+                    placeholder="https://qat.world"
+                    className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono font-bold"
+                  />
+                  <button
+                    type="button"
+                    disabled={switchingMode || !cloudUrlInput.trim()}
+                    onClick={() => handleSwitchMode("cloud", cloudUrlInput)}
+                    className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black disabled:opacity-50 transition"
+                  >
+                    {isAr ? "حفظ والاتصال بالسحابة" : "Save & Connect Cloud"}
+                  </button>
                 </div>
               </div>
             )}

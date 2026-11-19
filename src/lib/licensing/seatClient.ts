@@ -697,11 +697,27 @@ export async function buildOfflineClientLicenseStatus(
   const requestCode = getClientRequestCode(storage);
   const license = loadOfflineClientLicense(storage);
 
+  // Respect persisted client runtime mode & server URLs (even while UNLICENSED)
+  const rawMode = (storage.getItem("uas_runtime_mode") || "").trim().toLowerCase();
+  const savedServerUrl = (storage.getItem("uas_server_url") || "").trim().replace(/\/+$/, "");
+  const activeMode: "local" | "lan" | "cloud" =
+    rawMode === "cloud" || rawMode === "lan" || rawMode === "local"
+      ? rawMode
+      : savedServerUrl.startsWith("https://")
+      ? "cloud"
+      : savedServerUrl.startsWith("http://")
+      ? "lan"
+      : "local";
+  const savedLanUrl = (storage.getItem("uas_lan_server_url") || "").trim().replace(/\/+$/, "");
+  const savedCloudUrl = (storage.getItem("uas_cloud_server_url") || "").trim().replace(/\/+$/, "");
+  const lanUrl = savedLanUrl || (activeMode === "lan" && savedServerUrl ? savedServerUrl : "http://192.168.1.10:3000");
+  const cloudUrl = savedCloudUrl || (activeMode === "cloud" && savedServerUrl ? savedServerUrl : "https://qat.world");
+
   if (!license) {
     return {
       request_code: requestCode,
       hwid,
-      active_mode: "local",
+      active_mode: activeMode,
       license_status: "UNLICENSED",
       is_valid: false,
       error: "المنظومة غير مفعلة بترخيص رسمي. / System is not activated with a valid license.",
@@ -711,8 +727,8 @@ export async function buildOfflineClientLicenseStatus(
       active_seats: 0,
       remaining_days: 0,
       server_lan_ips: ["127.0.0.1"],
-      lan_url: "http://127.0.0.1:3000",
-      cloud_url: "https://qat.world",
+      lan_url: lanUrl,
+      cloud_url: cloudUrl,
     };
   }
 
@@ -733,7 +749,7 @@ export async function buildOfflineClientLicenseStatus(
   return {
     request_code: requestCode,
     hwid,
-    active_mode: "local",
+    active_mode: activeMode,
     license_status: !sigOk ? "HWID_MISMATCH" : isExpired ? "EXPIRED" : "ACTIVE",
     is_valid: sigOk && !isExpired,
     error: !sigOk
@@ -765,7 +781,184 @@ export async function buildOfflineClientLicenseStatus(
     issued_at: license.issued_at,
     remaining_days: remainingDays,
     server_lan_ips: ["127.0.0.1"],
-    lan_url: "http://127.0.0.1:3000",
-    cloud_url: "https://qat.world",
+    lan_url: lanUrl,
+    cloud_url: cloudUrl,
   };
+}
+
+function encodeUtf8Base64(str: string): string {
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(str, "utf8").toString("base64");
+  }
+  const bytes = new TextEncoder().encode(str);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) {
+    bin += String.fromCharCode(bytes[i]);
+  }
+  return btoa(bin);
+}
+
+/**
+ * Online `UASKEY-...` activation flow for Android APK (`https://localhost`) and remote clients.
+ * Resolves `/api/licensing/verify-key` against the configured Cloud/LAN server URL
+ * (defaulting to `https://qat.world`), parses JSON safely (never throws `Unexpected token '<'`),
+ * and persists the verified license + seat binding into `localStorage`.
+ * Falls back cleanly to offline WebCrypto verification if the device has no internet access.
+ */
+export async function activateOnlineKeyOnClient(
+  input: {
+    activationKey: string;
+    confirmCompanyName?: string;
+    userEmail?: string;
+    platform?: SeatPlatform | string;
+    hwid?: string;
+    deviceName?: string;
+    serverBaseUrl?: string;
+  },
+  opts: OfflineClientOptions & { fetchImpl?: typeof fetch } = {}
+): Promise<OfflineActivationResult & { verifiedOnline?: boolean; resolvedServerUrl?: string }> {
+  const storage = opts.storage ?? getDefaultStorage() ?? createMemoryStorage();
+  const key = input.activationKey.trim();
+  const platform = normalizePlatform(String(input.platform ?? detectClientPlatform())) ?? "android";
+  const hwid = (input.hwid?.trim() || getClientDeviceHwid(storage)).toUpperCase();
+  const confirmCompanyName = (input.confirmCompanyName ?? "").trim();
+  const userEmail = (input.userEmail ?? "").trim();
+
+  // Resolve target server URL (explicit -> saved server -> saved cloud -> https://qat.world)
+  const savedServer = (storage.getItem("uas_server_url") || "").trim().replace(/\/+$/, "");
+  const savedCloud = (storage.getItem("uas_cloud_server_url") || "").trim().replace(/\/+$/, "");
+  const targetBase = (
+    input.serverBaseUrl?.trim().replace(/\/+$/, "") ||
+    savedServer ||
+    savedCloud ||
+    "https://qat.world"
+  ).replace(/\/+$/, "");
+
+  const fetchFn = opts.fetchImpl ?? (typeof fetch !== "undefined" ? fetch : undefined);
+
+  // Extract company_name from UASKEY-... payload if caller left it blank
+  let decodedCompany = confirmCompanyName;
+  if (!decodedCompany && key.startsWith("UASKEY-")) {
+    try {
+      const parsed = validateLicenseStructure(JSON.parse(decodeBase64Utf8(key.slice(7))));
+      if (parsed?.company_name) decodedCompany = parsed.company_name;
+    } catch {
+      // ignore
+    }
+  }
+
+  let serverLicenseObj: UasSignedLicense | null = null;
+  let verifiedOnline = false;
+
+  if (fetchFn && targetBase) {
+    try {
+      const res = await fetchFn(`${targetBase}/api/licensing/verify-key`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key,
+          company_name: decodedCompany || undefined,
+          user_email: userEmail || undefined,
+          platform,
+          hwid,
+          device_name: input.deviceName || (platform === "android" ? "Android Device" : "Windows PC"),
+        }),
+      });
+      const contentType = (res.headers.get("content-type") || "").toLowerCase();
+      const rawText = await res.text();
+      const trimmed = rawText.trim();
+      const isHtml =
+        /^<!doctype\s+html/i.test(trimmed) ||
+        /^<html[\s>]/i.test(trimmed) ||
+        (trimmed.startsWith("<") && !contentType.includes("application/json"));
+
+      if (!isHtml && (trimmed.startsWith("{") || trimmed.startsWith("["))) {
+        const data = JSON.parse(trimmed) as Record<string, unknown>;
+        if (res.ok && data.success) {
+          verifiedOnline = true;
+          if (data.license) {
+            serverLicenseObj = validateLicenseStructure(data.license);
+          }
+        } else if (res.status === 400 || res.status === 403 || res.status === 409) {
+          return {
+            success: false,
+            status: res.status,
+            code: String(data.code || "CLOUD_REJECTED"),
+            error: String(
+              data.error ||
+                "رفض الخادم السحابي مفتاح التفعيل (تحقق من اسم المنشأة أو حد المقاعد). / Cloud server rejected activation key."
+            ),
+            resolvedServerUrl: targetBase,
+          };
+        }
+      }
+    } catch {
+      // Network offline or unreachable: fall through to client-side WebCrypto verification
+    }
+  }
+
+  // Verify signature + persist license & seat binding locally in localStorage so app becomes ACTIVE immediately
+  const localResult = await activateOfflineClientLicense(
+    serverLicenseObj
+      ? {
+          licenseFileContent: serverLicenseObj as unknown as Record<string, unknown>,
+          confirmCompanyName: decodedCompany || undefined,
+          userEmail: userEmail || undefined,
+          platform,
+          hwid,
+          deviceName: input.deviceName,
+        }
+      : {
+          activationKey: key,
+          confirmCompanyName: decodedCompany || undefined,
+          userEmail: userEmail || undefined,
+          platform,
+          hwid,
+          deviceName: input.deviceName,
+        },
+    opts
+  );
+
+  return {
+    ...localResult,
+    verifiedOnline,
+    resolvedServerUrl: targetBase,
+  };
+}
+
+/**
+ * Best-effort background seat registration after an offline `.uas` activation on Android.
+ * Never throws or blocks offline activation.
+ */
+export async function syncOfflineSeatInBackground(
+  license: UasSignedLicense,
+  input: {
+    companyName?: string;
+    userEmail?: string;
+    platform?: SeatPlatform;
+    hwid?: string;
+    serverBaseUrl?: string;
+  },
+  fetchImpl?: typeof fetch
+): Promise<boolean> {
+  const fn = fetchImpl ?? (typeof fetch !== "undefined" ? fetch : undefined);
+  if (!fn) return false;
+  const base = (input.serverBaseUrl || "https://qat.world").replace(/\/+$/, "");
+  try {
+    const keyToken = `UASKEY-${encodeUtf8Base64(JSON.stringify(license))}`;
+    const res = await fn(`${base}/api/licensing/verify-key`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        key: keyToken,
+        company_name: input.companyName || license.company_name || license.customer_name,
+        user_email: input.userEmail || undefined,
+        platform: input.platform || detectClientPlatform(),
+        hwid: input.hwid || getClientDeviceHwid(),
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }

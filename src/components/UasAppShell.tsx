@@ -32,7 +32,11 @@ import {
   executeMutation,
   fetchBootstrapState,
   getApiBaseUrl,
+  getStoredRuntimeMode,
   installGlobalApiFetchInterceptor,
+  isNativeAndroid,
+  resolveApiBaseUrl,
+  safeFetchJson,
   syncQueuedOfflineMutations,
 } from "@/lib/apiClient";
 import { resolveEffectiveTab, resolveGroupForTab } from "@/lib/erpNavigation";
@@ -119,13 +123,34 @@ export function UasAppShell() {
   }, []);
 
   const checkLicensingStatus = useCallback(async () => {
+    const onAndroid = isNativeAndroid();
+    const base = resolveApiBaseUrl();
+
+    // On Android APK, evaluate local persisted license first so offline `.uas` / `UASKEY-...` activations
+    // and selected Cloud/LAN modes remain authoritative without hitting https://localhost/api/* HTML fallback.
+    if (onAndroid) {
+      try {
+        const offlineStatus = (await buildOfflineClientLicenseStatus()) as LicenseStatusData;
+        if (offlineStatus.is_valid || !base) {
+          setLicenseStatus(offlineStatus);
+          if (!offlineStatus.is_valid) {
+            setLicenseModalOpen(true);
+          }
+          return;
+        }
+      } catch {
+        // continue to remote check
+      }
+    }
+
     try {
-      const res = await fetch("/api/licensing/status");
-      const isJson = (res.headers.get("content-type") || "").includes("application/json");
-      if (res.ok && isJson) {
-        const data = (await res.json()) as LicenseStatusData;
-        setLicenseStatus(data);
-        if (!data.is_valid) {
+      const res = await safeFetchJson<LicenseStatusData>(`${base}/api/licensing/status`);
+      if (res.ok && !res.isHtmlFallback && res.data) {
+        const merged: LicenseStatusData = onAndroid
+          ? { ...res.data, active_mode: getStoredRuntimeMode() }
+          : res.data;
+        setLicenseStatus(merged);
+        if (!merged.is_valid) {
           setLicenseModalOpen(true);
         }
         return;
