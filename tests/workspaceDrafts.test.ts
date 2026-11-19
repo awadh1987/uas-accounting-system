@@ -113,8 +113,8 @@ describe("Phase 4 — Universal Workspace Drafts Module (حفظ كمسودة)", 
       userId: "user-B",
       userRole: "FIELD_ACCOUNTANT",
     });
-    assert.ok(forColleague.some((d) => d.id === shared.id), "Colleague sees shared draft");
-    assert.ok(!forColleague.some((d) => d.id === priv.id), "Colleague cannot see private draft");
+    assert.ok(forColleague.some((d: { id: string }) => d.id === shared.id), "Colleague sees shared draft");
+    assert.ok(!forColleague.some((d: { id: string }) => d.id === priv.id), "Colleague cannot see private draft");
 
     // Creator user-A sees both
     const forCreator = await listWorkspaceDrafts({
@@ -122,8 +122,8 @@ describe("Phase 4 — Universal Workspace Drafts Module (حفظ كمسودة)", 
       userId: "user-A",
       userRole: "FIELD_ACCOUNTANT",
     });
-    assert.ok(forCreator.some((d) => d.id === shared.id));
-    assert.ok(forCreator.some((d) => d.id === priv.id));
+    assert.ok(forCreator.some((d: { id: string }) => d.id === shared.id));
+    assert.ok(forCreator.some((d: { id: string }) => d.id === priv.id));
 
     // Discarding hides draft from active list
     await discardWorkspaceDraft(priv.id, { userId: "user-A", userName: "المستخدم أ" });
@@ -132,7 +132,7 @@ describe("Phase 4 — Universal Workspace Drafts Module (حفظ كمسودة)", 
       userId: "user-A",
       userRole: "FIELD_ACCOUNTANT",
     });
-    assert.ok(!afterDiscard.some((d) => d.id === priv.id), "Discarded draft excluded from active list");
+    assert.ok(!afterDiscard.some((d: { id: string }) => d.id === priv.id), "Discarded draft excluded from active list");
   });
 
   it("(c) promotes a saved Journal Voucher draft into a live posted JournalEntry and marks draft CONVERTED", async () => {
