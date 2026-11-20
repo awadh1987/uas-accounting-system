@@ -1,10 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import {
+  createVendorWithAccountTx,
+  ensureCustomerWithAccountTx,
   generateFinancialReports,
   postJournalEntry,
   recordAuditDiffTx,
 } from "@/lib/accounting/ledgerService";
+import { provisionEntityGen6AccountAndCostCenter } from "@/lib/accountingCoreEngine";
 import { assertDateNotInClosedFiscalYear } from "@/lib/fiscalYearClosingEngine";
 import { findMatchingApprovalRule, submitApprovalRequest } from "@/lib/approvalEngine";
 import { createWorkspaceDraft } from "@/lib/workspaceDraftsEngine";
@@ -242,6 +245,10 @@ export async function executeConfirmedAiAction(input: {
     PAYMENT_VOUCHER: "expenses",
     SALES_INVOICE: "sales",
     PURCHASE_BILL: "procurement",
+    CREATE_CUSTOMER: "customers",
+    CREATE_VENDOR: "procurement",
+    CREATE_PROJECT: "projects",
+    EXPORT_CLIENT_REPORT: "customers",
   };
   const requiredModule = moduleMap[op] || "ledger";
   if (!canCreate(targetUser, requiredModule)) {
@@ -252,6 +259,211 @@ export async function executeConfirmedAiAction(input: {
       executed_by_ai: false,
       summaryAr: `⛔ غير مصرح: دورك الحالي (${role}) لا يملك صلاحية الترحيل في قسم (${requiredModule}).`,
       summaryEn: `⛔ RBAC Blocked: Role (${role}) does not have create permission in '${requiredModule}'.`,
+    };
+  }
+
+  // 0. Master & Operational AI Actions (Create Customer, Create Vendor, Create Project, Export Client Report)
+  if (op === "CREATE_CUSTOMER") {
+    const payload = confirmationCard.executionPayload || {};
+    const name = String(payload.name || confirmationCard.partyName || "").trim();
+    const nameEn = String(payload.nameEn || name).trim();
+    const phone = String(payload.phone || "").trim();
+    const creditLimit = Math.max(0, Number(payload.creditLimit || 0));
+    const address = payload.address ? String(payload.address).trim() : undefined;
+    const costCenterId = payload.costCenterId ? String(payload.costCenterId).trim() : undefined;
+
+    const customer = await prisma.$transaction(async (tx) => {
+      const cust = await ensureCustomerWithAccountTx(tx, {
+        name,
+        nameEn,
+        phone,
+        address,
+        costCenterId,
+      });
+      if (creditLimit > 0) {
+        await tx.customer.update({
+          where: { id: cust.id },
+          data: { creditLimit },
+        });
+      }
+      await recordAuditDiffTx(tx, {
+        userId: actor.userId,
+        action: "CREATE",
+        entity: "Customer",
+        entityId: cust.id,
+        before: null,
+        after: {
+          code: cust.code,
+          name: cust.name,
+          phone: cust.phone,
+          creditLimit,
+          costCenterId: cust.costCenterId,
+          executed_by_ai: true,
+        },
+      });
+      await appendAuditLogTx(tx, {
+        ...actor,
+        actionType: "إنشاء عميل عبر المساعد الذكي [executed_by_ai: true]",
+        entityReference: cust.code,
+        details: `إضافة العميل ${cust.name} (${cust.code}) مع ربطه بشجرة الحسابات بالجيل السادس ومراكز التكلفة`,
+      });
+      return cust;
+    });
+
+    return {
+      ok: true,
+      status: 201,
+      executed_by_ai: true,
+      entryNumber: customer.code,
+      summaryAr: `✅ **تم إنشاء العميل بنجاح!** الاسم: **${customer.name}** • الرمز: \`${customer.code}\` • الهاتف: ${customer.phone || "—"} (تم الربط التلقائي بحساب فرعي بالجيل السادس ومركز تكلفة [executed_by_ai: true]).`,
+      summaryEn: `✅ **Customer Created Successfully!** Name: **${customer.name}** • Code: \`${customer.code}\` • Phone: ${customer.phone || "—"} (Auto-provisioned Gen-6 COA leaf & Cost Center [executed_by_ai: true]).`,
+    };
+  }
+
+  if (op === "CREATE_VENDOR") {
+    const payload = confirmationCard.executionPayload || {};
+    const nameAr = String(payload.nameAr || confirmationCard.partyName || "").trim();
+    const nameEn = payload.nameEn ? String(payload.nameEn).trim() : nameAr;
+    const phone = String(payload.phone || "777000000").trim();
+    const email = payload.email ? String(payload.email).trim() : undefined;
+    const address = payload.address ? String(payload.address).trim() : undefined;
+    const taxRegistration = payload.taxRegistration ? String(payload.taxRegistration).trim() : undefined;
+    const costCenterId = payload.costCenterId ? String(payload.costCenterId).trim() : undefined;
+
+    const vendor = await prisma.$transaction(async (tx) => {
+      const v = await createVendorWithAccountTx(tx, {
+        nameAr,
+        nameEn,
+        phone,
+        email,
+        address,
+        taxRegistration,
+        costCenterId,
+      });
+      await recordAuditDiffTx(tx, {
+        userId: actor.userId,
+        action: "CREATE",
+        entity: "Vendor",
+        entityId: v.id,
+        before: null,
+        after: {
+          code: v.code,
+          nameAr: v.nameAr,
+          phone: v.phone,
+          costCenterId: v.costCenterId,
+          executed_by_ai: true,
+        },
+      });
+      await appendAuditLogTx(tx, {
+        ...actor,
+        actionType: "إنشاء مورد عبر المساعد الذكي [executed_by_ai: true]",
+        entityReference: v.code,
+        details: `إضافة المورد ${v.nameAr} (${v.code}) مع ربطه بشجرة الحسابات بالجيل السادس ومراكز التكلفة`,
+      });
+      return v;
+    });
+
+    return {
+      ok: true,
+      status: 201,
+      executed_by_ai: true,
+      entryNumber: vendor.code,
+      summaryAr: `✅ **تم إنشاء المورد بنجاح!** الاسم: **${vendor.nameAr}** • الرمز: \`${vendor.code}\` • الهاتف: ${vendor.phone} (تم الربط التلقائي بحساب فرعي بالجيل السادس ومركز تكلفة [executed_by_ai: true]).`,
+      summaryEn: `✅ **Supplier Created Successfully!** Name: **${vendor.nameAr}** • Code: \`${vendor.code}\` • Phone: ${vendor.phone} (Auto-provisioned Gen-6 COA leaf & Cost Center [executed_by_ai: true]).`,
+    };
+  }
+
+  if (op === "CREATE_PROJECT") {
+    const payload = confirmationCard.executionPayload || {};
+    const name = String(payload.name || confirmationCard.partyName || "").trim();
+    const nameEn = String(payload.nameEn || name).trim();
+    const budgetTotal = Math.max(0, Number(payload.budgetTotal ?? confirmationCard.totalDebit ?? 0));
+    const plannedHarvestCount = Math.max(1, Number(payload.plannedHarvests || 1));
+    const count = await prisma.project.count();
+    const code = String(payload.code || `PRJ-${String(count + 1).padStart(3, "0")}`).trim();
+    const notes = String(payload.notes || "").trim();
+
+    const ORDINAL_HARVESTS = ["القطفة الأولى", "القطفة الثانية", "القطفة الثالثة", "القطفة الرابعة", "القطفة الخامسة"];
+    const harvests = Array.from({ length: plannedHarvestCount }, (_, i) => ORDINAL_HARVESTS[i] || `القطفة ${i + 1}`);
+
+    const project = await prisma.$transaction(async (tx) => {
+      const uniqueCode = (await tx.project.findUnique({ where: { code } }))
+        ? `${code}-${Date.now().toString().slice(-3)}`
+        : code;
+
+      const p = await tx.project.create({
+        data: {
+          code: uniqueCode,
+          name,
+          nameAr: name,
+          nameEn,
+          budgetTotal,
+          estimatedValue: budgetTotal,
+          plannedHarvestCount,
+          status: "ACTIVE",
+          notes,
+          harvestCycles: {
+            create: harvests.map((hName, idx) => ({
+              cycleNumber: idx + 1,
+              name: hName,
+              sortOrder: idx + 1,
+              isLocked: false,
+            })),
+          },
+        },
+      });
+
+      await provisionEntityGen6AccountAndCostCenter(
+        { entityType: "PROJECT", entityId: p.id, nameAr: name, nameEn },
+        tx
+      );
+
+      await recordAuditDiffTx(tx, {
+        userId: actor.userId,
+        action: "CREATE",
+        entity: "Project",
+        entityId: p.id,
+        before: null,
+        after: {
+          code: p.code,
+          name: p.name,
+          budgetTotal,
+          executed_by_ai: true,
+        },
+      });
+
+      await appendAuditLogTx(tx, {
+        ...actor,
+        actionType: "إنشاء مشروع عبر المساعد الذكي [executed_by_ai: true]",
+        entityReference: p.code,
+        details: `إضافة مشروع ${p.name} (${p.code}) بموازنة ${budgetTotal.toLocaleString()} ريال ودورات حصاد: ${plannedHarvestCount}`,
+      });
+
+      return p;
+    });
+
+    return {
+      ok: true,
+      status: 201,
+      executed_by_ai: true,
+      entryNumber: project.code,
+      summaryAr: `✅ **تم إنشاء المشروع بنجاح!** الاسم: **${project.nameAr}** • الرمز: \`${project.code}\` • الموازنة: **${budgetTotal.toLocaleString()} YER** (تم توليد حساب Gen-6 ومركز تكلفة ودورات الحصاد [executed_by_ai: true]).`,
+      summaryEn: `✅ **Project Created Successfully!** Name: **${project.nameAr}** • Code: \`${project.code}\` • Budget: **${budgetTotal.toLocaleString()} YER** (Generated Gen-6 leaf, Cost Center & Harvest Cycles [executed_by_ai: true]).`,
+    };
+  }
+
+  if (op === "EXPORT_CLIENT_REPORT") {
+    const payload = confirmationCard.executionPayload || {};
+    const partyName = String(confirmationCard.partyName || payload.customerName || "كافة العملاء").trim();
+    const includeSaleDetails = Boolean(payload.includeSaleDetails ?? true);
+
+    return {
+      ok: true,
+      status: 200,
+      executed_by_ai: true,
+      entryNumber: `RPT-CUST-${Date.now().toString().slice(-4)}`,
+      summaryAr: `📄 **جاهز لتصدير/طباعة كشف حساب العميل (${partyName})**\n- خيار تفاصيل المبيعات: **${includeSaleDetails ? "مضمّنة بالكامل (تفاصيل الأصناف والكميات والأسعار) ✅" : "ملخص إجمالي فقط 📊"}**\nيمكنك طباعة الكشف أو تصديره إلى PDF مباشرة من قسم العملاء.`,
+      summaryEn: `📄 **Ready to export/print Client Account Statement (${partyName})**\n- Sale Details: **${includeSaleDetails ? "Itemized sales included (items, qty, price, total) ✅" : "Summary totals only 📊"}**\nYou can print or export PDF directly from the Customers module.`,
     };
   }
 

@@ -66,6 +66,12 @@ import type {
   UasSystemSettings,
   UasUser,
 } from "@/types/uas";
+import type {
+  ResetScopeType,
+  ResetSectionModule,
+  ResetUnitType,
+  FactoryCoaMode,
+} from "@/lib/scopedResetEngine";
 
 const ERP_DOMAINS: { id: ErpGroupId; labelAr: string; labelEn: string; descAr: string }[] = [
   {
@@ -516,6 +522,70 @@ export function SystemTab({
     localSnapshotName?: string;
     file?: File | null;
   }>({ open: false });
+
+  // Scoped Reset & Factory Format States
+  const [resetScope, setResetScope] = useState<ResetScopeType>("section");
+  const [resetSectionModule, setResetSectionModule] = useState<ResetSectionModule>("sales");
+  const [resetUnitType, setResetUnitType] = useState<ResetUnitType>("project");
+  const [resetUnitId, setResetUnitId] = useState<string>("");
+  const [resetCoaMode, setResetCoaMode] = useState<FactoryCoaMode>("starter_template");
+  const [resetConfirmationInput, setResetConfirmationInput] = useState<string>("");
+  const [executingReset, setExecutingReset] = useState<boolean>(false);
+
+  const expectedConfirmationPhrase =
+    resetScope === "section"
+      ? `RESET_SECTION_${resetSectionModule.toUpperCase()}`
+      : resetScope === "unit"
+      ? "RESET_UNIT"
+      : "FACTORY_RESET";
+
+  const handleExecuteScopedReset = async () => {
+    if (currentUser.role !== "SUPER_ADMIN") {
+      onToast(isAr ? "صلاحية المشرف العام مطلوبة" : "SUPER_ADMIN role required");
+      return;
+    }
+
+    setExecutingReset(true);
+    try {
+      const baseUrl = getApiBaseUrl();
+      const endpoint = baseUrl ? `${baseUrl}/api/system/reset` : "/api/system/reset";
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-uas-role": currentUser.role,
+          "x-uas-user-id": currentUser.id,
+        },
+        body: JSON.stringify({
+          scope: resetScope,
+          sectionModule: resetSectionModule,
+          unitType: resetUnitType,
+          unitId: resetUnitId,
+          coaMode: resetCoaMode,
+          confirmationPhrase: resetConfirmationInput,
+          actor: {
+            userId: currentUser.id,
+            userDisplay: currentUser.name,
+            userRole: currentUser.role,
+          },
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || "Reset failed");
+      }
+
+      onToast(isAr ? data.result.summaryAr : data.result.summaryEn);
+      setResetConfirmationInput("");
+      await fetchBackups();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onToast(msg);
+    } finally {
+      setExecutingReset(false);
+    }
+  };
 
   const fetchBackups = React.useCallback(async () => {
     if (currentUser.role !== "SUPER_ADMIN" && !canManageUsers) return;
@@ -1466,6 +1536,183 @@ export function SystemTab({
                     </table>
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* Scoped Reset & Factory Format Panel */}
+          {currentUser.role === "SUPER_ADMIN" && (
+            <div className="card-surface rounded-2xl p-5 space-y-4 border border-rose-500/30">
+              <div className="flex items-center justify-between border-b pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-rose-500/10 text-rose-600 flex items-center justify-center">
+                    <Trash2 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-extrabold text-rose-700 dark:text-rose-400">
+                      {isAr
+                        ? "إعادة الضبط الموجه والتهيئة المصنعية (Scoped Reset & Factory Format)"
+                        : "Scoped Reset & Factory Format"}
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      {isAr
+                        ? "تصفير منظم للعمليات بحسب القسم، المشروع، أو تهيئة مصنعية شاملة مع حفظ نسخة أمان وصيانة التراخيص"
+                        : "Controlled reset by module, project unit, or full factory zeroing with automated safety backup"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Scope Selector */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs font-bold">
+                <button
+                  type="button"
+                  data-testid="reset-scope-section"
+                  onClick={() => setResetScope("section")}
+                  className={`p-3 rounded-xl border text-start transition ${
+                    resetScope === "section"
+                      ? "border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300"
+                      : "border-slate-200 dark:border-slate-800 hover:border-slate-300"
+                  }`}
+                >
+                  <div className="font-extrabold">{isAr ? "1. إعادة ضبط بحسب القسم / الموديول" : "1. By Section / Module"}</div>
+                  <div className="text-[10px] text-slate-500 font-normal mt-0.5">
+                    {isAr ? "تصفير المبيعات، المشتريات، المخزون، أو الخزينة فقط" : "Reset sales, procurement, inventory, or treasury"}
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  data-testid="reset-scope-unit"
+                  onClick={() => setResetScope("unit")}
+                  className={`p-3 rounded-xl border text-start transition ${
+                    resetScope === "unit"
+                      ? "border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300"
+                      : "border-slate-200 dark:border-slate-800 hover:border-slate-300"
+                  }`}
+                >
+                  <div className="font-extrabold">{isAr ? "2. إعادة ضبط بحسب المشروع / الوحدة" : "2. By Project / Unit"}</div>
+                  <div className="text-[10px] text-slate-500 font-normal mt-0.5">
+                    {isAr ? "تصفير حركات مشروع أو مركز تكلفة مع بقاء الوحدات الأخرى" : "Clear single project or cost-center records"}
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  data-testid="reset-scope-factory"
+                  onClick={() => setResetScope("factory")}
+                  className={`p-3 rounded-xl border text-start transition ${
+                    resetScope === "factory"
+                      ? "border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300"
+                      : "border-slate-200 dark:border-slate-800 hover:border-slate-300"
+                  }`}
+                >
+                  <div className="font-extrabold">{isAr ? "3. تهيئة مصنعية شاملة (Factory)" : "3. Full Factory Format"}</div>
+                  <div className="text-[10px] text-slate-500 font-normal mt-0.5">
+                    {isAr ? "تصفير كافة العمليات وبدء دورة جديدة مع صيانة التراخيص" : "Zero all transactions, preserving licenses"}
+                  </div>
+                </button>
+              </div>
+
+              {/* Sub-options */}
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 space-y-3 text-xs">
+                {resetScope === "section" && (
+                  <div>
+                    <label className="block text-slate-500 mb-1 font-bold">
+                      {isAr ? "حدد القسم المراد تصفيره:" : "Select Target Module:"}
+                    </label>
+                    <select
+                      value={resetSectionModule}
+                      onChange={(e) => setResetSectionModule(e.target.value as ResetSectionModule)}
+                      className="w-full sm:w-80 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 font-bold"
+                    >
+                      <option value="sales">{isAr ? "قسم المبيعات والعملاء (Sales & Receivables)" : "Sales & Receivables"}</option>
+                      <option value="procurement">{isAr ? "قسم المشتريات والموردين (Procurement & Payables)" : "Procurement & Payables"}</option>
+                      <option value="inventory">{isAr ? "قسم المخزون والأصناف (Inventory & Stock)" : "Inventory & Stock"}</option>
+                      <option value="treasury">{isAr ? "قسم الخزينة والبنوك (Treasury & Cash/Bank)" : "Treasury & Cash/Bank"}</option>
+                      <option value="expenses_wages">{isAr ? "قسم المصروفات وأجور العمال (Expenses & Wages)" : "Expenses & Wages"}</option>
+                    </select>
+                  </div>
+                )}
+
+                {resetScope === "unit" && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-500 mb-1 font-bold">
+                        {isAr ? "نوع الوحدة:" : "Unit Type:"}
+                      </label>
+                      <select
+                        value={resetUnitType}
+                        onChange={(e) => setResetUnitType(e.target.value as ResetUnitType)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 font-bold"
+                      >
+                        <option value="project">{isAr ? "مشروع استثماري / زراعي" : "Project"}</option>
+                        <option value="costCenter">{isAr ? "مركز تكلفة / نشاط" : "Cost Center"}</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-slate-500 mb-1 font-bold">
+                        {isAr ? "معرف / اسم الوحدة:" : "Target Unit ID:"}
+                      </label>
+                      <input
+                        type="text"
+                        value={resetUnitId}
+                        onChange={(e) => setResetUnitId(e.target.value)}
+                        placeholder={isAr ? "أدخل معرف المشروع أو المركز..." : "Enter Project / Cost Center ID..."}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {resetScope === "factory" && (
+                  <div>
+                    <label className="block text-slate-500 mb-1 font-bold">
+                      {isAr ? "تهيئة شجرة الحسابات (COA Configuration):" : "Chart of Accounts Initial State:"}
+                    </label>
+                    <select
+                      value={resetCoaMode}
+                      onChange={(e) => setResetCoaMode(e.target.value as FactoryCoaMode)}
+                      className="w-full sm:w-80 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 font-bold"
+                    >
+                      <option value="starter_template">{isAr ? "إعادة بناء دليل الحسابات القياسي من 6 مستويات (موصى به)" : "Standard 6-Gen COA Template (Recommended)"}</option>
+                      <option value="blank_coa">{isAr ? "دليل حسابات فارغ لتسجيل الأرصدة الافتتاحية المخصصة (Blank COA)" : "Blank COA for Opening Balances"}</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Safety & Confirmation Box */}
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                    <span>
+                      {isAr
+                        ? `للتأكيد، اكتب في الحقل: "${expectedConfirmationPhrase}"`
+                        : `To confirm, enter: "${expectedConfirmationPhrase}"`}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      data-testid="reset-confirmation-input"
+                      value={resetConfirmationInput}
+                      onChange={(e) => setResetConfirmationInput(e.target.value)}
+                      placeholder={isAr ? "اكتب عبارة التأكيد هنا..." : "Type confirmation phrase here..."}
+                      className="flex-1 max-w-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 font-mono text-xs uppercase"
+                    />
+                    <button
+                      type="button"
+                      data-testid="execute-scoped-reset-btn"
+                      onClick={handleExecuteScopedReset}
+                      disabled={executingReset || !resetConfirmationInput.trim()}
+                      className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs shadow disabled:opacity-50 inline-flex items-center gap-1.5 transition"
+                    >
+                      {executingReset && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                      <span>{executingReset ? (isAr ? "جاري التصفير..." : "Resetting...") : (isAr ? "تنفيذ إعادة الضبط مع نسخة أمان" : "Execute Scoped Reset")}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           )}

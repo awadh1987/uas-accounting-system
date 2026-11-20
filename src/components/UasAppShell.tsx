@@ -31,6 +31,7 @@ import { SalesTab } from "@/components/tabs/SalesTab";
 import { SystemTab } from "@/components/tabs/SystemTab";
 import { TreasuryTab } from "@/components/tabs/TreasuryTab";
 import { WorkersTab } from "@/components/tabs/WorkersTab";
+import { TabErrorBoundary } from "@/components/TabErrorBoundary";
 import {
   executeMutation,
   fetchBootstrapState,
@@ -108,6 +109,7 @@ export function UasAppShell() {
   const [selectedProjectId, setSelectedProjectId] = useState("ALL");
   const [selectedSubProjectId, setSelectedSubProjectId] = useState("ALL");
   const [selectedHarvest, setSelectedHarvest] = useState("ALL");
+  const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
 
   const [currentUser, setCurrentUser] = useState<UasUser | null>(null);
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
@@ -846,6 +848,32 @@ export function UasAppShell() {
         });
     }
     const allowedProjects = filterAssignedProjects(u, state.projects);
+
+    if (pendingProjectId) {
+      const targetId = pendingProjectId;
+      setPendingProjectId(null); // Clear pending
+
+      const targetProj = allowedProjects.find((p) => p.id === targetId);
+      if (targetProj) {
+        handleProjectFilterChange(targetId);
+        navigateToTab("projects");
+        setViewMode("erp");
+        const uRoleMeta = getRoleMeta(u);
+        showToast(
+          lang === "ar"
+            ? `تم تسجيل الدخول وتفعيل جذر المشروع: ${targetProj.nameAr || targetProj.name} (${uRoleMeta.labelAr})`
+            : `Signed in as ${u.name} — Activated project: ${targetProj.nameEn || targetProj.name}`
+        );
+        return;
+      } else {
+        showToast(
+          lang === "ar"
+            ? "تم تسجيل الدخول بنجاح، ولكن ليس لديك صلاحية للوصول إلى المشروع المطلوب."
+            : "Signed in, but access to requested project is restricted for your role."
+        );
+      }
+    }
+
     if (
       selectedProjectId !== "ALL" &&
       !allowedProjects.some((p) => p.id === selectedProjectId)
@@ -867,6 +895,7 @@ export function UasAppShell() {
   }
 
   async function handleLogout() {
+    setPendingProjectId(null);
     const actorId = currentUser?.id;
     const actorRole = currentUser?.role;
     try {
@@ -978,6 +1007,32 @@ export function UasAppShell() {
           }}
           onOpenLogin={() => setViewMode("login")}
           onToggleLang={() => setLang((prev) => (prev === "ar" ? "en" : "ar"))}
+          onSelectProjectCard={(projectId) => {
+            if (currentUser) {
+              const allowedProjects = filterAssignedProjects(currentUser, state.projects);
+              const targetProj = allowedProjects.find((p) => p.id === projectId);
+              if (!targetProj) {
+                showToast(
+                  lang === "ar"
+                    ? "عذراً: ليس لديك صلاحية للوصول إلى هذا المشروع."
+                    : "Access denied: You do not have permission to access this project."
+                );
+                return;
+              }
+              handleProjectFilterChange(projectId);
+              navigateToTab("projects");
+              setViewMode("erp");
+              showToast(
+                lang === "ar"
+                  ? `تم تفعيل جذر المشروع: ${targetProj.nameAr || targetProj.name}`
+                  : `Activated project root: ${targetProj.nameEn || targetProj.name}`
+              );
+              return;
+            }
+
+            setPendingProjectId(projectId);
+            setViewMode("login");
+          }}
         />
       ) : viewMode === "login" || !currentUser ? (
         <LoginView
@@ -988,7 +1043,10 @@ export function UasAppShell() {
           theme={theme}
           currentUserId={currentUser?.id ?? ""}
           offlineMode={offlineMode}
-          onBackToLanding={() => setViewMode("landing")}
+          onBackToLanding={() => {
+            setPendingProjectId(null);
+            setViewMode("landing");
+          }}
           onToggleLang={() => setLang((prev) => (prev === "ar" ? "en" : "ar"))}
           licenseStatus={licenseStatus}
           onOpenLicenseModal={() => setLicenseModalOpen(true)}
@@ -1199,7 +1257,13 @@ export function UasAppShell() {
                 </div>
               )}
 
-              {activeTab === "dashboard" && (
+              {/* Active Tab Screen rendering wrapped in TabErrorBoundary */}
+              <TabErrorBoundary
+                tab={activeTab}
+                lang={lang}
+                onNavigateHome={() => navigateToTab("dashboard")}
+              >
+                {activeTab === "dashboard" && (
                 <DashboardTab
                   state={state}
                   lang={lang}
@@ -1708,7 +1772,8 @@ export function UasAppShell() {
               )}
 
               {activeTab === "prompt" && <PromptTab onToast={showToast} />}
-            </main>
+            </TabErrorBoundary>
+          </main>
           </div>
 
           <MobileBottomNav

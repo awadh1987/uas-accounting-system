@@ -14,7 +14,10 @@ import {
   executeUasAgentTool,
   resolveNavigationTarget,
   UAS_AGENT_TOOL_SCHEMAS,
+  type CitationLink,
+  type ClarificationPromptData,
   type ConfirmationPreviewCard,
+  type EscalationCardData,
   type UasAgentExecutionContext,
   type UasAgentToolName,
   type UasAgentToolResult,
@@ -59,6 +62,9 @@ export interface UasAiAgentResponse {
   confirmationCard?: ConfirmationPreviewCard;
   navigationTab?: TabId;
   openLicenseModal?: boolean;
+  citations?: CitationLink[];
+  clarificationPrompt?: ClarificationPromptData;
+  escalationCard?: EscalationCardData;
   reasoningTrace: AgentReasoningStep[];
 }
 
@@ -283,6 +289,178 @@ export function parseBilingualAgentIntent(prompt: string): ParsedAgentIntent {
         thoughtEn: `Intent parsed: Direct navigation request to module '${resolved.labelEn}' (${resolved.tab}).`,
       };
     }
+  }
+
+  // 1.1 Check create_customer intent ("عميل جديد ...", "أنشئ عميل ...", "create customer ...", "add client ...")
+  const isCreateCustomer =
+    /(?:عميل\s+جديد|انشئ\s+عميل|أنشئ\s+عميل|اضف\s+عميل|أضف\s+عميل|تسجيل\s+عميل|create\s+customer|new\s+customer|add\s+customer|new\s+client|create\s+client)/i.test(norm) &&
+    !/(?:فاتور|سند|قيد|invoice|voucher|bill|journal)/i.test(norm);
+
+  if (isCreateCustomer) {
+    const phoneMatch = raw.match(/(?:هاتف|تلفون|جوال|phone|mobile)\s*[:=]?\s*([0-9+]{6,15})/i);
+    const creditMatch = raw.match(/(?:حد\s+ائتمان|حد\s+ائتماني|credit\s*limit)\s*[:=]?\s*(\d+(?:\.\d+)?)/i);
+    const phone = phoneMatch ? phoneMatch[1].trim() : undefined;
+    const creditLimit = creditMatch ? Number(creditMatch[1]) : 0;
+
+    let custName = raw
+      .replace(/(?:انشئ|أنشئ|اضف|أضف|سجل|تسجيل|جديد|عميل|زبون|create|add|new|customer|client)\b/gi, "")
+      .replace(/(?:هاتف|تلفون|جوال|phone|mobile)\s*[:=]?\s*[0-9+]{6,15}/gi, "")
+      .replace(/(?:حد\s+ائتمان|حد\s+ائتماني|credit\s*limit)\s*[:=]?\s*\d+(?:\.\d+)?/gi, "")
+      .replace(/(?:مركز\s+تكلفة|cost\s*center)\s*[:=]?\s*[A-Za-z0-9_\u0600-\u06FF-]+/gi, "")
+      .trim();
+    if (!custName || custName.length < 2) custName = "عميل جديد";
+
+    return {
+      toolName: "create_customer",
+      args: {
+        name: custName,
+        phone,
+        creditLimit,
+        costCenterId,
+      },
+      thoughtAr: `تحليل النية: طلب إنشاء عميل جديد (${custName})${phone ? ` برقم هاتف: ${phone}` : ""}${creditLimit > 0 ? ` وحد ائتماني: ${creditLimit}` : ""}${costCenterId ? ` ومركز تكلفة: ${costCenterId}` : ""}. سيتم توليد حساب Gen-6 ومركز تكلفة وبطاقة التأكيد.`,
+      thoughtEn: `Intent parsed: Create new customer (${custName})${phone ? ` phone: ${phone}` : ""}${creditLimit > 0 ? ` credit limit: ${creditLimit}` : ""}${costCenterId ? ` CC: ${costCenterId}` : ""}. Generates Gen-6 leaf and confirmation card.`,
+    };
+  }
+
+  // 1.2 Check create_vendor intent ("مورد جديد ...", "أنشئ مورد ...", "create vendor ...", "add supplier ...")
+  const isCreateVendor =
+    /(?:مورد\s+جديد|انشئ\s+مورد|أنشئ\s+مورد|اضف\s+مورد|أضف\s+مورد|تسجيل\s+مورد|create\s+vendor|new\s+vendor|add\s+vendor|new\s+supplier|create\s+supplier)/i.test(norm) &&
+    !/(?:فاتور|سند|قيد|invoice|voucher|bill|journal)/i.test(norm);
+
+  if (isCreateVendor) {
+    const phoneMatch = raw.match(/(?:هاتف|تلفون|جوال|phone|mobile)\s*[:=]?\s*([0-9+]{6,15})/i);
+    const phone = phoneMatch ? phoneMatch[1].trim() : "777000000";
+
+    let vendName = raw
+      .replace(/(?:انشئ|أنشئ|اضف|أضف|سجل|تسجيل|جديد|مورد|create|add|new|vendor|supplier)\b/gi, "")
+      .replace(/(?:هاتف|تلفون|جوال|phone|mobile)\s*[:=]?\s*[0-9+]{6,15}/gi, "")
+      .replace(/(?:مركز\s+تكلفة|cost\s*center)\s*[:=]?\s*[A-Za-z0-9_\u0600-\u06FF-]+/gi, "")
+      .trim();
+    if (!vendName || vendName.length < 2) vendName = "مورد جديد";
+
+    return {
+      toolName: "create_vendor",
+      args: {
+        nameAr: vendName,
+        phone,
+        costCenterId,
+      },
+      thoughtAr: `تحليل النية: طلب إنشاء مورد جديد (${vendName})${phone ? ` برقم هاتف: ${phone}` : ""}${costCenterId ? ` ومركز تكلفة: ${costCenterId}` : ""}. سيتم توليد حساب Gen-6 ومركز تكلفة وبطاقة التأكيد.`,
+      thoughtEn: `Intent parsed: Create new vendor (${vendName})${phone ? ` phone: ${phone}` : ""}${costCenterId ? ` CC: ${costCenterId}` : ""}. Generates Gen-6 leaf and confirmation card.`,
+    };
+  }
+
+  // 1.3 Check create_project intent ("مشروع جديد ...", "أنشئ مشروع ...", "create project ...")
+  const isCreateProject =
+    /(?:مشروع\s+جديد|انشئ\s+مشروع|أنشئ\s+مشروع|اضف\s+مشروع|أضف\s+مشروع|تسجيل\s+مشروع|create\s+project|new\s+project|add\s+project)/i.test(norm) &&
+    !/(?:فاتور|سند|قيد|invoice|voucher|bill|journal)/i.test(norm);
+
+  if (isCreateProject) {
+    const budgetMatch = raw.match(/(?:موازنة|ميزانية|budget)\s*[:=]?\s*(\d+(?:\.\d+)?)/i);
+    const amounts = extractMonetaryAmounts(raw);
+    const budgetTotal = budgetMatch ? Number(budgetMatch[1]) : (amounts[0] ?? 0);
+    const harvestMatch = raw.match(/(\d+)\s*(?:قطفات|قطفة|دورات|دورة|harvests|cycles)/i);
+    const plannedHarvests = harvestMatch ? Number(harvestMatch[1]) : 1;
+
+    let projName = raw
+      .replace(/(?:انشئ|أنشئ|اضف|أضف|سجل|تسجيل|جديد|مشروع|create|add|new|project)\b/gi, "")
+      .replace(/(?:موازنة|ميزانية|budget)\s*[:=]?\s*\d+(?:\.\d+)?/gi, "")
+      .replace(/\b\d+\s*(?:قطفات|قطفة|دورات|دورة|harvests|cycles)\b/gi, "")
+      .replace(/(?:مركز\s+تكلفة|cost\s*center)\s*[:=]?\s*[A-Za-z0-9_\u0600-\u06FF-]+/gi, "")
+      .trim();
+    if (!projName || projName.length < 2) projName = "مشروع إنتاجي جديد";
+
+    return {
+      toolName: "create_project",
+      args: {
+        name: projName,
+        budgetTotal,
+        plannedHarvests,
+        costCenterId,
+      },
+      thoughtAr: `تحليل النية: طلب إنشاء مشروع جديد (${projName})${budgetTotal > 0 ? ` بموازنة: ${budgetTotal}` : ""} ودورات حصاد: ${plannedHarvests}. سيتم توليد حساب Gen-6 ومركز تكلفة وبطاقة التأكيد.`,
+      thoughtEn: `Intent parsed: Create new project (${projName})${budgetTotal > 0 ? ` budget: ${budgetTotal}` : ""} harvests: ${plannedHarvests}. Generates Gen-6 leaf and confirmation card.`,
+    };
+  }
+
+  // 1.4 Check export_client_report intent ("تقرير عميل ...", "كشف حساب عميل ...", "تصدير كشف حساب ...")
+  const isClientReport =
+    /(?:تقرير\s+عميل|كشف\s+حساب\s+عميل|كشف\s+حساب|تقرير\s+العميل|تصدير\s+كشف\s+حساب|طباعه\s+كشف\s+حساب|client\s+report|customer\s+statement|export\s+client\s+report|customer\s+report)/i.test(norm);
+
+  if (isClientReport) {
+    const includeSaleDetails = !/(?:دون\s+تفاصيل|بدون\s+تفاصيل|ملخص\s+فقط|summary\s+only|without\s+details)/i.test(norm);
+    const partyName = extractPartyName(raw, "", "", lang);
+
+    return {
+      toolName: "export_client_report",
+      args: {
+        customerName: partyName,
+        includeSaleDetails,
+      },
+      thoughtAr: `تحليل النية: طلب كشف حساب وتصدير تقرير العميل (${partyName || "الكل"})${includeSaleDetails ? " متضمناً تفاصيل كل عملية بيع" : " كملخص إجمالي"}.`,
+      thoughtEn: `Intent parsed: Export client statement for (${partyName || "All"})${includeSaleDetails ? " including per-sale item details" : " summary only"}.`,
+    };
+  }
+
+  // 1.5 Check query_workspace_data: Customer Balances & Debt
+  const isCustomerBalanceQuery =
+    /(?:رصيد\s+العميل|مديونيه\s+العميل|مديونية\s+العميل|حساب\s+العميل|كم\s+على\s+العميل|كم\s+يستحق\s+على|customer\s+balance|client\s+balance|client\s+debt)/i.test(norm) &&
+    !/(?:فاتور|سند|قيد|انشئ|أنشئ|اضف|أضف|جديد|invoice|voucher|bill|journal)/i.test(norm);
+
+  if (isCustomerBalanceQuery) {
+    const custName = extractPartyName(raw, "", "", lang);
+    return {
+      toolName: "query_workspace_data",
+      args: { scope: "customers", query: custName },
+      thoughtAr: `تحليل النية: استعلام فوري عن رصيد ومديونية العميل (${custName || "الكل"}) في سجل المبيعات والعملاء مع توفير الروابط المباشرة.`,
+      thoughtEn: `Intent parsed: Query client balance and receivables for (${custName || "All"}) with citation links.`,
+    };
+  }
+
+  // 1.6 Check query_workspace_data: Vendor Payables
+  const isVendorBalanceQuery =
+    /(?:مستحقات\s+المورد|رصيد\s+المورد|حساب\s+المورد|كم\s+للمورد|مستحقات\s+الموردين|vendor\s+balance|supplier\s+balance|vendor\s+payables)/i.test(norm) &&
+    !/(?:فاتور|سند|قيد|انشئ|أنشئ|اضف|أضف|جديد|invoice|voucher|bill|journal)/i.test(norm);
+
+  if (isVendorBalanceQuery) {
+    const vendName = extractPartyName(raw, "", "", lang);
+    return {
+      toolName: "query_workspace_data",
+      args: { scope: "vendors", query: vendName },
+      thoughtAr: `تحليل النية: استعلام فوري عن مستحقات وفواتير المورد (${vendName || "الكل"}) في سجل المشتريات.`,
+      thoughtEn: `Intent parsed: Query vendor payables and bills for (${vendName || "All"}) with citation links.`,
+    };
+  }
+
+  // 1.7 Check query_workspace_data: Project Totals & Budget
+  const isProjectBudgetQuery =
+    /(?:موازنه\s+مشروع|ميزانيه\s+مشروع|تكاليف\s+مشروع|مصروفات\s+مشروع|ارباح\s+مشروع|project\s+budget|project\s+costs|project\s+spend|project\s+totals)/i.test(norm) &&
+    !/(?:انشئ|أنشئ|اضف|أضف|جديد|create|new|add)/i.test(norm);
+
+  if (isProjectBudgetQuery) {
+    let projName = raw
+      .replace(/(?:موازنة|موازنه|ميزانية|ميزانيه|تكاليف|مصروفات|أرباح|ارباح|مشروع|project|budget|costs|totals)(?:\s+|$|\b)/gi, "")
+      .trim();
+    return {
+      toolName: "query_workspace_data",
+      args: { scope: "projects", query: projName },
+      thoughtAr: `تحليل النية: استعلام فوري عن موازنة وتكاليف وأرباح المشروع (${projName || "العام"}) مع روابط بطاقة المشروع والتقارير.`,
+      thoughtEn: `Intent parsed: Query project budget, costs, and profit for (${projName || "All"}) with citation links.`,
+    };
+  }
+
+  // 1.8 Check query_workspace_data: Recent Vouchers
+  const isRecentVouchersQuery =
+    /(?:آخر\s+السندات|اخر\s+السندات|اخر\s+سندات|آخر\s+سندات|سندات\s+اليوم|السندات\s+الاخيره|السندات\s+الأخيرة|recent\s+vouchers|latest\s+vouchers)/i.test(norm);
+
+  if (isRecentVouchersQuery) {
+    return {
+      toolName: "query_workspace_data",
+      args: { scope: "vouchers", query: "" },
+      thoughtAr: "تحليل النية: استعلام فوري عن آخر سندات القبض والصرف المسجلة بالخزينة مع رابط القسم المباشر.",
+      thoughtEn: "Intent parsed: Query recent receipt and payment vouchers in Treasury with citation links.",
+    };
   }
 
   // 2. Check draft_journal_entry intent
@@ -737,6 +915,9 @@ export async function runUasAiAgent(
     confirmationCard: toolResult.confirmationCard,
     navigationTab: toolResult.navigationTab,
     openLicenseModal: toolResult.openLicenseModal,
+    citations: toolResult.citations,
+    clarificationPrompt: toolResult.clarificationPrompt,
+    escalationCard: toolResult.escalationCard,
     reasoningTrace,
   };
 }

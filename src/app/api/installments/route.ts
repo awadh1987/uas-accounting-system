@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { computeQrVerificationCode } from "@/lib/formulas";
-import { ensureWorkerWithAccountTx, postJournalEntry } from "@/lib/accounting/ledgerService";
+import { ensureWorkerWithAccountTx, postJournalEntry, reverseJournalEntry } from "@/lib/accounting/ledgerService";
 import { appendAuditLogTx, getBootstrapState, isHarvestLockedTx } from "@/lib/serverBootstrap";
 import { extractActor, jsonError, lockedError } from "@/lib/apiHelpers";
 
@@ -195,5 +195,97 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error("POST /api/installments error:", error);
     return jsonError("تعذر حفظ سند الدفعة", 500);
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    let id = searchParams.get("id");
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+      if (!id && body.id) id = String(body.id).trim();
+    } catch {
+      // Body may be empty
+    }
+
+    if (!id) return jsonError("يرجى تحديد معرف السند المطلوب حذفه", 400);
+    const actor = extractActor(body);
+
+    const result = await prisma.$transaction(async (tx) => {
+      const voucher = await tx.installmentVoucher.findUnique({ where: { id } });
+      if (!voucher) return { status: "NOT_FOUND" as const };
+
+      // Revert sale balances
+      if (voucher.saleTransactionId) {
+        const sale = await tx.saleTransaction.findUnique({ where: { id: voucher.saleTransactionId } });
+        if (sale) {
+          const nextCredit = Math.max(0, sale.creditPaid - voucher.amountYER);
+          const nextDebit = Math.max(0, sale.totalAmount - nextCredit);
+          await tx.saleTransaction.update({
+            where: { id: sale.id },
+            data: { creditPaid: nextCredit, debitReceivable: nextDebit },
+          });
+        }
+      }
+
+      // Revert worker balances
+      if (voucher.workerWageEntryId) {
+        const worker = await tx.workerWageEntry.findUnique({ where: { id: voucher.workerWageEntryId } });
+        if (worker) {
+          const nextCredit = Math.max(0, worker.creditAmount - voucher.amountYER);
+          const nextDebit = Math.max(0, worker.totalWage - nextCredit);
+          await tx.workerWageEntry.update({
+            where: { id: worker.id },
+            data: { creditAmount: nextCredit, debitBalance: nextDebit },
+          });
+        }
+      }
+
+      // Revert treasury balance
+      const treasury = await tx.treasuryAccount.findUnique({ where: { id: voucher.treasuryAccountId } });
+      if (treasury) {
+        const delta = voucher.type === "CUSTOMER_RECEIPT" ? -voucher.amountYER : voucher.amountYER;
+        await tx.treasuryAccount.update({
+          where: { id: treasury.id },
+          data: { balanceYER: treasury.balanceYER + delta },
+        });
+      }
+
+      // Reversal of journal entry
+      if (voucher.journalEntryId) {
+        try {
+          await reverseJournalEntry({
+            journalEntryId: voucher.journalEntryId,
+            reason: `إلغاء سند دفعة محذوف: ${voucher.voucherNo}`,
+            createdById: actor.userId ?? undefined,
+            tx,
+          });
+        } catch {
+          await tx.journalEntryLine.deleteMany({ where: { journalEntryId: voucher.journalEntryId } });
+          await tx.journalEntry.delete({ where: { id: voucher.journalEntryId } });
+        }
+      }
+
+      await appendAuditLogTx(tx, {
+        ...actor,
+        actionType: "حذف سند دفعة",
+        entityReference: voucher.id,
+        details: `حذف سند ${voucher.voucherNo} — المبلغ: ${voucher.amountYER.toLocaleString()} ريال`,
+      });
+
+      await tx.installmentVoucher.delete({ where: { id: voucher.id } });
+
+      return { status: "OK" as const, voucher };
+    });
+
+    if (result.status === "NOT_FOUND") return jsonError("السند غير موجود", 404);
+
+    const state = await getBootstrapState();
+    return NextResponse.json({ success: true, deletedId: id, voucherNo: result.voucher.voucherNo, state });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "تعذر حذف سند الدفعة";
+    return jsonError(msg, 400);
   }
 }

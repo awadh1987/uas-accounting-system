@@ -15,6 +15,7 @@ import {
   Send,
   ShoppingCart,
   Store,
+  Trash2,
   Wallet,
 } from "lucide-react";
 import { fmtNum } from "@/lib/formulas";
@@ -84,6 +85,7 @@ interface VendorBillItem {
   isInventory: boolean;
   threeWayStatus: string;
   notes: string | null;
+  paymentCount?: number;
 }
 
 interface PaymentVoucherItem {
@@ -171,8 +173,8 @@ export function ProcurementTab({
   const [poSubProjectId, setPoSubProjectId] = useState("");
   const [poDesc, setPoDesc] = useState("");
   const [poUnit, setPoUnit] = useState("وحدة");
-  const [poQty, setPoQty] = useState("10");
-  const [poUnitPrice, setPoUnitPrice] = useState("5000");
+  const [poQty, setPoQty] = useState("");
+  const [poUnitPrice, setPoUnitPrice] = useState("");
   const [poCurrency, setPoCurrency] = useState("YER");
   const [poNotes, setPoNotes] = useState("");
 
@@ -390,6 +392,27 @@ export function ProcurementTab({
       return;
     }
     const isEdit = Boolean(editingPoId);
+
+    // Non-blocking Duplicate Entry Warning
+    if (!isEdit) {
+      const isDuplicate = pos.some(
+        (po) =>
+          po.vendorId === poVendorId &&
+          po.projectId === poProjectId &&
+          po.items.some(
+            (it) =>
+              it.description.trim().toLowerCase() === poDesc.trim().toLowerCase() &&
+              Math.abs(Number(it.unitPrice) - (Number(poUnitPrice) || 0)) < 0.01
+          )
+      );
+      if (isDuplicate) {
+        const proceed = window.confirm(
+          "⚠️ تنبيه بوجود أمر شراء مماثل:\nتم العثور على أمر شراء سابق لنفس المورد والمشروع بنفس الصنف والسعر.\n\nهل ترغب في المتابعة وتأكيد إصدار أمر الشراء؟"
+        );
+        if (!proceed) return;
+      }
+    }
+
     const res = await fetch("/api/procurement/pos", {
       method: isEdit ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
@@ -452,6 +475,23 @@ export function ProcurementTab({
       return;
     }
     const isEdit = Boolean(editingBillId);
+
+    // Non-blocking Duplicate Entry Warning
+    if (!isEdit) {
+      const isDuplicate = bills.some(
+        (b) =>
+          b.vendorId === billVendorId &&
+          b.projectId === billProjectId &&
+          Math.abs(Number(b.totalAmount) - numericAmt) < 0.01
+      );
+      if (isDuplicate) {
+        const proceed = window.confirm(
+          `⚠️ تنبيه بوجود فاتورة مورد مماثلة:\nتم العثور على فاتورة سابقة لنفس المورد والمشروع بنفس المبلغ (${numericAmt.toLocaleString()} ريال).\n\nهل ترغب في المتابعة وتأكيد إصدار الفاتورة؟`
+        );
+        if (!proceed) return;
+      }
+    }
+
     const res = await fetch("/api/procurement/bills", {
       method: isEdit ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
@@ -508,6 +548,23 @@ export function ProcurementTab({
       return;
     }
     const isEdit = Boolean(editingPaymentId);
+
+    // Non-blocking Duplicate Entry Warning
+    if (!isEdit) {
+      const isDuplicate = payments.some(
+        (p) =>
+          p.vendorId === payVendorId &&
+          Math.abs(Number(p.amount) - amt) < 0.01 &&
+          (payBillId ? p.billId === payBillId : true)
+      );
+      if (isDuplicate) {
+        const proceed = window.confirm(
+          `⚠️ تنبيه بوجود سند صرف مماثل:\nتم العثور على سند صرف سابق لنفس المورد بنفس المبلغ (${amt.toLocaleString()} ريال).\n\nهل ترغب في المتابعة وتأكيد إصدار السند؟`
+        );
+        if (!proceed) return;
+      }
+    }
+
     const res = await fetch("/api/procurement/payments", {
       method: isEdit ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
@@ -576,6 +633,60 @@ export function ProcurementTab({
       qrPayload: `PV:${p.voucherNumber}|VND:${p.vendor.code}|AMT:${p.amount}|DATE:${p.date.slice(0, 10)}`,
       whatsappText: `النظام المحاسبي الموحد (UAS)\nسند صرف مورد رقم: ${p.voucherNumber}\nالمورد: ${p.vendor.nameAr}\nالمبلغ: ${fmtNum(p.amount)} ${p.currency}\nالخزينة/البنك: ${p.treasury.nameAr}\nالتاريخ: ${p.date.slice(0, 10)}`,
     });
+  }
+
+  async function handleDeleteBill(bill: VendorBillItem) {
+    if (Number(bill.paidAmount) > 0 || (bill.paymentCount ?? 0) > 0) {
+      alert("⚠️ لا يمكن حذف فاتورة تم سدادها أو سداد جزء منها. يرجى إلغاء سندات الصرف المرتبطة أولاً.");
+      return;
+    }
+    const confirmed = window.confirm(
+      `هل أنت متأكد من حذف فاتورة المورد (${bill.billNumber}) بمبلغ ${Number(bill.totalAmount).toLocaleString()} ${bill.currency}؟ سيتم إلغاء القيد المحاسبي المرتبط بها.`
+    );
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(`/api/procurement/bills?id=${encodeURIComponent(bill.id)}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: bill.id, actor: actorPayload }),
+      });
+      const data = (await res.json()) as { error?: string; success?: boolean };
+      if (!res.ok || data.error) {
+        onToast(data.error || "تعذر حذف فاتورة المورد");
+        return;
+      }
+      onToast(`✅ تم حذف الفاتورة ${bill.billNumber} بنجاح`);
+      await Promise.all([loadAll(), onRefreshState()]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "تعذر حذف الفاتورة";
+      onToast(msg);
+    }
+  }
+
+  async function handleDeletePayment(payment: PaymentVoucherItem) {
+    const confirmed = window.confirm(
+      `هل أنت متأكد من حذف سند الصرف (${payment.voucherNumber}) بمبلغ ${Number(payment.amount).toLocaleString()} ${payment.currency}؟ سيتم إعادة رصيد الفاتورة المرتبطة وعكس القيد المحاسبي.`
+    );
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(`/api/procurement/payments?id=${encodeURIComponent(payment.id)}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: payment.id, actor: actorPayload }),
+      });
+      const data = (await res.json()) as { error?: string; success?: boolean };
+      if (!res.ok || data.error) {
+        onToast(data.error || "تعذر حذف سند الصرف");
+        return;
+      }
+      onToast(`✅ تم حذف سند الصرف ${payment.voucherNumber} بنجاح`);
+      await Promise.all([loadAll(), onRefreshState()]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "تعذر حذف سند الصرف";
+      onToast(msg);
+    }
   }
 
   const activePoProj = projects.find((p) => p.id === poProjectId);
@@ -890,6 +1001,17 @@ export function ProcurementTab({
                                 <span>تعديل</span>
                               </button>
                             )}
+                            {!readOnly && canEditRecords && (
+                              <button
+                                type="button"
+                                onClick={() => void handleDeleteBill(b)}
+                                className="px-2 py-1 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 font-bold inline-flex items-center gap-1"
+                                title="حذف الفاتورة"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>حذف</span>
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -991,6 +1113,17 @@ export function ProcurementTab({
                               >
                                 <Edit3 className="w-3 h-3" />
                                 <span>تعديل</span>
+                              </button>
+                            )}
+                            {!readOnly && canEditRecords && (
+                              <button
+                                type="button"
+                                onClick={() => void handleDeletePayment(p)}
+                                className="px-2 py-1 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 font-bold inline-flex items-center gap-1"
+                                title="حذف سند الصرف"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>حذف</span>
                               </button>
                             )}
                           </div>

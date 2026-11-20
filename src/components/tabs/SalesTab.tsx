@@ -105,13 +105,13 @@ export function SalesTab({
 }: SalesTabProps) {
   const [projectId, setProjectId] = useState(projects[0]?.id || "");
   const activeProj = projects.find((p) => p.id === projectId) || projects[0];
-  const [harvest, setHarvest] = useState(activeProj?.harvests[0] || "القطفة الأولى");
+  const [harvest, setHarvest] = useState(activeProj?.harvests[0] || "");
   const [subProjectId, setSubProjectId] = useState<string>("");
 
   // Concurrent Multi-Officer Sales Fields
   const [sequenceNumber, setSequenceNumber] = useState("");
-  const [dailyBatchLabel, setDailyBatchLabel] = useState("وردية الصباح");
-  const [batch, setBatch] = useState("عملية بيع");
+  const [dailyBatchLabel, setDailyBatchLabel] = useState("");
+  const [batch, setBatch] = useState("");
   const [salesOfficerId, setSalesOfficerId] = useState(currentUser?.id || "");
   const [salesOfficerTitle, setSalesOfficerTitle] = useState(
     currentUser?.name
@@ -128,11 +128,11 @@ export function SalesTab({
 
   const [customer, setCustomer] = useState("");
   const [phone, setPhone] = useState("");
-  const [bundles, setBundles] = useState("100");
-  const [price, setPrice] = useState("2000");
-  const [credit, setCredit] = useState("50000");
-  const [date, setDate] = useState("2026-11-10");
-  const [voucherNo, setVoucherNo] = useState("RV-101");
+  const [bundles, setBundles] = useState("");
+  const [price, setPrice] = useState("");
+  const [credit, setCredit] = useState("");
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [voucherNo, setVoucherNo] = useState("");
   const [notes, setNotes] = useState("");
   const [costCenterId, setCostCenterId] = useState("");
 
@@ -184,12 +184,12 @@ export function SalesTab({
     const defProj = projects[0];
     setProjectId(defProj?.id || "");
     setSubProjectId("");
-    setHarvest(defProj?.harvests[0] || "القطفة الأولى");
+    setHarvest(defProj?.harvests[0] || "");
 
     const year = new Date().getFullYear();
     const nextSeq = `SO-${year}-${String(sales.length + 1).padStart(4, "0")}`;
     setSequenceNumber(nextSeq);
-    setDailyBatchLabel("وردية الصباح");
+    setDailyBatchLabel("");
     setBatch(nextSeq);
 
     const defaultTitle = currentUser?.name
@@ -206,9 +206,9 @@ export function SalesTab({
     setCustomGradeText("");
     setCustomer("");
     setPhone("");
-    setBundles("100");
-    setPrice("2000");
-    setCredit("50000");
+    setBundles("");
+    setPrice("");
+    setCredit("");
     setDate(new Date().toISOString().slice(0, 10));
     setVoucherNo(`RV-${Math.floor(100 + Math.random() * 900)}`);
     setNotes("");
@@ -257,6 +257,23 @@ export function SalesTab({
     const pid = activeProj?.id || projectId;
     const harv =
       activeProj?.harvests.includes(harvest) ? harvest : activeProj?.harvests[0] || "القطفة الأولى";
+
+    // Non-blocking Duplicate Entry Warning (same party, project, and amount)
+    if (!editingId) {
+      const saleTotal = (Number(bundles) || 0) * (Number(price) || 0);
+      const isDuplicate = sales.some(
+        (s) =>
+          s.projectId === pid &&
+          s.customer.trim().toLowerCase() === customer.trim().toLowerCase() &&
+          Math.abs(Number(s.total) - saleTotal) < 0.01
+      );
+      if (isDuplicate) {
+        const proceed = window.confirm(
+          `⚠️ تنبيه بوجود عملية مبيعات مماثلة:\nتم العثور على عملية سابقة مسجلة لنفس العميل (${customer.trim()}) في هذا المشروع بنفس المبلغ (${saleTotal.toLocaleString()} ريال).\n\nهل ترغب في المتابعة وتأكيد تسجيل العملية؟`
+        );
+        if (!proceed) return;
+      }
+    }
 
     const finalGrade =
       selectedGradePreset === "أخرى (تحديد مخصص)"

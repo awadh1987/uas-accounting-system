@@ -115,9 +115,9 @@ export function MultiUnitInventoryPanel({
   const [customBaseUnitName, setCustomBaseUnitName] = useState("");
   const [defaultWarehouseId, setDefaultWarehouseId] = useState("");
   const [customWarehouseName, setCustomWarehouseName] = useState("");
-  const [purchasePrice, setPurchasePrice] = useState("0");
-  const [wholesalePrice, setWholesalePrice] = useState("0");
-  const [retailPrice, setRetailPrice] = useState("0");
+  const [purchasePrice, setPurchasePrice] = useState("");
+  const [wholesalePrice, setWholesalePrice] = useState("");
+  const [retailPrice, setRetailPrice] = useState("");
   const [conversions, setConversions] = useState<ConversionRowDraft[]>([]);
   const [savingItem, setSavingItem] = useState(false);
 
@@ -129,8 +129,8 @@ export function MultiUnitInventoryPanel({
   const [movUnitId, setMovUnitId] = useState("");
   const [movCustomUnitLabel, setMovCustomUnitLabel] = useState("");
   const [movCustomFactor, setMovCustomFactor] = useState("1");
-  const [movQty, setMovQty] = useState("1");
-  const [movUnitCost, setMovUnitCost] = useState("0");
+  const [movQty, setMovQty] = useState("");
+  const [movUnitCost, setMovUnitCost] = useState("");
   const [movCostCenterId, setMovCostCenterId] = useState("");
   const [savingMov, setSavingMov] = useState(false);
 
@@ -623,6 +623,7 @@ export function MultiUnitInventoryPanel({
                   step="any"
                   value={purchasePrice}
                   onChange={(e) => setPurchasePrice(e.target.value)}
+                  placeholder="0.00"
                   className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 font-mono"
                 />
               </label>
@@ -633,6 +634,7 @@ export function MultiUnitInventoryPanel({
                   step="any"
                   value={wholesalePrice}
                   onChange={(e) => setWholesalePrice(e.target.value)}
+                  placeholder="0.00"
                   className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 font-mono"
                 />
               </label>
@@ -643,6 +645,7 @@ export function MultiUnitInventoryPanel({
                   step="any"
                   value={retailPrice}
                   onChange={(e) => setRetailPrice(e.target.value)}
+                  placeholder="0.00"
                   className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 font-mono"
                 />
               </label>

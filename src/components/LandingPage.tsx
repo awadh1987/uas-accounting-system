@@ -36,6 +36,7 @@ interface LandingPageProps {
   onEnterErp: (tab?: TabId) => void;
   onOpenLogin: () => void;
   onToggleLang: () => void;
+  onSelectProjectCard?: (projectId: string) => void;
 }
 
 interface PublicSummary {
@@ -69,6 +70,7 @@ export function LandingPage({
   onEnterErp,
   onOpenLogin,
   onToggleLang,
+  onSelectProjectCard,
 }: LandingPageProps) {
   const profile = state.enterpriseProfile;
   const isAr = lang === "ar";
@@ -259,22 +261,20 @@ export function LandingPage({
             </p>
 
             <div className="pt-2 flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={currentUser ? () => onEnterErp("dashboard") : onOpenLogin}
-                className="px-6 py-3.5 rounded-2xl accent-bg text-sm font-black shadow-lg hover:shadow-xl flex items-center gap-2.5 transition"
-              >
-                <ArrowIcon className="w-4 h-4" />
-                <span>
-                  {currentUser
-                    ? isAr
+              {currentUser && (
+                <button
+                  type="button"
+                  onClick={() => onEnterErp("dashboard")}
+                  className="px-6 py-3.5 rounded-2xl accent-bg text-sm font-black shadow-lg hover:shadow-xl flex items-center gap-2.5 transition"
+                >
+                  <ArrowIcon className="w-4 h-4" />
+                  <span>
+                    {isAr
                       ? "الانتقال إلى لوحة العمليات"
-                      : "Go to ERP Workspace"
-                    : isAr
-                    ? "تسجيل الدخول إلى مساحة العمل"
-                    : "Sign In to Workspace"}
-                </span>
-              </button>
+                      : "Go to ERP Workspace"}
+                  </span>
+                </button>
+              )}
 
               {!isInstalledApp && (
                 <>
@@ -531,30 +531,58 @@ export function LandingPage({
         {/* Active Projects Showcase (rendered only when projects actually exist) */}
         {state.projects.length > 0 && (
           <section className="max-w-7xl mx-auto px-4 sm:px-8 py-8 border-t border-slate-200/80 dark:border-slate-800">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-black">
-                {isAr ? "مشاريع المؤسسة الإنتاجية" : "Enterprise Portfolio"}
-              </h3>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-6">
+              <div>
+                <h3 className="text-lg font-black">
+                  {isAr ? "مشاريع المؤسسة الإنتاجية (Enterprise Portfolio)" : "Enterprise Portfolio"}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  {isAr
+                    ? "انقر على أي مشروع للدخول المباشر إلى جذر المشروع وسجلات عملياته بعد التحقق الأمني"
+                    : "Click any project card to access its root workspace context & financial records"}
+                </p>
+              </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
               {state.projects.slice(0, 3).map((proj) => (
-                <div key={proj.id} className="card-surface rounded-2xl p-5 space-y-3 border border-slate-200 dark:border-slate-800">
+                <div
+                  key={proj.id}
+                  data-testid={`portfolio-project-${proj.id}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() =>
+                    onSelectProjectCard
+                      ? onSelectProjectCard(proj.id)
+                      : onEnterErp("projects")
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      if (onSelectProjectCard) onSelectProjectCard(proj.id);
+                      else onEnterErp("projects");
+                    }
+                  }}
+                  className="card-surface rounded-2xl p-5 space-y-3 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/70 hover:shadow-lg transition cursor-pointer group focus:outline-none focus:ring-2 focus:ring-emerald-500/40 text-start"
+                >
                   <div className="flex items-center justify-between">
-                    <span className="font-mono text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 font-bold">
+                    <span className="font-mono text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 font-bold text-slate-700 dark:text-slate-300">
                       {proj.code || proj.id.toUpperCase()}
                     </span>
-                    <span className="accent-badge px-2.5 py-1 rounded-lg text-[11px] font-bold">
+                    <span className="accent-badge px-2.5 py-1 rounded-lg text-[11px] font-bold group-hover:bg-emerald-600 group-hover:text-white transition">
                       {proj.status || "ACTIVE"}
                     </span>
                   </div>
                   <div>
-                    <h4 className="font-extrabold text-base">{proj.nameAr || proj.name}</h4>
-                    {proj.notes && <p className="text-xs text-slate-500 mt-1">{proj.notes}</p>}
+                    <h4 className="font-extrabold text-base group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition">
+                      {proj.nameAr || proj.name}
+                    </h4>
+                    {proj.notes && <p className="text-xs text-slate-500 mt-1 line-clamp-2">{proj.notes}</p>}
                   </div>
-                  <div className="flex justify-between text-xs pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <div className="flex justify-between items-center text-xs pt-2 border-t border-slate-100 dark:border-slate-800">
                     <span className="text-slate-500">{isAr ? "الموازنة:" : "Budget:"}</span>
-                    <span className="font-extrabold text-emerald-600">
-                      {fmtNum(proj.budgetTotal ?? proj.estimatedValue)} YER
+                    <span className="font-extrabold text-emerald-600 flex items-center gap-1.5">
+                      <span>{fmtNum(proj.budgetTotal ?? proj.estimatedValue)} YER</span>
+                      <ArrowIcon className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100 group-hover:translate-x-[-2px] rtl:group-hover:translate-x-[-2px] ltr:group-hover:translate-x-[2px] transition" />
                     </span>
                   </div>
                 </div>

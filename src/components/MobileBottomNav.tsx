@@ -40,8 +40,8 @@ export function MobileBottomNav({
   const isTreasury = ["accounting", "coa", "ledger", "treasury"].includes(activeTab);
 
   const navClass = (active: boolean) =>
-    `flex flex-col items-center py-1 rounded-xl min-h-[44px] justify-center transition ${
-      active ? "text-emerald-600 font-extrabold" : "text-slate-500"
+    `flex flex-col items-center py-1 px-0.5 rounded-xl min-h-[44px] justify-center transition max-w-full overflow-hidden ${
+      active ? "text-emerald-600 font-extrabold" : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
     }`;
 
   return (
@@ -180,13 +180,13 @@ export function MobileBottomNav({
         id="mobileBottomNav"
         className={`${
           mobileSimulatorActive ? "block" : "md:hidden"
-        } fixed bottom-0 inset-x-0 z-40 card-surface border-t border-slate-200 dark:border-slate-700 px-2 py-1.5 shadow-2xl no-print`}
-        style={{ paddingBottom: "max(0.375rem, env(safe-area-inset-bottom))" }}
+        } fixed bottom-0 inset-x-0 z-40 card-surface border-t border-slate-200 dark:border-slate-700 px-2 py-1 shadow-2xl no-print`}
+        style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
       >
-        <div className="max-w-md mx-auto grid grid-cols-5 items-center text-center text-[11px] font-bold">
+        <div className="max-w-md mx-auto grid grid-cols-5 items-center text-center text-[10px] font-bold">
           <button type="button" onClick={() => onSwitchTab("dashboard")} className={navClass(activeTab === "dashboard")}>
-            <Home className="w-4 h-4" />
-            <span className="mt-0.5">{dict.mNavHome}</span>
+            <Home className="w-4 h-4 shrink-0" />
+            <span className="mt-0.5 text-[10px] leading-tight truncate max-w-full">{dict.mNavHome}</span>
           </button>
           <button
             type="button"
@@ -201,8 +201,8 @@ export function MobileBottomNav({
             }
             className={navClass(isCommercial)}
           >
-            <ShoppingBag className="w-4 h-4" />
-            <span className="mt-0.5">{isAr ? "التجارة" : "Commerce"}</span>
+            <ShoppingBag className="w-4 h-4 shrink-0" />
+            <span className="mt-0.5 text-[10px] leading-tight truncate max-w-full">{isAr ? "التجارة" : "Commerce"}</span>
           </button>
           <div className="flex justify-center -mt-5">
             <button
@@ -230,19 +230,19 @@ export function MobileBottomNav({
           >
             {canAccessModule(currentUser, "treasury") ? (
               <>
-                <Landmark className="w-4 h-4" />
-                <span className="mt-0.5">{dict.mNavTreasury}</span>
+                <Landmark className="w-4 h-4 shrink-0" />
+                <span className="mt-0.5 text-[10px] leading-tight truncate max-w-full">{dict.mNavTreasury}</span>
               </>
             ) : (
               <>
-                <BarChart3 className="w-4 h-4" />
-                <span className="mt-0.5">{isAr ? "التقارير" : "Reports"}</span>
+                <BarChart3 className="w-4 h-4 shrink-0" />
+                <span className="mt-0.5 text-[10px] leading-tight truncate max-w-full">{isAr ? "التقارير" : "Reports"}</span>
               </>
             )}
           </button>
           <button type="button" onClick={onOpenMobileSidebar} className={navClass(false)}>
-            <Menu className="w-4 h-4" />
-            <span className="mt-0.5">{isAr ? "القائمة" : "Menu"}</span>
+            <Menu className="w-4 h-4 shrink-0" />
+            <span className="mt-0.5 text-[10px] leading-tight truncate max-w-full">{isAr ? "القائمة" : "Menu"}</span>
           </button>
         </div>
       </div>

@@ -319,3 +319,72 @@ export async function PUT(req: NextRequest) {
   return handleBillUpdate(req);
 }
 
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    let id = searchParams.get("id");
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+      if (!id && body.id) id = String(body.id).trim();
+    } catch {
+      // Body may be empty when passing query param ?id=...
+    }
+
+    if (!id) return jsonError("يرجى تحديد معرف الفاتورة المطلوب حذفها", 400);
+
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "procurement",
+      action: "delete",
+    });
+    if (!auth.ok) return auth.response;
+
+    const existing = await prisma.vendorBill.findUnique({
+      where: { id },
+      include: { paymentVouchers: true },
+    });
+    if (!existing) return jsonError("فاتورة المورد غير موجودة", 404);
+
+    if (Number(existing.paidAmount) > 0 || existing.paymentVouchers.length > 0) {
+      return jsonError("لا يمكن حذف فاتورة تم سدادها أو سداد جزء منها. يرجى إلغاء سندات الصرف المرتبطة أولاً.", 400);
+    }
+
+    await prisma.$transaction(async (tx) => {
+      if (existing.journalEntryId) {
+        try {
+          await reverseJournalEntry({
+            journalEntryId: existing.journalEntryId,
+            reason: `إلغاء فاتورة مورد محذوفة: ${existing.billNumber}`,
+            createdById: auth.actor.userId ?? undefined,
+            tx,
+          });
+        } catch {
+          await tx.journalEntryLine.deleteMany({ where: { journalEntryId: existing.journalEntryId } });
+          await tx.journalEntry.delete({ where: { id: existing.journalEntryId } });
+        }
+      }
+
+      await recordAuditDiffTx(tx, {
+        userId: auth.actor.userId,
+        action: "VOID",
+        entity: "VendorBill",
+        entityId: id,
+        before: {
+          billNumber: existing.billNumber,
+          vendorId: existing.vendorId,
+          totalAmount: Number(existing.totalAmount),
+          date: existing.date.toISOString().slice(0, 10),
+        },
+        after: null,
+      });
+
+      await tx.vendorBill.delete({ where: { id } });
+    });
+
+    return NextResponse.json({ success: true, deletedId: id, billNumber: existing.billNumber });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "تعذر حذف فاتورة المورد";
+    return jsonError(msg, 400);
+  }
+}
+

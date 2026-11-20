@@ -358,3 +358,86 @@ export async function PUT(req: NextRequest) {
   return handlePaymentUpdate(req);
 }
 
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    let id = searchParams.get("id");
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+      if (!id && body.id) id = String(body.id).trim();
+    } catch {
+      // Body may be empty when passing query param ?id=...
+    }
+
+    if (!id) return jsonError("يرجى تحديد معرف سند الصرف المطلوب حذفه", 400);
+
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "procurement",
+      action: "delete",
+    });
+    if (!auth.ok) return auth.response;
+
+    const existing = await prisma.paymentVoucher.findUnique({
+      where: { id },
+      include: { bill: true },
+    });
+    if (!existing) return jsonError("سند صرف المورد غير موجود", 404);
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Revert bill balance if linked
+      if (existing.billId && existing.bill) {
+        const nextPaid = Math.max(0, Number(existing.bill.paidAmount) - Number(existing.amount));
+        const nextDue = Math.max(0, Number(existing.bill.totalAmount) - nextPaid);
+        const nextStatus = nextPaid <= 0.005 ? "POSTED" : "PARTIALLY_PAID";
+        await tx.vendorBill.update({
+          where: { id: existing.billId },
+          data: {
+            paidAmount: nextPaid,
+            balanceDue: nextDue,
+            status: nextStatus,
+          },
+        });
+      }
+
+      // 2. Reverse/delete GL entry
+      if (existing.journalEntryId) {
+        try {
+          await reverseJournalEntry({
+            journalEntryId: existing.journalEntryId,
+            reason: `إلغاء سند صرف مورد محذوف: ${existing.voucherNumber}`,
+            createdById: auth.actor.userId ?? undefined,
+            tx,
+          });
+        } catch {
+          await tx.journalEntryLine.deleteMany({ where: { journalEntryId: existing.journalEntryId } });
+          await tx.journalEntry.delete({ where: { id: existing.journalEntryId } });
+        }
+      }
+
+      // 3. Audit trail
+      await recordAuditDiffTx(tx, {
+        userId: auth.actor.userId,
+        action: "VOID",
+        entity: "PaymentVoucher",
+        entityId: id,
+        before: {
+          voucherNumber: existing.voucherNumber,
+          vendorId: existing.vendorId,
+          amount: Number(existing.amount),
+          date: existing.date.toISOString().slice(0, 10),
+        },
+        after: null,
+      });
+
+      // 4. Delete payment voucher
+      await tx.paymentVoucher.delete({ where: { id } });
+    });
+
+    return NextResponse.json({ success: true, deletedId: id, voucherNumber: existing.voucherNumber });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "تعذر حذف سند الصرف";
+    return jsonError(msg, 400);
+  }
+}
+

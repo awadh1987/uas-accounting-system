@@ -85,13 +85,13 @@ export function WorkersTab({
 }: WorkersTabProps) {
   const [projectId, setProjectId] = useState(projects[0]?.id || "");
   const activeProj = projects.find((p) => p.id === projectId) || projects[0];
-  const [harvest, setHarvest] = useState(activeProj?.harvests[0] || "القطفة الأولى");
+  const [harvest, setHarvest] = useState(activeProj?.harvests[0] || "");
   const [subProjectId, setSubProjectId] = useState<string>("");
   const [name, setName] = useState("");
-  const [dailyWage, setDailyWage] = useState("5000");
-  const [days, setDays] = useState("10");
-  const [credit, setCredit] = useState("10000");
-  const [date, setDate] = useState("2026-11-10");
+  const [dailyWage, setDailyWage] = useState("");
+  const [days, setDays] = useState("");
+  const [credit, setCredit] = useState("");
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
   const [costCenterId, setCostCenterId] = useState("");
   const [filterWorker, setFilterWorker] = useState("ALL");
@@ -139,11 +139,11 @@ export function WorkersTab({
     const defProj = projects[0];
     setProjectId(defProj?.id || "");
     setSubProjectId("");
-    setHarvest(defProj?.harvests[0] || "القطفة الأولى");
+    setHarvest(defProj?.harvests[0] || "");
     setName("");
-    setDailyWage("5000");
-    setDays("10");
-    setCredit("10000");
+    setDailyWage("");
+    setDays("");
+    setCredit("");
     setDate(new Date().toISOString().slice(0, 10));
     setNotes("");
     setAccountingDir({ accountCode: "511101", isCustom: false });
@@ -173,6 +173,24 @@ export function WorkersTab({
     const pid = activeProj?.id || projectId;
     const harv =
       activeProj?.harvests.includes(harvest) ? harvest : activeProj?.harvests[0] || "القطفة الأولى";
+
+    // Non-blocking Duplicate Entry Warning
+    if (!editingId) {
+      const wageTotal = (Number(dailyWage) || 0) * (Number(days) || 1);
+      const isDuplicate = workers.some(
+        (w) =>
+          w.projectId === pid &&
+          w.name.trim().toLowerCase() === name.trim().toLowerCase() &&
+          Math.abs(Number(w.total) - wageTotal) < 0.01
+      );
+      if (isDuplicate) {
+        const proceed = window.confirm(
+          `⚠️ تنبيه بوجود سجل أجور مماثل:\nتم العثور على سجل سابق لنفس العامل (${name.trim()}) في هذا المشروع بنفس المبلغ (${wageTotal.toLocaleString()} ريال).\n\nهل ترغب في المتابعة وتأكيد تسجيل السجل؟`
+        );
+        if (!proceed) return;
+      }
+    }
+
     const payload: WorkerPayload = {
       projectId: pid,
       subProjectId: subProjectId || undefined,
@@ -361,6 +379,7 @@ export function WorkersTab({
                 type="number"
                 inputMode="numeric"
                 min={0}
+                placeholder="مثال: 5000"
                 className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
               />
             </div>
@@ -372,6 +391,7 @@ export function WorkersTab({
                 type="number"
                 inputMode="numeric"
                 min={1}
+                placeholder="1"
                 className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
               />
             </div>
@@ -394,6 +414,7 @@ export function WorkersTab({
                 type="number"
                 inputMode="numeric"
                 min={0}
+                placeholder="0"
                 className="w-full rounded-xl border border-slate-300 bg-transparent px-2.5 py-2"
               />
             </div>

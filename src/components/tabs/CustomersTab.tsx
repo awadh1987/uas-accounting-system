@@ -3,7 +3,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Edit3, Plus, Users } from "lucide-react";
 import { fmtNum } from "@/lib/formulas";
-import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
+import {
+  printUasDocument,
+  type PrintKeyValue,
+  type PrintSummaryCard,
+  type PrintTableColumn,
+  type UasPrintDocumentSpec,
+} from "@/lib/print/uasDocumentPrinter";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
 import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
@@ -20,6 +26,8 @@ interface CustomerMasterItem {
   address?: string | null;
   creditLimit: number;
   account?: { id: string; code: string; nameAr: string } | null;
+  costCenterId?: string | null;
+  costCenter?: { id: string; code: string; nameAr: string; nameEn?: string | null } | null;
   invoiceCount: number;
   saleCount: number;
   totalInvoiced: number;
@@ -41,6 +49,144 @@ interface CustomersTabProps {
   onToast?: (msg: string) => void;
 }
 
+export function buildCustomerStatementPrintSpec(params: {
+  selectedCustomer: string;
+  visibleRows: UasSaleTransaction[];
+  projects: UasProject[];
+  includeSaleDetails: boolean;
+  documentDate?: string;
+}): UasPrintDocumentSpec {
+  const { selectedCustomer, visibleRows, projects, includeSaleDetails, documentDate } = params;
+  const totSales = visibleRows.reduce((s, r) => s + Number(r.total || 0), 0);
+  const totPaid = visibleRows.reduce((s, r) => s + Number(r.credit || 0), 0);
+  const totDue = visibleRows.reduce((s, r) => s + Number(r.debit || 0), 0);
+  const totBundles = visibleRows.reduce((s, r) => s + Number(r.bundles || 0), 0);
+  const dateStr = documentDate || new Date().toISOString().slice(0, 10);
+
+  const metadata: PrintKeyValue[] = [
+    {
+      labelAr: "العميل",
+      labelEn: "Customer",
+      value: selectedCustomer === "ALL" ? "جميع العملاء / All Customers" : selectedCustomer,
+    },
+    {
+      labelAr: "نمط التقرير",
+      labelEn: "Report Mode",
+      value: includeSaleDetails
+        ? "مفصل (يشمل تفاصيل كل عملية بيع) / Detailed (Per-sale items)"
+        : "ملخص إجمالي / Summary Statement",
+    },
+    {
+      labelAr: "عدد العمليات",
+      labelEn: "Transactions Count",
+      value: String(visibleRows.length),
+    },
+  ];
+
+  const summaryCards: PrintSummaryCard[] = [
+    { labelAr: "إجمالي المبيعات", labelEn: "Total Billed", value: `${fmtNum(totSales)} YER`, tone: "indigo" },
+    { labelAr: "المقبوض (دائن)", labelEn: "Collected", value: `${fmtNum(totPaid)} YER`, tone: "emerald" },
+    { labelAr: "الرصيد المستحق (مدين)", labelEn: "Receivable", value: `${fmtNum(totDue)} YER`, tone: "rose" },
+  ];
+
+  if (includeSaleDetails && totBundles > 0) {
+    summaryCards.push({
+      labelAr: "إجمالي الكمية / الحزم",
+      labelEn: "Total Quantity",
+      value: `${fmtNum(totBundles)} وحدة`,
+      tone: "neutral",
+    });
+  }
+
+  const columns: PrintTableColumn[] = includeSaleDetails
+    ? [
+        { key: "date", labelAr: "التاريخ", labelEn: "Date" },
+        { key: "voucherNo", labelAr: "السند", labelEn: "Voucher" },
+        { key: "customer", labelAr: "العميل", labelEn: "Customer" },
+        { key: "harvest", labelAr: "المشروع / القطفة", labelEn: "Project / Harvest" },
+        { key: "grade", labelAr: "الصنف / النوع", labelEn: "Grade / Item" },
+        { key: "bundles", labelAr: "الكمية / الحزم", labelEn: "Qty / Units", numeric: true },
+        { key: "price", labelAr: "سعر الوحدة", labelEn: "Unit Price", numeric: true },
+        { key: "total", labelAr: "الإجمالي", labelEn: "Total", numeric: true },
+        { key: "credit", labelAr: "المدفوع", labelEn: "Paid", numeric: true },
+        { key: "debit", labelAr: "المتبقي", labelEn: "Balance", numeric: true },
+      ]
+    : [
+        { key: "date", labelAr: "التاريخ", labelEn: "Date" },
+        { key: "voucherNo", labelAr: "السند / المرجع", labelEn: "Voucher / Ref" },
+        { key: "customer", labelAr: "العميل", labelEn: "Customer" },
+        { key: "total", labelAr: "إجمالي الفاتورة", labelEn: "Total Billed", numeric: true },
+        { key: "credit", labelAr: "المدفوع (سداد)", labelEn: "Paid (Receipt)", numeric: true },
+        { key: "debit", labelAr: "الرصيد المستحق", labelEn: "Balance Due", numeric: true },
+      ];
+
+  const rows = visibleRows.map((r) => {
+    if (includeSaleDetails) {
+      const proj = projects.find((p) => p.id === r.projectId);
+      const harvestDisplay = proj ? `${proj.name} — ${r.harvest || ""}` : (r.harvest || "—");
+      return {
+        date: r.date,
+        voucherNo: r.voucherNo || "—",
+        customer: r.customer,
+        harvest: harvestDisplay,
+        grade: r.grade || "—",
+        bundles: fmtNum(r.bundles || 0),
+        price: fmtNum(r.price || 0),
+        total: fmtNum(r.total),
+        credit: fmtNum(r.credit),
+        debit: fmtNum(r.debit),
+      };
+    }
+    return {
+      date: r.date,
+      voucherNo: r.voucherNo || "—",
+      customer: r.customer,
+      total: fmtNum(r.total),
+      credit: fmtNum(r.credit),
+      debit: fmtNum(r.debit),
+    };
+  });
+
+  const totalsRow = includeSaleDetails
+    ? {
+        date: "الإجمالي / Total",
+        bundles: fmtNum(totBundles),
+        total: fmtNum(totSales),
+        credit: fmtNum(totPaid),
+        debit: fmtNum(totDue),
+      }
+    : {
+        date: "الإجمالي / Total",
+        total: fmtNum(totSales),
+        credit: fmtNum(totPaid),
+        debit: fmtNum(totDue),
+      };
+
+  return {
+    titleAr: "كشف حساب وفواتير العملاء",
+    titleEn: "Customer Account Statement",
+    documentNumber: `RPT-CUST-${dateStr}`,
+    currency: "YER",
+    status: "POSTED",
+    format: includeSaleDetails ? "A4_LANDSCAPE" : "A4_PORTRAIT",
+    metadata,
+    summaryCards,
+    tables: [
+      {
+        headingAr: includeSaleDetails
+          ? "حركات وفواتير العميل مع تفاصيل المبيعات"
+          : "حركات وفواتير العميل (ملخص)",
+        headingEn: includeSaleDetails
+          ? "Statement Lines (With Sale Details)"
+          : "Statement Summary Lines",
+        columns,
+        rows,
+        totalsRow,
+      },
+    ],
+  };
+}
+
 export function CustomersTab({
   projects,
   sales,
@@ -56,6 +202,7 @@ export function CustomersTab({
   const [customers, setCustomers] = useState<CustomerMasterItem[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [includeSaleDetails, setIncludeSaleDetails] = useState(true);
 
   // Edit Client drawer state
   const [editingCustomer, setEditingCustomer] = useState<CustomerMasterItem | null>(null);
@@ -358,61 +505,34 @@ export function CustomersTab({
             >
               تصدير كشف العملاء Excel
             </button>
+            <label
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold cursor-pointer select-none hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors"
+              title={
+                includeSaleDetails
+                  ? "تضمين تفاصيل كل عملية بيع (الأصناف، الكميات، الأسعار، السندات)"
+                  : "تصدير كشف حساب إجمالي ملخص بدون تفاصيل الأصناف"
+              }
+            >
+              <input
+                type="checkbox"
+                data-testid="toggle-sale-details"
+                checked={includeSaleDetails}
+                onChange={(e) => setIncludeSaleDetails(e.target.checked)}
+                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5 cursor-pointer"
+              />
+              <span>تضمين تفاصيل كل عملية بيع (Include details for each sale)</span>
+            </label>
             <button
               onClick={() => {
-                const totSales = visibleRows.reduce((s, r) => s + Number(r.total), 0);
-                const totPaid = visibleRows.reduce((s, r) => s + Number(r.credit), 0);
-                const totDue = visibleRows.reduce((s, r) => s + Number(r.debit), 0);
-                void printUasDocument({
-                  titleAr: "كشف حساب وفواتير العملاء",
-                  titleEn: "Customer Account Statement",
-                  documentNumber: `RPT-CUST-${new Date().toISOString().slice(0, 10)}`,
-                  currency: "YER",
-                  status: "POSTED",
-                  format: "A4_PORTRAIT",
-                  metadata: [
-                    {
-                      labelAr: "العميل",
-                      labelEn: "Customer",
-                      value: selectedCustomer === "ALL" ? "جميع العملاء / All Customers" : selectedCustomer,
-                    },
-                  ],
-                  summaryCards: [
-                    { labelAr: "إجمالي المبيعات", labelEn: "Total Billed", value: `${fmtNum(totSales)} YER`, tone: "indigo" },
-                    { labelAr: "المقبوض (دائن)", labelEn: "Collected", value: `${fmtNum(totPaid)} YER`, tone: "emerald" },
-                    { labelAr: "الرصيد المستحق (مدين)", labelEn: "Receivable", value: `${fmtNum(totDue)} YER`, tone: "rose" },
-                  ],
-                  tables: [
-                    {
-                      headingAr: "حركات وفواتير العميل",
-                      headingEn: "Statement Lines",
-                      columns: [
-                        { key: "date", labelAr: "التاريخ", labelEn: "Date" },
-                        { key: "voucherNo", labelAr: "السند", labelEn: "Voucher" },
-                        { key: "customer", labelAr: "العميل", labelEn: "Customer" },
-                        { key: "total", labelAr: "الإجمالي", labelEn: "Total", numeric: true },
-                        { key: "credit", labelAr: "المدفوع", labelEn: "Paid", numeric: true },
-                        { key: "debit", labelAr: "المتبقي", labelEn: "Balance", numeric: true },
-                      ],
-                      rows: visibleRows.map((r) => ({
-                        date: r.date,
-                        voucherNo: r.voucherNo || "—",
-                        customer: r.customer,
-                        total: fmtNum(r.total),
-                        credit: fmtNum(r.credit),
-                        debit: fmtNum(r.debit),
-                      })),
-                      totalsRow: {
-                        date: "الإجمالي",
-                        total: fmtNum(totSales),
-                        credit: fmtNum(totPaid),
-                        debit: fmtNum(totDue),
-                      },
-                    },
-                  ],
+                const spec = buildCustomerStatementPrintSpec({
+                  selectedCustomer,
+                  visibleRows,
+                  projects,
+                  includeSaleDetails,
                 });
+                void printUasDocument(spec);
               }}
-              className="px-3.5 py-1.5 rounded-xl border border-slate-300 text-xs font-bold"
+              className="px-3.5 py-1.5 rounded-xl border border-slate-300 text-xs font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             >
               طباعة الفاتورة / الكشف PDF
             </button>
@@ -440,7 +560,7 @@ export function CustomersTab({
                 const code = master?.code || "CUST-000";
                 const glAccountCode = master?.account?.code || "112190xxx";
                 const creditLimit = master?.creditLimit || 0;
-                const costCenterBadge = (master as any)?.costCenter?.nameAr || ((master as any)?.costCenterId ? "مركز تكلفة" : null);
+                const costCenterBadge = master?.costCenter?.nameAr || (master?.costCenterId ? "مركز تكلفة" : null);
 
                 const bundles = rows.reduce((a, b) => a + Number(b.bundles || 0), 0);
                 const total = master ? master.totalInvoiced : rows.reduce((a, b) => a + Number(b.total || 0), 0);

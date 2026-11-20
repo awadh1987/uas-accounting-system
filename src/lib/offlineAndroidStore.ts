@@ -255,6 +255,7 @@ export function getEndpointSyncPriority(endpoint: string, _method = "POST"): num
     ep.includes("/api/expenses") ||
     ep.includes("/api/inventory/movements") ||
     ep.includes("/api/ledger") ||
+    ep.includes("/api/installments") ||
     ep.includes("/api/installment-vouchers")
   ) {
     return 60;
@@ -980,6 +981,215 @@ export async function handleOfflineAndroidApiRequest(
   return res;
 }
 
+function handleOfflineScopedReset(
+  reqBody: Record<string, unknown>,
+  actor: { userId?: string | null; userDisplay: string; userRole: string },
+  storage?: OfflineStorageLike | null
+): Response {
+  const s = storage ?? getDefaultStorage();
+  const scope = String(reqBody.scope || "section");
+  const sectionModule = String(reqBody.sectionModule || "sales");
+  const unitType = reqBody.unitType ? String(reqBody.unitType) : undefined;
+  const unitId = reqBody.unitId ? String(reqBody.unitId) : undefined;
+  const coaMode = String(reqBody.coaMode || "starter_template");
+  const confirmationPhrase = String(reqBody.confirmationPhrase || "").trim().toUpperCase();
+
+  if (actor.userRole !== "SUPER_ADMIN") {
+    return jsonResponse(
+      { error: "صلاحية المشرف العام (SUPER_ADMIN) مطلوبة لتنفيذ عمليات إعادة الضبط" },
+      403
+    );
+  }
+
+  let expectedPhrase = "RESET_SECTION";
+  if (scope === "section") {
+    expectedPhrase = `RESET_SECTION_${sectionModule.toUpperCase()}`;
+  } else if (scope === "unit") {
+    expectedPhrase = "RESET_UNIT";
+  } else {
+    expectedPhrase = "FACTORY_RESET";
+  }
+
+  if (
+    confirmationPhrase !== expectedPhrase &&
+    confirmationPhrase !== "CONFIRM-RESET" &&
+    confirmationPhrase !== "CONFIRM-FACTORY-RESET"
+  ) {
+    return jsonResponse(
+      { error: `عبارة التأكيد غير صحيحة. يرجى إدخال: "${expectedPhrase}" للمتابعة.` },
+      400
+    );
+  }
+
+  const state = loadOfflineAndroidState(s) as any;
+  const deletedCounts: Record<string, number> = {};
+
+  const backupKey = `uas_offline_prereset_${Date.now()}`;
+  if (s) {
+    try {
+      s.setItem(backupKey, JSON.stringify(state));
+    } catch {}
+  }
+
+  // Purge sync queue entries matching the reset scope to prevent sync loops
+  const syncQueueRaw = s?.getItem("uas_offline_sync_queue");
+  let syncQueue: any[] = [];
+  if (syncQueueRaw) {
+    try {
+      syncQueue = JSON.parse(syncQueueRaw);
+      if (!Array.isArray(syncQueue)) syncQueue = [];
+    } catch {
+      syncQueue = [];
+    }
+  }
+
+  if (scope === "section") {
+    if (sectionModule === "sales") {
+      deletedCounts.salesInvoices = (state.salesInvoices || []).length;
+      state.salesInvoices = [];
+      state.saleTransactions = [];
+      state.installmentVouchers = [];
+      for (const c of state.customers || []) {
+        c.balance = 0;
+        c.currentBalance = 0;
+      }
+      syncQueue = syncQueue.filter(
+        (item: any) =>
+          !item.endpoint?.includes("/api/commercial/sales") &&
+          !item.endpoint?.includes("/api/installments")
+      );
+    } else if (sectionModule === "procurement") {
+      deletedCounts.purchaseOrders = (state.purchaseOrders || []).length;
+      state.purchaseOrders = [];
+      state.vendorBills = [];
+      state.paymentVouchers = [];
+      for (const v of state.vendors || []) {
+        v.balance = 0;
+        v.currentBalance = 0;
+      }
+      syncQueue = syncQueue.filter(
+        (item: any) =>
+          !item.endpoint?.includes("/api/procurement") &&
+          !item.endpoint?.includes("/api/purchases")
+      );
+    } else if (sectionModule === "inventory") {
+      state.stockMovements = [];
+      state.stockBalances = [];
+      state.inventoryLots = [];
+      for (const it of state.stockItems || []) {
+        it.currentStock = 0;
+      }
+      syncQueue = syncQueue.filter((item: any) => !item.endpoint?.includes("/api/inventory"));
+    } else if (sectionModule === "treasury") {
+      state.treasuryTransactions = [];
+      state.vouchers = [];
+      for (const t of state.treasuryAccounts || []) {
+        t.currentBalance = 0;
+      }
+      syncQueue = syncQueue.filter((item: any) => !item.endpoint?.includes("/api/treasury"));
+    } else if (sectionModule === "expenses_wages") {
+      state.expenses = [];
+      state.wageEntries = [];
+      for (const w of state.workers || []) {
+        w.currentBalance = 0;
+      }
+      syncQueue = syncQueue.filter(
+        (item: any) =>
+          !item.endpoint?.includes("/api/expenses") &&
+          !item.endpoint?.includes("/api/workers")
+      );
+    }
+  } else if (scope === "unit") {
+    if (unitType === "project" && unitId) {
+      state.expenses = (state.expenses || []).filter((e: any) => e.projectId !== unitId);
+      state.wageEntries = (state.wageEntries || []).filter((w: any) => w.projectId !== unitId);
+      state.purchaseOrders = (state.purchaseOrders || []).filter((p: any) => p.projectId !== unitId);
+      state.salesInvoices = (state.salesInvoices || []).filter((s: any) => s.projectId !== unitId);
+      const proj = (state.projects || []).find((p: any) => p.id === unitId);
+      if (proj) {
+        proj.spentAmount = 0;
+        proj.revenueAmount = 0;
+      }
+      syncQueue = syncQueue.filter((item: any) => item.payload?.projectId !== unitId);
+    } else if (unitType === "costCenter" && unitId) {
+      state.expenses = (state.expenses || []).filter((e: any) => e.costCenterId !== unitId);
+      const cc = (state.costCenters || []).find((c: any) => c.id === unitId);
+      if (cc) {
+        cc.currentBalance = 0;
+      }
+      syncQueue = syncQueue.filter((item: any) => item.payload?.costCenterId !== unitId);
+    }
+  } else if (scope === "factory") {
+    state.journalEntries = [];
+    state.salesInvoices = [];
+    state.saleTransactions = [];
+    state.installmentVouchers = [];
+    state.purchaseOrders = [];
+    state.vendorBills = [];
+    state.paymentVouchers = [];
+    state.vouchers = [];
+    state.expenses = [];
+    state.wageEntries = [];
+    state.treasuryTransactions = [];
+    state.stockMovements = [];
+    state.stockBalances = [];
+    state.inventoryLots = [];
+    state.drafts = [];
+
+    for (const c of state.customers || []) { c.balance = 0; c.currentBalance = 0; }
+    for (const v of state.vendors || []) { v.balance = 0; v.currentBalance = 0; }
+    for (const w of state.workers || []) { w.currentBalance = 0; }
+    for (const it of state.stockItems || []) { it.currentStock = 0; }
+    for (const t of state.treasuryAccounts || []) { t.currentBalance = 0; }
+    for (const p of state.projects || []) { p.spentAmount = 0; p.revenueAmount = 0; }
+    for (const cc of state.costCenters || []) { cc.currentBalance = 0; }
+
+    let coa = readCollection<any>(OFFLINE_DB_COA_KEY, s);
+    if (!Array.isArray(coa) || coa.length === 0) {
+      coa = Array.isArray(state.accounts) && state.accounts.length > 0 ? state.accounts : [
+        { code: "1", nameAr: "الأصول", nameEn: "Assets", level: 1, type: "ASSET", isPosting: false },
+        { code: "2", nameAr: "الخصوم", nameEn: "Liabilities", level: 1, type: "LIABILITY", isPosting: false },
+        { code: "3", nameAr: "حقوق الملكية", nameEn: "Equity", level: 1, type: "EQUITY", isPosting: false },
+        { code: "4", nameAr: "الإيرادات", nameEn: "Revenue", level: 1, type: "REVENUE", isPosting: false },
+        { code: "5", nameAr: "المصروفات", nameEn: "Expenses", level: 1, type: "EXPENSE", isPosting: false },
+      ];
+    }
+    if (coaMode === "blank_coa") {
+      coa = coa.filter((a: any) => ["1", "2", "3", "4", "5"].includes(a.code));
+    }
+    for (const a of coa) {
+      a.debit = 0;
+      a.credit = 0;
+      a.balance = 0;
+    }
+    writeCollection(OFFLINE_DB_COA_KEY, coa, s);
+    state.accounts = coa;
+
+    syncQueue = [];
+  }
+
+  if (s) {
+    try {
+      s.setItem("uas_offline_sync_queue", JSON.stringify(syncQueue));
+    } catch {}
+  }
+
+  saveOfflineAndroidState(state, s);
+
+  return jsonResponse({
+    ok: true,
+    result: {
+      ok: true,
+      scope,
+      preResetBackupFilename: backupKey,
+      deletedCounts,
+      preservedLicense: true,
+      summaryAr: "تم تنفيذ إعادة الضبط في الوضع المحلي للأندرويد بنجاح",
+      summaryEn: "Scoped reset executed successfully in Android Local Mode",
+    },
+  }, 200);
+}
+
 async function handleOfflineAndroidApiRequestCore(
   rawUrl: string,
   init?: RequestInit,
@@ -1003,6 +1213,44 @@ async function handleOfflineAndroidApiRequestCore(
     const id = String(body.id || "");
     const action = String(body.action || "SAFE_DELETE").toUpperCase();
     return handleLocalMasterLifecycle(entityType, id, action, actor, s);
+  }
+
+  if (pathname === "/api/system/reset") {
+    if (method === "GET") {
+      const scope = (rawUrl.includes("scope=factory")
+        ? "factory"
+        : rawUrl.includes("scope=unit")
+        ? "unit"
+        : "section") as string;
+      let expectedPhrase = "RESET_SECTION";
+      if (scope === "unit") expectedPhrase = "RESET_UNIT";
+      else if (scope === "factory") expectedPhrase = "FACTORY_RESET";
+      else {
+        if (rawUrl.includes("sectionModule=procurement")) expectedPhrase = "RESET_SECTION_PROCUREMENT";
+        else if (rawUrl.includes("sectionModule=inventory")) expectedPhrase = "RESET_SECTION_INVENTORY";
+        else if (rawUrl.includes("sectionModule=treasury")) expectedPhrase = "RESET_SECTION_TREASURY";
+        else if (rawUrl.includes("sectionModule=expenses_wages")) expectedPhrase = "RESET_SECTION_EXPENSES_WAGES";
+        else expectedPhrase = "RESET_SECTION_SALES";
+      }
+
+      return jsonResponse({
+        ok: true,
+        check: {
+          scope,
+          requiredConfirmationPhrase: expectedPhrase,
+          hasClosedFiscalYear: false,
+          closedFiscalYearsCount: 0,
+          unpostedDraftsCount: 0,
+          affectedRecordsStats: {},
+          warningsAr: [],
+          warningsEn: [],
+          safeToProceed: true,
+        },
+      }, 200);
+    }
+    if (method === "POST") {
+      return handleOfflineScopedReset(body, actor, s);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1741,6 +1989,22 @@ async function handleOfflineAndroidApiRequestCore(
           }
           if (col.prefix === "/api/procurement/vendors") {
             return handleLocalMasterLifecycle("Vendor", id, String(body.action || "SAFE_DELETE"), actor, s);
+          }
+          if (col.prefix === "/api/procurement/bills") {
+            const bill = rows.find((r) => r.id === id);
+            if (bill && Number(bill.paidAmount || 0) > 0) {
+              return jsonResponse({ error: "لا يمكن حذف فاتورة تم سدادها أو سداد جزء منها", offline: true }, 400);
+            }
+            const nextRows = rows.filter((r) => r.id !== id);
+            writeCollection(col.storageKey, nextRows, s);
+            appendOfflineSyncQueue(pathname, method, body, s);
+            return jsonResponse({ success: true, deleted: true, bills: nextRows, offline: true }, 200);
+          }
+          if (col.prefix === "/api/procurement/payments") {
+            const nextRows = rows.filter((r) => r.id !== id);
+            writeCollection(col.storageKey, nextRows, s);
+            appendOfflineSyncQueue(pathname, method, body, s);
+            return jsonResponse({ success: true, deleted: true, payments: nextRows, offline: true }, 200);
           }
         }
         appendOfflineSyncQueue(pathname, method, body, s);

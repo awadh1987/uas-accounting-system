@@ -507,11 +507,11 @@ export function FinancialReportsTab({
         </div>
 
         {/* Filters */}
-        <div className="grid grid-cols-1 sm:grid-cols-6 gap-3 text-xs no-print">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 text-xs no-print">
           <select
             value={costCenterFilter}
             onChange={(e) => setCostCenterFilter(e.target.value)}
-            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-bold"
+            className="w-full min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
           >
             <option value="ALL">كافة مراكز التكلفة / All Cost Centers</option>
             {costCenterList.map((c) => (
@@ -526,7 +526,7 @@ export function FinancialReportsTab({
               setProjectIdOverride(e.target.value);
               setSubProjectIdOverride("ALL");
             }}
-            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-bold"
+            className="w-full min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
           >
             <option value="ALL">كافة المشاريع (قوائم موحدة)</option>
             {projects.map((p) => (
@@ -538,7 +538,7 @@ export function FinancialReportsTab({
           <select
             value={localSubProjectId}
             onChange={(e) => setSubProjectIdOverride(e.target.value)}
-            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-bold"
+            className="w-full min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
           >
             <option value="ALL">كافة القطاعات الفرعية</option>
             {availableSubProjects.map((sp) => (
@@ -550,7 +550,7 @@ export function FinancialReportsTab({
           <select
             value={coaLevel}
             onChange={(e) => setCoaLevel(Number(e.target.value))}
-            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-bold"
+            className="w-full min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
           >
             <option value={6}>عرض حتى الجيل 6 (حسابات الترحيل التشغيلية)</option>
             <option value={5}>عرض حتى الجيل 5 (الحسابات التحليلية)</option>
@@ -561,15 +561,17 @@ export function FinancialReportsTab({
           </select>
           <input
             type="date"
+            dir="ltr"
             value={fromDate}
             onChange={(e) => setFromDate(e.target.value)}
-            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            className="w-full min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
           />
           <input
             type="date"
+            dir="ltr"
             value={toDate}
             onChange={(e) => setToDate(e.target.value)}
-            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            className="w-full min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
           />
         </div>
 
@@ -615,9 +617,9 @@ export function FinancialReportsTab({
                     <tr key={r.costCenterId ?? "none"} className="border-t border-slate-200">
                       <td className="px-3 py-2 font-mono">{r.code}</td>
                       <td className="px-3 py-2 font-bold"><bdi>{r.nameAr}</bdi> <span className="text-slate-500">(<bdi>{r.nameEn}</bdi>)</span></td>
-                      <td className="px-3 py-2 tabular-nums">{fmtNum(r.revenue)}</td>
-                      <td className="px-3 py-2 tabular-nums">{fmtNum(r.expense)}</td>
-                      <td className={`px-3 py-2 tabular-nums font-extrabold ${r.net >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{fmtNum(r.net)}</td>
+                      <td className="px-3 py-2 tabular-nums"><bdi dir="ltr">{fmtNum(r.revenue)}</bdi></td>
+                      <td className="px-3 py-2 tabular-nums"><bdi dir="ltr">{fmtNum(r.expense)}</bdi></td>
+                      <td className={`px-3 py-2 tabular-nums font-extrabold ${r.net >= 0 ? "text-emerald-700" : "text-rose-700"}`}><bdi dir="ltr">{fmtNum(r.net)}</bdi></td>
                     </tr>
                   ))}
                   {ccReport.rows.length === 0 && (
@@ -627,9 +629,9 @@ export function FinancialReportsTab({
                 <tfoot className="bg-slate-50 dark:bg-slate-900 font-black">
                   <tr>
                     <td className="px-3 py-2" colSpan={2}>الإجمالي / Total</td>
-                    <td className="px-3 py-2 tabular-nums">{fmtNum(ccReport.totals.revenue)}</td>
-                    <td className="px-3 py-2 tabular-nums">{fmtNum(ccReport.totals.expense)}</td>
-                    <td className="px-3 py-2 tabular-nums">{fmtNum(ccReport.totals.net)}</td>
+                    <td className="px-3 py-2 tabular-nums"><bdi dir="ltr">{fmtNum(ccReport.totals.revenue)}</bdi></td>
+                    <td className="px-3 py-2 tabular-nums"><bdi dir="ltr">{fmtNum(ccReport.totals.expense)}</bdi></td>
+                    <td className="px-3 py-2 tabular-nums"><bdi dir="ltr">{fmtNum(ccReport.totals.net)}</bdi></td>
                   </tr>
                 </tfoot>
               </table>
@@ -654,7 +656,7 @@ export function FinancialReportsTab({
                 </span>
               </span>
               <span className="font-mono">
-                DR: {fmtNum(tb.totalDebits)} | CR: {fmtNum(tb.totalCredits)}
+                DR: <bdi dir="ltr">{fmtNum(tb.totalDebits)}</bdi> | CR: <bdi dir="ltr">{fmtNum(tb.totalCredits)}</bdi>
               </span>
             </div>
 
@@ -683,13 +685,13 @@ export function FinancialReportsTab({
                           الجيل {r.level}
                         </span>
                       </td>
-                      <td className="py-2 font-mono">{fmtNum(r.totalDebit)}</td>
-                      <td className="py-2 font-mono">{fmtNum(r.totalCredit)}</td>
+                      <td className="py-2 font-mono"><bdi dir="ltr">{fmtNum(r.totalDebit)}</bdi></td>
+                      <td className="py-2 font-mono"><bdi dir="ltr">{fmtNum(r.totalCredit)}</bdi></td>
                       <td className="py-2 font-mono text-emerald-700 font-bold">
-                        {r.netDebit > 0 ? fmtNum(r.netDebit) : "—"}
+                        {r.netDebit > 0 ? <bdi dir="ltr">{fmtNum(r.netDebit)}</bdi> : "—"}
                       </td>
                       <td className="py-2 font-mono text-indigo-700 font-bold">
-                        {r.netCredit > 0 ? fmtNum(r.netCredit) : "—"}
+                        {r.netCredit > 0 ? <bdi dir="ltr">{fmtNum(r.netCredit)}</bdi> : "—"}
                       </td>
                     </tr>
                   ))}
@@ -705,22 +707,22 @@ export function FinancialReportsTab({
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="p-4 rounded-xl border space-y-1">
                 <div className="text-slate-500 font-bold">إجمالي الإيرادات</div>
-                <div className="text-lg font-black text-emerald-600">{fmtNum(pl.totalRevenue)} YER</div>
+                <div className="text-lg font-black text-emerald-600"><bdi dir="ltr">{fmtNum(pl.totalRevenue)} YER</bdi></div>
               </div>
               <div className="p-4 rounded-xl border space-y-1">
                 <div className="text-slate-500 font-bold">تكلفة الإنتاج والعمالة (COGS)</div>
-                <div className="text-lg font-black text-amber-600">{fmtNum(pl.totalCogs)} YER</div>
+                <div className="text-lg font-black text-amber-600"><bdi dir="ltr">{fmtNum(pl.totalCogs)} YER</bdi></div>
               </div>
               <div className="p-4 rounded-xl border space-y-1">
                 <div className="text-slate-500 font-bold">المصروفات التشغيلية والإدارية</div>
                 <div className="text-lg font-black text-rose-600">
-                  {fmtNum(pl.totalOperatingExpenses + pl.totalAdminExpenses)} YER
+                  <bdi dir="ltr">{fmtNum(pl.totalOperatingExpenses + pl.totalAdminExpenses)} YER</bdi>
                 </div>
               </div>
               <div className="p-4 rounded-xl border space-y-1 bg-emerald-50/40 dark:bg-emerald-950/20">
                 <div className="text-slate-500 font-bold">صافي الربح التشغيلي</div>
                 <div className={`text-lg font-black ${pl.netProfit >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                  {fmtNum(pl.netProfit)} YER
+                  <bdi dir="ltr">{fmtNum(pl.netProfit)} YER</bdi>
                 </div>
               </div>
             </div>
@@ -733,7 +735,7 @@ export function FinancialReportsTab({
                     <span>
                       <strong className="font-mono">{l.code}</strong> {l.nameAr}
                     </span>
-                    <span className="font-bold">{fmtNum(l.balance)} YER</span>
+                    <span className="font-bold"><bdi dir="ltr">{fmtNum(l.balance)} YER</bdi></span>
                   </div>
                 ))}
               </div>
@@ -744,7 +746,7 @@ export function FinancialReportsTab({
                     <span>
                       <strong className="font-mono">{l.code}</strong> {l.nameAr}
                     </span>
-                    <span className="font-bold">{fmtNum(l.balance)} YER</span>
+                    <span className="font-bold"><bdi dir="ltr">{fmtNum(l.balance)} YER</bdi></span>
                   </div>
                 ))}
               </div>
@@ -769,21 +771,21 @@ export function FinancialReportsTab({
                 </span>
               </span>
               <span className="font-mono">
-                Assets: {fmtNum(bs.totalAssets)} = L+E: {fmtNum(bs.liabilitiesPlusEquity)}
+                Assets: <bdi dir="ltr">{fmtNum(bs.totalAssets)}</bdi> = L+E: <bdi dir="ltr">{fmtNum(bs.liabilitiesPlusEquity)}</bdi>
               </span>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div className="p-4 rounded-2xl border space-y-2">
                 <h4 className="font-extrabold text-sm border-b pb-2 text-emerald-700">
-                  الأصول (Assets) — الإجمالي: {fmtNum(bs.totalAssets)} YER
+                  الأصول (Assets) — الإجمالي: <bdi dir="ltr">{fmtNum(bs.totalAssets)} YER</bdi>
                 </h4>
                 {bs.assetLines.map((a) => (
                   <div key={a.code} className="flex justify-between py-1 border-b border-dashed">
                     <span>
                       <strong className="font-mono">{a.code}</strong> {a.nameAr}
                     </span>
-                    <span className="font-bold">{fmtNum(a.balance)} YER</span>
+                    <span className="font-bold"><bdi dir="ltr">{fmtNum(a.balance)} YER</bdi></span>
                   </div>
                 ))}
               </div>
@@ -791,34 +793,34 @@ export function FinancialReportsTab({
               <div className="p-4 rounded-2xl border space-y-3">
                 <div className="space-y-2">
                   <h4 className="font-extrabold text-sm border-b pb-2 text-amber-700">
-                    الالتزامات (Liabilities) — {fmtNum(bs.totalLiabilities)} YER
+                    الالتزامات (Liabilities) — <bdi dir="ltr">{fmtNum(bs.totalLiabilities)} YER</bdi>
                   </h4>
                   {bs.liabilityLines.map((l) => (
                     <div key={l.code} className="flex justify-between py-1 border-b border-dashed">
                       <span>
                         <strong className="font-mono">{l.code}</strong> {l.nameAr}
                       </span>
-                      <span className="font-bold">{fmtNum(l.balance)} YER</span>
+                      <span className="font-bold"><bdi dir="ltr">{fmtNum(l.balance)} YER</bdi></span>
                     </div>
                   ))}
                 </div>
                 <div className="space-y-2 pt-2">
                   <h4 className="font-extrabold text-sm border-b pb-2 text-indigo-700">
-                    حقوق الملكية (Equity) — {fmtNum(bs.totalEquity)} YER
+                    حقوق الملكية (Equity) — <bdi dir="ltr">{fmtNum(bs.totalEquity)} YER</bdi>
                   </h4>
                   {bs.equityLines.map((eq) => (
                     <div key={eq.code} className="flex justify-between py-1 border-b border-dashed">
                       <span>
                         <strong className="font-mono">{eq.code}</strong> {eq.nameAr}
                       </span>
-                      <span className="font-bold">{fmtNum(eq.balance)} YER</span>
+                      <span className="font-bold"><bdi dir="ltr">{fmtNum(eq.balance)} YER</bdi></span>
                     </div>
                   ))}
                   <div className="flex justify-between py-1 border-b border-dashed text-emerald-700 font-bold">
                     <span>
                       <strong className="font-mono">313101</strong> صافي نتيجة العام المالي الجاري
                     </span>
-                    <span>{fmtNum(bs.currentYearNetProfit)} YER</span>
+                    <span><bdi dir="ltr">{fmtNum(bs.currentYearNetProfit)} YER</bdi></span>
                   </div>
                 </div>
               </div>
@@ -853,10 +855,10 @@ export function FinancialReportsTab({
                     <tr key={p.projectId}>
                       <td className="py-2.5 font-mono font-bold">{p.code}</td>
                       <td className="py-2.5 font-extrabold">{p.nameAr}</td>
-                      <td className="py-2.5 font-mono">{fmtNum(p.budgetTotal)}</td>
-                      <td className="py-2.5 font-mono text-amber-700 font-bold">{fmtNum(p.actualCost)}</td>
+                      <td className="py-2.5 font-mono"><bdi dir="ltr">{fmtNum(p.budgetTotal)}</bdi></td>
+                      <td className="py-2.5 font-mono text-amber-700 font-bold"><bdi dir="ltr">{fmtNum(p.actualCost)}</bdi></td>
                       <td className={`py-2.5 font-mono font-bold ${p.isOverBudget ? "text-rose-600" : "text-emerald-600"}`}>
-                        {fmtNum(p.variance)}
+                        <bdi dir="ltr">{fmtNum(p.variance)}</bdi>
                       </td>
                       <td className="py-2.5">
                         <span
@@ -864,11 +866,11 @@ export function FinancialReportsTab({
                             p.isOverBudget ? "bg-rose-100 text-rose-800" : "bg-emerald-100 text-emerald-800"
                           }`}
                         >
-                          {p.utilizationPct.toFixed(1)}%
+                          <bdi dir="ltr">{p.utilizationPct.toFixed(1)}%</bdi>
                         </span>
                       </td>
-                      <td className="py-2.5 font-mono text-emerald-700 font-bold">{fmtNum(p.revenue)}</td>
-                      <td className="py-2.5 font-mono font-extrabold">{fmtNum(p.netProfit)}</td>
+                      <td className="py-2.5 font-mono text-emerald-700 font-bold"><bdi dir="ltr">{fmtNum(p.revenue)}</bdi></td>
+                      <td className="py-2.5 font-mono font-extrabold"><bdi dir="ltr">{fmtNum(p.netProfit)}</bdi></td>
                     </tr>
                   ))}
                 </tbody>
@@ -917,10 +919,10 @@ export function FinancialReportsTab({
                               </span>
                               {sp.projectNameAr}
                             </td>
-                            <td className="py-2.5 px-3 font-mono">{fmtNum(budget)}</td>
-                            <td className="py-2.5 px-3 font-mono text-amber-700 font-bold">{fmtNum(sp.actualCost)}</td>
+                            <td className="py-2.5 px-3 font-mono"><bdi dir="ltr">{fmtNum(budget)}</bdi></td>
+                            <td className="py-2.5 px-3 font-mono text-amber-700 font-bold"><bdi dir="ltr">{fmtNum(sp.actualCost)}</bdi></td>
                             <td className={`py-2.5 px-3 font-mono font-bold ${sp.isOverBudget ? "text-rose-600" : "text-emerald-600"}`}>
-                              {fmtNum(sp.variance)}
+                              <bdi dir="ltr">{fmtNum(sp.variance)}</bdi>
                             </td>
                             <td className="py-2.5 px-3">
                               <span
@@ -928,15 +930,15 @@ export function FinancialReportsTab({
                                   sp.isOverBudget ? "bg-rose-100 text-rose-800" : "bg-emerald-100 text-emerald-800"
                                 }`}
                               >
-                                {sp.utilizationPct.toFixed(1)}%
+                                <bdi dir="ltr">{sp.utilizationPct.toFixed(1)}%</bdi>
                               </span>
                             </td>
-                            <td className="py-2.5 px-3 font-mono text-emerald-700 font-bold">{fmtNum(sp.revenue)}</td>
+                            <td className="py-2.5 px-3 font-mono text-emerald-700 font-bold"><bdi dir="ltr">{fmtNum(sp.revenue)}</bdi></td>
                             <td className={`py-2.5 px-3 font-mono font-extrabold ${sp.netProfit >= 0 ? "text-slate-900" : "text-rose-600"}`}>
-                              {fmtNum(sp.netProfit)}
+                              <bdi dir="ltr">{fmtNum(sp.netProfit)}</bdi>
                             </td>
                             <td className={`py-2.5 px-3 font-mono font-bold text-xs ${marginPct >= 0 ? "text-emerald-700" : "text-rose-600"}`}>
-                              {marginPct.toFixed(1)}%
+                              <bdi dir="ltr">{marginPct.toFixed(1)}%</bdi>
                             </td>
                           </tr>
                         );

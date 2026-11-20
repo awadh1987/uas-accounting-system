@@ -700,3 +700,5 @@ export async function printUasDocument(spec: UasPrintDocumentSpec): Promise<{ ok
     }, 180);
   });
 }
+
+export const printDocument = printUasDocument;

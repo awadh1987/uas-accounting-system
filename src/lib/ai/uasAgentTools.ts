@@ -40,7 +40,53 @@ export type UasAgentToolName =
   | "verify_qr_document"
   | "generate_report_summary"
   | "diagnose_system_health"
-  | "search_user_manual";
+  | "search_user_manual"
+  | "create_customer"
+  | "create_vendor"
+  | "create_project"
+  | "export_client_report"
+  | "query_workspace_data";
+
+export interface CitationLink {
+  labelAr: string;
+  labelEn: string;
+  tab: TabId;
+  referenceId?: string;
+  type: "tab" | "record" | "manual";
+}
+
+export interface ClarificationOption {
+  labelAr: string;
+  labelEn: string;
+  promptFill: string;
+}
+
+export interface ClarificationPromptData {
+  questionAr: string;
+  questionEn: string;
+  missingFields: string[];
+  quickOptions: ClarificationOption[];
+}
+
+export interface EscalationCardData {
+  reasonCode: string;
+  reasonAr: string;
+  reasonEn: string;
+  moduleTab?: TabId;
+  referenceId?: string;
+  adminContact: {
+    name?: string;
+    phone?: string;
+    email?: string;
+    whatsApp?: string;
+  };
+  supportContact: {
+    hotline: string;
+    whatsApp: string;
+    email: string;
+    portalUrl: string;
+  };
+}
 
 export interface PreviewLedgerLine {
   accountCode: string;
@@ -57,8 +103,24 @@ export interface PreviewLedgerLine {
 
 export interface ConfirmationPreviewCard {
   actionId: string;
-  toolName: "draft_journal_entry" | "draft_voucher" | "draft_invoice";
-  operationType: "JOURNAL_ENTRY" | "RECEIPT_VOUCHER" | "PAYMENT_VOUCHER" | "SALES_INVOICE" | "PURCHASE_BILL";
+  toolName:
+    | "draft_journal_entry"
+    | "draft_voucher"
+    | "draft_invoice"
+    | "create_customer"
+    | "create_vendor"
+    | "create_project"
+    | "export_client_report";
+  operationType:
+    | "JOURNAL_ENTRY"
+    | "RECEIPT_VOUCHER"
+    | "PAYMENT_VOUCHER"
+    | "SALES_INVOICE"
+    | "PURCHASE_BILL"
+    | "CREATE_CUSTOMER"
+    | "CREATE_VENDOR"
+    | "CREATE_PROJECT"
+    | "EXPORT_CLIENT_REPORT";
   titleAr: string;
   titleEn: string;
   narrationAr: string;
@@ -134,6 +196,9 @@ export interface UasAgentToolResult {
   navigationTab?: TabId;
   openLicenseModal?: boolean;
   confirmationCard?: ConfirmationPreviewCard;
+  citations?: CitationLink[];
+  clarificationPrompt?: ClarificationPromptData;
+  escalationCard?: EscalationCardData;
 }
 
 export interface UasAgentToolSchema {
@@ -244,6 +309,65 @@ export const UAS_AGENT_TOOL_SCHEMAS: UasAgentToolSchema[] = [
     descriptionAr: "البحث في دليل المستخدم وقاعدة معرفة خدمة العملاء (7 فصول بالعربية والإنجليزية).",
     descriptionEn: "Search the embedded 7-chapter bilingual User Manual and Customer Service knowledge base.",
     parameters: { query: "question or topic in Arabic or English" },
+  },
+  {
+    name: "create_customer",
+    isWriteTool: true,
+    descriptionAr: "إنشاء عميل (زبون) جديد مع توليد حساب فرعي تلقائي بالجيل السادس (1121xx) ومركز تكلفة خاص (يتطلب تأكيد المستخدم).",
+    descriptionEn: "Create a new client/customer with auto-provisioned Gen-6 GL leaf account (1121xx) and Cost Center (requires explicit user confirmation).",
+    parameters: {
+      name: "Arabic/primary customer name",
+      phone: "optional phone number",
+      creditLimit: "optional credit limit in YER",
+      costCenterId: "optional cost center code",
+      address: "optional address",
+    },
+  },
+  {
+    name: "create_vendor",
+    isWriteTool: true,
+    descriptionAr: "إنشاء مورد (vendor) جديد مع توليد حساب فرعي تلقائي بالجيل السادس (2111xx) ومركز تكلفة خاص (يتطلب تأكيد المستخدم).",
+    descriptionEn: "Create a new supplier/vendor with auto-provisioned Gen-6 GL leaf account (2111xx) and Cost Center (requires explicit user confirmation).",
+    parameters: {
+      nameAr: "supplier name in Arabic",
+      phone: "contact phone number",
+      costCenterId: "optional cost center code",
+      email: "optional email",
+      address: "optional address",
+    },
+  },
+  {
+    name: "create_project",
+    isWriteTool: true,
+    descriptionAr: "إنشاء مشروع زراعي/تشغيلي جديد مع تحديد الموازنة ومركز التكلفة ودورات الحصاد (يتطلب تأكيد المستخدم).",
+    descriptionEn: "Create a new project with budget, cost center, and harvest cycles (requires explicit user confirmation).",
+    parameters: {
+      name: "project name",
+      budgetTotal: "budget amount in YER",
+      costCenterId: "optional cost center code",
+      plannedHarvests: "number of harvest cycles (default 1)",
+      notes: "optional notes",
+    },
+  },
+  {
+    name: "export_client_report",
+    isWriteTool: false,
+    descriptionAr: "توليد كشف حساب وتصدير تقرير عميل مع خيار تضمين تفاصيل كل عملية بيع للطباعة وPDF.",
+    descriptionEn: "Generate and export client account statement with optional itemized per-sale details for PDF/print.",
+    parameters: {
+      customerName: "customer name or code",
+      includeSaleDetails: "true | false (include per-sale item breakdown)",
+    },
+  },
+  {
+    name: "query_workspace_data",
+    isWriteTool: false,
+    descriptionAr: "البحث في بيانات مساحة العمل اللحظية (أرصدة العملاء، مستحقات الموردين، موازنات المشاريع، رصيد المخزون، وآخر السندات) مع روابط الاقتباس المباشرة.",
+    descriptionEn: "Live workspace search for customer/vendor balances, project totals, inventory stock, and recent vouchers with citation links.",
+    parameters: {
+      query: "search query or target entity name",
+      scope: "all|customers|vendors|projects|inventory|vouchers",
+    },
   },
 ];
 
@@ -406,12 +530,73 @@ export function resolveNavigationTarget(rawTarget: string): {
   return null;
 }
 
+export function buildEscalationCard(params: {
+  code: string;
+  summaryAr: string;
+  summaryEn: string;
+  tab?: TabId;
+  referenceId?: string;
+  ctx?: UasAgentExecutionContext;
+}): EscalationCardData {
+  const { code, summaryAr, summaryEn, tab, referenceId, ctx } = params;
+  const adminUser = ctx?.state?.users?.find(
+    (u) => u.role === "SUPER_ADMIN" || u.role === "ADMIN"
+  );
+  const profile = ctx?.state?.enterpriseProfile;
+
+  return {
+    reasonCode: code || "POLICY_BLOCK",
+    reasonAr: summaryAr,
+    reasonEn: summaryEn,
+    moduleTab: tab,
+    referenceId,
+    adminContact: {
+      name: profile?.legalNameAr || adminUser?.name || "مسؤول المنشأة المعتمد",
+      phone: profile?.contactPhone || profile?.phone || adminUser?.phone || "777123456",
+      email: profile?.email || adminUser?.email || "admin@uas-system.local",
+      whatsApp: profile?.contactWhatsApp || profile?.phone || adminUser?.phone || "777123456",
+    },
+    supportContact: {
+      hotline: "+967 777 000 000",
+      whatsApp: "+967 777 000 000",
+      email: "support@qat.world",
+      portalUrl: "https://qat.world/support",
+    },
+  };
+}
+
 function makeResult(
   lang: "ar" | "en",
-  partial: Omit<UasAgentToolResult, "summary">
+  partial: Omit<UasAgentToolResult, "summary">,
+  ctx?: UasAgentExecutionContext
 ): UasAgentToolResult {
+  let escalationCard = partial.escalationCard;
+  const escalatableCodes = [
+    "RBAC_FORBIDDEN",
+    "CLOSED_FISCAL_YEAR",
+    "SEATS_EXHAUSTED",
+    "COMPANY_MISMATCH",
+    "LICENSE_EXPIRED",
+    "UNLICENSED",
+    "DOCUMENT_NOT_FOUND",
+    "COA_NON_POSTING_ACCOUNT",
+    "UNBALANCED_JOURNAL_ENTRY",
+    "APPROVAL_REQUIRED_POST_POSTING",
+  ];
+  if (!escalationCard && !partial.ok && partial.code && escalatableCodes.includes(partial.code)) {
+    escalationCard = buildEscalationCard({
+      code: partial.code,
+      summaryAr: partial.summaryAr,
+      summaryEn: partial.summaryEn,
+      tab: partial.navigationTab,
+      referenceId: partial.code,
+      ctx,
+    });
+  }
+
   return {
     ...partial,
+    escalationCard,
     summary: lang === "ar" ? partial.summaryAr : partial.summaryEn,
   };
 }
@@ -491,7 +676,7 @@ export async function executeUasAgentTool(
           requiresConfirmation: false,
           summaryAr: `⛔ غير مصرح: دورك الحالي (${role}) لا يملك صلاحية الوصول إلى قسم (${resolved.labelAr}).`,
           summaryEn: `⛔ RBAC Blocked: Your role (${role}) is not authorized to access '${resolved.labelEn}'.`,
-        });
+        }, ctx);
       }
 
       return makeResult(lang, {
@@ -599,7 +784,7 @@ export async function executeUasAgentTool(
           requiresConfirmation: false,
           summaryAr: perm.summaryAr,
           summaryEn: perm.summaryEn,
-        });
+        }, ctx);
       }
 
       const rawLines = Array.isArray(args.lines) ? (args.lines as Array<Record<string, unknown>>) : [];
@@ -768,18 +953,64 @@ export async function executeUasAgentTool(
       }
 
       const amount = Number(args.amount ?? 0);
-      if (!Number.isFinite(amount) || amount <= 0) {
+      const rawParty = String(args.partyName ?? args.party ?? "").trim();
+      const hasParty = Boolean(rawParty);
+      const hasAmount = Number.isFinite(amount) && amount > 0;
+
+      if (args.isClarificationNeeded || !hasAmount || !hasParty) {
+        const missingFields: string[] = [];
+        if (!hasParty) missingFields.push("partyName");
+        if (!hasAmount) missingFields.push("amount");
+
+        const extState = ctx.state as (UasBootstrapState & {
+          customers?: Array<{ nameAr?: string }>;
+          vendors?: Array<{ nameAr?: string }>;
+        }) | null | undefined;
+        const dynamicCustomers: string[] = (extState?.customers ?? [])
+          .map((c: { nameAr?: string }) => c.nameAr)
+          .filter((n): n is string => Boolean(n));
+        const dynamicVendors: string[] = (extState?.vendors ?? [])
+          .map((v: { nameAr?: string }) => v.nameAr)
+          .filter((n): n is string => Boolean(n));
+
+        const partyOptions: string[] = isReceipt
+          ? (dynamicCustomers.length > 0 ? dynamicCustomers : ["شركة الأمل للتجارة", "شركة النور"])
+          : (dynamicVendors.length > 0 ? dynamicVendors : ["مؤسسة البركة", "مؤسسة النصر"]);
+
+        const quickOptions: ClarificationOption[] = !hasParty
+          ? partyOptions.map((p: string) => ({
+              labelAr: p,
+              labelEn: p,
+              promptFill: isReceipt
+                ? `سند قبض من ${p} بمبلغ ${hasAmount ? `${amount} ${args.currency || "YER"}` : "50000 YER"}`
+                : `سند صرف إلى ${p} بمبلغ ${hasAmount ? `${amount} ${args.currency || "YER"}` : "50000 YER"}`,
+            }))
+          : [
+              { labelAr: "50,000 YER", labelEn: "50,000 YER", promptFill: isReceipt ? `سند قبض من ${rawParty} بمبلغ 50000 YER` : `سند صرف إلى ${rawParty} بمبلغ 50000 YER` },
+              { labelAr: "100,000 YER", labelEn: "100,000 YER", promptFill: isReceipt ? `سند قبض من ${rawParty} بمبلغ 100000 YER` : `سند صرف إلى ${rawParty} بمبلغ 100000 YER` },
+              { labelAr: "500 SAR", labelEn: "500 SAR", promptFill: isReceipt ? `سند قبض من ${rawParty} بمبلغ 500 SAR` : `سند صرف إلى ${rawParty} بمبلغ 500 SAR` },
+            ];
+
         return makeResult(lang, {
-          ok: false,
+          ok: true,
           toolName,
-          code: "INVALID_AMOUNT",
           requiresConfirmation: false,
-          summaryAr: "⚠️ يرجى تحديد مبلغ مالي صحيح أكبر من الصفر للسند.",
-          summaryEn: "⚠️ Please provide a valid positive amount for the voucher.",
-        });
+          clarificationPrompt: {
+            questionAr: !hasParty
+              ? `يرجى تحديد الطرف ${isReceipt ? "المستلم منه (العميل)" : "المستفيد (المورد)"} لإصدار سند ${isReceipt ? "القبض" : "الصرف"}:`
+              : `يرجى تحديد مبلغ سند ${isReceipt ? "القبض" : "الصرف"} والعملة:`,
+            questionEn: !hasParty
+              ? `Please specify the party (${isReceipt ? "Customer" : "Payee/Vendor"}) for this ${isReceipt ? "Receipt" : "Payment"} voucher:`
+              : `Please specify the voucher amount and currency:`,
+            missingFields,
+            quickOptions,
+          },
+          summaryAr: `❓ **مطلوب توضيح لاستكمال السند:** يرجى تحديد ${!hasParty ? "اسم الطرف/العميل" : "مبلغ السند"} لمتابعة إعداد السند المحاسبي.`,
+          summaryEn: `❓ **Clarification Needed:** Please specify the ${!hasParty ? "party name" : "voucher amount"} to proceed with drafting the voucher.`,
+        }, ctx);
       }
 
-      const partyName = String(args.partyName ?? args.party ?? (isReceipt ? "عميل نقدي" : "مستفيد عام")).trim();
+      const partyName = rawParty;
       const currency = String(args.currency ?? "YER").toUpperCase();
       const exchangeRate = typeof args.exchangeRate === "number" ? args.exchangeRate : undefined;
       const costCenterId = typeof args.costCenterId === "string" ? args.costCenterId : undefined;
@@ -941,22 +1172,67 @@ export async function executeUasAgentTool(
       const unitPrice = Math.max(0, Number(args.unitPrice ?? args.price ?? 0));
       const explicitAmount = Number(args.amount ?? 0);
       const totalAmount = Number((explicitAmount > 0 ? explicitAmount : qty * unitPrice).toFixed(2));
+      const rawParty = String(args.partyName ?? args.customer ?? args.vendor ?? "").trim();
+      const hasParty = Boolean(rawParty);
+      const hasAmount = Number.isFinite(totalAmount) && totalAmount > 0;
+      const currency = String(args.currency ?? "YER").toUpperCase();
 
-      if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
+      if (args.isClarificationNeeded || !hasAmount || !hasParty) {
+        const missingFields: string[] = [];
+        if (!hasParty) missingFields.push("partyName");
+        if (!hasAmount) missingFields.push("amount");
+
+        const extState = ctx.state as (UasBootstrapState & {
+          customers?: Array<{ nameAr?: string }>;
+          vendors?: Array<{ nameAr?: string }>;
+        }) | null | undefined;
+        const dynamicCustomers: string[] = (extState?.customers ?? [])
+          .map((c: { nameAr?: string }) => c.nameAr)
+          .filter((n): n is string => Boolean(n));
+        const dynamicVendors: string[] = (extState?.vendors ?? [])
+          .map((v: { nameAr?: string }) => v.nameAr)
+          .filter((n): n is string => Boolean(n));
+
+        const partyOptions: string[] = isPurchase
+          ? (dynamicVendors.length > 0 ? dynamicVendors : ["مؤسسة البركة", "مؤسسة النصر"])
+          : (dynamicCustomers.length > 0 ? dynamicCustomers : ["شركة الأمل للتجارة", "شركة النور"]);
+
+        const quickOptions: ClarificationOption[] = !hasParty
+          ? partyOptions.map((p: string) => ({
+              labelAr: p,
+              labelEn: p,
+              promptFill: isPurchase
+                ? `فاتورة مشتريات من ${p} بمبلغ ${hasAmount ? `${totalAmount} ${currency}` : "75000 YER"}`
+                : `فاتورة مبيعات للعميل ${p} بمبلغ ${hasAmount ? `${totalAmount} ${currency}` : "75000 YER"}`,
+            }))
+          : [
+              { labelAr: "50,000 YER", labelEn: "50,000 YER", promptFill: isPurchase ? `فاتورة مشتريات من ${rawParty} بمبلغ 50000 YER` : `فاتورة مبيعات للعميل ${rawParty} بمبلغ 50000 YER` },
+              { labelAr: "100,000 YER", labelEn: "100,000 YER", promptFill: isPurchase ? `فاتورة مشتريات من ${rawParty} بمبلغ 100000 YER` : `فاتورة مبيعات للعميل ${rawParty} بمبلغ 100000 YER` },
+              { labelAr: "50 كرتون × 2000 YER", labelEn: "50 boxes @ 2000 YER", promptFill: isPurchase ? `فاتورة مشتريات من ${rawParty} 50 كرتون بسعر 2000 YER` : `فاتورة مبيعات للعميل ${rawParty} 50 كرتون بسعر 2000 YER` },
+            ];
+
         return makeResult(lang, {
-          ok: false,
+          ok: true,
           toolName,
-          code: "INVALID_AMOUNT",
           requiresConfirmation: false,
-          summaryAr: "⚠️ يرجى تحديد كمية وسعر أو مبلغ إجمالي أكبر من الصفر للفاتورة.",
-          summaryEn: "⚠️ Please specify a positive quantity/unit price or total amount for the invoice.",
-        });
+          clarificationPrompt: {
+            questionAr: !hasParty
+              ? `يرجى تحديد ${isPurchase ? "المورد" : "العميل"} لإصدار ${isPurchase ? "فاتورة المشتريات" : "فاتورة المبيعات"}:`
+              : `يرجى تحديد مبلغ أو كمية وسعر الفاتورة:`,
+            questionEn: !hasParty
+              ? `Please specify the ${isPurchase ? "vendor" : "customer"} for this ${isPurchase ? "purchase bill" : "sales invoice"}:`
+              : `Please specify the invoice amount or quantity and unit price:`,
+            missingFields,
+            quickOptions,
+          },
+          summaryAr: `❓ **مطلوب توضيح لاستكمال الفاتورة:** يرجى تحديد ${!hasParty ? "اسم الطرف" : "المبلغ والكمية"} لمتابعة إعداد مسودة الفاتورة.`,
+          summaryEn: `❓ **Clarification Needed:** Please specify the ${!hasParty ? "party name" : "amount and quantity"} to proceed with drafting the invoice.`,
+        }, ctx);
       }
 
-      const partyName = String(args.partyName ?? args.customer ?? args.vendor ?? (isPurchase ? "مورد عام" : "عميل عام")).trim();
+      const partyName = rawParty;
       const itemName = String(args.itemName ?? args.grade ?? "صنف 1 ممتاز").trim();
       const paymentMethod = String(args.paymentMethod ?? "CREDIT").toUpperCase() === "CASH" ? "CASH" : "CREDIT";
-      const currency = String(args.currency ?? "YER").toUpperCase();
       const exchangeRate = typeof args.exchangeRate === "number" ? args.exchangeRate : undefined;
       const costCenterId = typeof args.costCenterId === "string" ? args.costCenterId : undefined;
       const factorToBase = typeof args.factorToBase === "number" ? args.factorToBase : undefined;
@@ -1264,11 +1540,20 @@ export async function executeUasAgentTool(
       });
 
       const firstNav = supportRes.matches[0]?.section.targetTab;
+      const citations: CitationLink[] = supportRes.matches.map((m) => ({
+        labelAr: `فصل ${m.section.chapterNumber}: ${m.section.titleAr}`,
+        labelEn: `Ch.${m.section.chapterNumber}: ${m.section.titleEn}`,
+        tab: (m.section.targetTab as TabId) || "system",
+        referenceId: m.section.id,
+        type: "manual",
+      }));
+
       return makeResult(lang, {
         ok: true,
         toolName,
         requiresConfirmation: false,
         navigationTab: firstNav,
+        citations,
         openLicenseModal: supportRes.suggestedActions.some((a) => a.type === "open_license_modal"),
         data: {
           matches: supportRes.matches.map((m) => ({
@@ -1282,7 +1567,651 @@ export async function executeUasAgentTool(
         },
         summaryAr: supportRes.answerAr,
         summaryEn: supportRes.answerEn,
+      }, ctx);
+    }
+
+    // -----------------------------------------------------------------------
+    // 12. create_customer (WRITE TOOL -> MANDATORY CONFIRMATION PREVIEW CARD)
+    // -----------------------------------------------------------------------
+    case "create_customer": {
+      const perm = checkWritePermission(ctx.user, "customers", false);
+      if (!perm.allowed) {
+        return makeResult(lang, {
+          ok: false,
+          toolName,
+          code: "RBAC_FORBIDDEN",
+          requiresConfirmation: false,
+          summaryAr: perm.summaryAr,
+          summaryEn: perm.summaryEn,
+        });
+      }
+
+      const rawName = String(args.name ?? args.customerName ?? args.partyName ?? "").trim();
+      if (!rawName || rawName === "عميل جديد" || args.isClarificationNeeded) {
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          clarificationPrompt: {
+            questionAr: "يرجى تحديد اسم العميل أو المنشأة ورقم الهاتف لإنشاء الحساب:",
+            questionEn: "Please specify the customer or organization name and phone number:",
+            missingFields: ["name"],
+            quickOptions: [
+              { labelAr: "شركة الأمل للتجارة", labelEn: "Al-Amal Trading Co.", promptFill: "إنشاء عميل جديد باسم شركة الأمل للتجارة بهاتف 777112233" },
+              { labelAr: "مؤسسة النور الحديثة", labelEn: "Al-Noor Modern Est.", promptFill: "إنشاء عميل جديد باسم مؤسسة النور الحديثة بهاتف 777223344" },
+              { labelAr: "مجموعة الفلاح الزراعية", labelEn: "Al-Falah Agri Group", promptFill: "إنشاء عميل جديد باسم مجموعة الفلاح الزراعية بهاتف 777334455" },
+            ],
+          },
+          summaryAr: "❓ **مطلوب توضيح:** يرجى تزويدي باسم العميل الجديد ورقم الهاتف لإنشاء الحساب بالجيل السادس ومركز التكلفة.",
+          summaryEn: "❓ **Clarification Needed:** Please specify the customer name and phone to generate the Gen-6 account and profile.",
+        }, ctx);
+      }
+
+      const name = rawName;
+
+      const nameEn = String(args.nameEn ?? name).trim();
+      const phone = String(args.phone ?? "").trim();
+      const creditLimit = Math.max(0, Number(args.creditLimit ?? 0));
+      const costCenterId = typeof args.costCenterId === "string" ? args.costCenterId : undefined;
+      const address = typeof args.address === "string" ? args.address : undefined;
+
+      const card: ConfirmationPreviewCard = {
+        actionId: `ai-cust-${Date.now()}`,
+        toolName: "create_customer",
+        operationType: "CREATE_CUSTOMER",
+        titleAr: `معاينة إنشاء عميل جديد (${name})`,
+        titleEn: `Create New Customer Preview (${name})`,
+        narrationAr: `إضافة عميل جديد: ${name}${phone ? ` • هاتف: ${phone}` : ""}${creditLimit > 0 ? ` • حد ائتماني: ${creditLimit.toLocaleString()} YER` : ""}`,
+        narrationEn: `Create customer: ${name}${phone ? ` • Phone: ${phone}` : ""}${creditLimit > 0 ? ` • Credit limit: ${creditLimit.toLocaleString()} YER` : ""}`,
+        date: todayIso,
+        currency: "YER",
+        costCenterId,
+        totalDebit: 0,
+        totalCredit: 0,
+        isBalanced: true,
+        partyName: name,
+        lines: [
+          {
+            accountCode: "112190xxx",
+            accountNameAr: `العميل: ${name} (الجيل السادس)`,
+            accountNameEn: `Customer: ${nameEn} (Gen-6 Leaf)`,
+            debit: 0,
+            credit: 0,
+            costCenterId,
+          },
+        ],
+        confirmButtonLabelAr: "تأكيد وإنشاء العميل",
+        confirmButtonLabelEn: "Confirm & Create Client",
+        confirmButtonLabel: "تأكيد وإنشاء العميل / Confirm & Create Client",
+        executionPayload: {
+          operationType: "CREATE_CUSTOMER",
+          name,
+          nameEn,
+          phone,
+          creditLimit,
+          costCenterId,
+          address,
+          executed_by_ai: true,
+        },
+      };
+
+      return makeResult(lang, {
+        ok: true,
+        toolName,
+        requiresConfirmation: true,
+        confirmationCard: card,
+        data: { preview: card },
+        summaryAr: `🛡️ **بوابة التأكيد:** تم إعداد مقترح إنشاء العميل **(${name})**${phone ? ` بهاتف: ${phone}` : ""}${creditLimit > 0 ? ` وحد ائتماني: ${creditLimit.toLocaleString()} YER` : ""}.\nسيتم ربطه تلقائياً بحساب فرعي بالجيل السادس (1121xx) ومركز تكلفة خاص. اضغط **"تأكيد وإنشاء العميل"** للاعتماد.`,
+        summaryEn: `🛡️ **Confirmation Gate:** Prepared proposal to create customer **(${name})**${phone ? ` with phone: ${phone}` : ""}${creditLimit > 0 ? ` and credit limit: ${creditLimit.toLocaleString()} YER` : ""}.\nWill auto-provision a Gen-6 GL leaf account (1121xx) and Cost Center. Click **"Confirm & Create Client"** to execute.`,
       });
+    }
+
+    // -----------------------------------------------------------------------
+    // 13. create_vendor (WRITE TOOL -> MANDATORY CONFIRMATION PREVIEW CARD)
+    // -----------------------------------------------------------------------
+    case "create_vendor": {
+      const perm = checkWritePermission(ctx.user, "procurement", false);
+      if (!perm.allowed) {
+        return makeResult(lang, {
+          ok: false,
+          toolName,
+          code: "RBAC_FORBIDDEN",
+          requiresConfirmation: false,
+          summaryAr: perm.summaryAr,
+          summaryEn: perm.summaryEn,
+        });
+      }
+
+      const rawNameAr = String(args.nameAr ?? args.name ?? args.vendorName ?? args.partyName ?? "").trim();
+      if (!rawNameAr || rawNameAr === "مورد جديد" || args.isClarificationNeeded) {
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          clarificationPrompt: {
+            questionAr: "يرجى تحديد اسم المورد أو المورد المعتمد ورقم الهاتف:",
+            questionEn: "Please specify the supplier or vendor name and phone number:",
+            missingFields: ["nameAr"],
+            quickOptions: [
+              { labelAr: "مؤسسة البركة للمستلزمات", labelEn: "Al-Baraka Supplies", promptFill: "إنشاء مورد جديد باسم مؤسسة البركة للمستلزمات بهاتف 771122334" },
+              { labelAr: "شركة النصر للأسمدة", labelEn: "Al-Nasr Fertilizers", promptFill: "إنشاء مورد جديد باسم شركة النصر للأسمدة بهاتف 772233445" },
+              { labelAr: "مؤسسة الوحدة للتجارة", labelEn: "Al-Wehda Trading", promptFill: "إنشاء مورد جديد باسم مؤسسة الوحدة للتجارة بهاتف 773344556" },
+            ],
+          },
+          summaryAr: "❓ **مطلوب توضيح:** يرجى تحديد اسم المورد ورقم الهاتف للمتابعة في إعداد بطاقة المورد.",
+          summaryEn: "❓ **Clarification Needed:** Please specify the supplier name and phone number to draft the vendor profile.",
+        }, ctx);
+      }
+
+      const nameAr = rawNameAr;
+
+      const nameEn = typeof args.nameEn === "string" ? args.nameEn.trim() : nameAr;
+      const phone = String(args.phone ?? "777000000").trim();
+      const costCenterId = typeof args.costCenterId === "string" ? args.costCenterId : undefined;
+      const email = typeof args.email === "string" ? args.email.trim() : undefined;
+      const address = typeof args.address === "string" ? args.address.trim() : undefined;
+      const taxRegistration = typeof args.taxRegistration === "string" ? args.taxRegistration.trim() : undefined;
+
+      const card: ConfirmationPreviewCard = {
+        actionId: `ai-vnd-${Date.now()}`,
+        toolName: "create_vendor",
+        operationType: "CREATE_VENDOR",
+        titleAr: `معاينة إنشاء مورد جديد (${nameAr})`,
+        titleEn: `Create New Supplier Preview (${nameAr})`,
+        narrationAr: `إضافة مورد جديد: ${nameAr}${phone ? ` • هاتف: ${phone}` : ""}`,
+        narrationEn: `Create supplier: ${nameAr}${phone ? ` • Phone: ${phone}` : ""}`,
+        date: todayIso,
+        currency: "YER",
+        costCenterId,
+        totalDebit: 0,
+        totalCredit: 0,
+        isBalanced: true,
+        partyName: nameAr,
+        lines: [
+          {
+            accountCode: "211190xxx",
+            accountNameAr: `المورد: ${nameAr} (الجيل السادس)`,
+            accountNameEn: `Supplier: ${nameEn} (Gen-6 Leaf)`,
+            debit: 0,
+            credit: 0,
+            costCenterId,
+          },
+        ],
+        confirmButtonLabelAr: "تأكيد وإنشاء المورد",
+        confirmButtonLabelEn: "Confirm & Create Supplier",
+        confirmButtonLabel: "تأكيد وإنشاء المورد / Confirm & Create Supplier",
+        executionPayload: {
+          operationType: "CREATE_VENDOR",
+          nameAr,
+          nameEn,
+          phone,
+          costCenterId,
+          email,
+          address,
+          taxRegistration,
+          executed_by_ai: true,
+        },
+      };
+
+      return makeResult(lang, {
+        ok: true,
+        toolName,
+        requiresConfirmation: true,
+        confirmationCard: card,
+        data: { preview: card },
+        summaryAr: `🛡️ **بوابة التأكيد:** تم إعداد مقترح إنشاء المورد **(${nameAr})**${phone ? ` بهاتف: ${phone}` : ""}.\nسيتم ربطه تلقائياً بحساب فرعي بالجيل السادس (2111xx) ومركز تكلفة خاص. اضغط **"تأكيد وإنشاء المورد"** للاعتماد.`,
+        summaryEn: `🛡️ **Confirmation Gate:** Prepared proposal to create supplier **(${nameAr})**${phone ? ` with phone: ${phone}` : ""}.\nWill auto-provision a Gen-6 GL leaf account (2111xx) and Cost Center. Click **"Confirm & Create Supplier"** to execute.`,
+      });
+    }
+
+    // -----------------------------------------------------------------------
+    // 14. create_project (WRITE TOOL -> MANDATORY CONFIRMATION PREVIEW CARD)
+    // -----------------------------------------------------------------------
+    case "create_project": {
+      const perm = checkWritePermission(ctx.user, "projects", false);
+      if (!perm.allowed) {
+        return makeResult(lang, {
+          ok: false,
+          toolName,
+          code: "RBAC_FORBIDDEN",
+          requiresConfirmation: false,
+          summaryAr: perm.summaryAr,
+          summaryEn: perm.summaryEn,
+        });
+      }
+
+      const rawProjectName = String(args.name ?? args.projectName ?? args.title ?? "").trim();
+      if (!rawProjectName || rawProjectName === "مشروع جديد" || args.isClarificationNeeded) {
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          clarificationPrompt: {
+            questionAr: "يرجى تحديد اسم المشروع والموازنة التقديرية:",
+            questionEn: "Please specify the project name and estimated budget:",
+            missingFields: ["name"],
+            quickOptions: [
+              { labelAr: "مزرعة الجوف - قطاع أ", labelEn: "Al-Jawf Farm - Sector A", promptFill: "إنشاء مشروع مزرعة الجوف - قطاع أ بموازنة 5000000 YER ودورتي حصاد" },
+              { labelAr: "مشروع البيوت المحمية م/1", labelEn: "Greenhouse Project M1", promptFill: "إنشاء مشروع البيوت المحمية م/1 بموازنة 3000000 YER ودورة حصاد واحدة" },
+              { labelAr: "مشروع وادي سردود الزراعي", labelEn: "Wadi Sardood Agri Project", promptFill: "إنشاء مشروع وادي سردود الزراعي بموازنة 7500000 YER و3 دورات حصاد" },
+            ],
+          },
+          summaryAr: "❓ **مطلوب توضيح:** يرجى تزويدي باسم المشروع والموازنة التقديرية لإعداد قيد التأسيس وبطاقة المشروع.",
+          summaryEn: "❓ **Clarification Needed:** Please specify the project name and budget to set up the project profile.",
+        }, ctx);
+      }
+
+      const name = rawProjectName;
+
+      const budgetTotal = Math.max(0, Number(args.budgetTotal ?? args.budget ?? 0));
+      const plannedHarvests = Math.max(1, Number(args.plannedHarvests ?? args.harvests ?? 1));
+      const costCenterId = typeof args.costCenterId === "string" ? args.costCenterId : undefined;
+      const code = typeof args.code === "string" ? args.code.trim() : undefined;
+      const notes = typeof args.notes === "string" ? args.notes.trim() : undefined;
+
+      const card: ConfirmationPreviewCard = {
+        actionId: `ai-prj-${Date.now()}`,
+        toolName: "create_project",
+        operationType: "CREATE_PROJECT",
+        titleAr: `معاينة إنشاء مشروع جديد (${name})`,
+        titleEn: `Create New Project Preview (${name})`,
+        narrationAr: `إضافة مشروع جديد: ${name}${budgetTotal > 0 ? ` • موازنة: ${budgetTotal.toLocaleString()} YER` : ""} • دورات الحصاد: ${plannedHarvests}`,
+        narrationEn: `Create project: ${name}${budgetTotal > 0 ? ` • Budget: ${budgetTotal.toLocaleString()} YER` : ""} • Harvests: ${plannedHarvests}`,
+        date: todayIso,
+        currency: "YER",
+        costCenterId,
+        totalDebit: budgetTotal,
+        totalCredit: budgetTotal,
+        isBalanced: true,
+        partyName: name,
+        lines: [
+          {
+            accountCode: "121190xxx",
+            accountNameAr: `مشروع: ${name} (حساب رأسمالي / أصول بالجيل السادس)`,
+            accountNameEn: `Project: ${name} (Gen-6 Leaf)`,
+            debit: budgetTotal,
+            credit: budgetTotal,
+            costCenterId,
+          },
+        ],
+        confirmButtonLabelAr: "تأكيد وإنشاء المشروع",
+        confirmButtonLabelEn: "Confirm & Create Project",
+        confirmButtonLabel: "تأكيد وإنشاء المشروع / Confirm & Create Project",
+        executionPayload: {
+          operationType: "CREATE_PROJECT",
+          name,
+          code,
+          budgetTotal,
+          plannedHarvests,
+          costCenterId,
+          notes,
+          executed_by_ai: true,
+        },
+      };
+
+      return makeResult(lang, {
+        ok: true,
+        toolName,
+        requiresConfirmation: true,
+        confirmationCard: card,
+        data: { preview: card },
+        summaryAr: `🛡️ **بوابة التأكيد:** تم إعداد مقترح إنشاء المشروع **(${name})** بموازنة **${budgetTotal.toLocaleString()} YER** ودورات حصاد (${plannedHarvests}).\nسيتم ربطه تلقائياً بمركز تكلفة وحساب Gen-6. اضغط **"تأكيد وإنشاء المشروع"** للاعتماد.`,
+        summaryEn: `🛡️ **Confirmation Gate:** Prepared proposal to create project **(${name})** with budget **${budgetTotal.toLocaleString()} YER** and ${plannedHarvests} harvest cycles.\nWill auto-provision a Gen-6 GL leaf and Cost Center. Click **"Confirm & Create Project"** to execute.`,
+      });
+    }
+
+    // -----------------------------------------------------------------------
+    // 15. export_client_report
+    // -----------------------------------------------------------------------
+    case "export_client_report": {
+      const customerName = String(args.customerName ?? args.customer ?? args.partyName ?? "").trim();
+      const includeSaleDetails = args.includeSaleDetails !== false && String(args.includeSaleDetails).toLowerCase() !== "false";
+
+      const matchingSales = (ctx.state?.sales ?? []).filter((s) =>
+        customerName ? s.customer.toLowerCase().includes(customerName.toLowerCase()) : true
+      );
+      const totalSales = matchingSales.reduce((s, r) => s + Number(r.total || 0), 0);
+      const totalPaid = matchingSales.reduce((s, r) => s + Number(r.credit || 0), 0);
+      const balanceDue = matchingSales.reduce((s, r) => s + Number(r.debit ?? (r.total - (r.credit || 0))), 0);
+
+      const citations: CitationLink[] = [
+        {
+          labelAr: `سجل مبيعات العميل (${customerName || "الكل"})`,
+          labelEn: `Customer Sales Ledger (${customerName || "All"})`,
+          tab: "customers",
+          type: "tab",
+        },
+      ];
+
+      return makeResult(lang, {
+        ok: true,
+        toolName,
+        requiresConfirmation: false,
+        navigationTab: "customers",
+        citations,
+        data: {
+          customerName: customerName || (lang === "ar" ? "كافة العملاء" : "All Customers"),
+          includeSaleDetails,
+          salesCount: matchingSales.length,
+          totalSales,
+          totalPaid,
+          balanceDue,
+        },
+        summaryAr:
+          `📄 **كشف حساب العميل (${customerName || "كافة العملاء"}):**\n` +
+          `- عدد عمليات البيع المسجلة: **${matchingSales.length}** عملية\n` +
+          `- إجمالي المبيعات: **${totalSales.toLocaleString()} YER** • المسدد: **${totalPaid.toLocaleString()} YER**\n` +
+          `- رصيد المديونية المتبقي: **${balanceDue.toLocaleString()} YER**\n` +
+          `- خيار تفاصيل المبيعات: **${includeSaleDetails ? "تضمين تفاصيل كل عملية بيع: مضمّنة بالكامل (الأصناف، الكميات، الأسعار، الدفعات) ✅" : "ملخص إجمالي فقط 📊"}**\n` +
+          `[تم تحويلك إلى قسم العملاء لطباعة أو تصدير التقرير PDF فوراً]`,
+        summaryEn:
+          `📄 **Client Account Statement (${customerName || "All Clients"}):**\n` +
+          `- Sales Transactions: **${matchingSales.length}** sales\n` +
+          `- Total Sales: **${totalSales.toLocaleString()} YER** • Paid: **${totalPaid.toLocaleString()} YER**\n` +
+          `- Balance Due: **${balanceDue.toLocaleString()} YER**\n` +
+          `- Detail Mode: **${includeSaleDetails ? "Itemized sale details included (items, qty, rates, payments) ✅" : "Summary totals only 📊"}**\n` +
+          `[Navigated to Customers module to print or export PDF immediately]`,
+      }, ctx);
+    }
+
+    // -----------------------------------------------------------------------
+    // 16. query_workspace_data (READ TOOL -> LIVE OPERATIONAL Q&A + CITATIONS)
+    // -----------------------------------------------------------------------
+    case "query_workspace_data": {
+      const scope = String(args.scope ?? "all").toLowerCase();
+      const rawQuery = String(args.query ?? "").trim();
+      const queryLower = rawQuery.toLowerCase();
+
+      const citations: CitationLink[] = [];
+
+      // A. Scope: Customers / Client Balances
+      if (
+        scope === "customers" ||
+        queryLower.includes("عميل") ||
+        queryLower.includes("customer") ||
+        queryLower.includes("client") ||
+        queryLower.includes("مديونية") ||
+        queryLower.includes("مديونيه")
+      ) {
+        const sales = ctx.state?.sales ?? [];
+        const matchingSales = sales.filter((s) => {
+          if (!rawQuery) return true;
+          const cust = s.customer.toLowerCase();
+          return cust.includes(queryLower) || queryLower.includes(cust) || s.phone.includes(rawQuery);
+        });
+        const totalSales = matchingSales.reduce((s, r) => s + Number(r.total || 0), 0);
+        const totalPaid = matchingSales.reduce((s, r) => s + Number(r.credit || 0), 0);
+        const balanceDue = matchingSales.reduce((s, r) => s + Number(r.debit ?? (r.total - (r.credit || 0))), 0);
+
+        citations.push({
+          labelAr: "سجل مبيعات وحسابات العملاء",
+          labelEn: "Customer Accounts & Sales Ledger",
+          tab: "customers",
+          type: "tab",
+        });
+
+        const targetName = rawQuery || (lang === "ar" ? "كافة العملاء" : "All Customers");
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          navigationTab: "customers",
+          citations,
+          data: {
+            scope: "customers",
+            targetName,
+            transactionsCount: matchingSales.length,
+            totalSales,
+            totalPaid,
+            balanceDue,
+          },
+          summaryAr:
+            `📊 **بيانات رصيد ومديونية العميل (${targetName}):**\n` +
+            `- إجمالي المبيعات المحررة: **${totalSales.toLocaleString()} YER**\n` +
+            `- المسدد والمقبوض: **${totalPaid.toLocaleString()} YER**\n` +
+            `- رصيد المديونية المتبقي: **${balanceDue.toLocaleString()} YER**\n` +
+            `- عدد الفواتير والعمليات: **${matchingSales.length}** عملية مسجلة.\n` +
+            `*(يمكنك النقر على الرابط المباشر أدناه للانتقال لقسم العملاء)*`,
+          summaryEn:
+            `📊 **Client Account & Balance Data (${targetName}):**\n` +
+            `- Total Invoiced: **${totalSales.toLocaleString()} YER**\n` +
+            `- Total Paid: **${totalPaid.toLocaleString()} YER**\n` +
+            `- Outstanding Balance Due: **${balanceDue.toLocaleString()} YER**\n` +
+            `- Transactions: **${matchingSales.length}** recorded.\n` +
+            `*(Click citation link below to navigate to Customers module)*`,
+        }, ctx);
+      }
+
+      // B. Scope: Vendors / Supplier Payables
+      if (
+        scope === "vendors" ||
+        queryLower.includes("مورد") ||
+        queryLower.includes("vendor") ||
+        queryLower.includes("supplier") ||
+        queryLower.includes("مستحق")
+      ) {
+        const expenses = ctx.state?.expenses ?? [];
+        const matchingExpenses = expenses.filter((e) =>
+          rawQuery ? e.notes.toLowerCase().includes(queryLower) || e.category.toLowerCase().includes(queryLower) || e.subType.toLowerCase().includes(queryLower) : true
+        );
+        const totalExpenses = matchingExpenses.reduce((s, r) => s + Number(r.total || 0), 0);
+
+        citations.push({
+          labelAr: "سجل المشتريات والمصروفات التشغيلية",
+          labelEn: "Procurement & Operating Expenses",
+          tab: "procurement",
+          type: "tab",
+        });
+
+        const targetVendor = rawQuery || (lang === "ar" ? "الموردين والمشتريات" : "Vendors & Procurement");
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          navigationTab: "procurement",
+          citations,
+          data: {
+            scope: "vendors",
+            targetVendor,
+            count: matchingExpenses.length,
+            totalExpenses,
+          },
+          summaryAr:
+            `📦 **بيانات المشتريات ومستحقات الموردين (${targetVendor}):**\n` +
+            `- إجمالي فواتير ومصروفات المشتريات: **${totalExpenses.toLocaleString()} YER**\n` +
+            `- عدد القيود والفواتير: **${matchingExpenses.length}** عملية مسجلة.\n` +
+            `*(يمكنك النقر على الرابط أدناه للاطلاع على التفاصيل في قسم المشتريات)*`,
+          summaryEn:
+            `📦 **Vendor Payables & Procurement Data (${targetVendor}):**\n` +
+            `- Total Expenses/Bills: **${totalExpenses.toLocaleString()} YER**\n` +
+            `- Recorded Transactions: **${matchingExpenses.length}** records.\n` +
+            `*(Click the citation link below to view in Procurement module)*`,
+        }, ctx);
+      }
+
+      // C. Scope: Projects / Cost Centers
+      if (
+        scope === "projects" ||
+        queryLower.includes("مشروع") ||
+        queryLower.includes("project") ||
+        queryLower.includes("موازنة") ||
+        queryLower.includes("budget")
+      ) {
+        const projects = ctx.state?.projects ?? [];
+        const matchingProjects = projects.filter((p) => {
+          if (!rawQuery) return true;
+          const pName = p.name.toLowerCase();
+          const pCode = (p.code ?? "").toLowerCase();
+          return (
+            pName.includes(queryLower) ||
+            queryLower.includes(pName) ||
+            (pCode && (pCode.includes(queryLower) || queryLower.includes(pCode)))
+          );
+        });
+
+        if (matchingProjects.length > 0) {
+          const p = matchingProjects[0];
+          const budget = p.budgetTotal || p.estimatedValue || 0;
+          const expenses = (ctx.state?.expenses ?? []).filter((e) => e.projectId === p.id);
+          const wages = (ctx.state?.workers ?? []).filter((w) => w.projectId === p.id);
+          const sales = (ctx.state?.sales ?? []).filter((s) => s.projectId === p.id);
+
+          const totalSpend = expenses.reduce((s, r) => s + Number(r.total || 0), 0) + wages.reduce((s, r) => s + Number(r.total || 0), 0);
+          const totalRevenue = sales.reduce((s, r) => s + Number(r.total || 0), 0);
+          const netProfit = totalRevenue - totalSpend;
+          const remainingBudget = budget - totalSpend;
+
+          citations.push({
+            labelAr: `بطاقة المشروع: ${p.name}`,
+            labelEn: `Project Card: ${p.name}`,
+            tab: "projects",
+            referenceId: p.id,
+            type: "record",
+          });
+          citations.push({
+            labelAr: "قائمة الدخل والتقارير المالية للمشروع",
+            labelEn: "Financial Reports & Project P&L",
+            tab: "reports",
+            type: "tab",
+          });
+
+          return makeResult(lang, {
+            ok: true,
+            toolName,
+            requiresConfirmation: false,
+            navigationTab: "projects",
+            citations,
+            data: {
+              scope: "projects",
+              projectId: p.id,
+              projectName: p.name,
+              budget,
+              totalSpend,
+              totalRevenue,
+              netProfit,
+              remainingBudget,
+            },
+            summaryAr:
+              `🌱 **الملخص المالي والتشغيلي لمشروع (${p.name}):**\n` +
+              `- الموازنة المعتمدة: **${budget.toLocaleString()} YER**\n` +
+              `- إجمالي المصروفات والأجور الفعلية: **${totalSpend.toLocaleString()} YER**\n` +
+              `- المتبقي من الموازنة: **${remainingBudget.toLocaleString()} YER**\n` +
+              `- إجمالي إيرادات المبيعات المحققة: **${totalRevenue.toLocaleString()} YER**\n` +
+              `- صافي الأرباح التشغيلية: **${netProfit.toLocaleString()} YER**\n` +
+              `*(روابط المتابعة السريعة مرفقة أدناه لمراجعة بطاقة المشروع والتقارير)*`,
+            summaryEn:
+              `🌱 **Financial & Operational Summary for Project (${p.name}):**\n` +
+              `- Approved Budget: **${budget.toLocaleString()} YER**\n` +
+              `- Actual Spend (Expenses & Wages): **${totalSpend.toLocaleString()} YER**\n` +
+              `- Remaining Budget: **${remainingBudget.toLocaleString()} YER**\n` +
+              `- Sales Revenue: **${totalRevenue.toLocaleString()} YER**\n` +
+              `- Net Operating Profit: **${netProfit.toLocaleString()} YER**\n` +
+              `*(Click below to open project card and financial reports)*`,
+          }, ctx);
+        }
+      }
+
+      // D. Scope: Recent Vouchers / Treasury
+      if (
+        scope === "vouchers" ||
+        queryLower.includes("سند") ||
+        queryLower.includes("voucher") ||
+        queryLower.includes("قبض") ||
+        queryLower.includes("صرف") ||
+        queryLower.includes("خزينة")
+      ) {
+        const installments = ctx.state?.installments ?? [];
+        const recent = installments.slice(-5).reverse();
+        const totalVoucherAmount = installments.reduce((s, r) => s + Number(r.amount || 0), 0);
+
+        citations.push({
+          labelAr: "سجل الخزينة وسندات القبض والصرف",
+          labelEn: "Treasury & Installment Vouchers",
+          tab: "treasury",
+          type: "tab",
+        });
+
+        const recentListAr = recent.map((v) => `- ${v.voucherNo}: **${v.amount.toLocaleString()} YER** (${v.targetName || "طرف مسجل"}) • ${v.date}`).join("\n");
+        const recentListEn = recent.map((v) => `- ${v.voucherNo}: **${v.amount.toLocaleString()} YER** (${v.targetName || "Party"}) • ${v.date}`).join("\n");
+
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          navigationTab: "treasury",
+          citations,
+          data: {
+            scope: "vouchers",
+            totalCount: installments.length,
+            totalVoucherAmount,
+            recent,
+          },
+          summaryAr:
+            `💰 **سندات الخزينة وحركة المدفوعات والمقبوضات:**\n` +
+            `- إجمالي عدد السندات المسجلة: **${installments.length}** سند بمبلغ إجمالي **${totalVoucherAmount.toLocaleString()} YER**\n` +
+            (recent.length > 0 ? `\n**أحدث السندات المسجلة:**\n${recentListAr}\n` : "") +
+            `*(يمكنك النقر أدناه لفتح سجل الخزينة)*`,
+          summaryEn:
+            `💰 **Treasury Vouchers & Cash Flow Summary:**\n` +
+            `- Total Vouchers: **${installments.length}** vouchers totaling **${totalVoucherAmount.toLocaleString()} YER**\n` +
+            (recent.length > 0 ? `\n**Recent Vouchers:**\n${recentListEn}\n` : "") +
+            `*(Click below to open Treasury module)*`,
+        }, ctx);
+      }
+
+      // E. Composite or Open Workspace Knowledge / Support Fallback
+      citations.push({
+        labelAr: "لوحة القيادة والمؤشرات العامة",
+        labelEn: "Executive Dashboard",
+        tab: "dashboard",
+        type: "tab",
+      });
+
+      const supportRes = answerSupportQuery(rawQuery, {
+        lang,
+        diagnostics: ctx.diagnostics,
+        topK: 2,
+      });
+
+      if (supportRes.matches.length > 0) {
+        for (const m of supportRes.matches) {
+          citations.push({
+            labelAr: `فصل ${m.section.chapterNumber}: ${m.section.titleAr}`,
+            labelEn: `Ch.${m.section.chapterNumber}: ${m.section.titleEn}`,
+            tab: (m.section.targetTab as TabId) || "system",
+            referenceId: m.section.id,
+            type: "manual",
+          });
+        }
+      }
+
+      const totalCashYER = (ctx.state?.treasuryAccounts ?? []).reduce((s, a) => s + Number(a.balanceYER || a.balance || 0), 0);
+      const activeProjectsCount = (ctx.state?.projects ?? []).length;
+      const salesCount = (ctx.state?.sales ?? []).length;
+
+      return makeResult(lang, {
+        ok: true,
+        toolName,
+        requiresConfirmation: false,
+        navigationTab: "dashboard",
+        citations,
+        data: {
+          scope: "all",
+          totalCashYER,
+          activeProjectsCount,
+          salesCount,
+        },
+        summaryAr:
+          `🏢 **ملخص بيانات منظومة UAS وقواعد العمل:**\n` +
+          `- السيولة النقدية المتاحة بالخزائن والبنوك: **${totalCashYER.toLocaleString()} YER**\n` +
+          `- عدد المشاريع المسجلة: **${activeProjectsCount}** مشاريع • عمليات البيع: **${salesCount}** عملية.\n\n` +
+          `📖 **إجابة الاستفسار والقواعد المحاسبية:**\n${supportRes.answerAr}`,
+        summaryEn:
+          `🏢 **UAS System Workspace Snapshot & Rules:**\n` +
+          `- Available Treasury & Bank Cash: **${totalCashYER.toLocaleString()} YER**\n` +
+          `- Active Projects: **${activeProjectsCount}** • Sales Transactions: **${salesCount}**.\n\n` +
+          `📖 **Knowledge & Policy Guidance:**\n${supportRes.answerEn}`,
+      }, ctx);
     }
   }
 }
