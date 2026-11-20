@@ -12,6 +12,7 @@ import {
   PackageCheck,
   Plus,
   Printer,
+  Send,
   ShoppingCart,
   Store,
   Wallet,
@@ -22,6 +23,7 @@ import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { EmptyState } from "@/components/EmptyState";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
 import { SelectWithOther } from "@/components/SelectWithOther";
+import { BankPayoutModal, type PayoutInitialData } from "@/components/BankPayoutModal";
 import {
   AccountingDirectionSelector,
   type CustomAccountPayload,
@@ -142,6 +144,11 @@ export function ProcurementTab({
   const [bills, setBills] = useState<VendorBillItem[]>([]);
   const [payments, setPayments] = useState<PaymentVoucherItem[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Bank Payout Execution state
+  const [payoutModalOpen, setPayoutModalOpen] = useState(false);
+  const [payoutInitialData, setPayoutInitialData] = useState<PayoutInitialData | null>(null);
+  const [executedDispatches, setExecutedDispatches] = useState<Record<string, string>>({});
 
   // Add / Edit Vendor state
   const [editingVendorId, setEditingVendorId] = useState<string | null>(null);
@@ -930,7 +937,7 @@ export function ProcurementTab({
                         </td>
                         <td className="py-2.5 px-2 font-mono">{p.date.slice(0, 10)}</td>
                         <td className="py-2.5 px-2">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <button
                               type="button"
                               onClick={() => printPaymentVoucher(p)}
@@ -939,6 +946,31 @@ export function ProcurementTab({
                               <Printer className="w-3.5 h-3.5" />
                               <span>طباعة / QR</span>
                             </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPayoutInitialData({
+                                  treasuryAccountId: p.treasuryId || p.treasury.id,
+                                  sourceVoucherType: "PAYMENT_VOUCHER",
+                                  sourceVoucherId: p.id,
+                                  beneficiaryName: p.vendor.nameAr,
+                                  beneficiaryAccountOrPhone: p.vendor.phone || "",
+                                  amount: p.amount,
+                                  currencyCode: p.currency || "YER",
+                                  notes: `سداد سند صرف ${p.voucherNumber} للمورد ${p.vendor.nameAr}`,
+                                });
+                                setPayoutModalOpen(true);
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 hover:bg-emerald-100 font-bold flex items-center gap-1"
+                            >
+                              <Send className="w-3.5 h-3.5" />
+                              <span>تنفيذ التحويل البنكي</span>
+                            </button>
+                            {executedDispatches[p.id] && (
+                              <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200 font-bold">
+                                تم التحويل: {executedDispatches[p.id]}
+                              </span>
+                            )}
                             {!readOnly && canApprove && canEditRecords && (
                               <button
                                 type="button"
@@ -1689,6 +1721,30 @@ export function ProcurementTab({
           else if (quickVendorTarget === "bill") setBillVendorId(created.id);
           else if (quickVendorTarget === "payment") setPayVendorId(created.id);
           void loadAll();
+        }}
+        onToast={onToast}
+      />
+
+      {/* Shared Bank / Wallet Payout Execution Gateway Modal */}
+      <BankPayoutModal
+        isOpen={payoutModalOpen}
+        onClose={() => {
+          setPayoutModalOpen(false);
+          setPayoutInitialData(null);
+        }}
+        treasuryAccounts={treasuryAccounts}
+        currentUser={currentUser}
+        initialData={payoutInitialData}
+        onSuccess={(dispatch) => {
+          if (dispatch?.sourceVoucherId) {
+            setExecutedDispatches((prev) => ({
+              ...prev,
+              [dispatch.sourceVoucherId]:
+                dispatch.externalReferenceId || dispatch.dispatchNumber,
+            }));
+          }
+          void loadAll();
+          void onRefreshState();
         }}
         onToast={onToast}
       />

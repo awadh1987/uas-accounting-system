@@ -61,6 +61,7 @@ export const OFFLINE_DB_DRAFTS_KEY = "uas_offline_db_drafts";
 export const OFFLINE_DB_APPROVAL_RULES_KEY = "uas_offline_db_approval_rules";
 export const OFFLINE_DB_APPROVAL_REQUESTS_KEY = "uas_offline_db_approval_requests";
 export const OFFLINE_DB_IDEMPOTENCY_KEY = "uas_offline_db_idempotency";
+export const OFFLINE_DB_DISPATCHES_KEY = "uas_offline_db_dispatches";
 export const OFFLINE_SYNC_QUEUE_KEY = "uas_offline_sync_queue";
 
 export const DEFAULT_LOCAL_ADMIN_EMAIL = "admin@uas-ye.com";
@@ -846,6 +847,65 @@ export function handleLocalMasterLifecycle(
       return jsonResponse({ ok: true, deleted: true, message: "تم إلغاء المسودة", entityType, id });
     }
     return jsonResponse({ ok: false, status: 404, message: "المسودة غير موجودة" }, 404);
+  }
+
+  if (entityType === "TreasuryAccount") {
+    const idx = state.treasuryAccounts.findIndex((t) => t.id === id || t.code === id);
+    if (idx < 0) return jsonResponse({ ok: false, status: 404, message: "حساب الخزينة غير موجود" }, 404);
+
+    if (normAction === "RESTORE") {
+      state.treasuryAccounts[idx].isActive = true;
+      (state.treasuryAccounts[idx] as any).archivedAt = null;
+      addLocalAudit(state, actor.userDisplay, "استعادة حساب خزينة (محلي)", state.treasuryAccounts[idx].nameAr || id);
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({ ok: true, restored: true, message: "تمت استعادة حساب الخزينة بنجاح", entityType, id });
+    }
+
+    if (normAction === "ARCHIVE") {
+      state.treasuryAccounts[idx].isActive = false;
+      (state.treasuryAccounts[idx] as any).archivedAt = now;
+      addLocalAudit(state, actor.userDisplay, "أرشفة حساب خزينة (محلي)", state.treasuryAccounts[idx].nameAr || id);
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({ ok: true, archived: true, message: "تمت أرشفة حساب الخزينة بنجاح", entityType, id });
+    }
+
+    // SAFE_DELETE
+    const dispatches = readCollection<Record<string, unknown>>(OFFLINE_DB_DISPATCHES_KEY, s).filter(
+      (d) => d.treasuryAccountId === id
+    );
+    if (dispatches.length > 0 || (Number(state.treasuryAccounts[idx].balance) || 0) > 0) {
+      state.treasuryAccounts[idx].isActive = false;
+      (state.treasuryAccounts[idx] as any).archivedAt = now;
+      addLocalAudit(
+        state,
+        actor.userDisplay,
+        "أرشفة آلية لحساب خزينة (محلي)",
+        state.treasuryAccounts[idx].nameAr || id
+      );
+      saveOfflineAndroidState(state, s);
+      return jsonResponse({
+        ok: true,
+        archived: true,
+        deleted: false,
+        linkedCount: dispatches.length || 1,
+        message: "تم أرشفة حساب الخزينة لوجود حركات مالية أو رصيد مرتبط به",
+        entityType,
+        id,
+      });
+    }
+
+    state.treasuryAccounts.splice(idx, 1);
+    addLocalAudit(state, actor.userDisplay, "حذف نهائي لحساب خزينة (محلي)", id);
+    saveOfflineAndroidState(state, s);
+    return jsonResponse({
+      ok: true,
+      deleted: true,
+      archived: false,
+      linkedCount: 0,
+      message: "تم حذف حساب الخزينة نهائياً لعدم وجود حركات مرتبطة به",
+      entityType,
+      id,
+    });
   }
 
   return jsonResponse({ ok: true, message: "تمت معالجة السجل محلياً", entityType, id });
@@ -1691,6 +1751,246 @@ async function handleOfflineAndroidApiRequestCore(
         return jsonResponse({ success: true, [col.listProp]: rows, offline: true }, 200);
       }
     }
+  }
+
+  // Bank & E-Wallet Gateway Execution Dispatch
+  if (pathname === "/api/treasury/dispatch") {
+    if (method === "GET") {
+      const dispatches = readCollection<Record<string, unknown>>(OFFLINE_DB_DISPATCHES_KEY, s);
+      return jsonResponse({ dispatches, count: dispatches.length, offline: true }, 200);
+    }
+    if (method === "POST") {
+      const {
+        treasuryAccountId,
+        sourceVoucherType = "PAYMENT_VOUCHER",
+        sourceVoucherId = "MANUAL",
+        beneficiaryName,
+        beneficiaryAccountOrPhone,
+        amount,
+        currencyCode = "YER",
+        exchangeRate = 1,
+        costCenterId = null,
+      } = body;
+      const numAmount = Number(amount) || 0;
+      if (!treasuryAccountId || !beneficiaryName || !beneficiaryAccountOrPhone || numAmount <= 0) {
+        return jsonResponse(
+          { ok: false, error: "INVALID_DISPATCH_INPUT", messageAr: "بيانات التحويل غير مكتملة" },
+          400
+        );
+      }
+      const state = loadOfflineAndroidState(s);
+      const treasury = state.treasuryAccounts.find((t) => t.id === treasuryAccountId);
+      if (!treasury) {
+        return jsonResponse(
+          { ok: false, error: "TREASURY_ACCOUNT_NOT_FOUND", messageAr: "حساب الخزينة غير موجود" },
+          404
+        );
+      }
+
+      const todayStr = new Date().toISOString().slice(0, 10);
+      if ((treasury as any).lastDailyResetDate !== todayStr) {
+        (treasury as any).dailyUsedAmount = 0;
+        (treasury as any).lastDailyResetDate = todayStr;
+      }
+      const dailyLimit = Number(treasury.dailyLimit) || 0;
+      const currentUsed = Number((treasury as any).dailyUsedAmount) || 0;
+      if (dailyLimit > 0 && currentUsed + numAmount > dailyLimit) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: "DAILY_LIMIT_EXCEEDED",
+            messageAr: "تجاوز مبلغ التحويل الحد اليومي المسموح به للخزينة",
+          },
+          422
+        );
+      }
+
+      const feePercent = Number(treasury.transferFeePercent) || 0;
+      const feeAmount = numAmount * (feePercent / 100);
+      const totalDeduct = numAmount + feeAmount;
+      const currentBal = Number(treasury.balance ?? 0);
+      if (currentBal < totalDeduct) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: "INSUFFICIENT_TREASURY_BALANCE",
+            messageAr: "رصيد الخزينة أو المحفظة غير كافٍ لإتمام التحويل والرسوم",
+          },
+          422
+        );
+      }
+
+      treasury.balance = currentBal - totalDeduct;
+      (treasury as any).dailyUsedAmount = currentUsed + numAmount;
+
+      const dispatches = readCollection<Record<string, unknown>>(OFFLINE_DB_DISPATCHES_KEY, s);
+      const dispatchNumber = `DSP-${new Date().getFullYear()}-${String(dispatches.length + 1).padStart(4, "0")}`;
+      const provider = (treasury as any).gatewayProvider || "MANUAL";
+      const extRef = `${provider.slice(0, 3)}-SBX-${Date.now().toString().slice(-6)}`;
+
+      const dispatchRecord = {
+        id: `dsp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        dispatchNumber,
+        treasuryAccountId,
+        sourceVoucherType,
+        sourceVoucherId,
+        beneficiaryName,
+        beneficiaryAccountOrPhone,
+        amount: numAmount,
+        feeAmount,
+        currencyCode,
+        exchangeRate: Number(exchangeRate) || 1,
+        baseAmount: numAmount * (Number(exchangeRate) || 1),
+        provider,
+        externalReferenceId: extRef,
+        status: "EXECUTED",
+        rawResponseJson: JSON.stringify({ mode: "OFFLINE_LOCAL_SIMULATOR", extRef }),
+        idempotencyKey: extractOfflineIdempotencyKey(init) || `dsp-key-${Date.now()}`,
+        costCenterId,
+        executedById: actor.userId,
+        executedByName: actor.userDisplay,
+        executedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      };
+
+      dispatches.push(dispatchRecord);
+      writeCollection(OFFLINE_DB_DISPATCHES_KEY, dispatches, s);
+      saveOfflineAndroidState(state, s);
+      appendOfflineSyncQueue(pathname, method, body, s);
+
+      return jsonResponse(
+        {
+          ok: true,
+          dispatch: dispatchRecord,
+          balanceAfter: treasury.balance,
+          dailyRemaining: dailyLimit > 0 ? dailyLimit - (treasury as any).dailyUsedAmount : null,
+          offline: true,
+        },
+        200
+      );
+    }
+  }
+
+  // Bulk Bank/Wallet Transfer Export
+  if (pathname === "/api/treasury/batch-export" && method === "POST") {
+    const { treasuryAccountId: _treasuryAccountId, treasuryName = "Bank", provider = "BANK", items = [], format = "xlsx" } = body;
+    const rows = (Array.isArray(items) ? items : []).map((it: any, idx: number) => ({
+      serial: idx + 1,
+      beneficiaryName: it.beneficiaryName,
+      accountOrPhone: it.accountOrPhone,
+      amount: Number(it.amount) || 0,
+      currencyCode: it.currencyCode || "YER",
+      reference: it.reference || `BATCH-${Date.now().toString().slice(-4)}-${idx + 1}`,
+      notes: it.notes || "مستحقات دفعات UAS",
+    }));
+    const totalAmount = rows.reduce((acc: number, r: any) => acc + r.amount, 0);
+    const header = "رقم التسلسل,اسم المستفيد,رقم الحساب أو المحفظة,المبلغ,العملة,المرجع,البيان\n";
+    const csvContent =
+      "\uFEFF" +
+      header +
+      rows
+        .map(
+          (r: any) =>
+            `"${r.serial}","${r.beneficiaryName}","${r.accountOrPhone}","${r.amount}","${r.currencyCode}","${r.reference}","${r.notes}"`
+        )
+        .join("\n");
+    const base64 =
+      typeof btoa === "function"
+        ? btoa(unescape(encodeURIComponent(csvContent)))
+        : Buffer.from(csvContent).toString("base64");
+    const ext = format === "csv" ? "csv" : "csv";
+    const filename = `UAS_Payout_Batch_${provider}_${String(treasuryName).replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.${ext}`;
+    return jsonResponse(
+      {
+        ok: true,
+        filename,
+        mimeType: "text/csv; charset=utf-8",
+        base64,
+        count: rows.length,
+        totalAmount,
+        offline: true,
+      },
+      200
+    );
+  }
+
+  // Statement Auto-Reconciliation Import
+  if (pathname === "/api/treasury/reconcile-import" && method === "POST") {
+    const { treasuryAccountId, statementRows = [] } = body;
+    const dispatches = readCollection<Record<string, any>>(OFFLINE_DB_DISPATCHES_KEY, s).filter(
+      (d) => d.treasuryAccountId === treasuryAccountId
+    );
+
+    const matchedRows: any[] = [];
+    const unmatchedInUas: any[] = [];
+    const matchedDispatchIds = new Set<string>();
+
+    for (const row of Array.isArray(statementRows) ? statementRows : []) {
+      const rowAmt = Number(row.credit || row.debit) || 0;
+      let match = row.referenceId
+        ? dispatches.find(
+            (d) =>
+              d.externalReferenceId &&
+              String(d.externalReferenceId).toLowerCase() === String(row.referenceId).toLowerCase() &&
+              !matchedDispatchIds.has(d.id)
+          )
+        : null;
+      if (match) {
+        matchedDispatchIds.add(match.id);
+        matchedRows.push({
+          statementRow: row,
+          dispatchId: match.id,
+          dispatchNumber: match.dispatchNumber,
+          externalReferenceId: match.externalReferenceId,
+          matchedBy: "externalReferenceId",
+        });
+        continue;
+      }
+      match = dispatches.find(
+        (d) => Math.abs(Number(d.amount) - rowAmt) < 0.01 && !matchedDispatchIds.has(d.id)
+      );
+      if (match) {
+        matchedDispatchIds.add(match.id);
+        matchedRows.push({
+          statementRow: row,
+          dispatchId: match.id,
+          dispatchNumber: match.dispatchNumber,
+          externalReferenceId: match.externalReferenceId,
+          matchedBy: "amount_and_date",
+        });
+      } else {
+        unmatchedInUas.push(row);
+      }
+    }
+
+    const unmatchedInBank = dispatches
+      .filter((d) => !matchedDispatchIds.has(d.id))
+      .map((d) => ({
+        dispatchId: d.id,
+        dispatchNumber: d.dispatchNumber,
+        amount: d.amount,
+        beneficiaryName: d.beneficiaryName,
+        externalReferenceId: d.externalReferenceId,
+        createdAt: d.createdAt,
+      }));
+
+    return jsonResponse(
+      {
+        ok: true,
+        result: {
+          treasuryAccountId,
+          statementTotalRows: (statementRows as any[]).length,
+          matchedCount: matchedRows.length,
+          unmatchedInUasCount: unmatchedInUas.length,
+          unmatchedInBankCount: unmatchedInBank.length,
+          matchedRows,
+          unmatchedInUas,
+          unmatchedInBank,
+          offline: true,
+        },
+      },
+      200
+    );
   }
 
   if (pathname.startsWith("/api/treasury")) {

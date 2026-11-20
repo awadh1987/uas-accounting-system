@@ -10,7 +10,8 @@ export type MasterEntityType =
   | "InventoryItem"
   | "CostCenter"
   | "Account"
-  | "WorkspaceDraft";
+  | "WorkspaceDraft"
+  | "TreasuryAccount";
 
 export interface MasterLifecycleActor {
   userId: string | null;
@@ -234,6 +235,22 @@ export async function countLinkedRecordsTx(
       }
       break;
     }
+
+    case "TreasuryAccount": {
+      const trs = await tx.treasuryAccount.findUnique({ where: { id } });
+      if (!trs) break;
+      const [lines, dispatches, receipts, payments] = await Promise.all([
+        tx.journalEntryLine.count({ where: { accountId: trs.accountId } }),
+        tx.bankPaymentDispatch.count({ where: { treasuryAccountId: id } }),
+        tx.receiptVoucher.count({ where: { treasuryId: id } }),
+        tx.paymentVoucher.count({ where: { treasuryId: id } }),
+      ]);
+      details.journalLines = lines;
+      details.bankPaymentDispatches = dispatches;
+      details.receiptVouchers = receipts;
+      details.paymentVouchers = payments;
+      break;
+    }
   }
 
   const totalCount = Object.values(details).reduce((sum, v) => sum + v, 0);
@@ -369,6 +386,19 @@ export async function safeDeleteOrArchiveMasterRecord(
           await tx.workspaceDraft.delete({ where: { id } });
           break;
         }
+
+        case "TreasuryAccount": {
+          const trs = await tx.treasuryAccount.findUnique({ where: { id } });
+          if (!trs) return notFoundResult(entityType, id);
+          await tx.treasuryAccount.delete({ where: { id } });
+          if (trs.accountId) {
+            const linesOnGl = await tx.journalEntryLine.count({ where: { accountId: trs.accountId } });
+            if (linesOnGl === 0) {
+              await tx.account.deleteMany({ where: { id: trs.accountId } }).catch(() => {});
+            }
+          }
+          break;
+        }
       }
 
       await appendAuditLogTx(tx, {
@@ -499,6 +529,20 @@ export async function safeDeleteOrArchiveMasterRecord(
             where: { id },
             data: { status: "DISCARDED" },
           });
+          break;
+        }
+
+        case "TreasuryAccount": {
+          const trs = await tx.treasuryAccount.update({
+            where: { id },
+            data: { isActive: false, archivedAt: now },
+          });
+          if (trs.accountId) {
+            await tx.account.updateMany({
+              where: { id: trs.accountId },
+              data: { isActive: false, archivedAt: now },
+            });
+          }
           break;
         }
       }
@@ -641,6 +685,20 @@ export async function archiveMasterRecord(
         });
         break;
       }
+
+      case "TreasuryAccount": {
+        const trs = await tx.treasuryAccount.update({
+          where: { id },
+          data: { isActive: false, archivedAt: now },
+        });
+        if (trs.accountId) {
+          await tx.account.updateMany({
+            where: { id: trs.accountId },
+            data: { isActive: false, archivedAt: now },
+          });
+        }
+        break;
+      }
     }
 
     await appendAuditLogTx(tx, {
@@ -777,6 +835,20 @@ export async function restoreMasterRecord(
           where: { id },
           data: { status: "ACTIVE_DRAFT" },
         });
+        break;
+      }
+
+      case "TreasuryAccount": {
+        const trs = await tx.treasuryAccount.update({
+          where: { id },
+          data: { isActive: true, archivedAt: null },
+        });
+        if (trs.accountId) {
+          await tx.account.updateMany({
+            where: { id: trs.accountId },
+            data: { isActive: true, archivedAt: null },
+          });
+        }
         break;
       }
     }

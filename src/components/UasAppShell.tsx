@@ -1356,6 +1356,8 @@ export function UasAppShell() {
                   projects={scopedProjects}
                   workers={filteredWorkers}
                   allWorkers={state.workers}
+                  treasuryAccounts={state.treasuryAccounts}
+                  currentUser={currentUser}
                   readOnly={userReadOnly}
                   canEditRecords={canEdit(currentUser, "workers")}
                   canEditDate={userCanEditDate}
@@ -1391,6 +1393,7 @@ export function UasAppShell() {
                     exportFullWorkbookToExcel(state, { workerFilter });
                     showToast("تم تصدير كشف حساب العمال إلى Excel بنجاح");
                   }}
+                  onRefreshState={refreshFromServer}
                   onToast={showToast}
                 />
               )}

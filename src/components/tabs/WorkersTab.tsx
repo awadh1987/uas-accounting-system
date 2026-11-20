@@ -1,12 +1,13 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { Pencil, Plus, Printer } from "lucide-react";
+import { Pencil, Plus, Printer, Send } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { computeWorkerWageTotals, fmtNum } from "@/lib/formulas";
 import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
-import type { UasProject, UasWorkerWage } from "@/types/uas";
+import type { UasProject, UasTreasuryAccount, UasUser, UasWorkerWage } from "@/types/uas";
+import { BankPayoutModal, type PayoutInitialData } from "@/components/BankPayoutModal";
 import {
   AccountingDirectionSelector,
   type AccountingDirectionValue,
@@ -51,6 +52,8 @@ interface WorkersTabProps {
   projects: UasProject[];
   workers: UasWorkerWage[];
   allWorkers: UasWorkerWage[];
+  treasuryAccounts?: UasTreasuryAccount[];
+  currentUser?: UasUser;
   readOnly?: boolean;
   canEditRecords?: boolean;
   canEditDate?: boolean;
@@ -59,6 +62,7 @@ interface WorkersTabProps {
   onDeleteWorker: (id: string) => Promise<void>;
   onOpenWorkerVoucher: (w: UasWorkerWage) => void;
   onExportWorkerExcel: (workerFilter: string) => void;
+  onRefreshState?: () => Promise<void>;
   onToast: (msg: string) => void;
 }
 
@@ -66,6 +70,8 @@ export function WorkersTab({
   projects,
   workers,
   allWorkers,
+  treasuryAccounts = [],
+  currentUser,
   readOnly = false,
   canEditRecords = false,
   canEditDate = false,
@@ -74,6 +80,7 @@ export function WorkersTab({
   onDeleteWorker,
   onOpenWorkerVoucher,
   onExportWorkerExcel,
+  onRefreshState,
   onToast,
 }: WorkersTabProps) {
   const [projectId, setProjectId] = useState(projects[0]?.id || "");
@@ -94,6 +101,11 @@ export function WorkersTab({
     accountCode: "511101",
     isCustom: false,
   });
+
+  // Bank Payout Execution state
+  const [payoutModalOpen, setPayoutModalOpen] = useState(false);
+  const [payoutInitialData, setPayoutInitialData] = useState<PayoutInitialData | null>(null);
+  const [executedWorkerDispatches, setExecutedWorkerDispatches] = useState<Record<string, string>>({});
 
   const preview = computeWorkerWageTotals(
     Number(dailyWage),
@@ -555,9 +567,30 @@ export function WorkersTab({
                       </div>
 
                       {!readOnly && (
-                        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2">
+                        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2 flex-wrap">
                           {!isArchived ? (
                             <>
+                              {(w.balanceDue ?? 0) > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPayoutInitialData({
+                                      sourceVoucherType: "WORKER_WAGE",
+                                      sourceVoucherId: `WRK-DIR-${w.id}`,
+                                      beneficiaryName: w.name,
+                                      beneficiaryAccountOrPhone: w.phone || "",
+                                      amount: w.balanceDue || 0,
+                                      currencyCode: "YER",
+                                      notes: `صرف مستحقات العامل: ${w.name}`,
+                                    });
+                                    setPayoutModalOpen(true);
+                                  }}
+                                  className="text-emerald-700 dark:text-emerald-400 font-bold hover:underline inline-flex items-center gap-0.5"
+                                >
+                                  <Send className="w-3 h-3" />
+                                  <span>تحويل بنكي</span>
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => void handleArchiveMasterWorker(w)}
@@ -744,7 +777,7 @@ export function WorkersTab({
                     <td className="p-2.5 text-emerald-600 font-semibold tabular-nums">{fmtNum(w.credit)}</td>
                     <td className="p-2.5 text-rose-600 font-bold tabular-nums">{fmtNum(w.debit)}</td>
                     <td className="p-2.5 font-mono">{w.date}</td>
-                    <td className="p-2.5 no-print flex items-center gap-2">
+                    <td className="p-2.5 no-print flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
                         onClick={() => onOpenWorkerVoucher(w)}
@@ -752,6 +785,30 @@ export function WorkersTab({
                       >
                         سند
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPayoutInitialData({
+                            sourceVoucherType: "WORKER_WAGE",
+                            sourceVoucherId: w.id,
+                            beneficiaryName: w.name,
+                            beneficiaryAccountOrPhone: "",
+                            amount: w.debit > 0 ? w.debit : w.total,
+                            currencyCode: "YER",
+                            notes: `صرف أجر عامل: ${w.name} — قطفة: ${w.harvest}`,
+                          });
+                          setPayoutModalOpen(true);
+                        }}
+                        className="px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 font-bold hover:bg-emerald-100 flex items-center gap-1"
+                      >
+                        <Send className="w-3 h-3" />
+                        <span>تحويل بنكي</span>
+                      </button>
+                      {executedWorkerDispatches[w.id] && (
+                        <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200 font-bold">
+                          تم: {executedWorkerDispatches[w.id]}
+                        </span>
+                      )}
                       {!readOnly && canEditRecords && onEditWorker && (
                         <button
                           type="button"
@@ -792,6 +849,29 @@ export function WorkersTab({
         )}
       </div>
       )}
+
+      {/* Shared Bank / Wallet Payout Execution Gateway Modal */}
+      <BankPayoutModal
+        isOpen={payoutModalOpen}
+        onClose={() => {
+          setPayoutModalOpen(false);
+          setPayoutInitialData(null);
+        }}
+        treasuryAccounts={treasuryAccounts}
+        currentUser={currentUser}
+        initialData={payoutInitialData}
+        onSuccess={(dispatch) => {
+          if (dispatch?.sourceVoucherId) {
+            setExecutedWorkerDispatches((prev) => ({
+              ...prev,
+              [dispatch.sourceVoucherId]:
+                dispatch.externalReferenceId || dispatch.dispatchNumber,
+            }));
+          }
+          void onRefreshState?.();
+        }}
+        onToast={onToast}
+      />
     </section>
   );
 }

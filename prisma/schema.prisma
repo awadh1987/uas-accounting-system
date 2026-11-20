@@ -682,6 +682,14 @@ model TreasuryAccount {
   balanceYER         Float    @default(0)
   currency           String   @default("YER")
   currencyCode       String   @default("YER")
+  gatewayProvider    String   @default("MANUAL") // MANUAL | KURAIMI_API | JAWALI_API | JEEB_API | ONECASH_API | FLOOSAK_API | CUSTOM_WEBHOOK
+  gatewayMerchantId  String?
+  gatewayEndpointUrl String?
+  gatewayCredentialsEnc String?
+  isSandbox          Boolean  @default(true)
+  dailyUsedAmount    Float    @default(0)
+  lastDailyResetDate String?  // YYYY-MM-DD
+  archivedAt         DateTime?
   updatedAt          DateTime @updatedAt
 
   paymentVouchers   PaymentVoucher[]
@@ -689,6 +697,7 @@ model TreasuryAccount {
   installments      InstallmentVoucher[]
   salesInvoices     SalesInvoice[]
   salesTransactions SaleTransaction[]
+  dispatches        BankPaymentDispatch[]
 }
 
 model OperatingExpense {
@@ -1220,4 +1229,39 @@ model IdempotencyRecord {
   @@index([idempotencyKey])
   @@index([expiresAt])
 }
+
+model BankPaymentDispatch {
+  id                        String          @id @default(cuid())
+  dispatchNumber            String          @unique // DSP-YYYY-XXXX
+  treasuryAccountId         String
+  treasuryAccount           TreasuryAccount @relation(fields: [treasuryAccountId], references: [id], onDelete: Restrict)
+  sourceVoucherType         String          // PAYMENT_VOUCHER | VENDOR_BILL | WORKER_WAGE | TREASURY_TRANSFER
+  sourceVoucherId           String
+  beneficiaryName           String
+  beneficiaryAccountOrPhone String
+  amount                    Float
+  feeAmount                 Float           @default(0)
+  currencyCode              String          @default("YER")
+  exchangeRate              Float           @default(1)
+  baseAmount                Float
+  provider                  String          // MANUAL | KURAIMI_API | JAWALI_API | JEEB_API | ONECASH_API | FLOOSAK_API | CUSTOM_WEBHOOK
+  externalReferenceId       String?
+  status                    String          @default("QUEUED") // QUEUED | PENDING_OTP | EXECUTED | FAILED | RECONCILED
+  rawResponseJson           String?
+  errorMessage              String?
+  idempotencyKey            String          @unique
+  costCenterId              String?
+  journalEntryId            String?
+  executedById              String
+  executedByName            String
+  executedAt                DateTime?
+  createdAt                 DateTime        @default(now())
+  updatedAt                 DateTime        @updatedAt
+
+  @@index([treasuryAccountId])
+  @@index([status])
+  @@index([provider])
+  @@index([sourceVoucherType, sourceVoucherId])
+}
+
 

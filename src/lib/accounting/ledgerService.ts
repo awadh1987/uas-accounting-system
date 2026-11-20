@@ -84,6 +84,11 @@ export interface PostVendorBillInput {
   notes?: string;
   costCenterId?: string | null;
   createdById?: string;
+  gatewayProvider?: string;
+  gatewayMerchantId?: string;
+  gatewayEndpointUrl?: string;
+  gatewayCredentialsEnc?: string;
+  isSandbox?: boolean;
   tx?: Prisma.TransactionClient;
 }
 
@@ -102,6 +107,11 @@ export interface PostVendorPaymentInput {
   notes?: string;
   costCenterId?: string | null;
   createdById?: string;
+  gatewayProvider?: string;
+  gatewayMerchantId?: string;
+  gatewayEndpointUrl?: string;
+  gatewayCredentialsEnc?: string;
+  isSandbox?: boolean;
   tx?: Prisma.TransactionClient;
 }
 
@@ -139,6 +149,11 @@ export interface PostCustomerReceiptInput {
   notes?: string;
   costCenterId?: string | null;
   createdById?: string;
+  gatewayProvider?: string;
+  gatewayMerchantId?: string;
+  gatewayEndpointUrl?: string;
+  gatewayCredentialsEnc?: string;
+  isSandbox?: boolean;
   tx?: Prisma.TransactionClient;
 }
 
@@ -2099,6 +2114,11 @@ export interface CreateTreasuryAccountInput {
   notes?: string;
   costCenterId?: string | null;
   createdById?: string;
+  gatewayProvider?: string;
+  gatewayMerchantId?: string;
+  gatewayEndpointUrl?: string;
+  gatewayCredentialsEnc?: string;
+  isSandbox?: boolean;
   tx?: Prisma.TransactionClient;
 }
 
@@ -2167,6 +2187,11 @@ export async function createTreasuryAccount(input: CreateTreasuryAccountInput) {
         currencyCode: currency,
         balance: openingBalance,
         balanceYER: openingYER,
+        gatewayProvider: input.gatewayProvider?.trim() || "MANUAL",
+        gatewayMerchantId: input.gatewayMerchantId?.trim() || null,
+        gatewayEndpointUrl: input.gatewayEndpointUrl?.trim() || null,
+        gatewayCredentialsEnc: input.gatewayCredentialsEnc?.trim() || null,
+        isSandbox: input.isSandbox !== undefined ? Boolean(input.isSandbox) : true,
       },
       include: { account: true },
     });
@@ -2239,6 +2264,11 @@ export interface UpdateTreasuryAccountInput {
   isActive?: boolean;
   notes?: string;
   createdById?: string;
+  gatewayProvider?: string;
+  gatewayMerchantId?: string;
+  gatewayEndpointUrl?: string;
+  gatewayCredentialsEnc?: string;
+  isSandbox?: boolean;
   tx?: Prisma.TransactionClient;
 }
 
@@ -2291,6 +2321,11 @@ export async function updateTreasuryAccount(input: UpdateTreasuryAccountInput) {
         ...(input.isDefaultPayments !== undefined ? { isDefaultPayments: Boolean(input.isDefaultPayments) } : {}),
         ...(input.isActive !== undefined ? { isActive: Boolean(input.isActive) } : {}),
         ...(input.notes !== undefined ? { notes: input.notes.trim() } : {}),
+        ...(input.gatewayProvider !== undefined ? { gatewayProvider: input.gatewayProvider.trim() } : {}),
+        ...(input.gatewayMerchantId !== undefined ? { gatewayMerchantId: input.gatewayMerchantId.trim() || null } : {}),
+        ...(input.gatewayEndpointUrl !== undefined ? { gatewayEndpointUrl: input.gatewayEndpointUrl.trim() || null } : {}),
+        ...(input.gatewayCredentialsEnc !== undefined ? { gatewayCredentialsEnc: input.gatewayCredentialsEnc.trim() || null } : {}),
+        ...(input.isSandbox !== undefined ? { isSandbox: Boolean(input.isSandbox) } : {}),
       },
       include: { account: true },
     });

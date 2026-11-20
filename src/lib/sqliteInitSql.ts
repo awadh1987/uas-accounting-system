@@ -554,6 +554,14 @@ CREATE TABLE "TreasuryAccount" (
     "balanceYER" REAL NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
+    "gatewayProvider" TEXT NOT NULL DEFAULT 'MANUAL',
+    "gatewayMerchantId" TEXT,
+    "gatewayEndpointUrl" TEXT,
+    "gatewayCredentialsEnc" TEXT,
+    "isSandbox" BOOLEAN NOT NULL DEFAULT true,
+    "dailyUsedAmount" REAL NOT NULL DEFAULT 0,
+    "lastDailyResetDate" TEXT,
+    "archivedAt" DATETIME,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "TreasuryAccount_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
@@ -1036,6 +1044,36 @@ CREATE TABLE "IdempotencyRecord" (
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- CreateTable
+CREATE TABLE "BankPaymentDispatch" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "dispatchNumber" TEXT NOT NULL,
+    "treasuryAccountId" TEXT NOT NULL,
+    "sourceVoucherType" TEXT NOT NULL,
+    "sourceVoucherId" TEXT NOT NULL,
+    "beneficiaryName" TEXT NOT NULL,
+    "beneficiaryAccountOrPhone" TEXT NOT NULL,
+    "amount" REAL NOT NULL,
+    "feeAmount" REAL NOT NULL DEFAULT 0,
+    "currencyCode" TEXT NOT NULL DEFAULT 'YER',
+    "exchangeRate" REAL NOT NULL DEFAULT 1,
+    "baseAmount" REAL NOT NULL,
+    "provider" TEXT NOT NULL,
+    "externalReferenceId" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'QUEUED',
+    "rawResponseJson" TEXT,
+    "errorMessage" TEXT,
+    "idempotencyKey" TEXT NOT NULL,
+    "costCenterId" TEXT,
+    "journalEntryId" TEXT,
+    "executedById" TEXT NOT NULL,
+    "executedByName" TEXT NOT NULL,
+    "executedAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "BankPaymentDispatch_treasuryAccountId_fkey" FOREIGN KEY ("treasuryAccountId") REFERENCES "TreasuryAccount" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "Account_code_key" ON "Account"("code");
 
@@ -1175,4 +1213,22 @@ CREATE UNIQUE INDEX "IdempotencyRecord_idempotencyKey_key" ON "IdempotencyRecord
 CREATE INDEX "IdempotencyRecord_idempotencyKey_idx" ON "IdempotencyRecord"("idempotencyKey");
 
 -- CreateIndex
-CREATE INDEX "IdempotencyRecord_expiresAt_idx" ON "IdempotencyRecord"("expiresAt");`;
+CREATE INDEX "IdempotencyRecord_expiresAt_idx" ON "IdempotencyRecord"("expiresAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "BankPaymentDispatch_dispatchNumber_key" ON "BankPaymentDispatch"("dispatchNumber");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "BankPaymentDispatch_idempotencyKey_key" ON "BankPaymentDispatch"("idempotencyKey");
+
+-- CreateIndex
+CREATE INDEX "BankPaymentDispatch_treasuryAccountId_idx" ON "BankPaymentDispatch"("treasuryAccountId");
+
+-- CreateIndex
+CREATE INDEX "BankPaymentDispatch_status_idx" ON "BankPaymentDispatch"("status");
+
+-- CreateIndex
+CREATE INDEX "BankPaymentDispatch_provider_idx" ON "BankPaymentDispatch"("provider");
+
+-- CreateIndex
+CREATE INDEX "BankPaymentDispatch_sourceVoucherType_sourceVoucherId_idx" ON "BankPaymentDispatch"("sourceVoucherType", "sourceVoucherId");`;

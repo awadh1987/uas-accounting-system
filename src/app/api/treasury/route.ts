@@ -66,6 +66,11 @@ export async function POST(req: NextRequest) {
       isDefaultPayments: Boolean(body.isDefaultPayments),
       isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
       notes: body.notes ? String(body.notes) : undefined,
+      gatewayProvider: body.gatewayProvider ? String(body.gatewayProvider) : undefined,
+      gatewayMerchantId: body.gatewayMerchantId !== undefined ? String(body.gatewayMerchantId) : undefined,
+      gatewayEndpointUrl: body.gatewayEndpointUrl !== undefined ? String(body.gatewayEndpointUrl) : undefined,
+      gatewayCredentialsEnc: body.gatewayCredentialsEnc !== undefined ? String(body.gatewayCredentialsEnc) : undefined,
+      isSandbox: body.isSandbox !== undefined ? Boolean(body.isSandbox) : true,
       createdById: auth.actor.userId ?? undefined,
     });
 
@@ -117,6 +122,11 @@ async function handleUpdate(req: NextRequest) {
         body.isDefaultPayments !== undefined ? Boolean(body.isDefaultPayments) : undefined,
       isActive: body.isActive !== undefined ? Boolean(body.isActive) : undefined,
       notes: body.notes !== undefined ? String(body.notes) : undefined,
+      gatewayProvider: body.gatewayProvider !== undefined ? String(body.gatewayProvider) : undefined,
+      gatewayMerchantId: body.gatewayMerchantId !== undefined ? String(body.gatewayMerchantId) : undefined,
+      gatewayEndpointUrl: body.gatewayEndpointUrl !== undefined ? String(body.gatewayEndpointUrl) : undefined,
+      gatewayCredentialsEnc: body.gatewayCredentialsEnc !== undefined ? String(body.gatewayCredentialsEnc) : undefined,
+      isSandbox: body.isSandbox !== undefined ? Boolean(body.isSandbox) : undefined,
       createdById: auth.actor.userId ?? undefined,
     });
 

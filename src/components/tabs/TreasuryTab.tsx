@@ -2,13 +2,26 @@
 
 import React, { useState } from "react";
 import {
+  Archive,
   ArrowLeftRight,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   ClipboardCheck,
+  Download,
   Edit3,
+  Eye,
+  EyeOff,
+  FileSpreadsheet,
+  Globe,
   Landmark,
+  Loader2,
   Plus,
+  RotateCcw,
+  Send,
   Smartphone,
+  Trash2,
+  Upload,
   Vault,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
@@ -16,6 +29,7 @@ import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
 import { SelectWithOther } from "@/components/SelectWithOther";
+import { BankPayoutModal, type PayoutInitialData } from "@/components/BankPayoutModal";
 import { fmtNum, formatCurrencyVal, type CurrencyCode } from "@/lib/formulas";
 import type {
   UasInstallmentVoucher,
@@ -54,6 +68,22 @@ interface ReconcilePayload {
     varianceYER: number;
   };
   entries: ReconcileEntryItem[];
+}
+
+interface AutoReconcileResult {
+  matchedCount: number;
+  matchedTotal: number;
+  unmatchedUasCount: number;
+  unmatchedUasTotal: number;
+  unmatchedBankCount: number;
+  unmatchedBankTotal: number;
+  details: Array<{
+    date: string;
+    referenceId?: string;
+    description?: string;
+    amount: number;
+    status: "MATCHED" | "UNMATCHED_IN_SYSTEM" | "UNMATCHED_IN_BANK";
+  }>;
 }
 
 interface TreasuryTabProps {
@@ -103,6 +133,16 @@ const TYPE_META: Record<
     Icon: Smartphone,
   },
 };
+
+const GATEWAY_PROVIDERS: Array<{ value: string; label: string }> = [
+  { value: "MANUAL", label: "يدوي / Manual (بدون ربط مباشر)" },
+  { value: "KURAIMI_API", label: "بنك الكريمي (Kuraimi Express API)" },
+  { value: "JAWALI_API", label: "محفظة جوالي (Jawali Wallet API)" },
+  { value: "JEEB_API", label: "محفظة جيب (Jeeb Wallet API)" },
+  { value: "ONECASH_API", label: "ون كاش (OneCash API)" },
+  { value: "FLOOSAK_API", label: "فلوسك (Floosak API)" },
+  { value: "CUSTOM_WEBHOOK", label: "رابط مخصص (Custom API Webhook)" },
+];
 
 export function TreasuryTab({
   currency,
@@ -154,6 +194,18 @@ export function TreasuryTab({
   const [tNotes, setTNotes] = useState("");
   const [savingTreasury, setSavingTreasury] = useState(false);
 
+  // Gateway Provider Config state
+  const [tGatewayProvider, setTGatewayProvider] = useState("MANUAL");
+  const [tGatewayMerchantId, setTGatewayMerchantId] = useState("");
+  const [tGatewayEndpointUrl, setTGatewayEndpointUrl] = useState("");
+  const [tGatewayCredentialsEnc, setTGatewayCredentialsEnc] = useState("");
+  const [tIsSandbox, setTIsSandbox] = useState(true);
+  const [showSecret, setShowSecret] = useState(false);
+  const [gatewaySectionOpen, setGatewaySectionOpen] = useState(false);
+
+  // Filter archived treasuries
+  const [showArchivedTreasuries, setShowArchivedTreasuries] = useState(false);
+
   // FX Inter-Treasury Transfer drawer state
   const [transferDrawerOpen, setTransferDrawerOpen] = useState(false);
   const [txFromId, setTxFromId] = useState(treasuryAccounts[0]?.id || "");
@@ -175,6 +227,18 @@ export function TreasuryTab({
   const [stmtDate, setStmtDate] = useState("2026-11-10");
   const [stmtNotes, setStmtNotes] = useState("");
   const [savingReconcile, setSavingReconcile] = useState(false);
+
+  // Bulk Bank File Export state
+  const [batchFormat, setBatchFormat] = useState<"xlsx" | "csv">("xlsx");
+  const [exportingBatch, setExportingBatch] = useState(false);
+
+  // Auto-Reconciliation file import state
+  const [autoReconciling, setAutoReconciling] = useState(false);
+  const [autoReconcileResult, setAutoReconcileResult] = useState<AutoReconcileResult | null>(null);
+
+  // Live Payout Execution Modal state
+  const [payoutModalOpen, setPayoutModalOpen] = useState(false);
+  const [payoutInitialData, setPayoutInitialData] = useState<PayoutInitialData | null>(null);
 
   const actor = currentUser
     ? { userId: currentUser.id, userDisplay: currentUser.name, userRole: currentUser.role }
@@ -235,6 +299,16 @@ export function TreasuryTab({
     setTDefPayments(false);
     setTIsActive(true);
     setTNotes("");
+
+    // Gateway defaults
+    setTGatewayProvider("MANUAL");
+    setTGatewayMerchantId("");
+    setTGatewayEndpointUrl("");
+    setTGatewayCredentialsEnc("");
+    setTIsSandbox(true);
+    setShowSecret(false);
+    setGatewaySectionOpen(false);
+
     setSetupDrawerOpen(true);
   }
 
@@ -257,6 +331,17 @@ export function TreasuryTab({
     setTDefPayments(Boolean(t.isDefaultPayments));
     setTIsActive(t.isActive !== false);
     setTNotes(t.notes || "");
+
+    // Gateway settings
+    const prov = t.gatewayProvider || "MANUAL";
+    setTGatewayProvider(prov);
+    setTGatewayMerchantId(t.gatewayMerchantId || "");
+    setTGatewayEndpointUrl(t.gatewayEndpointUrl || "");
+    setTGatewayCredentialsEnc(t.gatewayCredentialsEnc || "");
+    setTIsSandbox(t.isSandbox !== false);
+    setShowSecret(false);
+    setGatewaySectionOpen(prov !== "MANUAL");
+
     setSetupDrawerOpen(true);
   }
 
@@ -295,6 +380,12 @@ export function TreasuryTab({
           isDefaultPayments: tDefPayments,
           isActive: tIsActive,
           notes: tNotes.trim() || undefined,
+          // Live Gateway Integration Settings
+          gatewayProvider: tGatewayProvider,
+          gatewayMerchantId: tGatewayMerchantId.trim() || undefined,
+          gatewayEndpointUrl: tGatewayEndpointUrl.trim() || undefined,
+          gatewayCredentialsEnc: tGatewayCredentialsEnc.trim() || undefined,
+          isSandbox: tIsSandbox,
           actor,
         }),
       });
@@ -314,6 +405,50 @@ export function TreasuryTab({
       onToast("تعذر الاتصال بالخادم");
     } finally {
       setSavingTreasury(false);
+    }
+  }
+
+  // Handle Archive / Restore / Safe Delete
+  async function handleLifecycleTreasury(
+    t: UasTreasuryAccount,
+    action: "ARCHIVE" | "RESTORE" | "SAFE_DELETE"
+  ) {
+    if (readOnly || !canManageTreasury) return;
+    const actionLabel =
+      action === "ARCHIVE"
+        ? "أرشفة"
+        : action === "RESTORE"
+        ? "استعادة"
+        : "حذف";
+
+    if (
+      action === "SAFE_DELETE" &&
+      !confirm(`هل أنت متأكد من حذف الحساب (${t.nameAr || t.name})؟ إذا كان مرتبطاً بحركات مالية فسيتم أرشفته بأمان لمنع اختلال القيود.`)
+    ) {
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/records/lifecycle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entityType: "TreasuryAccount",
+          entityId: t.id,
+          action,
+          actor,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        onToast(data.error || `تعذر ${actionLabel} الحساب`);
+        return;
+      }
+
+      onToast(data.message || `✅ تم تنفيذ ${actionLabel} بنجاح`);
+      await onRefreshState?.();
+    } catch {
+      onToast("تعذر الاتصال بالخادم");
     }
   }
 
@@ -365,6 +500,7 @@ export function TreasuryTab({
   async function openReconcileDrawer(treasuryIdToLoad: string) {
     setReconcileDrawerOpen(true);
     setReconcileLoading(true);
+    setAutoReconcileResult(null);
     try {
       const res = await fetch(
         `/api/treasury/reconcile?treasuryId=${encodeURIComponent(treasuryIdToLoad)}`,
@@ -436,30 +572,185 @@ export function TreasuryTab({
     }
   }
 
+  // Handle Export Bulk Bank File
+  async function handleExportBulkFile() {
+    if (!reconcileData) return;
+    setExportingBatch(true);
+    try {
+      // Build items from ledger entries or draft payouts
+      const items = reconcileData.entries.map((e, idx) => ({
+        beneficiaryName: e.narrationAr || `دفعة بنكية #${idx + 1}`,
+        accountOrPhone: e.reference || "N/A",
+        amount: Math.abs(e.creditBase || e.credit || e.debitBase || e.debit || 1000),
+        currencyCode: reconcileData.treasury.currency || "YER",
+        reference: e.entryNumber || `DSP-${idx + 1}`,
+        notes: e.narrationAr || "تسديد بنكي معتمد",
+      }));
+
+      // Fallback sample if empty
+      const payloadItems =
+        items.length > 0
+          ? items
+          : [
+              {
+                beneficiaryName: "مستفيد تجريبي",
+                accountOrPhone: "770000000",
+                amount: 50000,
+                currencyCode: reconcileData.treasury.currency || "YER",
+                reference: "DSP-TEST-001",
+                notes: "إرسالية دفع تجريبية",
+              },
+            ];
+
+      const res = await fetch("/api/treasury/batch-export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          treasuryAccountId: reconcileData.treasury.id,
+          treasuryName: reconcileData.treasury.nameAr,
+          provider: reconcileData.treasury.type,
+          items: payloadItems,
+          format: batchFormat,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        onToast(data.error || "فشل تصدير ملف التحويلات البنكية");
+        return;
+      }
+
+      // Trigger file download in browser
+      const byteCharacters = atob(data.base64);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: data.mimeType });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = data.filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      onToast(`✅ تم تصدير ملف التحويلات البنكية (${data.count} حركة بمبلغ ${fmtNum(data.totalAmount)} ${reconcileData.treasury.currency})`);
+    } catch {
+      onToast("حدث خطأ أثناء تصدير ملف البنك");
+    } finally {
+      setExportingBatch(false);
+    }
+  }
+
+  // Handle Auto-Reconcile File Import
+  async function handleAutoReconcileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !reconcileData) return;
+
+    setAutoReconciling(true);
+    setAutoReconcileResult(null);
+    try {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const base64 = (event.target?.result as string).split(",")[1];
+          const res = await fetch("/api/treasury/reconcile-import", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              treasuryAccountId: reconcileData.treasury.id,
+              base64File: base64,
+            }),
+          });
+          const json = await res.json();
+          if (res.ok && json.ok) {
+            setAutoReconcileResult(json.result);
+            onToast(
+              `✅ تمت المطابقة الآلية: ${json.result.matchedCount} مطابقة بنجاح، ${json.result.unmatchedUasCount} غير مسجل، ${json.result.unmatchedBankCount} غير ظاهر بالبنك`
+            );
+          } else {
+            onToast(json.error || "فشل تحليل ومطابقة كشف الحساب");
+          }
+        } catch {
+          onToast("حدث خطأ أثناء معالجة ملف الكشف");
+        } finally {
+          setAutoReconciling(false);
+          e.target.value = "";
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch {
+      setAutoReconciling(false);
+      onToast("تعذر قراءة الملف");
+    }
+  }
+
   const fromAcc = treasuryAccounts.find((t) => t.id === (txFromId || treasuryAccounts[0]?.id));
   const computedDefaultFee =
     txApplyDefaultFee && fromAcc?.transferFeePercent
       ? ((Number(txAmount) || 0) * fromAcc.transferFeePercent) / 100
       : 0;
 
+  // Filter treasury cards based on archive toggle
+  const visibleTreasuries = treasuryAccounts.filter(
+    (t) => (showArchivedTreasuries ? true : t.isActive !== false && !t.archivedAt)
+  );
+
   return (
     <section className="space-y-6">
       <div className="card-surface rounded-2xl p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-base font-extrabold">
+            <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
               إدارة الخزينة والبنوك والمحافظ الإلكترونية (Treasury &amp; Wallets Engine)
             </h3>
             <p className="text-xs text-slate-500">
-              إنشاء وربط الصناديق والحسابات البنكية والمحافظ (الكريمي، جوالي، جيب) بحسابات Tier-5 وتنفيذ التحويلات متعددة العملات والمطابقة البنكية
+              إنشاء وربط الصناديق والحسابات البنكية والمحافظ (الكريمي، جوالي، جيب، ون كاش، فلوسك) بحسابات الجيل السادس (Gen-6) وبوابات الدفع الإلكتروني والمطابقة الآلية
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="text-xs font-bold accent-badge px-3 py-1.5 rounded-xl tabular-nums">
               1 SAR = {exchangeRates.SAR || 425} YER | 1 USD = {fmtNum(exchangeRates.USD || 1620)} YER
             </div>
+
+            {/* Archive Toggle Filter */}
+            <button
+              type="button"
+              onClick={() => setShowArchivedTreasuries((p) => !p)}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${
+                showArchivedTreasuries
+                  ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700"
+                  : "bg-slate-200/50 dark:bg-slate-700/50 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600"
+              }`}
+            >
+              {showArchivedTreasuries ? "إخفاء المؤرشفين" : "إظهار المؤرشفين"}
+            </button>
+
             {!readOnly && canManageTreasury && (
               <>
+                {/* Live Payout Dispatch Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPayoutInitialData({
+                      sourceVoucherType: "TREASURY_TRANSFER",
+                      sourceVoucherId: `DISP-${Date.now()}`,
+                      beneficiaryName: "",
+                      beneficiaryAccountOrPhone: "",
+                      amount: 0,
+                      currencyCode: "YER",
+                      notes: "صرف أو تحويل بنكي مباشر",
+                    });
+                    setPayoutModalOpen(true);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold inline-flex items-center gap-1.5 shadow-sm"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>تنفيذ تحويل بنكي / محفظة</span>
+                </button>
+
+                {/* FX Inter-Treasury Transfer Button */}
                 <button
                   type="button"
                   onClick={() => {
@@ -473,6 +764,8 @@ export function TreasuryTab({
                   <ArrowLeftRight className="w-3.5 h-3.5" />
                   <span>تحويل بين الخزائن (FX)</span>
                 </button>
+
+                {/* Add Treasury Button */}
                 <button
                   type="button"
                   onClick={openCreateTreasury}
@@ -486,34 +779,48 @@ export function TreasuryTab({
           </div>
         </div>
 
+        {/* Bank & Wallet Cards Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {treasuryAccounts.map((t) => {
+          {visibleTreasuries.map((t) => {
             const rawType = (t.type || "VAULT").toUpperCase();
             const meta = TYPE_META[rawType] || TYPE_META.VAULT;
             const TypeIcon = meta.Icon;
+            const isArchived = t.isActive === false || Boolean(t.archivedAt);
+            const hasGateway = t.gatewayProvider && t.gatewayProvider !== "MANUAL";
+
             return (
               <div
                 key={t.id}
-                className={`p-4 rounded-2xl border space-y-2.5 flex flex-col justify-between ${
-                  t.isActive === false
-                    ? "border-slate-200 dark:border-slate-800 opacity-65"
-                    : "border-slate-200 dark:border-slate-700 bg-white/50 dark:bg-slate-900/30"
+                className={`p-4 rounded-2xl border space-y-2.5 flex flex-col justify-between transition ${
+                  isArchived
+                    ? "border-amber-300/60 bg-amber-50/20 dark:bg-amber-950/10 dark:border-amber-800/40 opacity-75"
+                    : "border-slate-200 dark:border-slate-700 bg-white/50 dark:bg-slate-900/30 hover:border-slate-300 dark:hover:border-slate-600"
                 }`}
               >
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-1">
+                  <div className="flex items-center justify-between gap-1 flex-wrap">
                     <span
                       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-extrabold ${meta.badgeClass}`}
                     >
                       <TypeIcon className="w-3 h-3" />
                       <span>{meta.labelAr}</span>
                     </span>
+
+                    {/* Archived Badge */}
+                    {isArchived && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                        مؤرشف
+                      </span>
+                    )}
+
                     <span className="text-[11px] font-mono text-slate-400">
                       {t.accountNo}
                     </span>
                   </div>
 
-                  <div className="font-extrabold text-sm">{t.nameAr || t.name}</div>
+                  <div className="font-extrabold text-sm text-slate-900 dark:text-white">
+                    {t.nameAr || t.name}
+                  </div>
                   {t.providerNameAr && (
                     <div className="text-[11px] text-slate-500">
                       {t.providerNameAr}
@@ -530,6 +837,12 @@ export function TreasuryTab({
                   </div>
 
                   <div className="flex flex-wrap gap-1 pt-1">
+                    {/* Gateway Badge */}
+                    {hasGateway && (
+                      <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 text-[9px] font-bold border border-blue-200 dark:border-blue-800">
+                        بوابة: {t.gatewayProvider} {t.isSandbox ? "(تجريبي)" : "(حي)"}
+                      </span>
+                    )}
                     {t.isDefaultReceipts && (
                       <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[9px] font-bold">
                         افتراضي قبض
@@ -548,24 +861,96 @@ export function TreasuryTab({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px]">
-                  <button
-                    type="button"
-                    onClick={() => void openReconcileDrawer(t.id)}
-                    className="font-bold text-indigo-600 hover:underline inline-flex items-center gap-1"
-                  >
-                    <ClipboardCheck className="w-3.5 h-3.5" />
-                    <span>كشف ومطابقة</span>
-                  </button>
-                  {!readOnly && canManageTreasury && (
+                {/* Card Action Buttons */}
+                <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px]">
+                  <div className="flex items-center justify-between gap-1">
                     <button
                       type="button"
-                      onClick={() => openEditTreasury(t)}
-                      className="font-bold text-slate-600 dark:text-slate-300 hover:text-emerald-600 inline-flex items-center gap-1"
+                      onClick={() => void openReconcileDrawer(t.id)}
+                      className="font-bold text-indigo-600 hover:underline inline-flex items-center gap-1"
                     >
-                      <Edit3 className="w-3 h-3" />
-                      <span>تعديل</span>
+                      <ClipboardCheck className="w-3.5 h-3.5" />
+                      <span>كشف ومطابقة</span>
                     </button>
+
+                    {/* Instant Payout Button */}
+                    {!readOnly && canManageTreasury && !isArchived && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPayoutInitialData({
+                            treasuryAccountId: t.id,
+                            sourceVoucherType: "TREASURY_TRANSFER",
+                            sourceVoucherId: `DISP-${Date.now()}`,
+                            beneficiaryName: "",
+                            beneficiaryAccountOrPhone: "",
+                            amount: 0,
+                            currencyCode: String(t.currencyCode || "YER"),
+                            notes: `تحويل من ${t.nameAr || t.name}`,
+                          });
+                          setPayoutModalOpen(true);
+                        }}
+                        className="text-emerald-700 dark:text-emerald-400 font-bold hover:underline inline-flex items-center gap-1"
+                      >
+                        <Send className="w-3 h-3" />
+                        <span>تحويل فوري</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {!readOnly && canManageTreasury && (
+                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100/60 dark:border-slate-800/60 text-[10px]">
+                      <button
+                        type="button"
+                        onClick={() => openEditTreasury(t)}
+                        className="font-bold text-slate-600 dark:text-slate-300 hover:text-emerald-600 inline-flex items-center gap-1"
+                      >
+                        <Edit3 className="w-3 h-3" />
+                        <span>تعديل</span>
+                      </button>
+
+                      <div className="flex items-center gap-1.5">
+                        {!isArchived ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => void handleLifecycleTreasury(t, "ARCHIVE")}
+                              className="text-amber-700 dark:text-amber-400 font-bold hover:underline inline-flex items-center gap-0.5"
+                            >
+                              <Archive className="w-3 h-3" />
+                              <span>أرشفة</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleLifecycleTreasury(t, "SAFE_DELETE")}
+                              className="text-rose-600 font-bold hover:underline inline-flex items-center gap-0.5"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>حذف</span>
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => void handleLifecycleTreasury(t, "RESTORE")}
+                              className="text-emerald-700 dark:text-emerald-400 font-bold hover:underline inline-flex items-center gap-0.5"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              <span>استعادة</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleLifecycleTreasury(t, "SAFE_DELETE")}
+                              className="text-rose-600 font-bold hover:underline inline-flex items-center gap-0.5"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>حذف نهائي</span>
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>
@@ -583,7 +968,7 @@ export function TreasuryTab({
             ? "تعديل إعدادات الصندوق / البنك / المحفظة"
             : "إضافة صندوق نقدي أو حساب بنكي أو محفظة إلكترونية"
         }
-        subtitle="ربط تلقائي بحساب أستاذ من المستوى الخامس (1111xx / 1112xx) مع دعم الرصيد الافتتاحي"
+        subtitle="ربط تلقائي بحساب أستاذ من الجيل السادس (Gen-6 / 1111xx / 1112xx) مع دعم الرصيد الافتتاحي وبوابة الربط البنكي"
       >
         <form onSubmit={handleSaveTreasury} className="space-y-3 text-xs">
           <div className="grid grid-cols-2 gap-2">
@@ -720,6 +1105,7 @@ export function TreasuryTab({
             </div>
           </div>
 
+          {/* Opening balance section */}
           {!editingTreasuryId && (
             <div className="grid grid-cols-2 gap-2 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
               <div>
@@ -744,6 +1130,109 @@ export function TreasuryTab({
               </div>
             </div>
           )}
+
+          {/* Collapsible Bank / Wallet API Gateway Section */}
+          <div className="rounded-xl border border-indigo-200 dark:border-indigo-800/50 bg-indigo-50/30 dark:bg-indigo-950/20 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setGatewaySectionOpen((p) => !p)}
+              className="w-full p-3 flex items-center justify-between text-indigo-900 dark:text-indigo-200 font-extrabold hover:bg-indigo-100/40 dark:hover:bg-indigo-950/40 transition"
+            >
+              <div className="flex items-center gap-2">
+                <Globe className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span>إعدادات الربط البنكي المباشر / API Gateway</span>
+                {tGatewayProvider !== "MANUAL" && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] bg-indigo-200 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 font-bold">
+                    نشط: {tGatewayProvider}
+                  </span>
+                )}
+              </div>
+              {gatewaySectionOpen ? (
+                <ChevronUp className="w-4 h-4" />
+              ) : (
+                <ChevronDown className="w-4 h-4" />
+              )}
+            </button>
+
+            {gatewaySectionOpen && (
+              <div className="p-3 border-t border-indigo-200 dark:border-indigo-800/50 space-y-3">
+                <div>
+                  <label className="block font-bold mb-1">مزود البوابة البنكية (Gateway Provider)</label>
+                  <select
+                    value={tGatewayProvider}
+                    onChange={(e) => setTGatewayProvider(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs"
+                  >
+                    {GATEWAY_PROVIDERS.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {tGatewayProvider !== "MANUAL" && (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block font-bold mb-1">معرّف التاجر (Merchant ID)</label>
+                        <input
+                          type="text"
+                          value={tGatewayMerchantId}
+                          onChange={(e) => setTGatewayMerchantId(e.target.value)}
+                          placeholder="مثال: MERCH-98124"
+                          className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-bold mb-1">عنوان نقطة النهاية (Endpoint URL)</label>
+                        <input
+                          type="url"
+                          value={tGatewayEndpointUrl}
+                          onChange={(e) => setTGatewayEndpointUrl(e.target.value)}
+                          placeholder="https://api.kuraimi.com/v1/payout"
+                          className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block font-bold">المفتاح السري / رمز الاعتماد (API Secret)</label>
+                        <button
+                          type="button"
+                          onClick={() => setShowSecret((p) => !p)}
+                          className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold inline-flex items-center gap-1 hover:underline"
+                        >
+                          {showSecret ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                          <span>{showSecret ? "إخفاء الرمز" : "إظهار الرمز"}</span>
+                        </button>
+                      </div>
+                      <input
+                        type={showSecret ? "text" : "password"}
+                        value={tGatewayCredentialsEnc}
+                        onChange={(e) => setTGatewayCredentialsEnc(e.target.value)}
+                        placeholder="أدخل مفتاح الـ API المشفر أو الـ Secret Token"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono"
+                      />
+                    </div>
+
+                    <div className="p-2 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                      <label className="inline-flex items-center gap-2 font-bold cursor-pointer text-amber-900 dark:text-amber-200">
+                        <input
+                          type="checkbox"
+                          checked={tIsSandbox}
+                          onChange={(e) => setTIsSandbox(e.target.checked)}
+                          className="rounded border-amber-300 text-amber-600 w-4 h-4"
+                        />
+                        <span>وضع التجربة والمحاكاة (Sandbox Mode — بدون تحويل أموال حقيقية)</span>
+                      </label>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
 
           <div className="flex flex-wrap items-center gap-4 pt-1">
             <label className="inline-flex items-center gap-2 font-bold cursor-pointer">
@@ -781,6 +1270,38 @@ export function TreasuryTab({
             onChange={(e) => setTNotes(e.target.value)}
             placeholder="ملاحظات إضافية..."
             className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+          />
+
+          <SaveDraftButton
+            module="TREASURY"
+            formType="TREASURY_ACCOUNT"
+            entityId={editingTreasuryId}
+            getTitleAr={() => `مسودة حساب خزينة / بنك: ${tNameAr.trim() || "جديد"}`}
+            getPayload={() => ({
+              type: tType,
+              nameAr: tNameAr.trim(),
+              nameEn: tNameEn.trim() || undefined,
+              currency: tCurrency,
+              providerNameAr: tProviderAr.trim() || undefined,
+              accountHolderName: tHolder.trim() || undefined,
+              accountNumber: tAccountNo.trim() || undefined,
+              ibanOrSwift: tIban.trim() || undefined,
+              branchOrAgent: tBranch.trim() || undefined,
+              transferFeePercent: Number(tFeePercent) || 0,
+              dailyLimit: Number(tDailyLimit) || 0,
+              isDefaultReceipts: tDefReceipts,
+              isDefaultPayments: tDefPayments,
+              isActive: tIsActive,
+              notes: tNotes.trim() || undefined,
+              gatewayProvider: tGatewayProvider,
+              gatewayMerchantId: tGatewayMerchantId.trim() || undefined,
+              gatewayEndpointUrl: tGatewayEndpointUrl.trim() || undefined,
+              gatewayCredentialsEnc: tGatewayCredentialsEnc.trim() || undefined,
+              isSandbox: tIsSandbox,
+            })}
+            actor={actor}
+            onToast={onToast}
+            className="w-full"
           />
 
           <button
@@ -900,12 +1421,12 @@ export function TreasuryTab({
               />
             </div>
             <div>
-              <label className="block font-bold mb-1">رقم المرجع / الحوالة</label>
+              <label className="block font-bold mb-1">المرجع البنكي / رقم الحوالة</label>
               <input
                 type="text"
                 value={txReference}
                 onChange={(e) => setTxReference(e.target.value)}
-                placeholder="TR-REF-001"
+                placeholder="REF-TRF-..."
                 className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono"
               />
             </div>
@@ -938,12 +1459,13 @@ export function TreasuryTab({
             ? `كشف ومطابقة الحساب: ${reconcileData.treasury.nameAr}`
             : "كشف ومطابقة الخزينة / البنك"
         }
-        subtitle="مراجعة حركات الأستاذ المساعد (Tier-5 GL) ومطابقتها مع الكشف البنكي الفعلي"
+        subtitle="مراجعة حركات الأستاذ المساعد (Gen-6 GL)، تصدير ملفات التحويلات البنكية، والمطابقة التلقائية مع كشف البنك"
       >
         {reconcileLoading || !reconcileData ? (
           <div className="py-12 text-center text-xs text-slate-500">جاري تحميل حركات الأستاذ...</div>
         ) : (
           <div className="space-y-4 text-xs">
+            {/* Balance Summary Header */}
             <div className="grid grid-cols-3 gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 tabular-nums text-center">
               <div>
                 <div className="text-[10px] text-slate-500">رصيد البطاقة</div>
@@ -971,6 +1493,149 @@ export function TreasuryTab({
               </div>
             </div>
 
+            {/* Bulk Bank File Export Section */}
+            <div className="p-3 rounded-2xl border border-indigo-200 dark:border-indigo-800/40 bg-indigo-50/30 dark:bg-indigo-950/20 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="font-extrabold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                  <FileSpreadsheet className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                  <span>تصدير ملف تحويلات بنكية (Bulk Bank File)</span>
+                </div>
+                <select
+                  value={batchFormat}
+                  onChange={(e) => setBatchFormat(e.target.value as "xlsx" | "csv")}
+                  className="rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold"
+                >
+                  <option value="xlsx">Excel (.xlsx)</option>
+                  <option value="csv">CSV (.csv)</option>
+                </select>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                توليد ملف دفع جماعي معتمد ومتوافق مع بوابات البنوك اليمنية (الكريمي إكسبرس، جوالي، جيب، ون كاش)
+              </p>
+              <button
+                type="button"
+                disabled={exportingBatch}
+                onClick={handleExportBulkFile}
+                className="w-full py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-60"
+              >
+                {exportingBatch ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>جاري إنشاء الملف...</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-3.5 h-3.5" />
+                    <span>تحميل ملف الحوالات الجماعية ({batchFormat.toUpperCase()})</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Auto-Reconcile Bank Statement Upload Section */}
+            <div className="p-3 rounded-2xl border border-emerald-200 dark:border-emerald-800/40 bg-emerald-50/30 dark:bg-emerald-950/20 space-y-2.5">
+              <div className="font-extrabold text-emerald-900 dark:text-emerald-200 flex items-center gap-1.5">
+                <Upload className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>استيراد كشف للمطابقة التلقائية (Auto-Reconcile Excel/CSV)</span>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                مطابقة فورية ذكية بين كشف حساب البنك الخارجي والقيود المرحلة في دفتر الأستاذ العام
+              </p>
+
+              <label className="block cursor-pointer">
+                <input
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  onChange={handleAutoReconcileUpload}
+                  disabled={autoReconciling}
+                  className="hidden"
+                />
+                <div className="w-full py-2.5 px-3 rounded-xl border-2 border-dashed border-emerald-400 dark:border-emerald-700 bg-white/70 dark:bg-slate-900/60 hover:bg-emerald-50/60 dark:hover:bg-emerald-950/40 text-center transition">
+                  {autoReconciling ? (
+                    <div className="flex items-center justify-center gap-1.5 text-emerald-700 dark:text-emerald-300 font-bold">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>جاري مطابقة كشف الحساب التلقائي...</span>
+                    </div>
+                  ) : (
+                    <div className="text-emerald-800 dark:text-emerald-300 font-bold flex items-center justify-center gap-1.5">
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>اضغط لاختيار كشف البنك (.xlsx / .csv) للمطابقة الفورية</span>
+                    </div>
+                  )}
+                </div>
+              </label>
+
+              {/* Auto-Reconcile Matching Results Summary */}
+              {autoReconcileResult && (
+                <div className="space-y-2 pt-2 border-t border-emerald-200 dark:border-emerald-800/40 animate-in fade-in">
+                  <div className="grid grid-cols-3 gap-2 text-center tabular-nums">
+                    <div className="p-2 rounded-xl bg-emerald-100/70 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800">
+                      <div className="text-[10px] text-emerald-700 dark:text-emerald-300 font-bold">طابق بالكامل</div>
+                      <div className="font-extrabold text-sm text-emerald-900 dark:text-emerald-100">
+                        {autoReconcileResult.matchedCount}
+                      </div>
+                      <div className="text-[9px] text-slate-500">
+                        {fmtNum(autoReconcileResult.matchedTotal)} YER
+                      </div>
+                    </div>
+                    <div className="p-2 rounded-xl bg-amber-100/70 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800">
+                      <div className="text-[10px] text-amber-700 dark:text-amber-300 font-bold">غير مسجل بالنظام</div>
+                      <div className="font-extrabold text-sm text-amber-900 dark:text-amber-100">
+                        {autoReconcileResult.unmatchedUasCount}
+                      </div>
+                      <div className="text-[9px] text-slate-500">
+                        {fmtNum(autoReconcileResult.unmatchedUasTotal)} YER
+                      </div>
+                    </div>
+                    <div className="p-2 rounded-xl bg-rose-100/70 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-800">
+                      <div className="text-[10px] text-rose-700 dark:text-rose-300 font-bold">غير ظاهر بالبنك</div>
+                      <div className="font-extrabold text-sm text-rose-900 dark:text-rose-100">
+                        {autoReconcileResult.unmatchedBankCount}
+                      </div>
+                      <div className="text-[9px] text-slate-500">
+                        {fmtNum(autoReconcileResult.unmatchedBankTotal)} YER
+                      </div>
+                    </div>
+                  </div>
+
+                  {autoReconcileResult.details.length > 0 && (
+                    <div className="max-h-48 overflow-y-auto space-y-1 pe-1">
+                      {autoReconcileResult.details.slice(0, 15).map((d, i) => (
+                        <div
+                          key={i}
+                          className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between text-[11px]"
+                        >
+                          <div className="truncate max-w-[200px]">
+                            <span className="font-bold">{d.description || d.referenceId || "حركة بنكية"}</span>
+                            <span className="text-[10px] text-slate-400 block font-mono">{d.date}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold tabular-nums">{fmtNum(d.amount)}</span>
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                                d.status === "MATCHED"
+                                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+                                  : d.status === "UNMATCHED_IN_SYSTEM"
+                                  ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200"
+                                  : "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200"
+                              }`}
+                            >
+                              {d.status === "MATCHED"
+                                ? "مطابق"
+                                : d.status === "UNMATCHED_IN_SYSTEM"
+                                ? "بالبنك فقط"
+                                : "بالنظام فقط"}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Manual Statement Balance Confirmation Form */}
             {!readOnly && canManageTreasury && (
               <form
                 onSubmit={handleSaveStatementReconcile}
@@ -1023,6 +1688,7 @@ export function TreasuryTab({
               </form>
             )}
 
+            {/* Ledger entries list */}
             <div className="space-y-2">
               <div className="font-extrabold">
                 حركات دفتر الأستاذ المرتبطة ({reconcileData.entries.length})
@@ -1034,25 +1700,44 @@ export function TreasuryTab({
                   {reconcileData.entries.map((entry) => (
                     <div
                       key={entry.lineId}
-                      className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-2"
+                      className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/40 dark:bg-slate-900/40 flex items-center justify-between gap-2"
                     >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 font-mono text-[11px]">
-                          <span className="font-bold">{entry.entryNumber}</span>
-                          <span className="text-slate-400">{entry.date.slice(0, 10)}</span>
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                            {entry.entryNumber}
+                          </span>
+                          <span className="font-mono text-slate-400 text-[10px]">
+                            {entry.date}
+                          </span>
                         </div>
-                        <div className="font-semibold truncate">{entry.narrationAr}</div>
-                        <div className="text-[11px] tabular-nums text-slate-500">
-                          {entry.debitBase > 0
-                            ? `مدين +${fmtNum(entry.debitBase)} YER`
-                            : `دائن -${fmtNum(entry.creditBase)} YER`}
+                        <div className="truncate text-slate-700 dark:text-slate-300">
+                          {entry.narrationAr || "حركة مالية"}
+                        </div>
+                        {entry.reference && (
+                          <div className="text-[10px] font-mono text-slate-400">
+                            المرجع: {entry.reference}
+                          </div>
+                        )}
+                        <div className="tabular-nums font-bold flex items-center gap-2 pt-0.5">
+                          {entry.debitBase > 0 && (
+                            <span className="text-emerald-600">
+                              مدين (وارد): +{fmtNum(entry.debitBase)} YER
+                            </span>
+                          )}
+                          {entry.creditBase > 0 && (
+                            <span className="text-rose-600">
+                              دائن (منصرف): -{fmtNum(entry.creditBase)} YER
+                            </span>
+                          )}
                         </div>
                       </div>
+
                       <button
                         type="button"
-                        disabled={readOnly || !canManageTreasury}
                         onClick={() => void handleToggleReconciledEntry(entry)}
-                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold shrink-0 inline-flex items-center gap-1 disabled:opacity-60 ${
+                        disabled={readOnly || !canManageTreasury}
+                        className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold shrink-0 inline-flex items-center gap-1 disabled:opacity-60 ${
                           entry.reconciled
                             ? "bg-emerald-100 text-emerald-800"
                             : "border border-slate-300 text-slate-600"
@@ -1178,7 +1863,16 @@ export function TreasuryTab({
             module="TREASURY"
             formType={type === "CUSTOMER_RECEIPT" ? "RECEIPT_VOUCHER" : "PAYMENT_VOUCHER"}
             getTitleAr={() => `مسودة سند ${voucherNo}`}
-            getPayload={() => ({ type, targetId, treasuryId, amount: Number(amount) || 0, voucherNo, date, notes, costCenterId: costCenterId || null })}
+            getPayload={() => ({
+              type,
+              targetId,
+              treasuryId,
+              amount: Number(amount) || 0,
+              voucherNo,
+              date,
+              notes,
+              costCenterId: costCenterId || null,
+            })}
             getTotalAmount={() => Number(amount) || null}
             actor={actor}
             onToast={onToast}
@@ -1190,6 +1884,7 @@ export function TreasuryTab({
         </form>
       </SlideOverDrawer>
 
+      {/* Installments Table */}
       <div className="card-surface rounded-2xl p-5 space-y-4 overflow-x-auto">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h4 className="text-sm font-extrabold">سجل سندات القبض والصرف والدفعات المتعددة</h4>
@@ -1222,48 +1917,49 @@ export function TreasuryTab({
         ) : (
           <table className="w-full text-xs text-right border-collapse">
             <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/90 dark:bg-slate-800/90">
+              <tr className="border-b border-slate-200 dark:border-slate-700 text-slate-500 font-semibold">
                 <th className="p-2.5">رقم السند</th>
                 <th className="p-2.5">النوع</th>
-                <th className="p-2.5">العميل / العامل</th>
-                <th className="p-2.5">الخزينة / البنك</th>
+                <th className="p-2.5">الطرف المستفيد / المسدد</th>
+                <th className="p-2.5">الصندوق / البنك</th>
                 <th className="p-2.5">المبلغ</th>
                 <th className="p-2.5">التاريخ</th>
-                <th className="p-2.5">ملاحظات</th>
-                <th className="p-2.5 no-print">سند QR / واتساب</th>
+                <th className="p-2.5">البيان</th>
+                <th className="p-2.5 no-print">طباعة / عرض</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
               {installments.map((inst) => {
-                const treas = treasuryAccounts.find((t) => t.id === inst.treasuryId);
-                const isReceipt = inst.type === "CUSTOMER_RECEIPT";
+                const tr = treasuryAccounts.find((t) => t.id === inst.treasuryId);
+                const isCust = inst.type === "CUSTOMER_RECEIPT";
                 return (
-                  <tr key={inst.id}>
+                  <tr key={inst.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
                     <td className="p-2.5 font-mono font-bold">{inst.voucherNo}</td>
                     <td className="p-2.5">
                       <span
-                        className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                          isReceipt
-                            ? "bg-emerald-100 text-emerald-800"
-                            : "bg-amber-100 text-amber-800"
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          isCust
+                            ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                            : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
                         }`}
                       >
-                        {isReceipt ? "سند قبض عميل" : "سند صرف عامل"}
+                        {isCust ? "قبض من عميل" : "صرف لعامل"}
                       </span>
                     </td>
-                    <td className="p-2.5 font-bold">{inst.targetName}</td>
-                    <td className="p-2.5">{treas ? treas.name : ""}</td>
+                    <td className="p-2.5 font-semibold">{inst.targetName || "—"}</td>
+                    <td className="p-2.5">{tr ? tr.name : "صندوق"}</td>
                     <td className="p-2.5 font-extrabold text-emerald-600 tabular-nums">
-                      {formatCurrencyVal(inst.amount, currency, exchangeRates)}
+                      {fmtNum(inst.amount)} YER
                     </td>
-                    <td className="p-2.5 font-mono">{inst.date}</td>
-                    <td className="p-2.5 text-slate-500">{inst.notes || "—"}</td>
+                    <td className="p-2.5 font-mono text-slate-500">{inst.date}</td>
+                    <td className="p-2.5 text-slate-600 dark:text-slate-400">{inst.notes || "—"}</td>
                     <td className="p-2.5 no-print">
                       <button
+                        type="button"
                         onClick={() => onOpenInstallmentModal(inst)}
-                        className="px-2.5 py-1 rounded-lg accent-bg text-[11px] font-bold"
+                        className="px-2.5 py-1 rounded bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-bold hover:underline"
                       >
-                        سند QR / واتساب
+                        عرض السند
                       </button>
                     </td>
                   </tr>
@@ -1273,6 +1969,22 @@ export function TreasuryTab({
           </table>
         )}
       </div>
+
+      {/* Shared Bank Payout Execution Modal */}
+      <BankPayoutModal
+        isOpen={payoutModalOpen}
+        onClose={() => {
+          setPayoutModalOpen(false);
+          setPayoutInitialData(null);
+        }}
+        treasuryAccounts={treasuryAccounts}
+        currentUser={currentUser}
+        initialData={payoutInitialData}
+        onSuccess={async () => {
+          await onRefreshState?.();
+        }}
+        onToast={onToast}
+      />
     </section>
   );
 }

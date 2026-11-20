@@ -220,6 +220,12 @@ const ACTION_PERM_DEFINITIONS: {
     labelEn: "Archive / Safe-Delete Master Records",
     descAr: "أرشفة أو حذف العملاء والموردين والعمال والأصناف والمراكز",
   },
+  {
+    key: "canExecuteGateway",
+    labelAr: "تنفيذ التحويلات البنكية والمحافظ (treasury.execute_gateway)",
+    labelEn: "Execute Bank & E-Wallet Gateway Payouts",
+    descAr: "صلاحية إرسال مبالغ الدفعات إلكترونياً للبنوك والمحافظ الرقمية",
+  },
 ];
 
 interface SystemTabProps {
@@ -697,6 +703,7 @@ export function SystemTab({
     canManageAllDrafts: false,
     canCustomUom: false,
     canArchiveDeleteRecords: false,
+    canExecuteGateway: false,
   });
   const [permAssignedProjects, setPermAssignedProjects] = useState<string[]>([]);
   const [permIsActive, setPermIsActive] = useState(true);
@@ -752,6 +759,7 @@ export function SystemTab({
         canManageAllDrafts: u.customOverrides.canManageAllDrafts ?? roleDefaults.canManageAllDrafts,
         canCustomUom: u.customOverrides.canCustomUom ?? roleDefaults.canCustomUom,
         canArchiveDeleteRecords: u.customOverrides.canArchiveDeleteRecords ?? roleDefaults.canArchiveDeleteRecords,
+        canExecuteGateway: u.customOverrides.canExecuteGateway ?? roleDefaults.canExecuteGateway,
       });
     } else {
       setPermAllowedGroups([...defaultGroups]);

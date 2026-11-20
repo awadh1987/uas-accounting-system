@@ -5,6 +5,7 @@
   "typescript.tsdk": "node_modules/typescript/lib",
   "typescript.enablePromptUseWorkspaceTsdk": true,
   "java.jdt.ls.java.home": "C:\\Program Files\\Android\\Android Studio\\jbr",
-  "java.import.gradle.java.home": "C:\\Program Files\\Android\\Android Studio\\jbr"
+  "java.import.gradle.java.home": "C:\\Program Files\\Android\\Android Studio\\jbr",
+  "java.configuration.updateBuildConfiguration": "interactive"
 }
 

@@ -62,6 +62,7 @@ export interface UasUserCustomOverrides {
   canManageAllDrafts?: boolean;
   canCustomUom?: boolean;
   canArchiveDeleteRecords?: boolean;
+  canExecuteGateway?: boolean;
   [key: string]: boolean | ErpGroupId[] | undefined;
 }
 
@@ -311,11 +312,86 @@ export interface UasTreasuryAccount {
   isDefaultReceipts?: boolean;
   isDefaultPayments?: boolean;
   isActive?: boolean;
+  archivedAt?: string | null;
   notes?: string;
   accountId?: string;
   currencyCode: CurrencyCode | string;
   balance?: number;
   balanceYER: number;
+  gatewayProvider?: "MANUAL" | "KURAIMI_API" | "JAWALI_API" | "JEEB_API" | "ONECASH_API" | "FLOOSAK_API" | "CUSTOM_WEBHOOK" | string;
+  gatewayMerchantId?: string | null;
+  gatewayEndpointUrl?: string | null;
+  gatewayCredentialsEnc?: string | null;
+  isSandbox?: boolean;
+  dailyUsedAmount?: number;
+  lastDailyResetDate?: string | null;
+}
+
+export type GatewayProvider =
+  | "MANUAL"
+  | "KURAIMI_API"
+  | "JAWALI_API"
+  | "JEEB_API"
+  | "ONECASH_API"
+  | "FLOOSAK_API"
+  | "CUSTOM_WEBHOOK";
+
+export type DispatchStatus = "QUEUED" | "PENDING_OTP" | "EXECUTED" | "FAILED" | "RECONCILED";
+
+export interface UasBankPaymentDispatch {
+  id: string;
+  dispatchNumber: string;
+  treasuryAccountId: string;
+  sourceVoucherType: "PAYMENT_VOUCHER" | "VENDOR_BILL" | "WORKER_WAGE" | "TREASURY_TRANSFER" | string;
+  sourceVoucherId: string;
+  beneficiaryName: string;
+  beneficiaryAccountOrPhone: string;
+  amount: number;
+  feeAmount: number;
+  currencyCode: string;
+  exchangeRate: number;
+  baseAmount: number;
+  provider: GatewayProvider | string;
+  externalReferenceId?: string | null;
+  status: DispatchStatus | string;
+  rawResponseJson?: string | null;
+  errorMessage?: string | null;
+  idempotencyKey: string;
+  costCenterId?: string | null;
+  journalEntryId?: string | null;
+  executedById: string;
+  executedByName: string;
+  executedAt?: string | null;
+  createdAt: string;
+}
+
+export interface BankPayoutPayload {
+  treasuryAccountId: string;
+  sourceVoucherType: "PAYMENT_VOUCHER" | "VENDOR_BILL" | "WORKER_WAGE" | "TREASURY_TRANSFER" | string;
+  sourceVoucherId: string;
+  beneficiaryName: string;
+  beneficiaryAccountOrPhone: string;
+  amount: number;
+  currencyCode?: string;
+  exchangeRate?: number;
+  costCenterId?: string | null;
+  idempotencyKey: string;
+  actor?: {
+    userId: string;
+    userName: string;
+    role?: string;
+  };
+}
+
+export interface BankPayoutResult {
+  ok: boolean;
+  dispatch: UasBankPaymentDispatch;
+  feeAmount: number;
+  totalDebited: number;
+  externalReferenceId?: string | null;
+  journalEntryId?: string | null;
+  messageAr: string;
+  messageEn: string;
 }
 
 export interface UasInstallmentVoucher {

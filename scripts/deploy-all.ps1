@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$TargetDomain = "qat.world",
     [string]$RemoteUser = "root",
     [string]$RemoteAppDir = "/var/www/uas-qat",
@@ -123,9 +123,9 @@ if ($SkipCloud) {
     Write-Host "-> Uploading signed Android APK to $TargetDomain..." -ForegroundColor Cyan
     & scp $SshOpts $ApkCanonicalLocal "${TargetHost}:${RemoteDownloadsDir}/uas-latest.apk"
 
-    Write-Host "-> Synchronizing all APK filenames, permissions, and restarting uas-qat.service..." -ForegroundColor Cyan
-    $remoteCmd = "cp -f '$RemoteDownloadsDir/uas-latest.apk' '$RemoteDownloadsDir/UAS-Accounting.apk' && cp -f '$RemoteDownloadsDir/uas-latest.apk' '$RemoteDownloadsDir/UAS-Mobile-Release-qat.world.apk' && chown -R www-data:www-data '$RemoteDownloadsDir' && chmod 644 '$RemoteDownloadsDir'/* && systemctl restart uas-qat"
-    & ssh $SshOpts $TargetHost $remoteCmd
+    Write-Host "-> Updating code, rebuilding web application, syncing downloads, and restarting uas-qat.service..." -ForegroundColor Cyan
+    $remoteBuildCmd = "cd '$RemoteAppDir' && git pull origin main && sed -i 's/provider = ""sqlite""/provider = ""postgresql""/' prisma/schema.prisma && npx prisma generate && npx prisma db push && npm run build && cp -f '$RemoteDownloadsDir/uas-latest.apk' '$RemoteDownloadsDir/UAS-Accounting.apk' && cp -f '$RemoteDownloadsDir/uas-latest.apk' '$RemoteDownloadsDir/UAS-Mobile-Release-qat.world.apk' && chown -R www-data:www-data '$RemoteDownloadsDir' && chmod 644 '$RemoteDownloadsDir'/* && systemctl restart uas-qat.service"
+    & ssh $SshOpts $TargetHost $remoteBuildCmd
 
     Write-Host "-> Cloud server $TargetDomain successfully updated and synced!" -ForegroundColor Green
 }

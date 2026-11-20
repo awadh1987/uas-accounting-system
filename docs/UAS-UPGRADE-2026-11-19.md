@@ -218,3 +218,47 @@ This release elevates UAS from an operational bookkeeping platform into a full I
 - **Implementation:** `src/lib/excelExport.ts`.
 - **Extended Columns:** Added `costCenterCode`, `currencyCode`, `exchangeRate`, `unitCode`, and `factorToBase` across Customer Sales and Operating Expenses sheets.
 - **Template Generators & Parsers:** `exportUasModuleTemplate()` produces downloadable templates with sample data for Sales, Expenses, Items, Customers, Vendors, and Journal Vouchers, while `parseExcelImport()` parses uploaded spreadsheets into structured arrays.
+
+---
+
+## 12. Mission 4 Architecture: Live Banking & E-Wallet Execution Gateway, Bulk Bank Files & Statement Auto-Reconciliation
+### 12. هندسة المرحلة الرابعة: بوابة الربط والتنفيذ البنكي المباشر والمحافظ الإلكترونية، ملفات التحويلات الجماعية والمطابقة الآلية لكشوفات الحساب
+
+#### 12.1 Pluggable Banking & E-Wallet Gateway Engine (`BankWalletGateway`)
+- **Implementation:** `src/lib/treasury/bankWalletGateway.ts`, `prisma/schema.prisma` (`BankPaymentDispatch`, `TreasuryAccount`), `src/lib/offlineAndroidStore.ts`.
+- **Supported Providers:**
+  - `MANUAL`: Internal cashbox/bank dispatch voucher with double-entry GL ledger posting.
+  - `KURAIMI_API`: Kuraimi Express API integration for instant commercial remittances and salary payouts.
+  - `JAWALI_API`: WeCash / Jawali mobile wallet gateway integration.
+  - `JEEB_API`: CAC Bank Jeeb electronic wallet integration.
+  - `ONECASH_API`: OneCash mobile wallet payout integration.
+  - `FLOOSAK_API`: Yemen and Kuwait Bank Floosak electronic wallet integration.
+  - `CUSTOM_WEBHOOK`: Generic external ERP/banking webhook adapter with configurable authentication headers.
+- **Atomic Balance & Daily Limit Enforcement:** Every payout checks the account's configured `dailyLimit` and active balance in atomic transactions before execution.
+- **Double-Entry General Ledger Auto-Posting:**
+  - Debits the target liability/expense account (e.g., Vendor Accounts Payable `2111xx`, Worker Wages `2112xx`, or Inter-Treasury Clearing).
+  - Debits Bank Transfer Fee expense account (`531200`) when transaction fees apply.
+  - Credits the specific Gen-6 Bank or Wallet asset account (`111290xxx`).
+- **Cryptographic Receipt Audit Trail:** Generates unique dispatch tracking numbers (`DSP-YYYY-XXXX`) and records external banking receipts (`externalReferenceId`), full response payloads, and actor attribution into `ImmutableAuditLog`.
+
+#### 12.2 Unified Multi-Module Payment Execution Modal (`BankPayoutModal`)
+- **Implementation:** `src/components/BankPayoutModal.tsx`, `TreasuryTab.tsx`, `ProcurementTab.tsx`, `WorkersTab.tsx`.
+- **Pre-filled Contextual Payouts:**
+  - **Payment Vouchers (`ProcurementTab.tsx`):** Immediate single-click payout for approved vendor bills, pre-filling vendor name, phone number, voucher amount, and currency.
+  - **Worker Wage Entries & Directory (`WorkersTab.tsx`):** Instant payout dispatch for field worker wages or accumulated balance due.
+  - **Treasury Disbursements (`TreasuryTab.tsx`):** Manual or direct electronic payouts for miscellaneous treasury operations.
+- **Live Receipt Badge:** Renders interactive receipt summary with external transaction ID and updates the source record with a `تم التحويل` status badge.
+
+#### 12.3 Bulk Bank Transfer Files Export (`batch-export`)
+- **Implementation:** `src/app/api/treasury/batch-export/route.ts`, `src/lib/treasury/bankWalletGateway.ts`.
+- **Formats:** Downloadable `.xlsx` (Excel) and `.csv` formatted in strict RTL layout with bilingual headers matching major Yemeni banking upload standards.
+- **Export Trigger:** Accessible directly inside the Statement & Reconciliation drawer with custom file generation.
+
+#### 12.4 Statement Auto-Reconciliation Engine (`reconcile-import`)
+- **Implementation:** `src/app/api/treasury/reconcile-import/route.ts`, `src/lib/treasury/bankWalletGateway.ts`.
+- **Upload & Parsing:** Accepts bank statement spreadsheets in `.xlsx` or `.csv` format.
+- **Tripartite Matching Algorithm:** Matches records by Date, Amount, and Reference Number against posted General Ledger entries.
+- **Summary Classification:**
+  - **Matched (`طابق بالكامل`):** Transactions reconciled in both the bank statement and UAS GL.
+  - **Unmatched in UAS (`غير مسجل بالنظام`):** Bank movements not yet recorded in UAS accounting books.
+  - **Unmatched in Bank (`غير ظاهر بالبنك`):** UAS ledger entries pending clearance in the bank statement.

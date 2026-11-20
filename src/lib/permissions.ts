@@ -242,6 +242,7 @@ export interface GranularActionPermissions {
   canManageAllDrafts: boolean;
   canCustomUom: boolean;
   canArchiveDeleteRecords: boolean;
+  canExecuteGateway: boolean;
 }
 
 export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermissions> = {
@@ -263,6 +264,7 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageAllDrafts: true,
     canCustomUom: true,
     canArchiveDeleteRecords: true,
+    canExecuteGateway: true,
   },
   PROJECT_MANAGER: {
     canCreate: true,
@@ -282,6 +284,7 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageAllDrafts: true,
     canCustomUom: true,
     canArchiveDeleteRecords: false,
+    canExecuteGateway: false,
   },
   CHIEF_ACCOUNTANT: {
     canCreate: true,
@@ -301,6 +304,7 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageAllDrafts: true,
     canCustomUom: true,
     canArchiveDeleteRecords: true,
+    canExecuteGateway: true,
   },
   PROCUREMENT_OFFICER: {
     canCreate: true,
@@ -320,6 +324,7 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageAllDrafts: false,
     canCustomUom: true,
     canArchiveDeleteRecords: false,
+    canExecuteGateway: false,
   },
   SALES_COLLECTOR: {
     canCreate: true,
@@ -339,6 +344,7 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageAllDrafts: false,
     canCustomUom: false,
     canArchiveDeleteRecords: false,
+    canExecuteGateway: false,
   },
   FIELD_ACCOUNTANT: {
     canCreate: true,
@@ -358,6 +364,7 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageAllDrafts: false,
     canCustomUom: false,
     canArchiveDeleteRecords: false,
+    canExecuteGateway: false,
   },
   EXTERNAL_AUDITOR: {
     canCreate: false,
@@ -377,6 +384,7 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, GranularActionPermission
     canManageAllDrafts: false,
     canCustomUom: false,
     canArchiveDeleteRecords: false,
+    canExecuteGateway: false,
   },
 };
 
@@ -638,6 +646,10 @@ export function canArchiveDeleteRecords(userOrRole?: UasUser | string | null): b
   return evaluateActionRight(userOrRole, "canArchiveDeleteRecords", true);
 }
 
+export function canExecuteGateway(userOrRole?: UasUser | string | null): boolean {
+  return evaluateActionRight(userOrRole, "canExecuteGateway", true);
+}
+
 export type GranularPermissionCode =
   | "accounting.close_year"
   | "accounting.fx_revalue"
@@ -646,6 +658,7 @@ export type GranularPermissionCode =
   | "drafts.manage_all"
   | "inventory.custom_uom"
   | "records.archive_delete"
+  | "treasury.execute_gateway"
   | keyof GranularActionPermissions;
 
 export function hasGranularPermission(
@@ -660,6 +673,7 @@ export function hasGranularPermission(
     "drafts.manage_all": "canManageAllDrafts",
     "inventory.custom_uom": "canCustomUom",
     "records.archive_delete": "canArchiveDeleteRecords",
+    "treasury.execute_gateway": "canExecuteGateway",
   };
   const key = (map[permission] || permission) as keyof GranularActionPermissions;
   return evaluateActionRight(userOrRole, key, true);

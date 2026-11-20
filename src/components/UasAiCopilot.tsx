@@ -92,7 +92,25 @@ export function UasAiCopilot({
   onRefreshState,
   onToast,
 }: UasAiCopilotProps) {
-  const isAr = lang === "ar";
+  const [docRtl, setDocRtl] = useState<boolean>(() => {
+    if (typeof document !== "undefined") {
+      return document.documentElement.dir === "rtl" || document.documentElement.lang === "ar";
+    }
+    return true;
+  });
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const checkRtl = () => {
+      setDocRtl(document.documentElement.dir === "rtl" || document.documentElement.lang === "ar");
+    };
+    checkRtl();
+    const observer = new MutationObserver(checkRtl);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["dir", "lang"] });
+    return () => observer.disconnect();
+  }, []);
+
+  const isAr = lang === "ar" || (lang !== "en" && docRtl);
   const [open, setOpen] = useState(false);
   const [activePane, setActivePane] = useState<"copilot" | "support" | "manual">("copilot");
   const [inputPrompt, setInputPrompt] = useState("");
@@ -769,13 +787,17 @@ export function UasAiCopilot({
           <button
             type="button"
             data-testid="uas-ai-copilot-hide-pill-btn"
-            onClick={() => handleToggleMinimize(true)}
-            className="p-2.5 rounded-2xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700/60 shadow-lg transition text-xs flex items-center gap-1"
-            title={isAr ? "إخفاء المساعد (تصغير إلى الزاوية)" : "Minimize / Hide Copilot"}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleToggleMinimize(true);
+            }}
+            className="p-2 sm:p-2.5 rounded-2xl bg-slate-900/85 hover:bg-red-950/80 text-slate-300 hover:text-red-300 border border-slate-700/60 hover:border-red-500/40 shadow-xl transition-all text-xs flex items-center gap-1.5"
+            title={isAr ? "إخفاء المساعد (تصغير إلى الزاوية) ✕" : "Hide Copilot ✕"}
+            aria-label={isAr ? "إخفاء المساعد" : "Hide Copilot"}
           >
-            <ChevronDown className="w-4 h-4" />
-            <span className="text-[10px] font-bold hidden md:inline">
-              {isAr ? "إخفاء المساعد" : "Hide"}
+            <X className="w-4 h-4 text-red-400 shrink-0" />
+            <span className="text-[11px] font-black text-slate-200">
+              {isAr ? "إخفاء" : "Hide"}
             </span>
           </button>
         </div>
