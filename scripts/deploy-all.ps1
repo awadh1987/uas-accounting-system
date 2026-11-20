@@ -106,22 +106,23 @@ if ($SkipCloud) {
 
     $RemoteDownloadsDir = "$RemoteAppDir/public/downloads"
     $TargetHost = "$RemoteUser@$TargetDomain"
-    $SshOpts = @("-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new")
+    $SshOpts = @("-n", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=15")
+    $ScpOpts = @("-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=15")
 
     Write-Host "-> Connecting to target cloud host: $TargetHost ($RemoteDownloadsDir)..." -ForegroundColor Cyan
     & ssh $SshOpts $TargetHost "mkdir -p '$RemoteDownloadsDir'"
 
     Write-Host "-> Uploading Windows installer (UAS-Setup-Win64.exe) to $TargetDomain..." -ForegroundColor Cyan
-    & scp $SshOpts $InstallerLocal "${TargetHost}:${RemoteDownloadsDir}/UAS-Setup-Win64.exe"
+    & scp $ScpOpts $InstallerLocal "${TargetHost}:${RemoteDownloadsDir}/UAS-Setup-Win64.exe"
 
     $UasExeLocal = Join-Path $PublicDownloadsDir "UAS.exe"
     if (Test-Path $UasExeLocal) {
         Write-Host "-> Uploading native Windows launcher (UAS.exe) to $TargetDomain..." -ForegroundColor Cyan
-        & scp $SshOpts $UasExeLocal "${TargetHost}:${RemoteDownloadsDir}/UAS.exe"
+        & scp $ScpOpts $UasExeLocal "${TargetHost}:${RemoteDownloadsDir}/UAS.exe"
     }
 
     Write-Host "-> Uploading signed Android APK to $TargetDomain..." -ForegroundColor Cyan
-    & scp $SshOpts $ApkCanonicalLocal "${TargetHost}:${RemoteDownloadsDir}/uas-latest.apk"
+    & scp $ScpOpts $ApkCanonicalLocal "${TargetHost}:${RemoteDownloadsDir}/uas-latest.apk"
 
     Write-Host "-> Updating code, rebuilding web application, syncing downloads, and restarting uas-qat.service..." -ForegroundColor Cyan
     $remoteBuildCmd = "cd '$RemoteAppDir' && git pull origin main && sed -i 's/provider = ""sqlite""/provider = ""postgresql""/' prisma/schema.prisma && npx prisma generate && npx prisma db push && npm run build && cp -f '$RemoteDownloadsDir/uas-latest.apk' '$RemoteDownloadsDir/UAS-Accounting.apk' && cp -f '$RemoteDownloadsDir/uas-latest.apk' '$RemoteDownloadsDir/UAS-Mobile-Release-qat.world.apk' && chown -R www-data:www-data '$RemoteDownloadsDir' && chmod 644 '$RemoteDownloadsDir'/* && systemctl restart uas-qat.service"
