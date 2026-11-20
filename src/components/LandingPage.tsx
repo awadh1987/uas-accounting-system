@@ -1,7 +1,7 @@
 "use client";
 import { isInstalledClientApp } from "@/lib/runtimePlatform";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useSyncExternalStore } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -49,6 +49,10 @@ interface PublicSummary {
   isLedgerBalanced: boolean;
 }
 
+const noopSubscribe = () => () => {};
+const getClientInstalledSnapshot = () => isInstalledClientApp();
+const getServerInstalledSnapshot = () => true;
+
 interface VerifyResult {
   verified: boolean;
   documentType?: string;
@@ -74,15 +78,15 @@ export function LandingPage({
 }: LandingPageProps) {
   const profile = state.enterpriseProfile;
   const isAr = lang === "ar";
-  const [isInstalledApp, setIsInstalledApp] = useState(true);
+  const isInstalledApp = useSyncExternalStore(
+    noopSubscribe,
+    getClientInstalledSnapshot,
+    getServerInstalledSnapshot
+  );
   const [query, setQuery] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [publicMetrics, setPublicMetrics] = useState<PublicSummary | null>(null);
-
-  useEffect(() => {
-    setIsInstalledApp(isInstalledClientApp());
-  }, []);
 
   useEffect(() => {
     let active = true;
