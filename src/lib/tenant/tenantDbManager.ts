@@ -13,6 +13,14 @@ const tenantPrismaCache = new Map<string, PrismaClient>();
 const readyTenantDbUrls = new Set<string>();
 
 /**
+ * Checks whether the active database runtime is PostgreSQL.
+ */
+export function isPostgresRuntime(): boolean {
+  const url = (process.env.DATABASE_URL || "").trim().toLowerCase();
+  return url.startsWith("postgresql://") || url.startsWith("postgres://");
+}
+
+/**
  * Resolves the isolated database file path or schema identifier for a tenant.
  */
 export function resolveTenantDbFilePath(rawTenantId?: string | null): string | null {
@@ -34,15 +42,35 @@ export function resolveTenantDbFilePath(rawTenantId?: string | null): string | n
 }
 
 /**
+ * Resolves the PostgreSQL schema name for a tenant.
+ * - 'default' -> 'public'
+ * - 'tenant_alpha' or 'tenant-alpha' -> 'tenant_alpha' (avoids double 'tenant_tenant_...' prefix)
+ */
+export function resolveTenantSchemaName(rawTenantId?: string | null): string {
+  const tenantId = normalizeTenantId(rawTenantId);
+  if (tenantId === "default") return "public";
+  return tenantId.startsWith("tenant_") ? tenantId : `tenant_${tenantId}`;
+}
+
+/**
  * Resolves connection URL for a tenant.
  * - SQLite: returns file:<path-to-tenant-db>
  * - PostgreSQL: returns base URL with ?schema=tenant_<slug>
  */
-export function resolveTenantDatabaseUrl(rawTenantId?: string | null): string {
+export function resolveTenantDatabaseUrl(
+  rawTenantId?: string | null,
+  overrideBaseUrl?: string
+): string {
   const tenantId = normalizeTenantId(rawTenantId);
-  const rawBaseUrl = (process.env.DATABASE_URL || "file:./dev.db").trim();
+  const rawBaseUrl = (overrideBaseUrl || process.env.DATABASE_URL || "file:./dev.db").trim();
 
-  if (isSqliteRuntime()) {
+  const isSqlite =
+    rawBaseUrl.startsWith("file:") ||
+    (!rawBaseUrl.startsWith("postgresql://") &&
+      !rawBaseUrl.startsWith("postgres://") &&
+      !rawBaseUrl.includes("://"));
+
+  if (isSqlite) {
     if (tenantId === "default") {
       return rawBaseUrl;
     }
@@ -56,17 +84,18 @@ export function resolveTenantDatabaseUrl(rawTenantId?: string | null): string {
     return rawBaseUrl;
   }
 
+  const schemaName = resolveTenantSchemaName(tenantId);
   try {
     const url = new URL(rawBaseUrl);
-    url.searchParams.set("schema", `tenant_${tenantId}`);
+    url.searchParams.set("schema", schemaName);
     return url.toString();
   } catch {
     const sep = rawBaseUrl.includes("?") ? "&" : "?";
-    return `${rawBaseUrl}${sep}schema=tenant_${tenantId}`;
+    return `${rawBaseUrl}${sep}schema=${schemaName}`;
   }
 }
 
-function splitSqlStatements(rawSql: string): string[] {
+export function splitSqlStatements(rawSql: string): string[] {
   const clean = rawSql.replace(/^\uFEFF/, "");
   const statements: string[] = [];
   let current = "";
@@ -104,7 +133,7 @@ function splitSqlStatements(rawSql: string): string[] {
   return statements;
 }
 
-function makeStatementIdempotent(stmt: string): string {
+export function makeStatementIdempotent(stmt: string): string {
   return stmt
     .replace(/^CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)/i, "CREATE TABLE IF NOT EXISTS ")
     .replace(
@@ -112,6 +141,367 @@ function makeStatementIdempotent(stmt: string): string {
       "CREATE UNIQUE INDEX IF NOT EXISTS "
     )
     .replace(/^CREATE\s+INDEX\s+(?!IF\s+NOT\s+EXISTS)/i, "CREATE INDEX IF NOT EXISTS ");
+}
+
+/**
+ * Converts a SQLite DDL statement into PostgreSQL-compatible DDL targeting the specified schema.
+ */
+export function convertSqliteStatementToPostgres(stmt: string, schemaName: string): string {
+  let s = stmt.trim();
+  if (!s) return "";
+
+  // Replace DATETIME with TIMESTAMP(3)
+  s = s.replace(/\bDATETIME\b/g, "TIMESTAMP(3)");
+
+  // Qualify CREATE TABLE "TableName" with schemaName
+  s = s.replace(
+    /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([a-zA-Z0-9_]+)"?/i,
+    `CREATE TABLE IF NOT EXISTS "${schemaName}"."$1"`
+  );
+
+  // Qualify CREATE [UNIQUE] INDEX "IndexName" ON "TableName"("col")
+  s = s.replace(
+    /^CREATE\s+(UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([a-zA-Z0-9_]+)"?\s+ON\s+"?([a-zA-Z0-9_]+)"?/i,
+    `CREATE $1INDEX IF NOT EXISTS "$2_${schemaName}" ON "${schemaName}"."$3"`
+  );
+
+  // Qualify REFERENCES "TargetTable" with schemaName
+  s = s.replace(
+    /REFERENCES\s+"?([a-zA-Z0-9_]+)"?/gi,
+    `REFERENCES "${schemaName}"."$1"`
+  );
+
+  // Qualify CONSTRAINT "Name" to avoid global collision
+  s = s.replace(
+    /CONSTRAINT\s+"?([a-zA-Z0-9_]+)"?/gi,
+    `CONSTRAINT "$1_${schemaName}"`
+  );
+
+  return s;
+}
+
+/**
+ * Generates an array of PostgreSQL DDL statements targeting a tenant schema from raw SQLite migration SQL.
+ */
+export function generatePostgresDdlFromSqlite(rawSql: string, schemaName: string): string[] {
+  const rawStmts = splitSqlStatements(rawSql);
+  const result: string[] = [];
+  for (const raw of rawStmts) {
+    const converted = convertSqliteStatementToPostgres(raw, schemaName);
+    if (converted) {
+      result.push(converted);
+    }
+  }
+  return result;
+}
+
+export type QueryableClient = {
+  $executeRawUnsafe: (query: string, ...values: any[]) => Promise<any>;
+  $queryRawUnsafe: <T = any>(query: string, ...values: any[]) => Promise<T>;
+};
+
+export interface PostgresProvisioningResult {
+  tablesProvisioned: string[];
+  enumsProvisioned: string[];
+  columnsRemapped: number;
+  fksProvisioned: number;
+  clonedFromPublic: boolean;
+}
+
+/**
+ * Clones all PostgreSQL ENUM types from the 'public' schema into the target tenant schema.
+ */
+export async function clonePostgresEnumTypes(
+  client: QueryableClient,
+  schemaName: string
+): Promise<string[]> {
+  const enumRows = await client.$queryRawUnsafe<
+    Array<{
+      type_name: string;
+      enum_label: string;
+      sort_order?: number;
+    }>
+  >(`
+    SELECT
+      t.typname AS type_name,
+      e.enumlabel AS enum_label,
+      e.enumsortorder AS sort_order
+    FROM pg_type t
+    JOIN pg_namespace n ON n.oid = t.typnamespace
+    JOIN pg_enum e ON e.enumtypid = t.oid
+    WHERE n.nspname = 'public' AND t.typtype = 'e'
+    ORDER BY t.typname, e.enumsortorder;
+  `);
+
+  if (!Array.isArray(enumRows) || enumRows.length === 0) {
+    return [];
+  }
+
+  const enumMap = new Map<string, string[]>();
+  for (const row of enumRows) {
+    const list = enumMap.get(row.type_name) || [];
+    list.push(row.enum_label);
+    enumMap.set(row.type_name, list);
+  }
+
+  const enumsCreated: string[] = [];
+
+  for (const [typeName, labels] of enumMap.entries()) {
+    try {
+      const quotedLabels = labels.map((l) => `'${l.replace(/'/g, "''")}'`).join(", ");
+      await client.$executeRawUnsafe(`
+        DO $$
+        BEGIN
+          CREATE TYPE "${schemaName}"."${typeName}" AS ENUM (${quotedLabels});
+        EXCEPTION
+          WHEN duplicate_object THEN NULL;
+        END $$;
+      `);
+      enumsCreated.push(typeName);
+
+      // Ensure any additional labels are added if enum already existed
+      for (const label of labels) {
+        try {
+          await client.$executeRawUnsafe(`
+            DO $$
+            BEGIN
+              ALTER TYPE "${schemaName}"."${typeName}" ADD VALUE IF NOT EXISTS '${label.replace(/'/g, "''")}';
+            EXCEPTION
+              WHEN duplicate_object THEN NULL;
+            END $$;
+          `);
+        } catch {
+          // Non-fatal
+        }
+      }
+    } catch (enumErr) {
+      console.warn(`[TenantDbManager] Notice creating enum ${typeName} in ${schemaName}:`, enumErr);
+    }
+  }
+
+  return enumsCreated;
+}
+
+/**
+ * Remaps columns in the tenant schema that reference 'public' ENUM types so they use
+ * the tenant's own isolated enum types (e.g. "tenant_beta"."Role" instead of public."Role").
+ */
+export async function remapPostgresEnumColumns(
+  client: QueryableClient,
+  schemaName: string,
+  enumNames: Set<string>
+): Promise<number> {
+  if (enumNames.size === 0) return 0;
+
+  let columnsToRemap: Array<{
+    table_name: string;
+    column_name: string;
+    udt_name: string;
+    column_default: string | null;
+  }> = [];
+
+  try {
+    columnsToRemap = await client.$queryRawUnsafe<
+      Array<{
+        table_name: string;
+        column_name: string;
+        udt_name: string;
+        column_default: string | null;
+      }>
+    >(
+      `
+      SELECT
+        c.table_name,
+        c.column_name,
+        c.udt_name,
+        c.column_default
+      FROM information_schema.columns c
+      WHERE c.table_schema = $1
+        AND c.udt_schema = 'public';
+      `,
+      schemaName
+    );
+  } catch (colErr) {
+    console.warn(`[TenantDbManager] Notice checking columns for enum remapping in ${schemaName}:`, colErr);
+    return 0;
+  }
+
+  let remappedCount = 0;
+
+  for (const col of columnsToRemap) {
+    if (!enumNames.has(col.udt_name)) continue;
+
+    try {
+      // 1. Drop existing default if present to allow type alteration
+      if (col.column_default) {
+        await client.$executeRawUnsafe(
+          `ALTER TABLE "${schemaName}"."${col.table_name}" ALTER COLUMN "${col.column_name}" DROP DEFAULT;`
+        );
+      }
+
+      // 2. Alter column type to use tenant's enum type
+      await client.$executeRawUnsafe(
+        `ALTER TABLE "${schemaName}"."${col.table_name}" ALTER COLUMN "${col.column_name}" TYPE "${schemaName}"."${col.udt_name}" USING "${col.column_name}"::text::"${schemaName}"."${col.udt_name}";`
+      );
+
+      // 3. Re-apply rewritten default pointing to tenant enum
+      if (col.column_default) {
+        const rewrittenDefault = col.column_default.replace(
+          /(?:"?public"?\.)?"?([a-zA-Z0-9_]+)"?/g,
+          (match, name) => (name === col.udt_name ? `"${schemaName}"."${col.udt_name}"` : match)
+        );
+        await client.$executeRawUnsafe(
+          `ALTER TABLE "${schemaName}"."${col.table_name}" ALTER COLUMN "${col.column_name}" SET DEFAULT ${rewrittenDefault};`
+        );
+      }
+
+      remappedCount++;
+    } catch (remapErr) {
+      console.warn(
+        `[TenantDbManager] Notice remapping column ${col.table_name}.${col.column_name} to ${schemaName}.${col.udt_name}:`,
+        remapErr
+      );
+    }
+  }
+
+  return remappedCount;
+}
+
+/**
+ * Provisions all Prisma tables, indexes, constraints, and sequences into a PostgreSQL tenant schema.
+ * Clones structure from the authoritative 'public' schema using:
+ * `CREATE TABLE IF NOT EXISTS "${schemaName}"."${tbl}" (LIKE public."${tbl}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)`
+ * and replicates intra-schema foreign key constraints.
+ */
+export async function provisionPostgresTenantSchema(
+  client: QueryableClient,
+  schemaName: string
+): Promise<PostgresProvisioningResult> {
+  // 1. Ensure schema exists
+  await client.$executeRawUnsafe(`CREATE SCHEMA IF NOT EXISTS "${schemaName}";`);
+
+  // 2. Clone all PostgreSQL ENUM types from 'public' into the tenant schema BEFORE cloning tables
+  let enumsProvisioned: string[] = [];
+  try {
+    enumsProvisioned = await clonePostgresEnumTypes(client, schemaName);
+  } catch (enumErr) {
+    console.warn(`[TenantDbManager] Notice cloning enums for ${schemaName}:`, enumErr);
+  }
+  const clonedEnumSet = new Set(enumsProvisioned);
+
+  // 3. Query existing tables in tenant schema
+  let existingRows: Array<{ tablename: string }> = [];
+  try {
+    existingRows = await client.$queryRawUnsafe<Array<{ tablename: string }>>(
+      `SELECT tablename FROM pg_tables WHERE schemaname = $1;`,
+      schemaName
+    );
+  } catch {
+    existingRows = [];
+  }
+  const existingSet = new Set((existingRows || []).map((r) => r.tablename));
+
+  // 4. Query public schema tables (authoritative Prisma tables)
+  let publicRows: Array<{ tablename: string }> = [];
+  try {
+    publicRows = await client.$queryRawUnsafe<Array<{ tablename: string }>>(
+      `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename NOT LIKE '_prisma_%';`
+    );
+  } catch (err) {
+    console.warn(`[TenantDbManager] Notice checking public schema tables on PostgreSQL:`, err);
+  }
+
+  const tablesProvisioned: string[] = [];
+  let columnsRemapped = 0;
+  let fksProvisioned = 0;
+
+  if (Array.isArray(publicRows) && publicRows.length > 0) {
+    // Clone each table from public into tenant schema
+    for (const row of publicRows) {
+      const tbl = row.tablename;
+      if (!existingSet.has(tbl)) {
+        await client.$executeRawUnsafe(
+          `CREATE TABLE IF NOT EXISTS "${schemaName}"."${tbl}" (LIKE public."${tbl}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES);`
+        );
+        tablesProvisioned.push(tbl);
+      }
+    }
+
+    // 5. Remap all columns that were copied from public referencing public ENUMs to the tenant's own ENUMs
+    try {
+      columnsRemapped = await remapPostgresEnumColumns(client, schemaName, clonedEnumSet);
+    } catch (colErr) {
+      console.warn(`[TenantDbManager] Notice remapping enum columns for ${schemaName}:`, colErr);
+    }
+
+    // 6. Replicate foreign keys
+    try {
+      const fkRows = await client.$queryRawUnsafe<
+        Array<{
+          constraint_name: string;
+          table_name: string;
+          def: string;
+        }>
+      >(`
+        SELECT
+          c.conname AS constraint_name,
+          src_tbl.relname AS table_name,
+          pg_get_constraintdef(c.oid) AS def
+        FROM pg_constraint c
+        JOIN pg_class src_tbl ON src_tbl.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = c.connamespace
+        WHERE n.nspname = 'public' AND c.contype = 'f';
+      `);
+
+      if (Array.isArray(fkRows)) {
+        for (const fk of fkRows) {
+          try {
+            const rewrittenDef = fk.def.replace(
+              /REFERENCES\s+(?:"?public"?\.)?"?([a-zA-Z0-9_]+)"?/i,
+              `REFERENCES "${schemaName}"."$1"`
+            );
+            const safeConstraintName = `${fk.constraint_name}_${schemaName}`.slice(0, 63);
+            await client.$executeRawUnsafe(
+              `ALTER TABLE "${schemaName}"."${fk.table_name}" ADD CONSTRAINT "${safeConstraintName}" ${rewrittenDef};`
+            );
+            fksProvisioned++;
+          } catch {
+            // Foreign key may already exist or fail non-fatally
+          }
+        }
+      }
+    } catch (fkErr) {
+      console.warn(`[TenantDbManager] Non-fatal notice cloning foreign keys for ${schemaName}:`, fkErr);
+    }
+
+    return {
+      tablesProvisioned,
+      enumsProvisioned,
+      columnsRemapped,
+      fksProvisioned,
+      clonedFromPublic: true,
+    };
+  } else {
+    // Fallback: public schema is empty or inaccessible, provision from embedded migration DDL
+    const postgresStatements = generatePostgresDdlFromSqlite(EMBEDDED_SQLITE_MIGRATION_SQL, schemaName);
+    for (const stmt of postgresStatements) {
+      try {
+        await client.$executeRawUnsafe(stmt);
+        tablesProvisioned.push("DDL_STATEMENT");
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("already exists") || msg.includes("duplicate")) continue;
+        console.warn(`[TenantDbManager] Fallback DDL execution notice for ${schemaName}:`, msg);
+      }
+    }
+    return {
+      tablesProvisioned,
+      enumsProvisioned: [],
+      columnsRemapped: 0,
+      fksProvisioned: 0,
+      clonedFromPublic: false,
+    };
+  }
 }
 
 /**
@@ -147,12 +537,13 @@ async function initializeTenantDatabase(
       }
     }
   } else {
-    // PostgreSQL runtime: ensure schema exists
-    try {
-      await client.$executeRawUnsafe(`CREATE SCHEMA IF NOT EXISTS "tenant_${tenantId}";`);
-    } catch {
-      // Schema may already exist
+    // PostgreSQL runtime:
+    if (tenantId === "default") {
+      // Default tenant continues using existing public schema without alteration
+      return;
     }
+    const schemaName = resolveTenantSchemaName(tenantId);
+    await provisionPostgresTenantSchema(client, schemaName);
   }
 
   // 1. EnterpriseProfile
