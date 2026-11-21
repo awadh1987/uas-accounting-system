@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import {
   getRuntimeConfig,
   saveRuntimeConfig,
@@ -12,7 +13,7 @@ import type { RuntimeMode } from "@/lib/licensing/licenseSchema";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   const config = getRuntimeConfig();
   const lanIps = getServerLanIps();
   const lanUrl = getLanServerUrl(config.port);
@@ -31,9 +32,9 @@ export async function GET() {
     cloudHealth,
     allowedModes: license?.allowed_modes || ["local", "lan", "cloud"],
   });
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const targetMode = body.mode as RuntimeMode;
@@ -81,4 +82,4 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { normalizeRole, ROLE_DEFINITIONS } from "@/lib/permissions";
 import { appendAuditLogTx, getBootstrapState, hashPassword } from "@/lib/serverBootstrap";
 import { extractActor, jsonError } from "@/lib/apiHelpers";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     const includeArchived = req.nextUrl.searchParams.get("includeArchived") === "true";
     const state = await getBootstrapState();
@@ -14,9 +14,9 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/users error:", error);
     return jsonError("تعذر تحميل قائمة المستخدمين", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const name = String(body.name || "").trim();
@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
     const assignedProjects = Array.isArray(body.assignedProjects)
       ? JSON.stringify(body.assignedProjects.map(String))
       : JSON.stringify(["p1", "p2", "p3"]);
-    const actor = extractActor(body);
+    const actor = extractActor(body, req);
 
     if (!name) {
       return jsonError("يرجى إدخال اسم المستخدم", 400);
@@ -76,4 +76,4 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/users error:", error);
     return jsonError("تعذر إضافة المستخدم", 500);
   }
-}
+});

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
+import { withTenantRoute } from "@/lib/prisma";
 import {
   getBackupsDirectory,
   restoreDatabaseFromBuffer,
@@ -14,7 +15,7 @@ import { extractActor, jsonError, forbiddenError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
 
@@ -124,4 +125,4 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/system/restore error:", error);
     return jsonError((error as Error).message, 400);
   }
-}
+});

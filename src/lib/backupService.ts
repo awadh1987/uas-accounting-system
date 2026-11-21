@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { prisma } from "@/lib/prisma";
+import { getActiveTenantId } from "@/lib/tenant/tenantContext";
+import { getTenantMetadata } from "@/lib/tenant/tenantRegistry";
+import { resolveTenantDbFilePath } from "@/lib/tenant/tenantDbManager";
 import {
   ensureSqliteDatabaseReady,
   isSqliteRuntime,
@@ -22,6 +25,7 @@ export interface FullSchemaBackupData {
   createdAt: string;
   companyName: string;
   licenseId: string;
+  tenantId?: string;
   tableCounts: Record<string, number>;
   tables: Record<string, unknown[]>;
 }
@@ -116,6 +120,7 @@ export interface UasbakEnvelope {
   createdAt: string;
   companyName: string;
   licenseId: string;
+  tenantId?: string;
   sha256: string;
   sizeBytes: number;
   dbBase64: string;
@@ -274,14 +279,23 @@ export async function createTempBackupSnapshot(): Promise<{
 export async function createUasbakEnvelope(params?: {
   companyName?: string;
   licenseId?: string;
+  tenantId?: string;
 }): Promise<{
   envelope: UasbakEnvelope;
   filename: string;
 }> {
+  const activeTenant = params?.tenantId || getActiveTenantId();
   const { sha256, sizeBytes, buffer } = await createTempBackupSnapshot();
 
   let compName = (params?.companyName || "").trim();
   let licId = (params?.licenseId || "").trim();
+
+  if (activeTenant !== "default") {
+    const meta = getTenantMetadata(activeTenant);
+    if (meta?.companyName && !compName) {
+      compName = meta.companyName;
+    }
+  }
 
   if (!compName || !licId) {
     const { license } = loadInstalledLicense();
@@ -312,13 +326,15 @@ export async function createUasbakEnvelope(params?: {
     .replace(/[^a-zA-Z0-9\u0600-\u06FF_-]/g, "_")
     .replace(/_+/g, "_")
     .slice(0, 30);
-  const filename = `UAS-Backup-${slug}-${todayStr}.uasbak`;
+  const tenantSuffix = activeTenant !== "default" ? `-${activeTenant}` : "";
+  const filename = `UAS-Backup-${slug}${tenantSuffix}-${todayStr}.uasbak`;
 
   const envelope: UasbakEnvelope = {
     format: "UAS-BACKUP-V1",
     createdAt: new Date().toISOString(),
     companyName: compName,
     licenseId: licId,
+    tenantId: activeTenant,
     sha256,
     sizeBytes,
     dbBase64: buffer.toString("base64"),
@@ -443,15 +459,19 @@ export function validateAndInspectCandidateDb(
   }
 }
 
-export function listLocalBackups(): BackupFileInfo[] {
+export function listLocalBackups(tenantId?: string): BackupFileInfo[] {
   const backupsDir = getBackupsDirectory();
   if (!fs.existsSync(backupsDir)) return [];
 
+  const activeTenant = tenantId || getActiveTenantId();
   const results: BackupFileInfo[] = [];
   try {
     const entries = fs.readdirSync(backupsDir);
     for (const file of entries) {
       if (!file.endsWith(".db") && !file.endsWith(".uasbak")) continue;
+      if (activeTenant !== "default" && !file.includes(activeTenant)) {
+        continue;
+      }
       const full = path.join(backupsDir, file);
       try {
         const stat = fs.statSync(full);
@@ -484,7 +504,8 @@ export async function restoreDatabaseFromBuffer(
     userDisplay: string;
     userRole: string;
   },
-  sourceDesc: string
+  sourceDesc: string,
+  tenantId?: string
 ): Promise<{
   ok: boolean;
   preRestoreSnapshot: string;
@@ -494,14 +515,22 @@ export async function restoreDatabaseFromBuffer(
     throw new Error("Database restore is only supported on SQLite runtime");
   }
 
-  const activeDbPath = resolveSqliteFilePath();
+  const activeTenant = tenantId || getActiveTenantId();
+  const activeDbPath = resolveTenantDbFilePath(activeTenant) || resolveSqliteFilePath();
   if (!activeDbPath) {
     throw new Error("Unable to resolve active SQLite database path");
   }
 
-  // Load installed license to enforce company lock on restore
-  const { license } = loadInstalledLicense();
-  const expectedCompany = license?.company_name;
+  // Load expected company name: from tenant metadata if isolated, else from installed license
+  let expectedCompany: string | undefined;
+  if (activeTenant !== "default") {
+    const meta = getTenantMetadata(activeTenant);
+    expectedCompany = meta?.companyName;
+  }
+  if (!expectedCompany) {
+    const { license } = loadInstalledLicense();
+    expectedCompany = license?.company_name;
+  }
 
   // 1. Verify candidate database structure and company lock
   const inspection = validateAndInspectCandidateDb(buffer, expectedCompany);
@@ -515,7 +544,8 @@ export async function restoreDatabaseFromBuffer(
     .toISOString()
     .replace(/[-:T]/g, "")
     .slice(0, 14);
-  const preRestoreFilename = `pre-restore-${timestamp}.db`;
+  const tenantPrefix = activeTenant !== "default" ? `pre-restore-${activeTenant}-` : "pre-restore-";
+  const preRestoreFilename = `${tenantPrefix}${timestamp}.db`;
   const preRestorePath = path.join(backupsDir, preRestoreFilename);
 
   if (fs.existsSync(activeDbPath)) {
@@ -564,10 +594,12 @@ export async function restoreDatabaseFromBuffer(
 export async function exportFullSchemaJsonBackup(params?: {
   companyName?: string;
   licenseId?: string;
+  tenantId?: string;
 }): Promise<{
   backup: FullSchemaBackupData;
   filename: string;
 }> {
+  const activeTenant = params?.tenantId || getActiveTenantId();
   await ensureSqliteDatabaseReady();
   const tableCounts: Record<string, number> = {};
   const tables: Record<string, unknown[]> = {};
@@ -588,6 +620,14 @@ export async function exportFullSchemaJsonBackup(params?: {
 
   let compName = (params?.companyName || "").trim();
   let licId = (params?.licenseId || "").trim();
+
+  if (activeTenant !== "default") {
+    const meta = getTenantMetadata(activeTenant);
+    if (meta?.companyName && !compName) {
+      compName = meta.companyName;
+    }
+  }
+
   if (!compName || !licId) {
     const { license } = loadInstalledLicense();
     if (license) {
@@ -606,7 +646,8 @@ export async function exportFullSchemaJsonBackup(params?: {
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const slug = compName.replace(/[^a-zA-Z0-9\u0600-\u06FF_-]/g, "_").slice(0, 30);
-  const filename = `UAS-FullBackup-${slug}-${todayStr}.json`;
+  const tenantSuffix = activeTenant !== "default" ? `-${activeTenant}` : "";
+  const filename = `UAS-FullBackup-${slug}${tenantSuffix}-${todayStr}.json`;
 
   const backup: FullSchemaBackupData = {
     format: "UAS-FULL-SCHEMA-JSON-V1",
@@ -614,6 +655,7 @@ export async function exportFullSchemaJsonBackup(params?: {
     createdAt: new Date().toISOString(),
     companyName: compName,
     licenseId: licId || "COMMERCIAL",
+    tenantId: activeTenant,
     tableCounts,
     tables,
   };
@@ -622,9 +664,10 @@ export async function exportFullSchemaJsonBackup(params?: {
 }
 
 export async function restoreFullSchemaJsonBackup(
-  backupData: FullSchemaBackupData | { tables: Record<string, unknown[]>; companyName?: string },
+  backupData: FullSchemaBackupData | { tables: Record<string, unknown[]>; companyName?: string; tenantId?: string },
   actor: { userId?: string | null; userDisplay: string; userRole: string },
-  sourceDesc = "json_restore"
+  sourceDesc = "json_restore",
+  tenantId?: string
 ): Promise<{
   ok: boolean;
   preRestoreSnapshot: string;
@@ -633,8 +676,17 @@ export async function restoreFullSchemaJsonBackup(
 }> {
   await ensureSqliteDatabaseReady();
 
-  const { license } = loadInstalledLicense();
-  const expectedCompany = license?.company_name;
+  const activeTenant = tenantId || (backupData as any).tenantId || getActiveTenantId();
+  let expectedCompany: string | undefined;
+  if (activeTenant !== "default") {
+    const meta = getTenantMetadata(activeTenant);
+    expectedCompany = meta?.companyName;
+  }
+  if (!expectedCompany) {
+    const { license } = loadInstalledLicense();
+    expectedCompany = license?.company_name;
+  }
+
   if (expectedCompany && backupData.companyName) {
     if (!companyNamesMatch(backupData.companyName, expectedCompany)) {
       throw new Error(
@@ -646,11 +698,12 @@ export async function restoreFullSchemaJsonBackup(
   // Save safety pre-restore snapshot
   let preRestoreFilename = "";
   if (isSqliteRuntime()) {
-    const activeDbPath = resolveSqliteFilePath();
+    const activeDbPath = resolveTenantDbFilePath(activeTenant) || resolveSqliteFilePath();
     if (activeDbPath && fs.existsSync(activeDbPath)) {
       const backupsDir = getBackupsDirectory();
       const timestamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
-      preRestoreFilename = `pre-restore-${timestamp}.db`;
+      const tenantPrefix = activeTenant !== "default" ? `pre-restore-${activeTenant}-` : "pre-restore-";
+      preRestoreFilename = `${tenantPrefix}${timestamp}.db`;
       try {
         fs.copyFileSync(activeDbPath, path.join(backupsDir, preRestoreFilename));
       } catch {}

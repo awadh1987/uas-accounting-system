@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
+import { getActiveTenantId } from "@/lib/tenant/tenantContext";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { appendAuditLogTx, hashPassword, parseAssignedProjects } from "@/lib/serverBootstrap";
 import { jsonError } from "@/lib/apiHelpers";
@@ -21,7 +22,7 @@ import {
 } from "@/lib/permissions";
 import type { UasUser } from "@/types/uas";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const body = (await req.json()) as Record<string, unknown>;
@@ -33,11 +34,28 @@ export async function POST(req: NextRequest) {
       return jsonError("يرجى إدخال اسم المستخدم أو البريد الإلكتروني وكلمة المرور", 400);
     }
 
+    const cleanId = identifier.trim();
     const user = userId
-      ? await prisma.user.findUnique({ where: { id: userId } })
+      ? await prisma.user.findFirst({
+          where: {
+            OR: [
+              { id: userId },
+              { email: userId.toLowerCase() },
+              { username: userId },
+              { username: userId.toLowerCase() },
+              { name: userId },
+            ],
+          },
+        })
       : await prisma.user.findFirst({
           where: {
-            OR: [{ email: identifier }, { username: identifier }],
+            OR: [
+              { id: cleanId },
+              { email: cleanId.toLowerCase() },
+              { username: cleanId },
+              { username: cleanId.toLowerCase() },
+              { name: cleanId },
+            ],
           },
         });
 
@@ -134,6 +152,7 @@ export async function POST(req: NextRequest) {
           defaultModule: uasUser.defaultModule,
         },
         mustChangePassword: uasUser.mustChangePassword,
+        tenantId: getActiveTenantId(),
         permissions: {
           allowedGroups: getAccessibleGroups(uasUser),
           accessibleTabs: getAccessibleTabs(uasUser),
@@ -160,4 +179,4 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/auth/login error:", error);
     return jsonError("تعذر تسجيل الدخول", 500);
   }
-}
+});

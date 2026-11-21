@@ -137,10 +137,9 @@ describe("Phase 1 — User Archive (أرشفة) & Safe Delete (حذف) with Lice
     assert.equal(outcome.deleted, false);
     assert.equal(outcome.archived, true);
     assert.equal(outcome.seatsReleased, 1);
-    assert.equal(
-      outcome.message,
-      "تمت أرشفة المستخدم لوجود قيود محاسبية مرتبطة به مع تحرير مقعد الترخيص"
-    );
+    assert.ok(outcome.message.includes("أرشفة المستخدم"));
+    assert.equal(outcome.guardReason, "LINKED_RECORDS");
+    assert.ok(outcome.guidance && outcome.guidance.length > 0);
 
     const archivedUser = await prisma.user.findUnique({ where: { id: user.id } });
     assert.ok(archivedUser);

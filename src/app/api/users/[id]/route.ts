@@ -1,17 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { canManageUsers, normalizeRole } from "@/lib/permissions";
 import { appendAuditLogTx, getBootstrapState, hashPassword, parseAssignedProjects } from "@/lib/serverBootstrap";
 import { extractActor, forbiddenError, jsonError } from "@/lib/apiHelpers";
 import { archiveOrRestoreUser, safeDeleteOrArchiveUser } from "@/lib/userLifecycle";
 import type { UasUser } from "@/types/uas";
 
-export async function PATCH(
+export const PATCH = withTenantRoute(async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await context.params;
+    const decodedId = decodeURIComponent(id).trim();
     const body = (await req.json()) as Record<string, unknown>;
     const actor = extractActor(body, req);
 
@@ -21,9 +22,16 @@ export async function PATCH(
 
     const lifecycleAction = String(body.action || "").trim().toLowerCase();
     if (lifecycleAction === "archive" || lifecycleAction === "restore") {
-      const outcome = await archiveOrRestoreUser(id, lifecycleAction, actor);
+      const outcome = await archiveOrRestoreUser(decodedId, lifecycleAction, actor);
       if (!outcome.ok) {
-        return jsonError(outcome.error || outcome.message, outcome.status);
+        return NextResponse.json(
+          {
+            error: outcome.error || outcome.message,
+            message: outcome.message,
+            code: outcome.code,
+          },
+          { status: outcome.status }
+        );
       }
       const state = await getBootstrapState();
       return NextResponse.json({
@@ -37,7 +45,17 @@ export async function PATCH(
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const existing = await tx.user.findUnique({ where: { id } });
+      const existing = await tx.user.findFirst({
+        where: {
+          OR: [
+            { id: decodedId },
+            { email: decodedId.toLowerCase() },
+            { username: decodedId },
+            { username: decodedId.toLowerCase() },
+            { name: decodedId },
+          ],
+        },
+      });
       if (!existing) return { notFound: true as const };
 
       const toggleActive = body.toggleActive === true;
@@ -123,7 +141,7 @@ export async function PATCH(
       }
 
       const updated = await tx.user.update({
-        where: { id },
+        where: { id: existing.id },
         data: {
           active: nextActive,
           isActive: nextActive,
@@ -151,7 +169,7 @@ export async function PATCH(
           : body.useCustomPermissions !== undefined
           ? "تعديل صلاحيات مخصصة لمستخدم"
           : "تحديث حساب مستخدم",
-        entityReference: `User:${id}`,
+        entityReference: `User:${existing.id}`,
         details: JSON.stringify({
           targetUser: updated.displayName || updated.name,
           diff,
@@ -214,7 +232,7 @@ export async function PATCH(
       };
     });
 
-    if (result.notFound) return jsonError("المستخدم غير موجود", 404);
+    if (result.notFound) return jsonError(`المستخدم غير موجود (${decodedId})`, 404);
 
     const state = await getBootstrapState();
     return NextResponse.json({ user: result.updated, diff: result.diff, state });
@@ -222,14 +240,15 @@ export async function PATCH(
     console.error("PATCH /api/users/[id] error:", error);
     return jsonError("تعذر تحديث بيانات وصلاحيات المستخدم", 500);
   }
-}
+});
 
-export async function DELETE(
+export const DELETE = withTenantRoute(async function DELETE(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await context.params;
+    const decodedId = decodeURIComponent(id).trim();
     let body: Record<string, unknown> = {};
     try {
       body = (await req.json()) as Record<string, unknown>;
@@ -237,9 +256,17 @@ export async function DELETE(
       body = {};
     }
     const actor = extractActor(body, req);
-    const outcome = await safeDeleteOrArchiveUser(id, actor);
+    const outcome = await safeDeleteOrArchiveUser(decodedId, actor);
     if (!outcome.ok) {
-      return jsonError(outcome.error || outcome.message, outcome.status);
+      return NextResponse.json(
+        {
+          error: outcome.error || outcome.message,
+          message: outcome.message,
+          code: outcome.code,
+          guardReason: outcome.guardReason,
+        },
+        { status: outcome.status }
+      );
     }
 
     const state = await getBootstrapState();
@@ -249,6 +276,7 @@ export async function DELETE(
       archived: outcome.archived,
       seatsReleased: outcome.seatsReleased,
       linkedCount: outcome.linkedCount ?? 0,
+      guardReason: outcome.guardReason,
       message: outcome.message,
       state,
     });
@@ -256,6 +284,4 @@ export async function DELETE(
     console.error("DELETE /api/users/[id] error:", error);
     return jsonError("تعذر حذف أو أرشفة المستخدم", 500);
   }
-}
-
-
+});

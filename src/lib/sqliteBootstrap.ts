@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { prisma } from "@/lib/prisma";
+import { getTenantContext } from "@/lib/tenant/tenantContext";
 import { STANDARD_COA_NODES } from "@/lib/accounting/coaCatalog";
 import {
   EMBEDDED_SQLITE_MIGRATION_SQL,
@@ -449,6 +450,12 @@ async function runSelfHealingBootstrap(): Promise<void> {
 
 export async function ensureSqliteDatabaseReady(): Promise<void> {
   if (!isSqliteRuntime()) return;
+
+  const tenantCtx = getTenantContext();
+  if (tenantCtx && tenantCtx.tenantId !== "default") {
+    // Isolated tenant databases are initialized upon resolution by getTenantPrisma()
+    return;
+  }
 
   const currentDbUrl = process.env.DATABASE_URL || "";
   if (

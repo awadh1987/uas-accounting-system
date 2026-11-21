@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
+import { withTenantRoute } from "@/lib/prisma";
 import {
   createUasbakEnvelope,
   createTempBackupSnapshot,
@@ -9,7 +10,7 @@ import { extractActor, jsonError, forbiddenError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
 
@@ -57,4 +58,4 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/system/backup error:", error);
     return jsonError(`تعذر إنشاء النسخة الاحتياطية: ${(error as Error).message}`, 500);
   }
-}
+});

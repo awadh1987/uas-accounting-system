@@ -420,10 +420,13 @@ export function SystemTab({
   }
 
   async function handleDeleteUser(user: UasUser) {
-    if (user.id === currentUser.id) return;
+    if (user.id === currentUser.id) {
+      onToast(isAr ? "لا يمكنك حذف حسابك الحالي أثناء تسجيل الدخول به" : "You cannot delete your own active account");
+      return;
+    }
     const confirmText = isAr
-      ? `هل تريد حذف المستخدم "${user.name}"؟\nسيتم الحذف النهائي إذا لم توجد قيود محاسبية مرتبطة به، أو أرشفته تلقائياً مع تحرير مقعد الترخيص إذا وُجدت قيود مرتبطة.`
-      : `Delete user "${user.name}"? Users with 0 linked records are permanently deleted; users with accounting/audit records are automatically archived and their license seat is released.`;
+      ? `هل تريد حذف المستخدم "${user.name}"؟\nسيتم الحذف النهائي إذا لم توجد سجلات محاسبية أو تدقيقية مرتبطة به، أو أرشفته تلقائياً مع تحرير مقعد الترخيص إذا وُجدت سجلات مرتبطة.`
+      : `Delete user "${user.name}"? Users with no linked records are permanently deleted; users with accounting/audit records are automatically archived and their license seat is released.`;
     if (typeof window !== "undefined" && !window.confirm(confirmText)) return;
 
     setUserLifecycleBusyId(user.id);
@@ -432,6 +435,8 @@ export function SystemTab({
         success?: boolean;
         deleted?: boolean;
         archived?: boolean;
+        guardReason?: string;
+        guidance?: string;
         message?: string;
         error?: string;
       }>(`/api/users/${encodeURIComponent(user.id)}`, {
@@ -451,7 +456,9 @@ export function SystemTab({
         }),
       });
       if (!res.ok || !res.data?.success) {
-        onToast(res.data?.error || (isAr ? "تعذر حذف المستخدم" : "Failed to delete user"));
+        const errorMsg = res.data?.error || (isAr ? "تعذر حذف المستخدم" : "Failed to delete user");
+        const guidanceMsg = res.data?.guidance ? `\n💡 ${res.data.guidance}` : "";
+        onToast(`${errorMsg}${guidanceMsg}`);
         return;
       }
       onToast(res.data.message || (isAr ? "تمت معالجة حذف المستخدم بنجاح" : "User removed successfully"));
@@ -477,9 +484,29 @@ export function SystemTab({
       );
       return;
     }
+
+    // Check for mixed-content restriction if browser is HTTPS and target is HTTP
+    const isHttpsOrigin = typeof window !== "undefined" && window.location.protocol === "https:";
+    const isHttpTarget = /^http:\/\//i.test(cleaned);
+
+    if (isHttpsOrigin && isHttpTarget) {
+      onToast(
+        isAr
+          ? `ℹ️ تم حفظ عنوان خادم الشبكة المحلية (${cleaned}) بنجاح. سيتصل تلقائياً عند فتح تطبيق أندرويد أو تطبيق سطح المكتب (تقييد المتصفح يمنع فحص HTTP من موقع HTTPS).`
+          : `ℹ️ Office LAN URL (${cleaned}) saved. Desktop and Android apps will connect directly (direct HTTP probe from HTTPS browser is restricted).`
+      );
+      return;
+    }
+
     setTestingServer(true);
     try {
-      const res = await fetch(`${cleaned}/api/bootstrap`, { cache: "no-store" });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const res = await fetch(`${cleaned}/api/bootstrap`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
       if (res.ok) {
         onToast(
           isAr
@@ -493,11 +520,16 @@ export function SystemTab({
             : `⚠️ Saved (${cleaned}) but server returned ${res.status}`
         );
       }
-    } catch {
+    } catch (err: any) {
+      const isTimeout = err?.name === "AbortError";
       onToast(
         isAr
-          ? `⚠️ تم حفظ العنوان (${cleaned}) — تأكد من تشغيل خادم الشبكة المحلية على الكمبيوتر`
-          : `⚠️ Saved (${cleaned}) — verify the Office LAN server is running`
+          ? (isTimeout
+              ? `⚠️ لم يستجب الخادم في غضون 3 ثوانٍ (${cleaned})`
+              : `⚠️ تم حفظ العنوان (${cleaned}) — تعذر الاتصال بالخادم حالياً`)
+          : (isTimeout
+              ? `⚠️ Server timed out after 3s (${cleaned})`
+              : `⚠️ Saved (${cleaned}) — unable to reach server right now`)
       );
     } finally {
       setTestingServer(false);
@@ -929,27 +961,38 @@ export function SystemTab({
     if (!resetModalUser || !resetNewPass) return;
     setResettingPass(true);
     try {
-      const res = await fetch(`/api/users/${resetModalUser.id}/reset-password`, {
+      const res = await safeFetchJson<{
+        success?: boolean;
+        message?: string;
+        error?: string;
+      }>(`/api/users/${encodeURIComponent(resetModalUser.id)}/reset-password`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-uas-user-id": currentUser.id,
+          "x-uas-role": String(currentUser.role),
+          "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+        },
         body: JSON.stringify({
           newPassword: resetNewPass,
           mustChangePassword: resetMustChange,
           actor: {
             userId: currentUser.id,
-            userDisplay: currentUser.name,
+            userDisplay: `${currentUser.name} (${currentUser.role})`,
             userRole: currentUser.role,
           },
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to reset password");
+
+      if (!res.ok || !res.data?.success) {
+        throw new Error(res.data?.error || (isAr ? "تعذر إعادة تعيين كلمة المرور" : "Failed to reset password"));
       }
+
       onToast(
-        isAr
-          ? `تمت إعادة تعيين كلمة المرور للمستخدم (${resetModalUser.name}) بنجاح`
-          : `Password reset successfully for ${resetModalUser.name}`
+        res.data.message ||
+          (isAr
+            ? `تمت إعادة تعيين كلمة المرور للمستخدم (${resetModalUser.name}) بنجاح`
+            : `Password reset successfully for ${resetModalUser.name}`)
       );
       setResetModalUser(null);
       setResetNewPass("");

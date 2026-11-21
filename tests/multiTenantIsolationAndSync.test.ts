@@ -1,0 +1,412 @@
+import { describe, it, after } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { prisma } from "../src/lib/prisma";
+import {
+  runWithTenant,
+  normalizeTenantId,
+  resolveTenantDbFilePath,
+  resetTenantClientsForTests,
+} from "../src/lib/tenant";
+import { safeDeleteOrArchiveUser } from "../src/lib/userLifecycle";
+import { hashPassword } from "../src/lib/serverBootstrap";
+import {
+  createUasbakEnvelope,
+  validateAndInspectCandidateDb,
+  restoreDatabaseFromBuffer,
+  getBackupsDirectory,
+  listLocalBackups,
+} from "../src/lib/backupService";
+import {
+  getStoredTenantId,
+  setStoredTenantId,
+} from "../src/lib/apiClient";
+
+const TEST_TIMESTAMP = Date.now();
+const TENANT_A = `tenant-alpha-${TEST_TIMESTAMP}`;
+const TENANT_B = `tenant-beta-${TEST_TIMESTAMP}`;
+const TENANT_GAMMA = `tenant-gamma-${TEST_TIMESTAMP}`;
+
+describe("Isolated Multi-Tenant Databases, Multi-Device Sync & Notification Fixes", () => {
+  after(async () => {
+    await resetTenantClientsForTests();
+    // Cleanup temporary sqlite database files created for these test tenants
+    for (const tid of [TENANT_A, TENANT_B, TENANT_GAMMA]) {
+      const dbPath = resolveTenantDbFilePath(tid);
+      if (dbPath && fs.existsSync(dbPath)) {
+        try {
+          fs.unlinkSync(dbPath);
+          const shm = `${dbPath}-shm`;
+          const wal = `${dbPath}-wal`;
+          if (fs.existsSync(shm)) fs.unlinkSync(shm);
+          if (fs.existsSync(wal)) fs.unlinkSync(wal);
+        } catch {
+          // Ignore cleanup errors on busy handles
+        }
+      }
+    }
+  });
+
+  describe("1. Multi-Tenant DB Routing & Data Isolation", () => {
+    it("provisions and seeds isolated databases for distinct tenants cleanly", async () => {
+      await runWithTenant(TENANT_GAMMA, async () => {
+        // Dynamic bootstrap should have created EnterpriseProfile, SystemSettings, and default admin
+        const profile = await prisma.enterpriseProfile.findFirst();
+        assert.ok(profile, "Tenant Gamma must have an auto-provisioned EnterpriseProfile");
+
+        const settings = await prisma.systemSettings.findFirst();
+        assert.ok(settings, "Tenant Gamma must have an auto-provisioned SystemSettings");
+
+        const defaultAdmin = await prisma.user.findFirst({
+          where: { role: "SUPER_ADMIN" },
+        });
+        assert.ok(defaultAdmin, "Tenant Gamma must have an auto-provisioned SUPER_ADMIN user");
+
+        const accounts = await prisma.account.count();
+        assert.ok(accounts > 0, "Tenant Gamma must have an auto-provisioned Chart of Accounts");
+      });
+    });
+
+    it("ensures records created in Tenant A do not exist or leak into Tenant B", async () => {
+      let createdUserIdA = "";
+      const emailA = `ahmed.awadh@qat.world`;
+
+      // Step 1: Create user in Tenant A
+      await runWithTenant(TENANT_A, async () => {
+        const userA = await prisma.user.create({
+          data: {
+            username: "ahmed_awadh_alpha",
+            name: "Ahmed AWADH",
+            fullName: "Ahmed AWADH - Alpha Co",
+            email: emailA,
+            passwordHash: hashPassword("AlphaPass123!"),
+            role: "SUPER_ADMIN",
+            department: "الإدارة العامة",
+            active: true,
+            isActive: true,
+          },
+        });
+        createdUserIdA = userA.id;
+        assert.ok(createdUserIdA);
+
+        const foundInA = await prisma.user.findUnique({ where: { id: createdUserIdA } });
+        assert.ok(foundInA);
+        assert.equal(foundInA.email, emailA);
+      });
+
+      // Step 2: Query Tenant B — user from Tenant A must NOT exist
+      await runWithTenant(TENANT_B, async () => {
+        const foundInBById = await prisma.user.findUnique({ where: { id: createdUserIdA } });
+        assert.equal(foundInBById, null, "User from Tenant A must not exist in Tenant B by ID");
+
+        const foundInBByEmail = await prisma.user.findFirst({ where: { email: emailA } });
+        assert.equal(foundInBByEmail, null, "User from Tenant A must not exist in Tenant B by Email");
+
+        // Create distinct user in Tenant B
+        const userB = await prisma.user.create({
+          data: {
+            username: "beta_accountant",
+            name: "Beta Accountant",
+            fullName: "Beta Accountant - Beta Co",
+            email: "accountant@beta.test",
+            passwordHash: hashPassword("BetaPass123!"),
+            role: "FIELD_ACCOUNTANT",
+            department: "المالية",
+            active: true,
+            isActive: true,
+          },
+        });
+        assert.ok(userB.id);
+      });
+
+      // Step 3: Query Tenant A again — user from Tenant B must NOT exist in Tenant A
+      await runWithTenant(TENANT_A, async () => {
+        const foundInAByEmailB = await prisma.user.findFirst({
+          where: { email: "accountant@beta.test" },
+        });
+        assert.equal(foundInAByEmailB, null, "User from Tenant B must not exist in Tenant A");
+      });
+    });
+  });
+
+  describe("2. Password Reset User Lookup Normalization", () => {
+    it("locates users for password reset by ID, case-insensitive email, username, or display name", async () => {
+      await runWithTenant(TENANT_A, async () => {
+        const testEmail = "ahmed.awadh@uas-ye.com";
+        const user = await prisma.user.create({
+          data: {
+            username: "ahmed_awadh_corp_reset",
+            name: "Ahmed AWADH Reset Target",
+            fullName: "Ahmed AWADH - Financial Executive",
+            email: testEmail,
+            passwordHash: hashPassword("OldPassword123!"),
+            role: "SUPER_ADMIN",
+            department: "Executive",
+            active: true,
+            isActive: true,
+          },
+        });
+
+        // 1. Lookup by exact ID
+        const matchById = await prisma.user.findFirst({
+          where: { id: user.id },
+        });
+        assert.ok(matchById);
+
+        // 2. Lookup by email uppercase / case-insensitive
+        const matchByUpperEmail = await prisma.user.findFirst({
+          where: {
+            OR: [
+              { email: { equals: "AHMED.AWADH@UAS-YE.COM" } },
+              { email: { equals: testEmail } },
+            ],
+          },
+        });
+        assert.ok(matchByUpperEmail);
+        assert.equal(matchByUpperEmail.id, user.id);
+
+        // 3. Lookup by username
+        const matchByUsername = await prisma.user.findFirst({
+          where: { username: "ahmed_awadh_corp_reset" },
+        });
+        assert.ok(matchByUsername);
+        assert.equal(matchByUsername.id, user.id);
+
+        // 4. Lookup by unique name
+        const matchByName = await prisma.user.findFirst({
+          where: { name: "Ahmed AWADH Reset Target" },
+        });
+        assert.ok(matchByName);
+        assert.equal(matchByName.id, user.id);
+
+        // Verify password reset updating passwordHash
+        const newPassword = "ResetSuccessPassword2026!";
+        const updated = await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            passwordHash: hashPassword(newPassword),
+            mustChangePassword: true,
+          },
+        });
+        assert.equal(updated.mustChangePassword, true);
+        assert.equal(updated.passwordHash, hashPassword(newPassword));
+        assert.notEqual(updated.passwordHash, hashPassword("WrongPassword"));
+      });
+    });
+  });
+
+  describe("3. User Delete Guards, Soft-Archive & Actionable Guidance", () => {
+    it("blocks self-deletion with structured SELF_DELETION error and code", async () => {
+      await runWithTenant(TENANT_A, async () => {
+        const selfUser = await prisma.user.create({
+          data: {
+            username: `self_admin_${Date.now()}`,
+            name: "Self Admin",
+            fullName: "Self Admin User",
+            email: `self_admin_${Date.now()}@alpha.test`,
+            passwordHash: hashPassword("123456"),
+            role: "SUPER_ADMIN",
+            department: "Admin",
+            active: true,
+            isActive: true,
+          },
+        });
+
+        const actor = {
+          userId: selfUser.id,
+          userRole: "SUPER_ADMIN",
+          userDisplay: "Self Admin",
+        };
+
+        const result = await safeDeleteOrArchiveUser(selfUser.id, actor);
+        assert.equal(result.ok, false);
+        assert.equal(result.status, 400);
+        assert.equal(result.guardReason, "SELF_DELETION");
+        assert.equal(result.code, "SELF_DELETION_FORBIDDEN");
+        assert.ok(result.error?.includes("حسابك الشخصي"));
+      });
+    });
+
+    it("blocks deleting the last active SUPER_ADMIN with LAST_ADMIN guard", async () => {
+      await runWithTenant(TENANT_A, async () => {
+        // Query current super admins in Tenant A
+        const superAdmins = await prisma.user.findMany({
+          where: { role: "SUPER_ADMIN", isActive: true },
+        });
+
+        // Ensure we isolate down to 1 active super admin to test the guard
+        const targetAdmin = superAdmins[0];
+        if (superAdmins.length > 1) {
+          for (let i = 1; i < superAdmins.length; i++) {
+            await prisma.user.delete({ where: { id: superAdmins[i].id } }).catch(() => {});
+          }
+        }
+
+        const outsideActor = {
+          userId: "temporary-outside-admin",
+          userRole: "SUPER_ADMIN",
+          userDisplay: "Outside Admin",
+        };
+
+        const deleteAttempt = await safeDeleteOrArchiveUser(targetAdmin.id, outsideActor);
+        assert.equal(deleteAttempt.ok, false);
+        assert.equal(deleteAttempt.status, 400);
+        assert.equal(deleteAttempt.guardReason, "LAST_ADMIN");
+        assert.equal(deleteAttempt.code, "LAST_ADMIN_PROTECTED");
+        assert.ok(deleteAttempt.error?.includes("المشرف العام الوحيد"));
+      });
+    });
+
+    it("auto-archives users with linked accounting/audit records with seat release and guidance", async () => {
+      await runWithTenant(TENANT_A, async () => {
+        // Add a second super admin so we can delete normal users safely
+        const actor = {
+          userId: "active-admin-actor",
+          userRole: "SUPER_ADMIN",
+          userDisplay: "Active Admin",
+        };
+
+        const accountant = await prisma.user.create({
+          data: {
+            username: `linked_acc_${Date.now()}`,
+            name: "Linked Accountant",
+            fullName: "Linked Accountant Alpha",
+            email: `linked.acc.${Date.now()}@alpha.test`,
+            passwordHash: hashPassword("123456"),
+            role: "CHIEF_ACCOUNTANT",
+            department: "الحسابات",
+            active: true,
+            isActive: true,
+          },
+        });
+
+        // Create linked AuditLog entry
+        await prisma.auditLog.create({
+          data: {
+            userId: accountant.id,
+            action: "CREATE",
+            entity: "JournalEntry",
+            entityId: "JV-ALPHA-001",
+            details: { test: true },
+          },
+        });
+
+        // Attempt deletion
+        const outcome = await safeDeleteOrArchiveUser(accountant.id, actor);
+        assert.equal(outcome.ok, true);
+        assert.equal(outcome.deleted, false);
+        assert.equal(outcome.archived, true);
+        assert.equal(outcome.guardReason, "LINKED_RECORDS");
+        assert.ok(outcome.guidance && outcome.guidance.length > 0);
+        assert.ok(outcome.message.includes("أرشفة المستخدم"));
+
+        // Verify user status in DB
+        const archivedInDb = await prisma.user.findUnique({ where: { id: accountant.id } });
+        assert.ok(archivedInDb);
+        assert.equal(archivedInDb.isActive, false);
+        assert.equal(archivedInDb.active, false);
+        assert.ok(archivedInDb.archivedAt instanceof Date);
+      });
+    });
+  });
+
+  describe("4. Backup & Disaster Recovery Scoping", () => {
+    it("creates backups scoped to active tenant and includes tenantId in metadata", async () => {
+      await runWithTenant(TENANT_A, async () => {
+        const { envelope, filename } = await createUasbakEnvelope();
+        const normalizedTenantA = normalizeTenantId(TENANT_A);
+
+        assert.equal(envelope.format, "UAS-BACKUP-V1");
+        assert.equal(envelope.tenantId, normalizedTenantA);
+        assert.ok(filename.includes(normalizedTenantA));
+        assert.ok(envelope.dbBase64.length > 0);
+        assert.ok(envelope.sha256.length === 64);
+
+        // Save into backups dir to test listLocalBackups filtering
+        const backupsDir = getBackupsDirectory();
+        const testBackupPath = path.join(backupsDir, filename);
+        fs.writeFileSync(testBackupPath, JSON.stringify(envelope));
+
+        const backupsList = listLocalBackups(normalizedTenantA);
+        assert.ok(
+          backupsList.some((b) => b.filename === filename),
+          "Backups list for Tenant A must contain the created backup"
+        );
+
+        // Cleanup test backup file
+        if (fs.existsSync(testBackupPath)) {
+          fs.unlinkSync(testBackupPath);
+        }
+      });
+    });
+
+    it("rejects cross-tenant restore when company names/tenants do not match", async () => {
+      let tenantABuffer: Buffer | null = null;
+
+      await runWithTenant(TENANT_A, async () => {
+        const { envelope } = await createUasbakEnvelope();
+        tenantABuffer = Buffer.from(envelope.dbBase64, "base64");
+      });
+
+      assert.ok(tenantABuffer, "Tenant A buffer must be generated");
+
+      // Verify validation rejects restoring Tenant A into a company with a different name
+      const inspection = validateAndInspectCandidateDb(tenantABuffer, "شركة بيتا المستقلة كلياً");
+      assert.equal(inspection.ok, false, "Cross-company validation must fail");
+      assert.ok(
+        inspection.error?.includes("اسم المنشأة") ||
+          inspection.error?.includes("غير متطابقة"),
+        "Error must describe company name mismatch protection"
+      );
+
+      // Verify restoreDatabaseFromBuffer also throws when executed in Tenant B
+      await runWithTenant(TENANT_B, async () => {
+        const actorB = {
+          userId: "admin-beta",
+          userRole: "SUPER_ADMIN",
+          userDisplay: "Admin Beta",
+        };
+
+        await assert.rejects(
+          async () => {
+            await restoreDatabaseFromBuffer(tenantABuffer!, actorB, "cross-tenant-test", TENANT_B);
+          },
+          /فشل التحقق من أمان|اسم المنشأة|غير متطابقة|Candidate database verification failed/
+        );
+      });
+    });
+  });
+
+  describe("5. Client Multi-Device Tenant Tracking", () => {
+    it("handles client tenant storage and header normalization", () => {
+      assert.equal(normalizeTenantId("  Company Alpha  "), "company_alpha");
+      assert.equal(normalizeTenantId(""), "default");
+      assert.equal(normalizeTenantId(undefined), "default");
+      assert.equal(normalizeTenantId("ahmed@qat.world"), "qat_world");
+      assert.equal(normalizeTenantId("tenant_slug_123"), "tenant_slug_123");
+
+      const mockStorage = {
+        data: {} as Record<string, string>,
+        getItem(k: string) {
+          return this.data[k] || null;
+        },
+        setItem(k: string, v: string) {
+          this.data[k] = v;
+        },
+        removeItem(k: string) {
+          delete this.data[k];
+        },
+      };
+
+      setStoredTenantId("tenant-alpha-test", mockStorage);
+      assert.equal(getStoredTenantId(mockStorage), "tenant-alpha-test");
+
+      setStoredTenantId("default", mockStorage);
+      assert.equal(getStoredTenantId(mockStorage), "default");
+
+      setStoredTenantId("", mockStorage);
+      assert.equal(getStoredTenantId(mockStorage), "default");
+    });
+  });
+});

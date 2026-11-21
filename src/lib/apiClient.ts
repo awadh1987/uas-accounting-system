@@ -27,8 +27,26 @@ export const SERVER_URL_STORAGE_KEY = "uas_server_url";
 export const RUNTIME_MODE_STORAGE_KEY = "uas_runtime_mode";
 export const LAN_URL_STORAGE_KEY = "uas_lan_server_url";
 export const CLOUD_URL_STORAGE_KEY = "uas_cloud_server_url";
+export const TENANT_ID_STORAGE_KEY = "uas_tenant_id";
 export const DEFAULT_CLOUD_API_URL = "https://qat.world";
 export const DEFAULT_LAN_API_URL = "http://192.168.1.10:3000";
+
+export function getStoredTenantId(storage?: Pick<StorageLike, "getItem"> | null): string {
+  const s = getStorage(storage);
+  return (s?.getItem(TENANT_ID_STORAGE_KEY) || "").trim() || "default";
+}
+
+export function setStoredTenantId(tenantId: string, storage?: StorageLike | null): void {
+  const s = getWritableStorage(storage);
+  if (s) {
+    const cleaned = (tenantId || "").trim();
+    if (!cleaned || cleaned === "default") {
+      s.removeItem(TENANT_ID_STORAGE_KEY);
+    } else {
+      s.setItem(TENANT_ID_STORAGE_KEY, cleaned);
+    }
+  }
+}
 
 export function generateClientUuid(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -266,15 +284,21 @@ export async function safeFetchJson<T = Record<string, unknown>>(
   try {
     const method = (init?.method || "GET").toUpperCase();
     const isMutating = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
-    let finalInit = init;
+    const headers = new Headers(init?.headers || {});
 
     if (isMutating) {
-      const headers = new Headers(init?.headers || {});
       if (!headers.has("x-idempotency-key") && !headers.has("X-Idempotency-Key")) {
         headers.set("X-Idempotency-Key", generateClientUuid());
       }
-      finalInit = { ...init, headers };
     }
+
+    if (!headers.has("x-uas-tenant-id") && !headers.has("X-UAS-Tenant-Id")) {
+      const tid = getStoredTenantId();
+      if (tid && tid !== "default") {
+        headers.set("x-uas-tenant-id", tid);
+      }
+    }
+    const finalInit = { ...init, headers };
 
     const res = await fn(url, finalInit);
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
@@ -338,14 +362,19 @@ export function installGlobalApiFetchInterceptor(): void {
 
     if (isRelativeApi || isLocalhostApi) {
       const method = (init?.method || "GET").toUpperCase();
-      let patchedInit = init;
+      const headers = new Headers(init?.headers || {});
       if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
-        const headers = new Headers(init?.headers || {});
         if (!headers.has("x-idempotency-key") && !headers.has("X-Idempotency-Key")) {
           headers.set("X-Idempotency-Key", generateClientUuid());
         }
-        patchedInit = { ...init, headers };
       }
+      if (!headers.has("x-uas-tenant-id") && !headers.has("X-UAS-Tenant-Id")) {
+        const tid = getStoredTenantId();
+        if (tid && tid !== "default") {
+          headers.set("x-uas-tenant-id", tid);
+        }
+      }
+      const patchedInit = { ...init, headers };
 
       // On Android in `"local"` mode, route all local `/api/*` calls to on-device localStorage adapter
       // (never reaching https://qat.world or Capacitor's HTML fallback).
@@ -396,8 +425,14 @@ export async function fetchBootstrapState(): Promise<{
   const queueCount = await getOfflineQueueCount();
   try {
     const base = resolveApiBaseUrl();
+    const tid = getStoredTenantId();
+    const headers: Record<string, string> = {};
+    if (tid && tid !== "default") {
+      headers["x-uas-tenant-id"] = tid;
+    }
     const res = await fetch(`${base}/api/bootstrap`, {
       cache: "no-store",
+      headers,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
@@ -812,12 +847,17 @@ export async function executeMutation(opts: {
 
   try {
     const base = getApiBaseUrl();
+    const tid = getStoredTenantId();
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "X-Idempotency-Key": generateClientUuid(),
+    };
+    if (tid && tid !== "default") {
+      headers["x-uas-tenant-id"] = tid;
+    }
     const res = await fetch(`${base}${opts.endpoint}`, {
       method: opts.method,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Idempotency-Key": generateClientUuid(),
-      },
+      headers,
       body: JSON.stringify(bodyWithActor),
     });
     const data = (await res.json().catch(() => ({}))) as {
@@ -895,11 +935,16 @@ export async function syncQueuedOfflineMutations(currentUser: UasUser): Promise<
   let failedCount = 0;
 
   const base = getApiBaseUrl();
+  const tid = getStoredTenantId();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (tid && tid !== "default") {
+    headers["x-uas-tenant-id"] = tid;
+  }
   for (const item of items) {
     try {
       const res = await fetch(`${base}${item.endpoint}`, {
         method: item.method,
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(item.payload),
       });
       if (res.ok || res.status === 404 || res.status === 423) {

@@ -1423,17 +1423,29 @@ async function handleOfflineAndroidApiRequestCore(
 
   const userMatch = pathname.match(/^\/api\/users\/([^/]+)$/);
   if (userMatch) {
-    const targetId = decodeURIComponent(userMatch[1]);
+    const targetId = decodeURIComponent(userMatch[1]).trim();
     const state = loadOfflineAndroidState(s);
-    const idx = state.users.findIndex((u) => u.id === targetId);
-    if (idx < 0) return jsonResponse({ error: "المستخدم غير موجود" }, 404);
+    const idx = state.users.findIndex(
+      (u) =>
+        u.id === targetId ||
+        u.email.toLowerCase() === targetId.toLowerCase() ||
+        u.username?.toLowerCase() === targetId.toLowerCase() ||
+        u.name.toLowerCase() === targetId.toLowerCase()
+    );
+    if (idx < 0) return jsonResponse({ error: `المستخدم غير موجود (${targetId})` }, 404);
     const existing = state.users[idx];
 
     if (method === "PATCH") {
       const action = String(body.action || "").trim().toLowerCase();
       if (action === "archive") {
-        if (targetId === actor.userId) {
+        if (existing.id === actor.userId || targetId === actor.userId) {
           return jsonResponse({ error: "لا يمكن أرشفة حسابك الشخصي المسجل به حالياً" }, 400);
+        }
+        if (existing.role === "SUPER_ADMIN") {
+          const activeAdmins = state.users.filter((u) => u.role === "SUPER_ADMIN" && u.active && !u.archivedAt);
+          if (activeAdmins.length <= 1 && existing.active && !existing.archivedAt) {
+            return jsonResponse({ error: "لا يمكن أرشفة المشرف العام الوحيد المتبقي في المنشأة" }, 400);
+          }
         }
         existing.active = false;
         existing.isActive = false;
@@ -1493,13 +1505,28 @@ async function handleOfflineAndroidApiRequestCore(
     }
 
     if (method === "DELETE") {
-      if (targetId === actor.userId) {
-        return jsonResponse({ error: "لا يمكن حذف حسابك الشخصي المسجل به حالياً" }, 400);
+      if (existing.id === actor.userId || targetId === actor.userId) {
+        return jsonResponse({
+          error: "لا يمكن حذف حسابك الشخصي المسجل به حالياً. يمكنك استخدام خيار إيقاف الحساب أو تسليم الصلاحيات لمشرف آخر.",
+          code: "SELF_DELETION_FORBIDDEN",
+          guardReason: "SELF_DELETION",
+        }, 400);
       }
+      if (existing.role === "SUPER_ADMIN") {
+        const activeAdmins = state.users.filter((u) => u.role === "SUPER_ADMIN" && u.active && !u.archivedAt);
+        if (activeAdmins.length <= 1 && existing.active && !existing.archivedAt) {
+          return jsonResponse({
+            error: "لا يمكن حذف أو أرشفة المشرف العام الوحيد المتبقي في المنشأة لضمان استمرارية إدارة النظام. يرجى إنشاء أو ترقية مشرف بديل أولاً، أو استخدام خيار الإيقاف.",
+            code: "LAST_ADMIN_PROTECTED",
+            guardReason: "LAST_ADMIN",
+          }, 400);
+        }
+      }
+
       const journals = readCollection<{ createdById?: string }>(OFFLINE_DB_JOURNALS_KEY, s);
       const hasLinked =
-        journals.some((j) => j.createdById === targetId) ||
-        state.sales.some((sale) => sale.salesOfficerId === targetId) ||
+        journals.some((j) => j.createdById === existing.id || j.createdById === targetId) ||
+        state.sales.some((sale) => sale.salesOfficerId === existing.id || sale.salesOfficerId === targetId) ||
         state.auditLogs.some((a) => a.user.includes(existing.name) || a.user.includes(existing.email));
       const released = await releaseLocalSeatsForEmail(existing.email, s);
 
@@ -1515,7 +1542,8 @@ async function handleOfflineAndroidApiRequestCore(
           deleted: false,
           archived: true,
           seatsReleased: released,
-          message: "تمت أرشفة المستخدم لوجود قيود محاسبية مرتبطة به مع تحرير مقعد الترخيص",
+          guardReason: "LINKED_RECORDS",
+          message: "تمت أرشفة المستخدم لوجود قيود محاسبية وسجلات مرتبطة به مع تحرير مقعد الترخيص. يمكنك استخدام خيار الإيقاف أو استعادته.",
           state,
         });
       }
@@ -1529,6 +1557,7 @@ async function handleOfflineAndroidApiRequestCore(
         deleted: true,
         archived: false,
         seatsReleased: released,
+        guardReason: "NONE",
         message: "تم حذف المستخدم نهائياً وتحرير مقعد الترخيص بنجاح",
         state,
       });
@@ -1537,10 +1566,16 @@ async function handleOfflineAndroidApiRequestCore(
 
   const userResetMatch = pathname.match(/^\/api\/users\/([^/]+)\/reset-password$/);
   if (userResetMatch && method === "POST") {
-    const targetId = decodeURIComponent(userResetMatch[1]);
+    const targetId = decodeURIComponent(userResetMatch[1]).trim();
     const state = loadOfflineAndroidState(s);
-    const existing = state.users.find((u) => u.id === targetId);
-    if (!existing) return jsonResponse({ error: "المستخدم غير موجود" }, 404);
+    const existing = state.users.find(
+      (u) =>
+        u.id === targetId ||
+        u.email.toLowerCase() === targetId.toLowerCase() ||
+        u.username?.toLowerCase() === targetId.toLowerCase() ||
+        u.name.toLowerCase() === targetId.toLowerCase()
+    );
+    if (!existing) return jsonResponse({ error: `المستخدم غير موجود (${targetId})` }, 404);
     const passwords = readPasswordMap(s);
     passwords[existing.email.toLowerCase()] = String(body.newPassword || DEFAULT_LOCAL_ADMIN_PASSWORD);
     writePasswordMap(passwords, s);
@@ -1549,7 +1584,14 @@ async function handleOfflineAndroidApiRequestCore(
     addLocalAudit(state, actor.userDisplay, "إعادة تعيين كلمة مرور (محلي)", existing.email);
     saveOfflineAndroidState(state, s);
     appendOfflineSyncQueue(pathname, method, body, s);
-    return jsonResponse({ success: true, state }, 200);
+    return jsonResponse(
+      {
+        success: true,
+        message: `تمت إعادة تعيين كلمة مرور ${existing.name} بنجاح`,
+        state,
+      },
+      200
+    );
   }
 
   // -------------------------------------------------------------------------

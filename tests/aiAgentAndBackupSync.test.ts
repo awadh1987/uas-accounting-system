@@ -21,6 +21,7 @@ import {
   backfillLegacyBaseCurrencies,
   FULL_SCHEMA_TABLE_ORDER,
 } from "../src/lib/backupService";
+import { loadInstalledLicense } from "../src/lib/licensing/verifier";
 import {
   getEndpointSyncPriority,
   sortSyncQueueTopologically,
@@ -297,8 +298,10 @@ describe("Phase 3 — AI Agent Copilot, Support Engine, Full-Schema Backup & And
   // 4. Full-Schema Backup & Backward-Compatible Restore
   // ---------------------------------------------------------------------------
   it("(d) exports full schema JSON backup and auto-migrates 6-Gen COA & base currencies on restore", async () => {
+    const { license } = loadInstalledLicense();
+    const testCompanyName = license?.company_name || "UAS-Test-Backup-Company";
     const { backup, filename } = await exportFullSchemaJsonBackup({
-      companyName: "UAS-Test-Backup-Company",
+      companyName: testCompanyName,
     });
 
     assert.equal(backup.format, "UAS-FULL-SCHEMA-JSON-V1");

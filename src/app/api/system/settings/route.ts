@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
 import { extractActor, jsonError } from "@/lib/apiHelpers";
@@ -11,7 +11,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     await ensureSqliteDatabaseReady();
     const row = await prisma.systemSettings.findUnique({ where: { id: "default" } });
@@ -21,7 +21,7 @@ export async function GET() {
     console.error("GET /api/system/settings error:", error);
     return jsonError("تعذر تحميل إعدادات النظام / Failed to load system settings", 500);
   }
-}
+});
 
 async function saveSettings(req: NextRequest) {
   try {
@@ -151,10 +151,10 @@ async function saveSettings(req: NextRequest) {
   }
 }
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return saveSettings(req);
-}
+});
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return saveSettings(req);
-}
+});
