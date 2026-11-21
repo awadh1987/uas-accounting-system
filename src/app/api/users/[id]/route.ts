@@ -256,7 +256,8 @@ export const DELETE = withTenantRoute(async function DELETE(
       body = {};
     }
     const actor = extractActor(body, req);
-    const outcome = await safeDeleteOrArchiveUser(decodedId, actor);
+    const targetEmail = String(body.targetUserEmail || body.email || "").trim();
+    const outcome = await safeDeleteOrArchiveUser(decodedId, actor, { targetEmail });
     if (!outcome.ok) {
       return NextResponse.json(
         {
@@ -264,6 +265,7 @@ export const DELETE = withTenantRoute(async function DELETE(
           message: outcome.message,
           code: outcome.code,
           guardReason: outcome.guardReason,
+          guidance: outcome.guidance,
         },
         { status: outcome.status }
       );
@@ -277,11 +279,19 @@ export const DELETE = withTenantRoute(async function DELETE(
       seatsReleased: outcome.seatsReleased,
       linkedCount: outcome.linkedCount ?? 0,
       guardReason: outcome.guardReason,
+      guidance: outcome.guidance,
       message: outcome.message,
       state,
     });
   } catch (error) {
     console.error("DELETE /api/users/[id] error:", error);
-    return jsonError("تعذر حذف أو أرشفة المستخدم", 500);
+    const detail = error instanceof Error ? error.message : String(error);
+    return NextResponse.json(
+      {
+        error: `تعذر حذف أو أرشفة المستخدم: ${detail}`,
+        message: `تعذر حذف أو أرشفة المستخدم: ${detail}`,
+      },
+      { status: 500 }
+    );
   }
 });

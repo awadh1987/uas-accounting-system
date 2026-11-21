@@ -39,7 +39,7 @@ import {
   RotateCcw,
   Trash2,
 } from "lucide-react";
-import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl, safeFetchJson } from "@/lib/apiClient";
+import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl, safeFetchJson, getStoredTenantId } from "@/lib/apiClient";
 import { exportOrShareBinaryFile } from "@/lib/nativeBridge";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { AccountingSettingsPanel } from "@/components/AccountingSettingsPanel";
@@ -429,6 +429,7 @@ export function SystemTab({
       : `Delete user "${user.name}"? Users with no linked records are permanently deleted; users with accounting/audit records are automatically archived and their license seat is released.`;
     if (typeof window !== "undefined" && !window.confirm(confirmText)) return;
 
+    const activeTenantId = getStoredTenantId() || (currentUser as any)?.tenantId || "default";
     setUserLifecycleBusyId(user.id);
     try {
       const res = await safeFetchJson<{
@@ -443,26 +444,68 @@ export function SystemTab({
         method: "DELETE",
         headers: {
           "Content-Type": "application/json",
+          "x-uas-tenant-id": activeTenantId,
           "x-uas-user-id": currentUser.id,
           "x-uas-role": String(currentUser.role),
           "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
         },
         body: JSON.stringify({
+          targetUserId: user.id,
+          targetUserEmail: user.email,
+          tenantId: activeTenantId,
           actor: {
             userId: currentUser.id,
             userRole: currentUser.role,
             userDisplay: `${currentUser.name} (${currentUser.role})`,
+            userEmail: currentUser.email,
           },
         }),
       });
+
       if (!res.ok || !res.data?.success) {
-        const errorMsg = res.data?.error || (isAr ? "تعذر حذف المستخدم" : "Failed to delete user");
-        const guidanceMsg = res.data?.guidance ? `\n💡 ${res.data.guidance}` : "";
-        onToast(`${errorMsg}${guidanceMsg}`);
+        const errorDetail =
+          res.data?.error ||
+          res.data?.message ||
+          res.error ||
+          (isAr ? "تعذر حذف المستخدم" : "Failed to delete user");
+
+        const guardReason = res.data?.guardReason;
+        const guidanceMsg =
+          res.data?.guidance ||
+          (guardReason === "LAST_ADMIN"
+            ? (isAr
+                ? "لا يمكن حذف أو أرشفة المشرف العام الوحيد المتبقي في المنشأة لضمان استمرارية إدارة النظام. يرجى إنشاء أو ترقية مشرف بديل أولاً، أو استخدام خيار الإيقاف المؤقت (إيقاف)."
+                : "Cannot delete the last active SUPER_ADMIN. Designate a replacement admin first, or use Suspend.")
+            : guardReason === "SELF_DELETION"
+            ? (isAr
+                ? "لا يمكن حذف الحساب المسجل به حالياً. يمكنك استخدام خيار إيقاف الحساب (إيقاف) أو تسليم الصلاحيات لمشرف آخر أولاً."
+                : "Cannot delete your own active account. Use Suspend or transfer ownership.")
+            : guardReason === "LINKED_RECORDS"
+            ? (isAr
+                ? "توجد قيود أو سجلات محاسبية مرتبطة بهذا المستخدم. تم الاحتفاظ بالبيانات لحماية الدفاتر المحاسبية، يمكنك استخدام خيار الإيقاف أو الأرشفة."
+                : "Accounting/audit records exist for this user. Use Suspend or Archive to maintain audit integrity.")
+            : "");
+
+        const formatted = guidanceMsg && !errorDetail.includes(guidanceMsg)
+          ? `⛔ ${errorDetail}\n💡 ${guidanceMsg}`
+          : `⛔ ${errorDetail}`;
+
+        onToast(formatted);
         return;
       }
-      onToast(res.data.message || (isAr ? "تمت معالجة حذف المستخدم بنجاح" : "User removed successfully"));
+
+      const successMsg =
+        res.data.message ||
+        (res.data.archived
+          ? (isAr ? `تمت أرشفة المستخدم (${user.name}) بنجاح وتحرير مقعد الترخيص` : `User archived successfully`)
+          : (isAr ? `تم حذف المستخدم (${user.name}) نهائياً وتحرير مقعد الترخيص` : `User removed successfully`));
+
+      const guidanceSuffix = res.data.guidance ? `\n💡 ${res.data.guidance}` : "";
+      onToast(`✅ ${successMsg}${guidanceSuffix}`);
       onRefreshState?.();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onToast(`⛔ ${isAr ? "تعذر حذف المستخدم" : "Failed to delete user"}: ${msg}`);
     } finally {
       setUserLifecycleBusyId(null);
     }

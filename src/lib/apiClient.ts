@@ -294,13 +294,16 @@ export async function safeFetchJson<T = Record<string, unknown>>(
 
     if (!headers.has("x-uas-tenant-id") && !headers.has("X-UAS-Tenant-Id")) {
       const tid = getStoredTenantId();
-      if (tid && tid !== "default") {
+      if (tid) {
         headers.set("x-uas-tenant-id", tid);
       }
     }
     const finalInit = { ...init, headers };
 
-    const res = await fn(url, finalInit);
+    const baseUrl = resolveApiBaseUrl();
+    const finalUrl = baseUrl && url.startsWith("/api/") ? `${baseUrl}${url}` : url;
+
+    const res = await fn(finalUrl, finalInit);
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
     const text = await res.text();
     const trimmed = text.trim();
@@ -322,11 +325,13 @@ export async function safeFetchJson<T = Record<string, unknown>>(
 
     try {
       const parsed = JSON.parse(trimmed) as T;
+      const parsedErr = (parsed as any)?.error || (parsed as any)?.message;
       return {
         ok: res.ok,
         status: res.status,
         isHtmlFallback: false,
         data: parsed,
+        error: !res.ok ? (parsedErr || `HTTP_${res.status}`) : undefined,
       };
     } catch {
       return {

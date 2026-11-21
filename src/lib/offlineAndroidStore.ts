@@ -1510,6 +1510,7 @@ async function handleOfflineAndroidApiRequestCore(
           error: "لا يمكن حذف حسابك الشخصي المسجل به حالياً. يمكنك استخدام خيار إيقاف الحساب أو تسليم الصلاحيات لمشرف آخر.",
           code: "SELF_DELETION_FORBIDDEN",
           guardReason: "SELF_DELETION",
+          guidance: "لا يمكنك حذف حسابك الشخصي المسجل به حالياً. استخدم خيار (إيقاف) أو تسليم الصلاحيات لمشرف آخر أولاً.",
         }, 400);
       }
       if (existing.role === "SUPER_ADMIN") {
@@ -1519,6 +1520,7 @@ async function handleOfflineAndroidApiRequestCore(
             error: "لا يمكن حذف أو أرشفة المشرف العام الوحيد المتبقي في المنشأة لضمان استمرارية إدارة النظام. يرجى إنشاء أو ترقية مشرف بديل أولاً، أو استخدام خيار الإيقاف.",
             code: "LAST_ADMIN_PROTECTED",
             guardReason: "LAST_ADMIN",
+            guidance: "للحفاظ على النظام، قم بإنشاء أو ترقية حساب مشرف عام بديل أولاً، أو استخدم خيار الإيقاف المؤقت (إيقاف).",
           }, 400);
         }
       }
@@ -1543,6 +1545,7 @@ async function handleOfflineAndroidApiRequestCore(
           archived: true,
           seatsReleased: released,
           guardReason: "LINKED_RECORDS",
+          guidance: "تم تحويل العملية تلقائياً إلى الأرشفة وتحرير مقعد الترخيص لحماية القيود المحاسبية وسجلات التدقيق. يمكنك إيقافه أو استعادته لاحقاً.",
           message: "تمت أرشفة المستخدم لوجود قيود محاسبية وسجلات مرتبطة به مع تحرير مقعد الترخيص. يمكنك استخدام خيار الإيقاف أو استعادته.",
           state,
         });
@@ -1567,17 +1570,36 @@ async function handleOfflineAndroidApiRequestCore(
   const userResetMatch = pathname.match(/^\/api\/users\/([^/]+)\/reset-password$/);
   if (userResetMatch && method === "POST") {
     const targetId = decodeURIComponent(userResetMatch[1]).trim();
+    const targetEmail = String(body.targetUserEmail || body.email || "").trim().toLowerCase();
     const state = loadOfflineAndroidState(s);
     const existing = state.users.find(
       (u) =>
         u.id === targetId ||
+        (targetEmail && u.email.toLowerCase() === targetEmail) ||
         u.email.toLowerCase() === targetId.toLowerCase() ||
         u.username?.toLowerCase() === targetId.toLowerCase() ||
         u.name.toLowerCase() === targetId.toLowerCase()
     );
-    if (!existing) return jsonResponse({ error: `المستخدم غير موجود (${targetId})` }, 404);
+    if (!existing) {
+      return jsonResponse({
+        error: `المستخدم غير موجود (${targetId}) في المنشأة المحددة`,
+        guidance: "تأكد من وجود المستخدم ضمن نفس الشركة أو المنشأة، أو تحقق من دقة المعرف.",
+        code: "USER_NOT_FOUND",
+      }, 404);
+    }
+    const newPass = String(body.newPassword || "").trim();
+    if (!newPass || newPass.length < 6) {
+      return jsonResponse(
+        {
+          error: "يجب أن تتكون كلمة المرور الجديدة من 6 أحرف على الأقل",
+          guidance: "يرجى اختيار كلمة مرور قوية مكونة من 6 أحرف أو أرقام على الأقل لضمان أمان الحساب.",
+          code: "PASSWORD_TOO_SHORT",
+        },
+        400
+      );
+    }
     const passwords = readPasswordMap(s);
-    passwords[existing.email.toLowerCase()] = String(body.newPassword || DEFAULT_LOCAL_ADMIN_PASSWORD);
+    passwords[existing.email.toLowerCase()] = newPass;
     writePasswordMap(passwords, s);
     existing.mustChangePassword = Boolean(body.mustChangePassword);
     existing.passwordUpdatedAt = new Date().toISOString();

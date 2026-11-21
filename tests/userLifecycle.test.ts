@@ -3,6 +3,17 @@ import assert from "node:assert/strict";
 import { prisma } from "../src/lib/prisma";
 import { hashPassword } from "../src/lib/serverBootstrap";
 import { archiveOrRestoreUser, safeDeleteOrArchiveUser } from "../src/lib/userLifecycle";
+import { handleOfflineAndroidApiRequest, type OfflineStorageLike } from "../src/lib/offlineAndroidStore";
+
+function createMemoryStorage(): OfflineStorageLike {
+  const store = new Map<string, string>();
+  return {
+    getItem: (k) => store.get(k) ?? null,
+    setItem: (k, v) => { store.set(k, String(v)); },
+    removeItem: (k) => { store.delete(k); },
+    clear: () => { store.clear(); },
+  };
+}
 
 const TEST_PREFIX = `ulc-${Date.now()}`;
 const createdUserIds: string[] = [];
@@ -30,7 +41,7 @@ describe("Phase 1 — User Archive (أرشفة) & Safe Delete (حذف) with Lice
     }
   });
 
-  it("blocks non-admin roles and blocks self-deletion", async () => {
+  it("blocks non-admin roles and blocks self-deletion with specific guardReason and guidance", async () => {
     const nonAdminRes = await safeDeleteOrArchiveUser("some-user", {
       userId: "u2",
       userRole: "FIELD_ACCOUNTANT",
@@ -38,10 +49,20 @@ describe("Phase 1 — User Archive (أرشفة) & Safe Delete (حذف) with Lice
     });
     assert.equal(nonAdminRes.ok, false);
     assert.equal(nonAdminRes.status, 403);
+    assert.equal(nonAdminRes.guardReason, "INSUFFICIENT_PERMISSIONS");
+    assert.ok(nonAdminRes.guidance && nonAdminRes.guidance.length > 0);
 
     const selfRes = await safeDeleteOrArchiveUser(ADMIN_ACTOR.userId, ADMIN_ACTOR);
     assert.equal(selfRes.ok, false);
     assert.equal(selfRes.status, 400);
+    assert.equal(selfRes.guardReason, "SELF_DELETION");
+    assert.ok(selfRes.guidance && selfRes.guidance.includes("حالياً"));
+
+    const notFoundRes = await safeDeleteOrArchiveUser("non-existent-user-xyz", ADMIN_ACTOR);
+    assert.equal(notFoundRes.ok, false);
+    assert.equal(notFoundRes.status, 404);
+    assert.equal(notFoundRes.guardReason, "USER_NOT_FOUND");
+    assert.ok(notFoundRes.guidance && notFoundRes.guidance.length > 0);
   });
 
   it("permanently deletes a user with 0 linked records and releases their LicenseDeviceBinding seat", async () => {
@@ -156,5 +177,91 @@ describe("Phase 1 — User Archive (أرشفة) & Safe Delete (حذف) with Lice
     assert.ok(restoredUser);
     assert.equal(restoredUser.isActive, true);
     assert.equal(restoredUser.archivedAt, null);
+  });
+
+  it("finds user by targetEmail option in safeDeleteOrArchiveUser if id does not directly match", async () => {
+    const email = `${TEST_PREFIX}-lookup@company.test`;
+    const user = await prisma.user.create({
+      data: {
+        username: `${TEST_PREFIX}_lookup`,
+        name: "مستخدم للبحث بالإيميل",
+        fullName: "مستخدم للبحث بالإيميل - Test",
+        email,
+        passwordHash: hashPassword("123456"),
+        role: "FIELD_ACCOUNTANT",
+        department: "الفروع",
+        active: true,
+        isActive: true,
+      },
+    });
+    createdUserIds.push(user.id);
+
+    // Call safeDeleteOrArchiveUser with an arbitrary non-matching id string, but valid targetEmail
+    const outcome = await safeDeleteOrArchiveUser("unknown-or-legacy-id", ADMIN_ACTOR, {
+      targetEmail: email,
+    });
+    assert.equal(outcome.ok, true);
+    assert.equal(outcome.deleted, true);
+
+    const check = await prisma.user.findUnique({ where: { id: user.id } });
+    assert.equal(check, null);
+  });
+
+  it("verifies offline store API returns actionable guidance on delete guards and password reset errors", async () => {
+    const memStorage = createMemoryStorage();
+
+    // 1. Password reset with short password (< 6 chars) on existing user (u1)
+    const shortPassRes = await handleOfflineAndroidApiRequest(
+      "/api/users/u1/reset-password",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          newPassword: "123",
+          actor: { userId: "u1", userDisplay: "Admin", userRole: "SUPER_ADMIN" },
+        }),
+      },
+      memStorage
+    );
+    assert.equal(shortPassRes.status, 400);
+    const shortPassJson = await shortPassRes.json();
+    assert.equal(shortPassJson.code, "PASSWORD_TOO_SHORT");
+    assert.ok(shortPassJson.guidance && shortPassJson.guidance.includes("6 أحرف"));
+
+    // 2. Password reset for non-existent user
+    const notFoundReset = await handleOfflineAndroidApiRequest(
+      "/api/users/non-existent-xyz/reset-password",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          newPassword: "ValidPassword123!",
+          actor: { userId: "u1", userDisplay: "Admin", userRole: "SUPER_ADMIN" },
+        }),
+      },
+      memStorage
+    );
+    assert.equal(notFoundReset.status, 404);
+    const notFoundResetJson = await notFoundReset.json();
+    assert.equal(notFoundResetJson.code, "USER_NOT_FOUND");
+    assert.ok(notFoundResetJson.guidance && notFoundResetJson.guidance.length > 0);
+
+    // 3. User delete self-deletion guard in offline store
+    const selfDelRes = await handleOfflineAndroidApiRequest(
+      "/api/users/u1",
+      {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetUserId: "u1",
+          actor: { userId: "u1", userDisplay: "Admin", userRole: "SUPER_ADMIN" },
+        }),
+      },
+      memStorage
+    );
+    assert.equal(selfDelRes.status, 400);
+    const selfDelJson = await selfDelRes.json();
+    assert.equal(selfDelJson.guardReason, "SELF_DELETION");
+    assert.ok(selfDelJson.guidance && selfDelJson.guidance.includes("حالياً"));
   });
 });

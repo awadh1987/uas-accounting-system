@@ -17,7 +17,15 @@ export interface SafeDeleteUserResult {
   seatsReleased: number;
   linkedCount?: number;
   code?: string;
-  guardReason?: "SELF_DELETION" | "LAST_ADMIN" | "LINKED_RECORDS" | "NONE";
+  guardReason?:
+    | "SELF_DELETION"
+    | "SELF_DELETION_FORBIDDEN"
+    | "LAST_ADMIN"
+    | "LAST_ADMIN_PROTECTED"
+    | "LINKED_RECORDS"
+    | "INSUFFICIENT_PERMISSIONS"
+    | "USER_NOT_FOUND"
+    | "NONE";
   guidance?: string;
   message: string;
   error?: string;
@@ -62,7 +70,8 @@ async function releaseSeatsByEmailTx(
  */
 export async function safeDeleteOrArchiveUser(
   targetUserId: string,
-  actor: UserLifecycleActor
+  actor: UserLifecycleActor,
+  options?: { targetEmail?: string }
 ): Promise<SafeDeleteUserResult> {
   if (!canManageUsers(actor.userRole)) {
     return {
@@ -72,13 +81,16 @@ export async function safeDeleteOrArchiveUser(
       archived: false,
       seatsReleased: 0,
       code: "FORBIDDEN",
+      guardReason: "INSUFFICIENT_PERMISSIONS",
+      guidance: "تتطلب هذه العملية صلاحيات مدير النظام العام (SUPER_ADMIN).",
       message: "غير مصرح",
       error: "⛔ إدارة وحذف المستخدمين محصورة بمدير النظام العام / Restricted to SUPER_ADMIN",
     };
   }
 
   const cleanTarget = (targetUserId || "").trim();
-  if (!cleanTarget) {
+  const targetEmail = (options?.targetEmail || "").trim().toLowerCase();
+  if (!cleanTarget && !targetEmail) {
     return {
       ok: false,
       status: 400,
@@ -92,16 +104,21 @@ export async function safeDeleteOrArchiveUser(
   }
 
   return prisma.$transaction(async (tx) => {
-    // 1. Normalize lookup: match by ID, email (case-insensitive), or username
+    // 1. Normalize lookup: match by ID, email (case-insensitive), username, or name
+    const lookupList: Array<Record<string, unknown>> = [
+      { id: cleanTarget },
+      { email: cleanTarget.toLowerCase() },
+      { username: cleanTarget },
+      { username: cleanTarget.toLowerCase() },
+      { name: cleanTarget },
+    ];
+    if (targetEmail) {
+      lookupList.push({ email: targetEmail });
+    }
+
     const existing = await tx.user.findFirst({
       where: {
-        OR: [
-          { id: cleanTarget },
-          { email: cleanTarget.toLowerCase() },
-          { username: cleanTarget },
-          { username: cleanTarget.toLowerCase() },
-          { name: cleanTarget },
-        ],
+        OR: lookupList,
       },
     });
 
@@ -113,8 +130,10 @@ export async function safeDeleteOrArchiveUser(
         archived: false,
         seatsReleased: 0,
         code: "USER_NOT_FOUND",
-        message: `المستخدم غير موجود (${cleanTarget})`,
-        error: `المستخدم غير موجود (${cleanTarget}) / User not found`,
+        guardReason: "USER_NOT_FOUND",
+        guidance: "تأكد من وجود المستخدم ضمن نفس المنشأة أو حدّث قائمة المستخدمين.",
+        message: `المستخدم غير موجود (${cleanTarget || targetEmail})`,
+        error: `المستخدم غير موجود (${cleanTarget || targetEmail}) في قاعدة بيانات المنشأة الحالية / User not found`,
       };
     }
 

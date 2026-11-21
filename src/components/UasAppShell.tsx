@@ -41,6 +41,7 @@ import {
   isNativeAndroid,
   resolveApiBaseUrl,
   safeFetchJson,
+  setStoredTenantId,
   syncQueuedOfflineMutations,
 } from "@/lib/apiClient";
 import { resolveEffectiveTab, resolveGroupForTab } from "@/lib/erpNavigation";
@@ -210,7 +211,11 @@ export function UasAppShell() {
 
   useEffect(() => {
     if (!toastMsg) return;
-    const timer = setTimeout(() => setToastMsg(null), 3000);
+    const duration =
+      toastMsg.includes("💡") || toastMsg.includes("\n") || toastMsg.length > 50
+        ? 6500
+        : 3500;
+    const timer = setTimeout(() => setToastMsg(null), duration);
     return () => clearTimeout(timer);
   }, [toastMsg]);
 
@@ -816,6 +821,10 @@ export function UasAppShell() {
 
   function handleLoginUser(u: UasUser) {
     setCurrentUser(u);
+    const userTenant = (u as any)?.tenantId;
+    if (userTenant) {
+      setStoredTenantId(userTenant);
+    }
     if (typeof window !== "undefined") {
       window.localStorage.setItem("uas_user", u.id);
       window.localStorage.setItem("uas_view_mode", "erp");
@@ -961,9 +970,26 @@ export function UasAppShell() {
     <div className="min-h-screen flex flex-col">
       {/* Top Notification Toast */}
       {toastMsg && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] no-print">
-          <div className="px-5 py-3 rounded-xl shadow-lg bg-emerald-700 text-white text-sm font-semibold flex items-center gap-2">
-            <span>{toastMsg}</span>
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] no-print max-w-lg w-[90vw] pointer-events-none">
+          <div
+            className={`px-5 py-3 rounded-xl shadow-xl text-white text-sm font-semibold flex items-start gap-2 whitespace-pre-line pointer-events-auto transition-all ${
+              toastMsg.includes("⛔") ||
+              toastMsg.includes("❌") ||
+              toastMsg.includes("تعذر") ||
+              toastMsg.includes("فشل") ||
+              toastMsg.includes("خطأ") ||
+              toastMsg.toLowerCase().includes("failed") ||
+              toastMsg.toLowerCase().includes("error")
+                ? "bg-rose-700 border border-rose-500/50 shadow-rose-900/40"
+                : toastMsg.includes("⚠️") ||
+                  toastMsg.includes("💡") ||
+                  toastMsg.includes("🟠") ||
+                  toastMsg.toLowerCase().includes("warn")
+                ? "bg-amber-700 border border-amber-500/50 shadow-amber-900/40"
+                : "bg-emerald-700 border border-emerald-500/50 shadow-emerald-900/40"
+            }`}
+          >
+            <span className="flex-1 leading-relaxed">{toastMsg}</span>
           </div>
         </div>
       )}

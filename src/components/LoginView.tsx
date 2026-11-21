@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { DualLogoBadge } from "@/components/DualLogoBadge";
 import { isInstalledClientApp } from "@/lib/runtimePlatform";
-import { getApiBaseUrl, resetApiBaseUrl, setApiBaseUrl } from "@/lib/apiClient";
+import { getApiBaseUrl, resetApiBaseUrl, setApiBaseUrl, setStoredTenantId } from "@/lib/apiClient";
 import type { LicenseStatusData } from "@/components/LicenseActivationModal";
 import type { LanguageCode, ThemeName, UasEnterpriseProfile, UasUser } from "@/types/uas";
 
@@ -239,6 +239,10 @@ export function LoginView({
         return;
       }
       if (typeof window !== "undefined") {
+        const localTenant = (localMatch as any)?.tenantId;
+        if (localTenant) {
+          setStoredTenantId(localTenant);
+        }
         if (rememberDevice) window.localStorage.setItem(REMEMBER_KEY, localMatch.email);
         else window.localStorage.removeItem(REMEMBER_KEY);
       }
@@ -257,7 +261,11 @@ export function LoginView({
           password: params.passInput,
         }),
       });
-      const data = (await res.json().catch(() => ({}))) as { user?: UasUser; error?: string };
+      const data = (await res.json().catch(() => ({}))) as {
+        user?: UasUser;
+        error?: string;
+        tenantId?: string;
+      };
       if (!res.ok || !data.user) {
         if ((res.status === 404 || res.status === 405) && !data.error && localMatch) {
           throw new Error("STATIC_EXPORT_OFFLINE_LOGIN");
@@ -270,6 +278,11 @@ export function LoginView({
         return;
       }
       if (typeof window !== "undefined") {
+        if (data.tenantId) {
+          setStoredTenantId(data.tenantId);
+        } else if ((data.user as any)?.tenantId) {
+          setStoredTenantId((data.user as any).tenantId);
+        }
         if (rememberDevice) window.localStorage.setItem(REMEMBER_KEY, data.user.email);
         else window.localStorage.removeItem(REMEMBER_KEY);
       }
