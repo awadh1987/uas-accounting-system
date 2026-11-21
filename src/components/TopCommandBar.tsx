@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Bell,
   Bot,
   ChevronDown,
   FileClock,
@@ -72,6 +73,10 @@ interface TopCommandBarProps {
   draftsCount?: number;
   onOpenApprovalsCenter?: () => void;
   pendingApprovalsCount?: number;
+  onOpenNotifications?: () => void;
+  unreadNotificationsCount?: number;
+  transportBadge?: string;
+  pendingConflictsCount?: number;
   onLogout?: () => void;
 }
 
@@ -112,6 +117,10 @@ export function TopCommandBar({
   draftsCount = 0,
   onOpenApprovalsCenter,
   pendingApprovalsCount = 0,
+  onOpenNotifications,
+  unreadNotificationsCount = 0,
+  transportBadge,
+  pendingConflictsCount = 0,
   onLogout,
 }: TopCommandBarProps) {
   const isAr = lang === "ar";
@@ -342,12 +351,30 @@ export function TopCommandBar({
           </select>
         )}
 
-        {/* Offline / Sync Pill */}
+        {/* Notification Center Bell */}
+        {onOpenNotifications && (
+          <button
+            type="button"
+            data-testid="topbar-notifications-btn"
+            onClick={onOpenNotifications}
+            title={isAr ? "مركز الإشعارات والتنبيهات" : "Notification Center"}
+            className="relative inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-800/70 hover:border-emerald-500 text-xs font-bold transition shrink-0"
+          >
+            <Bell className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            {unreadNotificationsCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-black tabular-nums leading-none">
+                {unreadNotificationsCount}
+              </span>
+            )}
+          </button>
+        )}
+
+        {/* Offline / Transport Mode & Sync Now Pill */}
         <div className="flex items-center rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shrink-0">
           <button
             type="button"
             onClick={onToggleOffline}
-            title={offlineMode ? dict.offlineBadge : dict.onlineBadge}
+            title={transportBadge || (offlineMode ? dict.offlineBadge : dict.onlineBadge)}
             className={`px-2 py-1.5 text-[11px] font-bold inline-flex items-center gap-1 ${
               offlineMode
                 ? "bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
@@ -356,17 +383,24 @@ export function TopCommandBar({
           >
             {offlineMode ? <WifiOff className="w-3.5 h-3.5" /> : <Wifi className="w-3.5 h-3.5" />}
             <span className="hidden lg:inline">
-              {offlineMode ? (isAr ? "أوفلاين" : "Offline") : isAr ? "متصل" : "Online"}
+              {transportBadge || (offlineMode ? (isAr ? "أوفلاين" : "Offline") : isAr ? "متصل" : "Online")}
             </span>
           </button>
           <button
             type="button"
+            data-testid="topbar-sync-now-btn"
             onClick={onSyncQueue}
-            title={dict.syncBtn}
+            title={isAr ? "مزامنة الآن (Sync Now)" : "Sync Now"}
             className="px-2 py-1.5 text-[11px] font-extrabold bg-indigo-50/80 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 inline-flex items-center gap-1 border-s border-slate-200 dark:border-slate-700"
           >
             <RefreshCw className="w-3 h-3" />
+            <span className="hidden xl:inline">{isAr ? "مزامنة الآن" : "Sync Now"}</span>
             <span className="tabular-nums">{offlineQueueCount}</span>
+            {pendingConflictsCount > 0 && (
+              <span className="px-1 rounded bg-rose-600 text-white text-[9px] font-black">
+                !{pendingConflictsCount}
+              </span>
+            )}
           </button>
         </div>
 

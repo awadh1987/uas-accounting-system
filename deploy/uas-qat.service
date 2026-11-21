@@ -1,18 +1,21 @@
 [Unit]
-Description=Unified Accounting System (UAS) Enterprise Service
-After=network.target
+Description=Unified Accounting System (UAS) Enterprise Standalone Service
+After=network.target postgresql.service
 
 [Service]
 Type=simple
 User=uas
-WorkingDirectory=/var/www/uas-accounting-system
+WorkingDirectory=/var/www/uas-qat
 Environment=NODE_ENV=production
 Environment=PORT=3000
-Environment=DATABASE_URL="file:/var/www/uas-accounting-system/prisma/dev.db"
+Environment=HOSTNAME=127.0.0.1
 Environment=NEXTAUTH_URL="https://qat.world"
 Environment=APP_URL="https://qat.world"
+Environment=UAS_ROOT_DOMAIN="qat.world"
+EnvironmentFile=-/var/www/uas-qat/.env.production
 
-ExecStart=/usr/bin/npm run start
+# Next.js output: "standalone" server entrypoint (ensure .next/static & public are synced into .next/standalone)
+ExecStart=/usr/bin/node /var/www/uas-qat/.next/standalone/server.js
 Restart=always
 RestartSec=5
 StandardOutput=syslog

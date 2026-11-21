@@ -3,6 +3,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { createPrismaSeatStore } from "@/lib/licensing/prismaSeatStore";
 import { releaseKeySeat, verifyKeyRequest } from "@/lib/licensing/licenseAuthority";
+import {
+  ensureTenantRegistered,
+  findTenantBySlug,
+  generateTenantSlug,
+  getTenantPrisma,
+  listExistingSlugs,
+  normalizeTenantId,
+} from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -69,6 +77,42 @@ export async function POST(req: NextRequest) {
     }
 
     const out = await verifyKeyRequest(body, { store });
+    if (out.status === 200 && out.body.success && out.body.license) {
+      const lic = out.body.license as {
+        company_name?: string;
+        customer_name?: string;
+        license_id?: string;
+        tenant_slug?: string;
+        name_ar?: string;
+        name_en?: string;
+        max_users?: number;
+      };
+      const companyName = (lic.company_name || lic.customer_name || "").trim();
+      if (companyName) {
+        try {
+          const existingBySlug = lic.tenant_slug ? findTenantBySlug(lic.tenant_slug) : null;
+          const derivedSlug =
+            lic.tenant_slug ||
+            existingBySlug?.slug ||
+            generateTenantSlug(lic.name_en || companyName, {
+              existingSlugs: listExistingSlugs(),
+            }).slug;
+          const tenantId = existingBySlug?.tenantId || normalizeTenantId(derivedSlug);
+          const meta = ensureTenantRegistered(tenantId, companyName, {
+            slug: derivedSlug,
+            nameAr: lic.name_ar || companyName,
+            nameEn: lic.name_en || companyName,
+            licenseId: lic.license_id,
+          });
+          await getTenantPrisma(meta.tenantId);
+          out.body.tenant_slug = meta.slug;
+          out.body.tenant_url = meta.tenantUrl;
+          out.body.tenant_id = meta.tenantId;
+        } catch (provErr) {
+          console.warn("[Licensing verify-key] Non-fatal tenant DB provisioning notice:", provErr);
+        }
+      }
+    }
     return NextResponse.json(out.body, { status: out.status });
   } catch (err) {
     console.error("[Licensing verify-key Error]:", err);

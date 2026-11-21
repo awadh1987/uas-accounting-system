@@ -21,6 +21,10 @@ const REQUIRED_CORE_TABLES = [
   "JournalEntry",
   "ImmutableAuditLog",
   "LicenseDeviceBinding",
+  "SyncChangeLog",
+  "SyncConflict",
+  "NotificationEvent",
+  "TenantDevice",
 ];
 
 const globalForSqliteInit = globalThis as unknown as {
@@ -404,6 +408,84 @@ async function seedDefaultBaselineRecords(): Promise<void> {
   }
 }
 
+async function ensureAdditiveColumns(client: {
+  $queryRawUnsafe: <T = unknown>(query: string, ...values: unknown[]) => Promise<T>;
+  $executeRawUnsafe: (query: string, ...values: unknown[]) => Promise<unknown>;
+}): Promise<void> {
+  const specs: Array<{ table: string; columns: Array<{ name: string; ddl: string }> }> = [
+    {
+      table: "EnterpriseProfile",
+      columns: [
+        { name: "tenantSlug", ddl: 'ALTER TABLE "EnterpriseProfile" ADD COLUMN "tenantSlug" TEXT' },
+        {
+          name: "welcomeNoticeAr",
+          ddl: 'ALTER TABLE "EnterpriseProfile" ADD COLUMN "welcomeNoticeAr" TEXT NOT NULL DEFAULT \'\'',
+        },
+        {
+          name: "welcomeNoticeEn",
+          ddl: 'ALTER TABLE "EnterpriseProfile" ADD COLUMN "welcomeNoticeEn" TEXT NOT NULL DEFAULT \'\'',
+        },
+        {
+          name: "supportEmail",
+          ddl: 'ALTER TABLE "EnterpriseProfile" ADD COLUMN "supportEmail" TEXT NOT NULL DEFAULT \'\'',
+        },
+      ],
+    },
+    {
+      table: "SystemSettings",
+      columns: [
+        {
+          name: "autoSyncEnabled",
+          ddl: 'ALTER TABLE "SystemSettings" ADD COLUMN "autoSyncEnabled" INTEGER NOT NULL DEFAULT 1',
+        },
+        {
+          name: "autoSyncIntervalSec",
+          ddl: 'ALTER TABLE "SystemSettings" ADD COLUMN "autoSyncIntervalSec" INTEGER NOT NULL DEFAULT 60',
+        },
+        {
+          name: "defaultDeviceSyncMode",
+          ddl: 'ALTER TABLE "SystemSettings" ADD COLUMN "defaultDeviceSyncMode" TEXT NOT NULL DEFAULT \'AUTO\'',
+        },
+        {
+          name: "requireDeviceApproval",
+          ddl: 'ALTER TABLE "SystemSettings" ADD COLUMN "requireDeviceApproval" INTEGER NOT NULL DEFAULT 0',
+        },
+        {
+          name: "tenantAdminConfigJson",
+          ddl: 'ALTER TABLE "SystemSettings" ADD COLUMN "tenantAdminConfigJson" TEXT NOT NULL DEFAULT \'{}\'',
+        },
+      ],
+    },
+  ];
+
+  for (const spec of specs) {
+    try {
+      const info = (await client.$queryRawUnsafe<Array<{ name: string }>>(
+        `PRAGMA table_info("${spec.table}");`
+      )) as Array<{ name: string }>;
+      const existingCols = new Set(info.map((c) => c.name));
+      for (const col of spec.columns) {
+        if (!existingCols.has(col.name)) {
+          try {
+            await client.$executeRawUnsafe(col.ddl);
+          } catch {
+            // Ignore duplicate column error if raced
+          }
+        }
+      }
+    } catch {
+      // Ignore if table doesn't exist yet
+    }
+  }
+}
+
+export async function ensureSqliteAdditiveSchema(client: {
+  $queryRawUnsafe: <T = unknown>(query: string, ...values: unknown[]) => Promise<T>;
+  $executeRawUnsafe: (query: string, ...values: unknown[]) => Promise<unknown>;
+}): Promise<void> {
+  await ensureAdditiveColumns(client);
+}
+
 async function runSelfHealingBootstrap(): Promise<void> {
   if (!isSqliteRuntime()) return;
 
@@ -431,11 +513,13 @@ async function runSelfHealingBootstrap(): Promise<void> {
       `[SQLite Bootstrap] Missing core tables detected (${missingTables.join(", ")}). Running zero-CLI pure-runtime schema initialization...`
     );
     await applyMigrationsIfNeeded(true);
+    await ensureAdditiveColumns(prisma);
     await seedDefaultBaselineRecords();
     console.log("[SQLite Bootstrap] Self-healing SQLite initialization completed successfully.");
   } else {
     // Check if any new migration files need to be applied, and ensure baseline singletons exist
     await applyMigrationsIfNeeded(false);
+    await ensureAdditiveColumns(prisma);
     await seedDefaultBaselineRecords();
   }
 

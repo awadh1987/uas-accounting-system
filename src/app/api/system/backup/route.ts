@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { withTenantRoute } from "@/lib/prisma";
 import {
-  createUasbakEnvelope,
+  createPortableUasbakEnvelope,
   createTempBackupSnapshot,
   exportFullSchemaJsonBackup,
 } from "@/lib/backupService";
+import { emitNotification } from "@/lib/notifications/notificationService";
 import { extractActor, jsonError, forbiddenError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
@@ -24,6 +25,17 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
 
     if (format === "json") {
       const { backup, filename } = await exportFullSchemaJsonBackup();
+      await emitNotification({
+        eventType: "BACKUP_COMPLETED",
+        channel: "general",
+        severity: "SUCCESS",
+        titleAr: "تم تصدير نسخة احتياطية كاملة (JSON)",
+        titleEn: "Full Schema Backup Exported (JSON)",
+        messageAr: `تم إنشاء الملف ${filename}`,
+        messageEn: `Generated backup file ${filename}`,
+        targetTab: "system",
+        actorUserId: actor.userId,
+      });
       return NextResponse.json(backup, {
         status: 200,
         headers: {
@@ -45,7 +57,21 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
       });
     }
 
-    const { envelope, filename } = await createUasbakEnvelope();
+    const { envelope, filename } = await createPortableUasbakEnvelope({
+      forcePortableV2: format === "portable",
+    });
+
+    await emitNotification({
+      eventType: "BACKUP_COMPLETED",
+      channel: "general",
+      severity: "SUCCESS",
+      titleAr: "تم إنشاء النسخة الاحتياطية (.uasbak)",
+      titleEn: "Backup Created (.uasbak)",
+      messageAr: `تم إنشاء النسخة الاحتياطية للمنشأة بنجاح (${filename})`,
+      messageEn: `Created tenant backup (${filename})`,
+      targetTab: "system",
+      actorUserId: actor.userId,
+    });
 
     return NextResponse.json(envelope, {
       status: 200,

@@ -26,6 +26,7 @@ import {
 import { DualLogoBadge } from "@/components/DualLogoBadge";
 import { isInstalledClientApp } from "@/lib/runtimePlatform";
 import { getApiBaseUrl, resetApiBaseUrl, setApiBaseUrl, setStoredTenantId } from "@/lib/apiClient";
+import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
 import type { LicenseStatusData } from "@/components/LicenseActivationModal";
 import type { LanguageCode, ThemeName, UasEnterpriseProfile, UasUser } from "@/types/uas";
 
@@ -318,6 +319,13 @@ export function LoginView({
   const legalName = isAr
     ? enterpriseProfile?.legalNameAr?.trim() || "منظومة تخطيط الموارد المحاسبية"
     : enterpriseProfile?.legalNameEn?.trim() || "Enterprise Resource Planning";
+  const hostSlug =
+    typeof window !== "undefined" ? extractSubdomainSlugFromHost(window.location.host) : null;
+  const tenantSlug = hostSlug || enterpriseProfile?.tenantSlug || null;
+  const tenantUrl = tenantSlug && tenantSlug !== "default" ? `https://${tenantSlug}.qat.world` : null;
+  const welcomeNotice = isAr
+    ? enterpriseProfile?.welcomeNoticeAr
+    : enterpriseProfile?.welcomeNoticeEn;
 
   return (
     <div className="min-h-screen w-full flex flex-col justify-between bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-4 sm:p-6 lg:p-8">
@@ -366,11 +374,21 @@ export function LoginView({
                 <h1 className="text-xl sm:text-2xl font-black tracking-tight pt-1">
                   {legalName}
                 </h1>
+                {tenantUrl && (
+                  <div className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-300" dir="ltr">
+                    {tenantUrl}
+                  </div>
+                )}
                 <p className="text-xs text-slate-500 dark:text-slate-400">
                   {isAr
                     ? "تسجيل الدخول إلى منظومة الحسابات الموحدة (UAS ERP)"
                     : "Sign in to Unified Accounting System (UAS ERP)"}
                 </p>
+                {welcomeNotice && (
+                  <div className="mt-2 p-2.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-[11px] font-bold text-emerald-800 dark:text-emerald-200">
+                    {welcomeNotice}
+                  </div>
+                )}
               </div>
 
               {offlineMode && (

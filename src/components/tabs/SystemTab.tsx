@@ -44,6 +44,8 @@ import { exportOrShareBinaryFile } from "@/lib/nativeBridge";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { AccountingSettingsPanel } from "@/components/AccountingSettingsPanel";
 import { ApprovalRulesMatrixPanel } from "@/components/ApprovalRulesMatrixPanel";
+import { TenantAdminConfigPanel } from "@/components/TenantAdminConfigPanel";
+import { TenantDevicesPanel } from "@/components/TenantDevicesPanel";
 import {
   ALL_USER_ROLES,
   ROLE_DEFAULT_PERMISSIONS,
@@ -316,21 +318,33 @@ export function SystemTab({
   onToast,
 }: SystemTabProps) {
   const isAr = lang === "ar";
-  const [activeSubTab, setActiveSubTab] = useState<"branding" | "users" | "accounting" | "security">("branding");
+  const [activeSubTab, setActiveSubTab] = useState<
+    "branding" | "users" | "accounting" | "tenant-config" | "devices" | "security"
+  >("branding");
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
 
+    const isValidSubTab = (
+      s: string | null | undefined
+    ): s is "branding" | "users" | "accounting" | "tenant-config" | "devices" | "security" =>
+      s === "branding" ||
+      s === "users" ||
+      s === "accounting" ||
+      s === "tenant-config" ||
+      s === "devices" ||
+      s === "security";
+
     const readInitialSubTab = () => {
       const rawHash = window.location.hash.replace(/^#\/?/, "");
       const [hTab, hSub] = rawHash.split("/");
-      if (hTab === "system" && (hSub === "branding" || hSub === "users" || hSub === "accounting" || hSub === "security")) {
+      if (hTab === "system" && isValidSubTab(hSub)) {
         setActiveSubTab(hSub);
         window.sessionStorage.setItem("uas_system_subtab", hSub);
         return;
       }
       const saved = window.sessionStorage.getItem("uas_system_subtab");
-      if (saved === "branding" || saved === "users" || saved === "accounting" || saved === "security") {
+      if (isValidSubTab(saved)) {
         setActiveSubTab(saved);
         if (hTab === "system") {
           window.location.hash = `#/system/${saved}`;
@@ -343,7 +357,7 @@ export function SystemTab({
     const handleHash = () => {
       const rawHash = window.location.hash.replace(/^#\/?/, "");
       const [hTab, hSub] = rawHash.split("/");
-      if (hTab === "system" && (hSub === "branding" || hSub === "users" || hSub === "accounting" || hSub === "security")) {
+      if (hTab === "system" && isValidSubTab(hSub)) {
         setActiveSubTab(hSub);
         window.sessionStorage.setItem("uas_system_subtab", hSub);
       }
@@ -353,7 +367,9 @@ export function SystemTab({
     return () => window.removeEventListener("hashchange", handleHash);
   }, []);
 
-  function handleSelectSubTab(subTab: "branding" | "users" | "accounting" | "security") {
+  function handleSelectSubTab(
+    subTab: "branding" | "users" | "accounting" | "tenant-config" | "devices" | "security"
+  ) {
     setActiveSubTab(subTab);
     if (typeof window !== "undefined") {
       window.sessionStorage.setItem("uas_system_subtab", subTab);
@@ -1168,6 +1184,30 @@ export function SystemTab({
         </button>
         <button
           type="button"
+          onClick={() => handleSelectSubTab("tenant-config")}
+          className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+            activeSubTab === "tenant-config"
+              ? "accent-bg shadow-sm"
+              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+          }`}
+        >
+          <Globe className="w-4 h-4" />
+          <span>{isAr ? "إعدادات مساحة المنشأة (Tenant Config)" : "Tenant Admin Config"}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => handleSelectSubTab("devices")}
+          className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+            activeSubTab === "devices"
+              ? "accent-bg shadow-sm"
+              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+          }`}
+        >
+          <Smartphone className="w-4 h-4" />
+          <span>{isAr ? "أجهزة المنشأة والمزامنة (Devices)" : "Tenant Devices Control"}</span>
+        </button>
+        <button
+          type="button"
           onClick={() => handleSelectSubTab("security")}
           className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
             activeSubTab === "security"
@@ -1179,6 +1219,25 @@ export function SystemTab({
           <span>{isAr ? "إعدادات النظام والأمان والربط (Settings & Connectivity)" : "System Settings & Connectivity"}</span>
         </button>
       </div>
+
+      {activeSubTab === "tenant-config" && (
+        <TenantAdminConfigPanel
+          lang={lang}
+          currentUser={currentUser}
+          readOnly={readOnly || (!canManageUsers && !canManageCms)}
+          onRefreshState={onRefreshState}
+          onToast={onToast}
+        />
+      )}
+
+      {activeSubTab === "devices" && (
+        <TenantDevicesPanel
+          lang={lang}
+          currentUser={currentUser}
+          readOnly={readOnly || !canManageUsers}
+          onToast={onToast}
+        />
+      )}
 
       {activeSubTab === "accounting" && (
         <div className="space-y-5">

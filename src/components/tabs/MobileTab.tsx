@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Download } from "lucide-react";
-import { getOfflineQueue, type OfflineMutationItem } from "@/lib/offlineDb";
-import type { TabId } from "@/types/uas";
+import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, CheckCircle2, Download, RefreshCw } from "lucide-react";
+import { safeFetchJson, getStoredTenantId } from "@/lib/apiClient";
+import { getOfflineQueue, getSyncMeta, type OfflineMutationItem, type OfflineSyncMetaRow } from "@/lib/offlineDb";
+import type { TabId, UasSyncConflict } from "@/types/uas";
 
 interface ApkVersionMeta {
   version: string;
@@ -41,6 +42,25 @@ export function MobileTab({
 }: MobileTabProps) {
   const [queueItems, setQueueItems] = useState<OfflineMutationItem[]>([]);
   const [apkMeta, setApkMeta] = useState<ApkVersionMeta | null>(null);
+  const [syncMeta, setSyncMeta] = useState<OfflineSyncMetaRow | null>(null);
+  const [conflicts, setConflicts] = useState<UasSyncConflict[]>([]);
+  const [resolvingConflictId, setResolvingConflictId] = useState<string | null>(null);
+
+  const loadSyncDetails = useCallback(async () => {
+    const tenantId = getStoredTenantId();
+    const [items, meta, confRes] = await Promise.all([
+      getOfflineQueue(),
+      getSyncMeta(tenantId),
+      safeFetchJson<{ conflicts?: UasSyncConflict[] }>("/api/sync/conflicts?status=CONFLICT_PENDING", {
+        cache: "no-store",
+      }),
+    ]);
+    setQueueItems(items);
+    setSyncMeta(meta);
+    if (confRes.ok && Array.isArray(confRes.data?.conflicts)) {
+      setConflicts(confRes.data.conflicts);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -56,14 +76,31 @@ export function MobileTab({
   }, []);
 
   useEffect(() => {
-    let active = true;
-    getOfflineQueue().then((items) => {
-      if (active) setQueueItems(items);
-    });
-    return () => {
-      active = false;
-    };
-  }, [offlineQueueCount, offlineMode]);
+    void loadSyncDetails();
+  }, [offlineQueueCount, offlineMode, loadSyncDetails]);
+
+  async function handleResolveConflict(
+    conflictId: string,
+    resolution: "KEEP_SERVER" | "APPLY_CLIENT" | "DISMISS"
+  ) {
+    setResolvingConflictId(conflictId);
+    try {
+      const res = await safeFetchJson<{ success?: boolean; error?: string }>("/api/sync/conflicts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conflictId, resolution }),
+      });
+      if (!res.ok || !res.data?.success) {
+        onToast(res.data?.error || "تعذر حل تعارض المزامنة");
+        return;
+      }
+      onToast("✅ تم حل تعارض المزامنة بنجاح");
+      await loadSyncDetails();
+      onSyncQueue();
+    } finally {
+      setResolvingConflictId(null);
+    }
+  }
   function copyCapacitorConfig() {
     const cfg = JSON.stringify(
       {
@@ -213,24 +250,92 @@ export function MobileTab({
           </div>
         </div>
 
-        {/* IndexedDB Offline Sync Queue Inspector */}
+        {/* IndexedDB Offline Sync Queue & Conflict Resolution Inspector */}
         <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h4 className="font-extrabold text-sm">
-                طابور المزامنة الميدانية (IndexedDB Offline Queue)
+                طابور المزامنة الميدانية والعمل دون اتصال (Sync &amp; Offline Queue)
               </h4>
               <p className="text-slate-500">
                 الحالة: {offlineMode ? "🟠 وضع عدم الاتصال (تخزين محلي)" : "🟢 متصل بالخادم"} — العمليات المعلقة: {offlineQueueCount}
+                {syncMeta && (
+                  <span className="font-mono ms-2">
+                    • Cursor #{syncMeta.cursor} • {syncMeta.syncMode}
+                    {syncMeta.lastSyncAt ? ` • آخر مزامنة: ${syncMeta.lastSyncAt.slice(0, 19).replace("T", " ")}` : ""}
+                  </span>
+                )}
               </p>
             </div>
             <button
               onClick={onSyncQueue}
-              className="px-3.5 py-2 rounded-xl accent-bg font-bold"
+              className="px-3.5 py-2 rounded-xl accent-bg font-bold inline-flex items-center gap-1.5"
             >
-              🔄 مزامنة العمليات المعلقة ({offlineQueueCount})
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>مزامنة الآن ({offlineQueueCount})</span>
             </button>
           </div>
+          {conflicts.length > 0 && (
+            <div className="p-3 rounded-xl border-2 border-rose-400/70 bg-rose-50/70 dark:bg-rose-950/30 space-y-2.5">
+              <div className="font-black text-rose-700 dark:text-rose-300 flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>تعارضات مزامنة بانتظار المراجعة (CONFLICT_PENDING: {conflicts.length})</span>
+              </div>
+              {conflicts.map((c) => (
+                <div
+                  key={c.id}
+                  className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800 space-y-2"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-black">
+                      {c.entityType} ({c.entityId})
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-700 dark:text-rose-300 font-mono text-[10px] font-bold">
+                      {c.status}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-rose-700 dark:text-rose-300">{c.reason}</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[10px] font-mono">
+                    <div className="p-2 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 overflow-x-auto">
+                      <div className="font-sans font-bold text-slate-500 mb-1">بيانات الجهاز (Client):</div>
+                      <pre className="whitespace-pre-wrap break-all">{JSON.stringify(c.clientPayload, null, 2)}</pre>
+                    </div>
+                    <div className="p-2 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 overflow-x-auto">
+                      <div className="font-sans font-bold text-slate-500 mb-1">حالة الخادم (Server):</div>
+                      <pre className="whitespace-pre-wrap break-all">{JSON.stringify(c.serverSnapshot, null, 2)}</pre>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <button
+                      type="button"
+                      disabled={resolvingConflictId === c.id}
+                      onClick={() => void handleResolveConflict(c.id, "KEEP_SERVER")}
+                      className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white font-bold inline-flex items-center gap-1"
+                    >
+                      <CheckCircle2 className="w-3 h-3" />
+                      <span>اعتماد نسخة الخادم (Keep Server)</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={resolvingConflictId === c.id}
+                      onClick={() => void handleResolveConflict(c.id, "APPLY_CLIENT")}
+                      className="px-2.5 py-1.5 rounded-lg bg-amber-600 text-white font-bold"
+                    >
+                      <span>تطبيق تعديل الجهاز (Apply Client)</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={resolvingConflictId === c.id}
+                      onClick={() => void handleResolveConflict(c.id, "DISMISS")}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 font-bold"
+                    >
+                      <span>تجاهل (Dismiss)</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           {queueItems.length > 0 ? (
             <div className="space-y-1.5">
               {queueItems.map((item, idx) => (

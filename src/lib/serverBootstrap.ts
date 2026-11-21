@@ -173,6 +173,10 @@ function mapEnterpriseProfile(
     showPublicVerify: row?.showPublicVerify ?? true,
     ctaPrimaryTextAr: row?.ctaPrimaryTextAr || "دخول النظام المالي",
     ctaPrimaryTextEn: row?.ctaPrimaryTextEn || "Launch ERP Console",
+    tenantSlug: row?.tenantSlug ?? null,
+    welcomeNoticeAr: row?.welcomeNoticeAr || "",
+    welcomeNoticeEn: row?.welcomeNoticeEn || "",
+    supportEmail: row?.supportEmail || "",
   };
 }
 
@@ -192,6 +196,12 @@ function mapSettings(settingsRow: SystemSettings | null): UasSystemSettings {
       settingsRow?.defaultCurrency === "USD"
         ? settingsRow.defaultCurrency
         : "YER",
+    periodLockDate: settingsRow?.periodLockDate ?? null,
+    autoSyncEnabled: settingsRow?.autoSyncEnabled ?? true,
+    autoSyncIntervalSec: settingsRow?.autoSyncIntervalSec ?? 60,
+    defaultDeviceSyncMode:
+      settingsRow?.defaultDeviceSyncMode === "MANUAL" ? "MANUAL" : "AUTO",
+    requireDeviceApproval: settingsRow?.requireDeviceApproval ?? false,
   };
 }
 

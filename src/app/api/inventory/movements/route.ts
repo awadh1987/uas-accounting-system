@@ -11,6 +11,7 @@ import {
 import { parseAccountingSettings } from "@/lib/accountingSettings";
 import { extractActor, jsonError } from "@/lib/apiHelpers";
 import { appendAuditLogTx } from "@/lib/serverBootstrap";
+import { emitNotification } from "@/lib/notifications/notificationService";
 import { withIdempotency } from "@/lib/idempotencyGuard";
 
 export const dynamic = "force-dynamic";
@@ -190,6 +191,26 @@ export async function POST(req: NextRequest) {
         entityReference: `StockMovement:${movement.id}`,
         details: `${item.nameAr} | ${enteredQty} × ${factorToBase} = ${baseQtyDelta} base`,
       });
+
+      if (item.minStockAlert > 0 && balance.qtyOnHandBase <= item.minStockAlert) {
+        await emitNotification(
+          {
+            eventType: "LOW_STOCK",
+            channel: "general",
+            severity: "WARNING",
+            titleAr: `تنبيه انخفاض المخزون (${item.nameAr})`,
+            titleEn: `Low Stock Alert (${item.nameEn || item.nameAr})`,
+            messageAr: `الرصيد المتبقي (${balance.qtyOnHandBase}) وصل أو أقل من حد التنبيه (${item.minStockAlert}).`,
+            messageEn: `Remaining balance (${balance.qtyOnHandBase}) is at or below alert threshold (${item.minStockAlert}).`,
+            targetTab: "inventory",
+            targetEntityType: "InventoryItem",
+            targetEntityId: item.id,
+            actorUserId: actor.userId,
+            metadata: { itemId: item.id, sku: item.sku, qtyOnHandBase: balance.qtyOnHandBase, minStockAlert: item.minStockAlert },
+          },
+          tx
+        );
+      }
 
       const breakdown = formatCompoundStockBreakdown(
         balance.qtyOnHandBase,

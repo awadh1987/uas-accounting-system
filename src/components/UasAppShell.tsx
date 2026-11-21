@@ -19,6 +19,7 @@ import { ApprovalsCenter, APPROVALS_CHANGED_EVENT } from "@/components/Approvals
 import { DRAFTS_CHANGED_EVENT } from "@/hooks/useFormDraft";
 import { UasAiCopilot } from "@/components/UasAiCopilot";
 import { UserProfileDrawer } from "@/components/UserProfileDrawer";
+import { NotificationCenterDrawer } from "@/components/NotificationCenterDrawer";
 import { VoucherModal } from "@/components/VoucherModal";
 import { AuditTab } from "@/components/tabs/AuditTab";
 import { CustomersTab } from "@/components/tabs/CustomersTab";
@@ -42,7 +43,6 @@ import {
   resolveApiBaseUrl,
   safeFetchJson,
   setStoredTenantId,
-  syncQueuedOfflineMutations,
 } from "@/lib/apiClient";
 import { resolveEffectiveTab, resolveGroupForTab } from "@/lib/erpNavigation";
 import { exportFullWorkbookToExcel } from "@/lib/excelExport";
@@ -71,6 +71,13 @@ import {
 } from "@/lib/licensing";
 import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
 import { INITIAL_FALLBACK_STATE } from "@/lib/seedFallback";
+import { performManualSyncNow, startAutoSyncController } from "@/lib/sync/clientSyncManager";
+import { resolveTransportTarget } from "@/lib/transportResolver";
+import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
+import {
+  ensureNotificationChannelsAndPermission,
+  flushQueuedNotifications,
+} from "@/lib/notifications/clientNotificationBridge";
 import type {
   LanguageCode,
   TabId,
@@ -118,6 +125,9 @@ export function UasAppShell() {
   const [draftsCount, setDraftsCount] = useState(0);
   const [approvalsDrawerOpen, setApprovalsDrawerOpen] = useState(false);
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
+  const [notificationsDrawerOpen, setNotificationsDrawerOpen] = useState(false);
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
+  const [pendingConflictsCount, setPendingConflictsCount] = useState(0);
   const [licenseStatus, setLicenseStatus] = useState<LicenseStatusData | null>(null);
   const [licenseModalOpen, setLicenseModalOpen] = useState(false);
   const [quickSheetOpen, setQuickSheetOpen] = useState(false);
@@ -152,15 +162,61 @@ export function UasAppShell() {
     };
     refreshApprovalsCount();
     window.addEventListener(APPROVALS_CHANGED_EVENT, refreshApprovalsCount);
+
+    const refreshNotificationsCount = () => {
+      safeFetchJson<{ unreadCount?: number }>(
+        `/api/notifications?unreadOnly=true&userId=${encodeURIComponent(currentUser.id)}`,
+        { cache: "no-store" }
+      )
+        .then((res) => {
+          if (res.ok && typeof res.data?.unreadCount === "number") {
+            setUnreadNotificationsCount(res.data.unreadCount);
+          }
+        })
+        .catch(() => undefined);
+    };
+    refreshNotificationsCount();
+    void ensureNotificationChannelsAndPermission().then(() => {
+      flushQueuedNotifications();
+    });
+
+    const stopAutoSync = startAutoSyncController({
+      currentUser,
+      enabled: state.settings.autoSyncEnabled !== false,
+      intervalSec: state.settings.autoSyncIntervalSec || 60,
+      onSyncComplete: (syncRes) => {
+        setState(syncRes.state);
+        setOfflineQueueCount(syncRes.remainingQueue);
+        setPendingConflictsCount(syncRes.conflictCount);
+        refreshNotificationsCount();
+      },
+    });
+
     return () => {
       window.removeEventListener(DRAFTS_CHANGED_EVENT, refreshDraftCount);
       window.removeEventListener(APPROVALS_CHANGED_EVENT, refreshApprovalsCount);
+      stopAutoSync();
     };
-  }, [currentUser]);
+  }, [currentUser, state.settings.autoSyncEnabled, state.settings.autoSyncIntervalSec]);
 
   const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleRevoked = () => {
+      setCurrentUser(null);
+      setViewMode("login");
+      showToast(
+        lang === "ar"
+          ? "⛔ تم إلغاء صلاحية هذا الجهاز من قبل مسؤول المنشأة — يرجى التواصل مع الإدارة."
+          : "⛔ This device has been revoked by your tenant administrator."
+      );
+    };
+    window.addEventListener("uas:device-revoked", handleRevoked);
+    return () => window.removeEventListener("uas:device-revoked", handleRevoked);
+  }, [lang, showToast]);
 
   const checkLicensingStatus = useCallback(async () => {
     const onAndroid = isNativeAndroid();
@@ -222,6 +278,12 @@ export function UasAppShell() {
   // Initial database bootstrap + restore session, user & tab across refreshes
   useEffect(() => {
     installGlobalApiFetchInterceptor();
+    if (typeof window !== "undefined") {
+      const hostSlug = extractSubdomainSlugFromHost(window.location.host);
+      if (hostSlug) {
+        setStoredTenantId(hostSlug);
+      }
+    }
     const isClientApp = isInstalledClientApp();
     void Promise.resolve().then(() => checkLicensingStatus());
     let active = true;
@@ -651,11 +713,25 @@ export function UasAppShell() {
       showToast("لا يوجد اتصال بالإنترنت حالياً لتنفيذ المزامنة");
       return;
     }
-    const res = await syncQueuedOfflineMutations(activeUser);
+    const res = await performManualSyncNow(activeUser);
     setState(res.state);
     setOfflineQueueCount(res.remainingQueue);
+    setPendingConflictsCount(res.conflictCount);
     setOfflineMode(false);
-    showToast(`✅ تمت المزامنة السحابية بنجاح (${res.syncedCount} عمليات)`);
+    flushQueuedNotifications();
+    if (res.conflictCount > 0) {
+      showToast(
+        lang === "ar"
+          ? `⚠️ تمت المزامنة (${res.syncedCount} عملية) مع وجود ${res.conflictCount} تعارض بانتظار المراجعة`
+          : `⚠️ Synced ${res.syncedCount} item(s), ${res.conflictCount} conflict(s) pending resolution`
+      );
+    } else {
+      showToast(
+        lang === "ar"
+          ? `✅ تمت المزامنة بنجاح (${res.syncedCount} عملية، المؤشر #${res.latestCursor})`
+          : `✅ Synced successfully (${res.syncedCount} item(s), cursor #${res.latestCursor})`
+      );
+    }
   }
 
   function handleProjectFilterChange(pid: string) {
@@ -1121,6 +1197,15 @@ export function UasAppShell() {
               currentUser={currentUser}
               onToast={showToast}
             />
+            <NotificationCenterDrawer
+              open={notificationsDrawerOpen}
+              onClose={() => setNotificationsDrawerOpen(false)}
+              lang={lang}
+              currentUser={currentUser}
+              onUnreadCountChange={setUnreadNotificationsCount}
+              onNavigateTab={(tab) => navigateToTab(tab)}
+              onToast={showToast}
+            />
             <TopCommandBar
               lang={lang}
               theme={theme}
@@ -1146,6 +1231,14 @@ export function UasAppShell() {
               draftsCount={draftsCount}
               onOpenApprovalsCenter={() => setApprovalsDrawerOpen(true)}
               pendingApprovalsCount={pendingApprovalsCount}
+              onOpenNotifications={() => setNotificationsDrawerOpen(true)}
+              unreadNotificationsCount={unreadNotificationsCount}
+              transportBadge={
+                lang === "ar"
+                  ? resolveTransportTarget({ offlineMode }).badgeLabelAr
+                  : resolveTransportTarget({ offlineMode }).badgeLabelEn
+              }
+              pendingConflictsCount={pendingConflictsCount}
               onProjectChange={handleProjectFilterChange}
               onSubProjectChange={handleSubProjectFilterChange}
               onHarvestChange={setSelectedHarvest}

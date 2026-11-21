@@ -1,3 +1,5 @@
+import { buildTenantWorkspaceUrl, validateTenantSlug } from "@/lib/tenant/tenantSlug";
+
 export type RuntimeMode = "local" | "lan" | "cloud";
 
 export type SeatPlatform = "windows" | "android";
@@ -34,6 +36,14 @@ export interface UasLicensePayload {
   company_name?: string;
   max_users?: number;
   per_user_devices?: PerUserDevices;
+  /**
+   * Subdomain-on-Key (v3) fields. When `tenant_slug` is present, it is validated (3–32 ASCII lowercase
+   * `[a-z0-9-]`, reserved-word guarded) and signed alongside `tenant_url` (`https://<slug>.qat.world`).
+   */
+  tenant_slug?: string;
+  tenant_url?: string;
+  name_ar?: string;
+  name_en?: string;
 }
 
 export interface UasSignedLicense extends UasLicensePayload {
@@ -141,7 +151,7 @@ export function canonicalizeLicensePayload(payload: UasLicensePayload): string {
     return JSON.stringify(base);
   }
 
-  // v2: company-locked multi-seat payload. Keys are emitted in alphabetical order.
+  // v2 / v3: company-locked multi-seat payload. Keys are emitted in exact alphabetical order.
   const { wildcard, targets } = parseHwidTargets(payload.hwid);
   const sorted: Record<string, unknown> = {
     allowed_modes: base.allowed_modes,
@@ -154,7 +164,15 @@ export function canonicalizeLicensePayload(payload: UasLicensePayload): string {
     max_branches: base.max_branches,
     max_lan_seats: base.max_lan_seats,
     max_users: resolveMaxUsers(payload.max_users),
+    ...(payload.tenant_slug && typeof payload.name_ar === "string" ? { name_ar: payload.name_ar.trim() } : {}),
+    ...(payload.tenant_slug && typeof payload.name_en === "string" ? { name_en: payload.name_en.trim() } : {}),
     per_user_devices: resolvePerUser(payload.per_user_devices),
+    ...(payload.tenant_slug
+      ? {
+          tenant_slug: payload.tenant_slug.trim().toLowerCase(),
+          tenant_url: (payload.tenant_url || buildTenantWorkspaceUrl(payload.tenant_slug)).trim().toLowerCase(),
+        }
+      : {}),
   };
   return JSON.stringify(sorted);
 }
@@ -216,6 +234,23 @@ export function validateLicenseStructure(obj: unknown): UasSignedLicense | null 
     result.company_name = item.company_name;
     result.max_users = maxUsers;
     result.per_user_devices = perUser;
+  }
+
+  // v3 Subdomain-on-Key fields
+  if (item.tenant_slug !== undefined) {
+    const slugCheck = validateTenantSlug(String(item.tenant_slug));
+    if (!slugCheck.valid) return null;
+    result.tenant_slug = slugCheck.normalized;
+    result.tenant_url =
+      typeof item.tenant_url === "string" && item.tenant_url.trim()
+        ? item.tenant_url.trim().toLowerCase()
+        : buildTenantWorkspaceUrl(slugCheck.normalized);
+    if (typeof item.name_ar === "string" && item.name_ar.trim()) {
+      result.name_ar = item.name_ar.trim();
+    }
+    if (typeof item.name_en === "string" && item.name_en.trim()) {
+      result.name_en = item.name_en.trim();
+    }
   }
 
   return result;

@@ -25,6 +25,15 @@ export interface NativeAndroidJsBridge {
     title: string
   ) => boolean;
   openExternalUrl?: (url: string) => boolean;
+  checkMicrophonePermission?: () => string;
+  requestMicrophonePermission?: () => boolean;
+  openAppSettings?: () => boolean;
+  checkUnusedAppRestrictionsStatus?: () => number;
+  openUnusedAppSettings?: () => boolean;
+  checkNotificationPermission?: () => boolean;
+  requestNotificationPermission?: () => boolean;
+  registerNotificationChannels?: () => boolean;
+  showLocalNotification?: (channelId: string, title: string, body: string) => boolean;
 }
 
 export interface NativeWindowLike {

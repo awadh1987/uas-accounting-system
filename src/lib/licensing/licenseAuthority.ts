@@ -18,6 +18,7 @@ import {
 } from "./seatService";
 import { companyMismatchMessage } from "./companyLock";
 import { seatFailure } from "./activationPolicy";
+import { buildTenantWorkspaceUrl, generateTenantSlug } from "@/lib/tenant/tenantSlug";
 
 export interface VerifyKeyRequest {
   key?: unknown;
@@ -169,6 +170,11 @@ export async function verifyKeyRequest(
     };
   }
 
+  const tenantSlug =
+    license.tenant_slug ||
+    generateTenantSlug(license.name_en || companyName).slug;
+  const tenantUrl = license.tenant_url || buildTenantWorkspaceUrl(tenantSlug);
+
   return {
     status: 200,
     body: {
@@ -176,6 +182,8 @@ export async function verifyKeyRequest(
       license,
       seat_managed: true,
       seat_status: result.status,
+      tenant_slug: tenantSlug,
+      tenant_url: tenantUrl,
       binding: {
         user_email: result.binding.userEmail,
         platform: result.binding.platform,

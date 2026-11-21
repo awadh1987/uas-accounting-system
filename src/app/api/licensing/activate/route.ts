@@ -9,6 +9,15 @@ import { createPrismaSeatStore } from "@/lib/licensing/prismaSeatStore";
 import { createPrismaProfileRepo } from "@/lib/licensing/companyLockServer";
 import { enforceActivationPolicy } from "@/lib/licensing/activationPolicy";
 import { normalizePlatform } from "@/lib/licensing/seatService";
+import {
+  buildTenantWorkspaceUrl,
+  ensureTenantRegistered,
+  findTenantBySlug,
+  generateTenantSlug,
+  getTenantPrisma,
+  listExistingSlugs,
+  normalizeTenantId,
+} from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -187,11 +196,41 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // Persist tenant subdomain mapping & provision isolated DB/schema when slug or company name is present
+    let tenantSlug = licenseObj.tenant_slug || null;
+    let tenantUrl = licenseObj.tenant_url || null;
+    const companyForTenant = (licenseObj.company_name || licenseObj.customer_name || confirmCompanyName || "").trim();
+    if (companyForTenant) {
+      try {
+        const existingBySlug = tenantSlug ? findTenantBySlug(tenantSlug) : null;
+        const resolvedSlug =
+          tenantSlug ||
+          existingBySlug?.slug ||
+          generateTenantSlug(licenseObj.name_en || companyForTenant, {
+            existingSlugs: listExistingSlugs(),
+          }).slug;
+        const tenantId = existingBySlug?.tenantId || normalizeTenantId(resolvedSlug);
+        const meta = ensureTenantRegistered(tenantId, companyForTenant, {
+          slug: resolvedSlug,
+          nameAr: licenseObj.name_ar || companyForTenant,
+          nameEn: licenseObj.name_en || companyForTenant,
+          licenseId: licenseObj.license_id,
+        });
+        await getTenantPrisma(meta.tenantId);
+        tenantSlug = meta.slug;
+        tenantUrl = meta.tenantUrl || buildTenantWorkspaceUrl(meta.slug);
+      } catch (tenantErr) {
+        console.warn("[Licensing Activate] Non-fatal tenant registration notice:", tenantErr);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       message: "تم تفعيل الترخيص بنجاح وتوثيقه مشفراً على هذا الجهاز / License activated successfully and bound to this hardware.",
       saved_path: savedPath,
       license: licenseObj,
+      tenant_slug: tenantSlug,
+      tenant_url: tenantUrl,
       company_lock: policy.companyLock,
       seat: policy.seat
         ? {

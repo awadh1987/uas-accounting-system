@@ -1,11 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeTenantId } from "./tenantContext";
+import { buildTenantWorkspaceUrl, generateTenantSlug } from "./tenantSlug";
 
 export interface TenantMetadata {
   tenantId: string;
   slug: string;
   companyName: string;
+  nameAr?: string;
+  nameEn?: string;
+  tenantUrl?: string;
+  licenseId?: string;
   schemaOrDb: string;
   status: "ACTIVE" | "SUSPENDED" | "ARCHIVED";
   createdAt: string;
@@ -166,21 +171,66 @@ export function listRegisteredTenants(): TenantMetadata[] {
   return Array.from(inMemoryRegistry.values());
 }
 
+export function listExistingSlugs(): Set<string> {
+  ensureRegistryInitialized();
+  const slugs = new Set<string>();
+  for (const item of inMemoryRegistry.values()) {
+    if (item.slug) slugs.add(item.slug.trim().toLowerCase());
+  }
+  return slugs;
+}
+
+export function findTenantBySlug(rawSlug?: string | null): TenantMetadata | null {
+  ensureRegistryInitialized();
+  const clean = String(rawSlug || "").trim().toLowerCase();
+  if (!clean) return null;
+  for (const item of inMemoryRegistry.values()) {
+    if (item.slug?.toLowerCase() === clean) return item;
+  }
+  const norm = normalizeTenantId(clean);
+  return inMemoryRegistry.get(norm) || null;
+}
+
 export function registerTenant(params: {
   tenantId: string;
   companyName: string;
   slug?: string;
+  nameAr?: string;
+  nameEn?: string;
+  tenantUrl?: string;
+  licenseId?: string;
   maxSeats?: number;
 }): TenantMetadata {
   ensureRegistryInitialized();
   const normId = normalizeTenantId(params.tenantId);
   const now = new Date().toISOString();
   const existing = inMemoryRegistry.get(normId);
+  const existingSlugs = listExistingSlugs();
+  if (existing?.slug) existingSlugs.delete(existing.slug.toLowerCase());
+
+  const resolvedSlug =
+    params.slug?.trim().toLowerCase() ||
+    existing?.slug ||
+    (normId === "default"
+      ? "default"
+      : generateTenantSlug(params.nameEn || params.companyName || normId, {
+          existingSlugs,
+          preferredSlug: normId.replace(/_/g, "-"),
+        }).slug);
+
+  const resolvedUrl =
+    params.tenantUrl ||
+    existing?.tenantUrl ||
+    buildTenantWorkspaceUrl(resolvedSlug);
 
   const meta: TenantMetadata = {
     tenantId: normId,
-    slug: params.slug || normId,
+    slug: resolvedSlug,
     companyName: params.companyName.trim() || normId,
+    nameAr: params.nameAr ?? existing?.nameAr ?? (params.companyName.trim() || normId),
+    nameEn: params.nameEn ?? existing?.nameEn ?? (params.companyName.trim() || normId),
+    tenantUrl: resolvedUrl,
+    licenseId: params.licenseId ?? existing?.licenseId,
     schemaOrDb: normId,
     status: existing?.status || "ACTIVE",
     createdAt: existing?.createdAt || now,
@@ -195,14 +245,36 @@ export function registerTenant(params: {
 
 export function ensureTenantRegistered(
   rawTenantId?: string | null,
-  companyName?: string
+  companyName?: string,
+  extra?: { slug?: string; nameAr?: string; nameEn?: string; licenseId?: string }
 ): TenantMetadata {
   ensureRegistryInitialized();
   const normId = normalizeTenantId(rawTenantId);
   const existing = inMemoryRegistry.get(normId);
   if (existing) {
+    let changed = false;
     if (companyName && companyName !== existing.companyName) {
       existing.companyName = companyName;
+      changed = true;
+    }
+    if (extra?.slug && extra.slug !== existing.slug) {
+      existing.slug = extra.slug.trim().toLowerCase();
+      existing.tenantUrl = buildTenantWorkspaceUrl(existing.slug);
+      changed = true;
+    }
+    if (extra?.nameAr && extra.nameAr !== existing.nameAr) {
+      existing.nameAr = extra.nameAr;
+      changed = true;
+    }
+    if (extra?.nameEn && extra.nameEn !== existing.nameEn) {
+      existing.nameEn = extra.nameEn;
+      changed = true;
+    }
+    if (extra?.licenseId && extra.licenseId !== existing.licenseId) {
+      existing.licenseId = extra.licenseId;
+      changed = true;
+    }
+    if (changed) {
       existing.updatedAt = new Date().toISOString();
       saveRegistryToDisk();
     }
@@ -212,5 +284,9 @@ export function ensureTenantRegistered(
   return registerTenant({
     tenantId: normId,
     companyName: companyName || normId,
+    slug: extra?.slug,
+    nameAr: extra?.nameAr,
+    nameEn: extra?.nameEn,
+    licenseId: extra?.licenseId,
   });
 }

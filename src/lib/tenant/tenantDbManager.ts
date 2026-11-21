@@ -5,7 +5,7 @@ import { PrismaClient } from "@prisma/client";
 import { STANDARD_COA_NODES } from "@/lib/accounting/coaCatalog";
 import { EMBEDDED_SQLITE_MIGRATION_SQL } from "@/lib/sqliteInitSql";
 import { hashPassword } from "@/lib/serverBootstrap";
-import { isSqliteRuntime, resolveSqliteFilePath } from "@/lib/sqliteBootstrap";
+import { ensureSqliteAdditiveSchema, isSqliteRuntime, resolveSqliteFilePath } from "@/lib/sqliteBootstrap";
 import { normalizeTenantId } from "./tenantContext";
 import { ensureTenantRegistered, getTenantMetadata } from "./tenantRegistry";
 
@@ -536,6 +536,7 @@ async function initializeTenantDatabase(
         throw err;
       }
     }
+    await ensureSqliteAdditiveSchema(client);
   } else {
     // PostgreSQL runtime:
     if (tenantId === "default") {
@@ -547,15 +548,20 @@ async function initializeTenantDatabase(
   }
 
   // 1. EnterpriseProfile
+  const profileNameAr = meta.nameAr || companyName;
+  const profileNameEn = meta.nameEn || `${tenantId.toUpperCase()} Enterprise`;
+  const profileSlug = meta.slug && meta.slug !== "default" ? meta.slug : null;
   await client.enterpriseProfile.upsert({
     where: { id: "default" },
     update: {
-      legalNameAr: companyName,
+      legalNameAr: profileNameAr,
+      ...(profileSlug ? { tenantSlug: profileSlug } : {}),
     },
     create: {
       id: "default",
-      legalNameAr: companyName,
-      legalNameEn: `${tenantId.toUpperCase()} Enterprise`,
+      legalNameAr: profileNameAr,
+      legalNameEn: profileNameEn,
+      tenantSlug: profileSlug,
       taxNumber: "",
       commercialReg: "",
       currencyCode: "YER",

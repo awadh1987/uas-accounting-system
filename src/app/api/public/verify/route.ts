@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { generateFinancialReports } from "@/lib/accounting/ledgerService";
 import { jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const { searchParams } = new URL(req.url);
@@ -167,5 +167,5 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/public/verify error:", error);
     return jsonError("تعذر التحقق من المستند", 500);
   }
-}
+});
 

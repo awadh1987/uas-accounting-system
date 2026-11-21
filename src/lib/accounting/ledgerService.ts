@@ -16,6 +16,7 @@ import {
   resolveLineCostCenter,
 } from "@/lib/accountingCoreEngine";
 import { assertDateNotInClosedFiscalYear } from "@/lib/fiscalYearClosingEngine";
+import { emitNotification } from "@/lib/notifications/notificationService";
 
 export type DbClient = Prisma.TransactionClient | typeof prisma;
 
@@ -643,6 +644,26 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
         },
       },
     });
+
+    if (entry.status === "POSTED") {
+      await emitNotification(
+        {
+          eventType: "JOURNAL_POSTED",
+          channel: "general",
+          severity: "SUCCESS",
+          titleAr: `تم ترحيل قيد يومية (${entry.entryNumber})`,
+          titleEn: `Journal Entry Posted (${entry.entryNumber})`,
+          messageAr: `${entry.narrationAr} — الإجمالي: ${totalDebitBase.toLocaleString("en-US")} ريال`,
+          messageEn: `${entry.narrationEn || entry.narrationAr} — Total: ${totalDebitBase.toLocaleString("en-US")} YER`,
+          targetTab: "ledger",
+          targetEntityType: "JournalEntry",
+          targetEntityId: entry.id,
+          actorUserId: createdById,
+          metadata: { entryNumber: entry.entryNumber, totalDebitBase, sourceType: entry.sourceType },
+        },
+        tx
+      );
+    }
 
     return entry;
   });

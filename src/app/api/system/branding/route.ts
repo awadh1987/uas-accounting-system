@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { recordAuditDiffTx } from "@/lib/accounting/ledgerService";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
@@ -8,7 +8,7 @@ import { loadActiveLockedLicense } from "@/lib/licensing/companyLockServer";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     const state = await getBootstrapState();
     return NextResponse.json({ enterpriseProfile: state.enterpriseProfile });
@@ -16,7 +16,7 @@ export async function GET() {
     console.error("GET /api/system/branding error:", error);
     return jsonError("تعذر تحميل إعدادات الهوية البصرية", 500);
   }
-}
+});
 
 async function handleUpdateBranding(req: NextRequest) {
   try {
@@ -101,6 +101,13 @@ async function handleUpdateBranding(req: NextRequest) {
       ...(strOpt("ctaPrimaryTextEn") !== undefined
         ? { ctaPrimaryTextEn: strOpt("ctaPrimaryTextEn") }
         : {}),
+      ...(strOpt("welcomeNoticeAr") !== undefined
+        ? { welcomeNoticeAr: strOpt("welcomeNoticeAr") }
+        : {}),
+      ...(strOpt("welcomeNoticeEn") !== undefined
+        ? { welcomeNoticeEn: strOpt("welcomeNoticeEn") }
+        : {}),
+      ...(strOpt("supportEmail") !== undefined ? { supportEmail: strOpt("supportEmail") } : {}),
     };
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -157,11 +164,11 @@ async function handleUpdateBranding(req: NextRequest) {
   }
 }
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleUpdateBranding(req);
-}
+});
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleUpdateBranding(req);
-}
+});
 

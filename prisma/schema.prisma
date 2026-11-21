@@ -169,6 +169,12 @@ model EnterpriseProfile {
   ctaPrimaryTextAr  String  @default("دخول النظام المحاسبي")
   ctaPrimaryTextEn  String  @default("Enter ERP Workspace")
 
+  // Tenant Branded Workspace & Landing Portal fields
+  tenantSlug        String?
+  welcomeNoticeAr   String  @default("")
+  welcomeNoticeEn   String  @default("")
+  supportEmail      String  @default("")
+
   updatedAt DateTime @updatedAt
 }
 
@@ -188,6 +194,11 @@ model SystemSettings {
   printLayout             String   @default("A4") // A4 | 80MM | CUSTOM
   controlAccountsJson     String   @default("{}") // JSON map of default GL control accounts
   documentSequencesJson   String   @default("{}") // JSON map of JV-/RV-/PV-/INV-/BILL-/TRN- prefixes & counters
+  autoSyncEnabled         Boolean  @default(true)
+  autoSyncIntervalSec     Int      @default(60)
+  defaultDeviceSyncMode   String   @default("AUTO") // AUTO | MANUAL
+  requireDeviceApproval   Boolean  @default(false)
+  tenantAdminConfigJson   String   @default("{}")
   updatedAt               DateTime @updatedAt
 }
 
@@ -1263,5 +1274,97 @@ model BankPaymentDispatch {
   @@index([provider])
   @@index([sourceVoucherType, sourceVoucherId])
 }
+
+// ---------------------------------------------------------
+// 9. SYNC ENGINE, NOTIFICATIONS & TENANT DEVICES CONTROL PLANE
+// ---------------------------------------------------------
+
+model SyncChangeLog {
+  cursor         Int      @id @default(autoincrement())
+  entityType     String
+  entityId       String
+  operation      String   // CREATE | UPDATE | DELETE | POST | VOID
+  payloadJson    String
+  idempotencyKey String?  @unique
+  deviceId       String?
+  actorUserId    String?
+  createdAt      DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model SyncConflict {
+  id                 String    @id @default(cuid())
+  entityType         String
+  entityId           String
+  idempotencyKey     String?
+  deviceId           String?
+  status             String    @default("CONFLICT_PENDING") // CONFLICT_PENDING | RESOLVED_KEEP_SERVER | RESOLVED_APPLY_CLIENT | DISMISSED
+  reason             String
+  clientPayloadJson  String
+  serverSnapshotJson String
+  resolutionNotes    String?
+  resolvedById       String?
+  resolvedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model NotificationEvent {
+  id               String    @id @default(cuid())
+  eventType        String    // JOURNAL_POSTED | APPROVAL_REQUIRED | LOW_STOCK | SYNC_COMPLETED | SYNC_CONFLICT | BACKUP_COMPLETED | RESTORE_COMPLETED | DEVICE_LOCKED | PASSWORD_RESET | SYSTEM_ALERT
+  channel          String    @default("general") // approvals | sync | security | general
+  severity         String    @default("INFO") // INFO | SUCCESS | WARNING | CRITICAL
+  titleAr          String
+  titleEn          String
+  messageAr        String
+  messageEn        String
+  targetTab        String?
+  targetEntityType String?
+  targetEntityId   String?
+  recipientUserId  String?
+  actorUserId      String?
+  isRead           Boolean   @default(false)
+  readAt           DateTime?
+  metadataJson     String    @default("{}")
+  createdAt        DateTime  @default(now())
+
+  @@index([isRead, createdAt])
+  @@index([eventType, createdAt])
+  @@index([recipientUserId, isRead])
+}
+
+model TenantDevice {
+  id                String    @id @default(cuid())
+  deviceId          String    @unique
+  tenantSlug        String    @default("default")
+  platform          String    // web | windows | android
+  appVersion        String    @default("1.0.0")
+  osVersion         String    @default("")
+  deviceLabel       String    @default("")
+  userId            String?
+  userEmail         String?
+  userDisplay       String?
+  lastSeenAt        DateTime  @default(now())
+  ipAddress         String?
+  status            String    @default("ACTIVE") // ACTIVE | SUSPENDED | REVOKED
+  syncMode          String    @default("AUTO") // AUTO | MANUAL
+  syncIntervalSec   Int       @default(60)
+  pendingQueueCount Int       @default(0)
+  lastCursor        Int       @default(0)
+  lastSyncAt        DateTime?
+  lastSyncError     String?
+  pendingCommand    String?   // SYNC_NOW | FORCE_FULL_RESYNC | WIPE_CREDENTIALS
+  pendingCommandAt  DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status, lastSeenAt])
+  @@index([userId])
+}
+
 
 

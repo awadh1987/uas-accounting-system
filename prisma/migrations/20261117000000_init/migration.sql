@@ -124,6 +124,10 @@ CREATE TABLE "EnterpriseProfile" (
     "showPublicVerify" BOOLEAN NOT NULL DEFAULT true,
     "ctaPrimaryTextAr" TEXT NOT NULL DEFAULT 'دخول النظام المحاسبي',
     "ctaPrimaryTextEn" TEXT NOT NULL DEFAULT 'Enter ERP Workspace',
+    "tenantSlug" TEXT,
+    "welcomeNoticeAr" TEXT NOT NULL DEFAULT '',
+    "welcomeNoticeEn" TEXT NOT NULL DEFAULT '',
+    "supportEmail" TEXT NOT NULL DEFAULT '',
     "updatedAt" DATETIME NOT NULL
 );
 
@@ -144,6 +148,11 @@ CREATE TABLE "SystemSettings" (
     "printLayout" TEXT NOT NULL DEFAULT 'A4',
     "controlAccountsJson" TEXT NOT NULL DEFAULT '{}',
     "documentSequencesJson" TEXT NOT NULL DEFAULT '{}',
+    "autoSyncEnabled" BOOLEAN NOT NULL DEFAULT true,
+    "autoSyncIntervalSec" INTEGER NOT NULL DEFAULT 60,
+    "defaultDeviceSyncMode" TEXT NOT NULL DEFAULT 'AUTO',
+    "requireDeviceApproval" BOOLEAN NOT NULL DEFAULT false,
+    "tenantAdminConfigJson" TEXT NOT NULL DEFAULT '{}',
     "updatedAt" DATETIME NOT NULL
 );
 
@@ -1069,6 +1078,85 @@ CREATE TABLE "BankPaymentDispatch" (
     CONSTRAINT "BankPaymentDispatch_treasuryAccountId_fkey" FOREIGN KEY ("treasuryAccountId") REFERENCES "TreasuryAccount" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
+-- CreateTable
+CREATE TABLE "SyncChangeLog" (
+    "cursor" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "entityType" TEXT NOT NULL,
+    "entityId" TEXT NOT NULL,
+    "operation" TEXT NOT NULL,
+    "payloadJson" TEXT NOT NULL,
+    "idempotencyKey" TEXT,
+    "deviceId" TEXT,
+    "actorUserId" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "SyncConflict" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "entityType" TEXT NOT NULL,
+    "entityId" TEXT NOT NULL,
+    "idempotencyKey" TEXT,
+    "deviceId" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'CONFLICT_PENDING',
+    "reason" TEXT NOT NULL,
+    "clientPayloadJson" TEXT NOT NULL,
+    "serverSnapshotJson" TEXT NOT NULL,
+    "resolutionNotes" TEXT,
+    "resolvedById" TEXT,
+    "resolvedAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "NotificationEvent" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "eventType" TEXT NOT NULL,
+    "channel" TEXT NOT NULL DEFAULT 'general',
+    "severity" TEXT NOT NULL DEFAULT 'INFO',
+    "titleAr" TEXT NOT NULL,
+    "titleEn" TEXT NOT NULL,
+    "messageAr" TEXT NOT NULL,
+    "messageEn" TEXT NOT NULL,
+    "targetTab" TEXT,
+    "targetEntityType" TEXT,
+    "targetEntityId" TEXT,
+    "recipientUserId" TEXT,
+    "actorUserId" TEXT,
+    "isRead" BOOLEAN NOT NULL DEFAULT false,
+    "readAt" DATETIME,
+    "metadataJson" TEXT NOT NULL DEFAULT '{}',
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "TenantDevice" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "deviceId" TEXT NOT NULL,
+    "tenantSlug" TEXT NOT NULL DEFAULT 'default',
+    "platform" TEXT NOT NULL,
+    "appVersion" TEXT NOT NULL DEFAULT '1.0.0',
+    "osVersion" TEXT NOT NULL DEFAULT '',
+    "deviceLabel" TEXT NOT NULL DEFAULT '',
+    "userId" TEXT,
+    "userEmail" TEXT,
+    "userDisplay" TEXT,
+    "lastSeenAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "ipAddress" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'ACTIVE',
+    "syncMode" TEXT NOT NULL DEFAULT 'AUTO',
+    "syncIntervalSec" INTEGER NOT NULL DEFAULT 60,
+    "pendingQueueCount" INTEGER NOT NULL DEFAULT 0,
+    "lastCursor" INTEGER NOT NULL DEFAULT 0,
+    "lastSyncAt" DATETIME,
+    "lastSyncError" TEXT,
+    "pendingCommand" TEXT,
+    "pendingCommandAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "Account_code_key" ON "Account"("code");
 
@@ -1227,3 +1315,33 @@ CREATE INDEX "BankPaymentDispatch_provider_idx" ON "BankPaymentDispatch"("provid
 
 -- CreateIndex
 CREATE INDEX "BankPaymentDispatch_sourceVoucherType_sourceVoucherId_idx" ON "BankPaymentDispatch"("sourceVoucherType", "sourceVoucherId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "SyncChangeLog_idempotencyKey_key" ON "SyncChangeLog"("idempotencyKey");
+
+-- CreateIndex
+CREATE INDEX "SyncChangeLog_entityType_entityId_idx" ON "SyncChangeLog"("entityType", "entityId");
+
+-- CreateIndex
+CREATE INDEX "SyncChangeLog_createdAt_idx" ON "SyncChangeLog"("createdAt");
+
+-- CreateIndex
+CREATE INDEX "SyncConflict_status_createdAt_idx" ON "SyncConflict"("status", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "NotificationEvent_isRead_createdAt_idx" ON "NotificationEvent"("isRead", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "NotificationEvent_eventType_createdAt_idx" ON "NotificationEvent"("eventType", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "NotificationEvent_recipientUserId_isRead_idx" ON "NotificationEvent"("recipientUserId", "isRead");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TenantDevice_deviceId_key" ON "TenantDevice"("deviceId");
+
+-- CreateIndex
+CREATE INDEX "TenantDevice_status_lastSeenAt_idx" ON "TenantDevice"("status", "lastSeenAt");
+
+-- CreateIndex
+CREATE INDEX "TenantDevice_userId_idx" ON "TenantDevice"("userId");

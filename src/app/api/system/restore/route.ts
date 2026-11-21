@@ -2,14 +2,16 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
+import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import { withTenantRoute } from "@/lib/prisma";
 import {
+  extractFullSchemaFromSqliteBuffer,
   getBackupsDirectory,
   restoreDatabaseFromBuffer,
   restoreFullSchemaJsonBackup,
   type FullSchemaBackupData,
   type UasbakEnvelope,
+  type UasbakPortableEnvelopeV2,
 } from "@/lib/backupService";
 import { extractActor, jsonError, forbiddenError } from "@/lib/apiHelpers";
 
@@ -41,7 +43,15 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       if (file.name.endsWith(".uasbak") || file.name.endsWith(".json") || fileText.trim().startsWith("{")) {
         try {
           const parsed = JSON.parse(fileText);
-          if (parsed.format === "UAS-FULL-SCHEMA-JSON-V1" || parsed.tables) {
+          if (parsed.format === "UAS-BACKUP-V2" && parsed.schemaBackup) {
+            const envV2 = parsed as UasbakPortableEnvelopeV2;
+            const serialized = JSON.stringify(envV2.schemaBackup);
+            const calculatedSha256 = crypto.createHash("sha256").update(serialized, "utf8").digest("hex");
+            if (envV2.sha256 && calculatedSha256 !== envV2.sha256) {
+              return jsonError("فشل التحقق من صحة بصمة التشفير (SHA-256 Checksum Mismatch).", 400);
+            }
+            jsonBackup = envV2.schemaBackup;
+          } else if (parsed.format === "UAS-FULL-SCHEMA-JSON-V1" || parsed.tables) {
             jsonBackup = parsed as FullSchemaBackupData;
           } else if (parsed.dbBase64) {
             const envelope = parsed as UasbakEnvelope;
@@ -65,7 +75,16 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       const body = (await req.json()) as Record<string, unknown>;
       actorInput = body;
 
-      if (body.format === "UAS-FULL-SCHEMA-JSON-V1" || body.tables) {
+      if (body.format === "UAS-BACKUP-V2" && body.schemaBackup) {
+        const envV2 = body as unknown as UasbakPortableEnvelopeV2;
+        const serialized = JSON.stringify(envV2.schemaBackup);
+        const calculatedSha256 = crypto.createHash("sha256").update(serialized, "utf8").digest("hex");
+        if (envV2.sha256 && calculatedSha256 !== envV2.sha256) {
+          return jsonError("فشل التحقق من صحة بصمة التشفير (SHA-256 Checksum Mismatch)", 400);
+        }
+        jsonBackup = envV2.schemaBackup;
+        sourceDesc = `portable_v2_restore: ${envV2.companyName || "UAS"}`;
+      } else if (body.format === "UAS-FULL-SCHEMA-JSON-V1" || body.tables) {
         jsonBackup = body as unknown as FullSchemaBackupData;
         sourceDesc = `json_payload: ${jsonBackup.companyName || "UAS"}`;
       } else if (body.localSnapshotName) {
@@ -111,6 +130,18 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
 
     if (!buffer || buffer.length === 0) {
       return jsonError("ملف النسخة الاحتياطية فارغ", 400);
+    }
+
+    if (!isSqliteRuntime()) {
+      const extracted = extractFullSchemaFromSqliteBuffer(buffer);
+      const result = await restoreFullSchemaJsonBackup(extracted, actor, `${sourceDesc} (cross-engine)`);
+      return NextResponse.json({
+        ok: true,
+        message: "تمت استعادة قاعدة البيانات السحابية من نسخة SQLite المحمولة بنجاح",
+        preRestoreSnapshot: result.preRestoreSnapshot,
+        companyName: result.companyName,
+        restoredTables: result.restoredTables,
+      });
     }
 
     const result = await restoreDatabaseFromBuffer(buffer, actor, sourceDesc);

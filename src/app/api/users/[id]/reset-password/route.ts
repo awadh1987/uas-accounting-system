@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
 import { canManageUsers, normalizeRole } from "@/lib/permissions";
 import { appendAuditLogTx, hashPassword } from "@/lib/serverBootstrap";
+import { emitNotification } from "@/lib/notifications/notificationService";
 import { extractActor, forbiddenError } from "@/lib/apiHelpers";
 
 export const POST = withTenantRoute(async function POST(
@@ -93,6 +94,24 @@ export const POST = withTenantRoute(async function POST(
         entityReference: `User:${user.id}`,
         details: `تمت إعادة تعيين كلمة مرور المستخدم ${user.displayName || user.name} (${normalizeRole(user.role)}) بنجاح. إلزام التغيير: ${mustChangePassword ? "نعم" : "لا"}`,
       });
+
+      await emitNotification(
+        {
+          eventType: "PASSWORD_RESET",
+          channel: "security",
+          severity: "WARNING",
+          titleAr: `تمت إعادة تعيين كلمة مرور (${user.displayName || user.name})`,
+          titleEn: `Password Reset (${user.displayName || user.name})`,
+          messageAr: `قام ${actor.userDisplay} بإعادة تعيين كلمة المرور مع إلزام التغيير عند الدخول.`,
+          messageEn: `${actor.userDisplay} reset the user password (change required: ${mustChangePassword}).`,
+          targetTab: "system",
+          targetEntityType: "User",
+          targetEntityId: user.id,
+          recipientUserId: user.id,
+          actorUserId: actor.userId,
+        },
+        tx
+      );
     });
 
     return NextResponse.json({

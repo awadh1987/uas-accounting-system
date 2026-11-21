@@ -18,6 +18,7 @@ import { loadInstalledLicense } from "@/lib/licensing/verifier";
 import { appendAuditLogTx } from "@/lib/serverBootstrap";
 import { ensure6GenerationCoaHierarchy } from "@/lib/accountingCoreEngine";
 import { ensureDefaultFiscalYear } from "@/lib/fiscalYearClosingEngine";
+import { emitNotification } from "@/lib/notifications/notificationService";
 
 export interface FullSchemaBackupData {
   format: "UAS-FULL-SCHEMA-JSON-V1";
@@ -84,9 +85,13 @@ export const FULL_SCHEMA_TABLE_ORDER = [
   "attachment",
   "adjustmentEntry",
   "approvalRequest",
-  // 6. Audit Logs
+  // 6. Audit Logs & Sync/Notification/Device Governance
   "auditLog",
   "immutableAuditLog",
+  "syncChangeLog",
+  "syncConflict",
+  "notificationEvent",
+  "tenantDevice",
 ] as const;
 
 export async function backfillLegacyBaseCurrencies(client: typeof prisma = prisma) {
@@ -124,6 +129,19 @@ export interface UasbakEnvelope {
   sha256: string;
   sizeBytes: number;
   dbBase64: string;
+}
+
+export interface UasbakPortableEnvelopeV2 {
+  format: "UAS-BACKUP-V2";
+  engine: "sqlite" | "postgresql";
+  createdAt: string;
+  companyName: string;
+  licenseId: string;
+  tenantId?: string;
+  tenantSlug?: string;
+  sha256: string;
+  sizeBytes: number;
+  schemaBackup: FullSchemaBackupData;
 }
 
 export interface BackupFileInfo {
@@ -572,7 +590,7 @@ export async function restoreDatabaseFromBuffer(
     console.warn("[BackupService] Post-restore migration warning:", err);
   }
 
-  // 6. Record immutable audit log
+  // 6. Record immutable audit log & notification
   await prisma.$transaction(async (tx) => {
     await appendAuditLogTx(tx, {
       userId: actor.userId ?? null,
@@ -582,6 +600,22 @@ export async function restoreDatabaseFromBuffer(
       entityReference: preRestoreFilename,
       details: `تمت استعادة قاعدة بيانات المنشأة (${inspection.companyName || "UAS"}) بنجاح من (${sourceDesc}). تم حفظ نسخة أمان سابقة: ${preRestoreFilename}`,
     });
+
+    await emitNotification(
+      {
+        eventType: "RESTORE_COMPLETED",
+        channel: "security",
+        severity: "SUCCESS",
+        titleAr: "تمت استعادة النسخة الاحتياطية بنجاح",
+        titleEn: "Database Backup Restored Successfully",
+        messageAr: `تمت الاستعادة من (${sourceDesc}) مع حفظ نقطة أمان (${preRestoreFilename}).`,
+        messageEn: `Restored from (${sourceDesc}) with safety snapshot (${preRestoreFilename}).`,
+        targetTab: "system",
+        actorUserId: actor.userId ?? null,
+        metadata: { preRestoreSnapshot: preRestoreFilename, sourceDesc, tenantId: activeTenant },
+      },
+      tx
+    );
   });
 
   return {
@@ -769,7 +803,7 @@ export async function restoreFullSchemaJsonBackup(
   await backfillLegacyBaseCurrencies();
   await ensureDefaultFiscalYear();
 
-  // 4. Record immutable audit log
+  // 4. Record immutable audit log & notification
   await prisma.$transaction(async (tx) => {
     await appendAuditLogTx(tx, {
       userId: actor.userId ?? null,
@@ -779,6 +813,26 @@ export async function restoreFullSchemaJsonBackup(
       entityReference: preRestoreFilename || "JSON_RESTORE",
       details: `تمت استعادة قاعدة بيانات المنشأة (${backupData.companyName || "UAS"}) بنجاح من (${sourceDesc}). عدد الجداول المستعادة: ${restoredTables.length}`,
     });
+
+    await emitNotification(
+      {
+        eventType: "RESTORE_COMPLETED",
+        channel: "security",
+        severity: "SUCCESS",
+        titleAr: "تمت استعادة النسخة الاحتياطية المحمولة بنجاح",
+        titleEn: "Portable Backup Restored Successfully",
+        messageAr: `تمت استعادة ${restoredTables.length} جدول من (${sourceDesc}).`,
+        messageEn: `Restored ${restoredTables.length} tables from (${sourceDesc}).`,
+        targetTab: "system",
+        actorUserId: actor.userId ?? null,
+        metadata: {
+          preRestoreSnapshot: preRestoreFilename,
+          restoredTablesCount: restoredTables.length,
+          tenantId: activeTenant,
+        },
+      },
+      tx
+    );
   });
 
   return {
@@ -786,5 +840,104 @@ export async function restoreFullSchemaJsonBackup(
     preRestoreSnapshot: preRestoreFilename,
     companyName: backupData.companyName,
     restoredTables,
+  };
+}
+
+/**
+ * Creates a portable `.uasbak` envelope across BOTH Local/LAN SQLite (`UAS-BACKUP-V1`)
+ * and Live Cloud PostgreSQL (`UAS-BACKUP-V2` JSON portable snapshot with SHA-256).
+ */
+export async function createPortableUasbakEnvelope(params?: {
+  companyName?: string;
+  licenseId?: string;
+  tenantId?: string;
+  forcePortableV2?: boolean;
+}): Promise<{
+  envelope: UasbakEnvelope | UasbakPortableEnvelopeV2;
+  filename: string;
+}> {
+  if (isSqliteRuntime() && !params?.forcePortableV2) {
+    return createUasbakEnvelope(params);
+  }
+
+  const activeTenant = params?.tenantId || getActiveTenantId();
+  const meta = getTenantMetadata(activeTenant);
+  const { backup, filename: jsonName } = await exportFullSchemaJsonBackup(params);
+  const serialized = JSON.stringify(backup);
+  const sha256 = crypto.createHash("sha256").update(serialized, "utf8").digest("hex");
+  const sizeBytes = Buffer.byteLength(serialized, "utf8");
+  const filename = jsonName.replace(/\.json$/i, ".uasbak");
+
+  const envelope: UasbakPortableEnvelopeV2 = {
+    format: "UAS-BACKUP-V2",
+    engine: isSqliteRuntime() ? "sqlite" : "postgresql",
+    createdAt: backup.createdAt,
+    companyName: backup.companyName,
+    licenseId: backup.licenseId,
+    tenantId: activeTenant,
+    tenantSlug: meta?.slug || activeTenant,
+    sha256,
+    sizeBytes,
+    schemaBackup: backup,
+  };
+
+  return { envelope, filename };
+}
+
+/**
+ * Extracts a `FullSchemaBackupData` payload from a SQLite binary buffer so a `.uasbak`
+ * taken from Local SQLite or Office LAN can be restored directly into a PostgreSQL cloud tenant DB.
+ */
+export function extractFullSchemaFromSqliteBuffer(
+  buffer: Buffer,
+  expectedCompanyName?: string
+): FullSchemaBackupData {
+  const inspection = validateAndInspectCandidateDb(buffer, expectedCompanyName);
+  if (!inspection.ok) {
+    throw new Error(inspection.error || "Invalid SQLite backup file");
+  }
+
+  const tempPath = path.join(
+    os.tmpdir(),
+    `uas-xengine-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.db`
+  );
+  fs.writeFileSync(tempPath, buffer);
+
+  const tables: Record<string, unknown[]> = {};
+  const tableCounts: Record<string, number> = {};
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(tempPath, { readOnly: true });
+    for (const modelKey of FULL_SCHEMA_TABLE_ORDER) {
+      const tableName = modelKey.charAt(0).toUpperCase() + modelKey.slice(1);
+      try {
+        const rows = db.prepare(`SELECT * FROM "${tableName}";`).all();
+        tables[modelKey] = rows;
+        tableCounts[modelKey] = rows.length;
+      } catch {
+        tables[modelKey] = [];
+        tableCounts[modelKey] = 0;
+      }
+    }
+  } finally {
+    if (db) {
+      try {
+        db.close();
+      } catch {}
+    }
+    try {
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    } catch {}
+  }
+
+  return {
+    format: "UAS-FULL-SCHEMA-JSON-V1",
+    version: "3.0.0",
+    createdAt: new Date().toISOString(),
+    companyName: inspection.companyName || expectedCompanyName || "UAS-Enterprise",
+    licenseId: "PORTABLE-RESTORE",
+    tenantId: getActiveTenantId(),
+    tableCounts,
+    tables,
   };
 }

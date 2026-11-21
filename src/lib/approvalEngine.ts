@@ -11,6 +11,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { createWorkspaceDraft } from "@/lib/workspaceDraftsEngine";
+import { emitNotification } from "@/lib/notifications/notificationService";
 
 type Db = Prisma.TransactionClient | typeof prisma;
 
@@ -273,6 +274,24 @@ export async function submitApprovalRequest(
       input.targetId,
       isAmend ? "AMENDMENT_PENDING" : "PENDING_APPROVAL",
       !isAmend && input.targetType === "JournalEntry" ? { status: "PENDING_APPROVAL" } : undefined
+    );
+
+    await emitNotification(
+      {
+        eventType: "APPROVAL_REQUIRED",
+        channel: "approvals",
+        severity: "WARNING",
+        titleAr: `طلب اعتماد مالي جديد (${requestNumber})`,
+        titleEn: `Approval Required (${requestNumber})`,
+        messageAr: `${input.summaryAr} — مقدم الطلب: ${input.actor.userName}`,
+        messageEn: `${input.summaryEn || input.summaryAr} — Requested by: ${input.actor.userName}`,
+        targetTab: "audit",
+        targetEntityType: "ApprovalRequest",
+        targetEntityId: request.id,
+        actorUserId: input.actor.userId,
+        metadata: { requestNumber, module: mod, actionType: input.actionType, amountBase: input.amountBase ?? 0 },
+      },
+      tx
     );
 
     return {

@@ -27,6 +27,7 @@ import { DualLogoBadge } from "@/components/DualLogoBadge";
 import { getApiBaseUrl } from "@/lib/apiClient";
 import { fmtNum } from "@/lib/formulas";
 import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
+import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
 import type { LanguageCode, TabId, UasBootstrapState, UasUser } from "@/types/uas";
 
 interface LandingPageProps {
@@ -87,9 +88,43 @@ export function LandingPage({
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [publicMetrics, setPublicMetrics] = useState<PublicSummary | null>(null);
+  const [tenantPortalInfo, setTenantPortalInfo] = useState<{
+    isTenantWorkspace: boolean;
+    tenantSlug: string | null;
+    tenantUrl: string;
+    welcomeNoticeAr?: string;
+    welcomeNoticeEn?: string;
+    supportEmail?: string;
+  } | null>(null);
 
   useEffect(() => {
     let active = true;
+    const hostSlug =
+      typeof window !== "undefined" ? extractSubdomainSlugFromHost(window.location.host) : null;
+    if (hostSlug) {
+      setTenantPortalInfo({
+        isTenantWorkspace: true,
+        tenantSlug: hostSlug,
+        tenantUrl: `https://${hostSlug}.qat.world`,
+      });
+    }
+
+    fetch("/api/public/tenant")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (active && data?.isTenantWorkspace) {
+          setTenantPortalInfo({
+            isTenantWorkspace: Boolean(data.isTenantWorkspace),
+            tenantSlug: data.tenantSlug || hostSlug,
+            tenantUrl: data.tenantUrl || (hostSlug ? `https://${hostSlug}.qat.world` : "https://qat.world"),
+            welcomeNoticeAr: data.profile?.welcomeNoticeAr || "",
+            welcomeNoticeEn: data.profile?.welcomeNoticeEn || "",
+            supportEmail: data.profile?.supportEmail || "",
+          });
+        }
+      })
+      .catch(() => null);
+
     fetch("/api/public/verify")
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
@@ -129,6 +164,18 @@ export function LandingPage({
     await runVerifyLookup(query);
   }
 
+  const isTenantBranded = Boolean(
+    tenantPortalInfo?.isTenantWorkspace || (profile?.tenantSlug && profile.tenantSlug !== "default")
+  );
+  const activeTenantSlug = tenantPortalInfo?.tenantSlug || profile?.tenantSlug || null;
+  const activeTenantUrl =
+    tenantPortalInfo?.tenantUrl ||
+    (activeTenantSlug ? `https://${activeTenantSlug}.qat.world` : null);
+  const welcomeNotice = isAr
+    ? tenantPortalInfo?.welcomeNoticeAr || profile?.welcomeNoticeAr || ""
+    : tenantPortalInfo?.welcomeNoticeEn || profile?.welcomeNoticeEn || "";
+  const supportEmail = tenantPortalInfo?.supportEmail || profile?.supportEmail || profile?.email || "";
+
   const legalName = isAr
     ? profile?.legalNameAr?.trim() || "منظومة تخطيط الموارد المحاسبية"
     : profile?.legalNameEn?.trim() || "Enterprise Resource Planning";
@@ -137,7 +184,37 @@ export function LandingPage({
   const totalSalesFallback = state.sales.reduce((s, x) => s + Number(x.total || 0), 0);
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+    <div
+      className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+      style={
+        profile?.brandColor
+          ? ({ "--tenant-accent": profile.brandColor } as React.CSSProperties)
+          : undefined
+      }
+    >
+      {isTenantBranded && (
+        <div
+          className="px-4 py-2 text-center text-[11px] font-bold text-white flex flex-wrap items-center justify-center gap-2"
+          style={{ backgroundColor: profile?.brandColor || "#059669" }}
+        >
+          <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+          <span>
+            {isAr
+              ? `مساحة عمل معزولة خاصة بالمنشأة: ${legalName}`
+              : `Dedicated Tenant Workspace: ${legalName}`}
+          </span>
+          {activeTenantUrl && (
+            <span className="font-mono px-2 py-0.5 rounded bg-black/20" dir="ltr">
+              {activeTenantUrl}
+            </span>
+          )}
+          {supportEmail && (
+            <span className="font-mono opacity-90" dir="ltr">
+              • {supportEmail}
+            </span>
+          )}
+        </div>
+      )}
       {/* Top Corporate Navigation Bar */}
       <header className="card-surface sticky top-0 z-30 border-b border-slate-200 dark:border-slate-800 px-4 sm:px-8 py-3.5 shadow-sm backdrop-blur-md bg-white/90 dark:bg-slate-900/90">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
@@ -263,6 +340,12 @@ export function LandingPage({
                 : profile?.heroSubtitleEn ||
                   "Integrated double-entry general ledger connecting projects, supply chains, treasury, and partners with immutable audit trails and real-time financial statements."}
             </p>
+
+            {welcomeNotice && (
+              <div className="p-3.5 rounded-2xl border border-emerald-300/70 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 text-xs font-bold text-emerald-900 dark:text-emerald-200 max-w-2xl">
+                {welcomeNotice}
+              </div>
+            )}
 
             <div className="pt-2 flex flex-wrap gap-3">
               {currentUser && (

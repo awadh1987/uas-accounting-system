@@ -10,6 +10,12 @@ export interface OfflineMutationItem {
   payload: Record<string, unknown>;
   label: string;
   createdAt: string;
+  idempotencyKey?: string;
+  entityType?: string;
+  entityId?: string;
+  baseUpdatedAt?: string | null;
+  status?: "QUEUED" | "SYNCED" | "CONFLICT_PENDING" | "FAILED";
+  error?: string;
 }
 
 export interface OfflineSnapshotRow {
@@ -18,15 +24,30 @@ export interface OfflineSnapshotRow {
   updatedAt: string;
 }
 
+export interface OfflineSyncMetaRow {
+  key: string;
+  cursor: number;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  syncMode: "AUTO" | "MANUAL";
+  syncIntervalSec: number;
+}
+
 class UasOfflineDatabase extends Dexie {
   snapshots!: Table<OfflineSnapshotRow, string>;
   queue!: Table<OfflineMutationItem, number>;
+  syncMeta!: Table<OfflineSyncMetaRow, string>;
 
   constructor() {
     super("uas_offline_db");
     this.version(1).stores({
       snapshots: "key, updatedAt",
       queue: "++id, endpoint, method, createdAt",
+    });
+    this.version(2).stores({
+      snapshots: "key, updatedAt",
+      queue: "++id, endpoint, method, createdAt, idempotencyKey, status",
+      syncMeta: "key",
     });
   }
 }
@@ -39,6 +60,13 @@ function getDb(): UasOfflineDatabase | null {
     dbInstance = new UasOfflineDatabase();
   }
   return dbInstance;
+}
+
+function generateOfflineKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `off-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export async function saveOfflineSnapshot(state: UasBootstrapState): Promise<void> {
@@ -74,6 +102,8 @@ export async function enqueueOfflineMutation(
   if (!db) return 0;
   await db.queue.add({
     ...item,
+    idempotencyKey: item.idempotencyKey || generateOfflineKey(),
+    status: item.status || "QUEUED",
     createdAt: new Date().toISOString(),
   });
   return db.queue.count();
@@ -101,9 +131,57 @@ export async function removeOfflineQueueItem(id: number): Promise<void> {
   await db.queue.delete(id);
 }
 
+export async function updateOfflineQueueItem(
+  id: number,
+  patch: Partial<OfflineMutationItem>
+): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+  await db.queue.update(id, patch);
+}
+
 export async function clearOfflineQueue(): Promise<void> {
   const db = getDb();
   if (!db) return;
   await db.queue.clear();
 }
 
+export async function getSyncMeta(tenantKey = "default"): Promise<OfflineSyncMetaRow> {
+  const fallback: OfflineSyncMetaRow = {
+    key: tenantKey,
+    cursor: 0,
+    lastSyncAt: null,
+    lastError: null,
+    syncMode: "AUTO",
+    syncIntervalSec: 60,
+  };
+  const db = getDb();
+  if (!db) return fallback;
+  try {
+    const row = await db.syncMeta.get(tenantKey);
+    return row || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export async function saveSyncMeta(
+  patch: Partial<Omit<OfflineSyncMetaRow, "key">>,
+  tenantKey = "default"
+): Promise<OfflineSyncMetaRow> {
+  const current = await getSyncMeta(tenantKey);
+  const next: OfflineSyncMetaRow = {
+    ...current,
+    ...patch,
+    key: tenantKey,
+  };
+  const db = getDb();
+  if (db) {
+    try {
+      await db.syncMeta.put(next);
+    } catch {
+      // Ignore IndexedDB error
+    }
+  }
+  return next;
+}

@@ -9,6 +9,7 @@ import {
   Ban,
   BookOpen,
   Bot,
+  Camera,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -26,11 +27,13 @@ import {
   MessageSquarePlus,
   Mic,
   MicOff,
+  Paperclip,
   Phone,
   Plus,
   Printer,
   Search,
   Send,
+  Settings,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
@@ -75,8 +78,23 @@ import {
   saveActiveThreadMessages,
 } from "@/lib/ai/conversationArchiveEngine";
 import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
+import { safeFetchJson } from "@/lib/apiClient";
+import {
+  checkMicrophoneDiagnostics,
+  createSpeechTranscriptAccumulator,
+  normalizeSpeechError,
+  openNativeAppSettings,
+  openUnusedAppRestrictionsSettings,
+  requestMicrophoneAccess,
+  type VoiceDiagnosticStatus,
+} from "@/lib/voicePermissions";
+import {
+  extractDocumentDraft,
+  validateExtractedDraft,
+} from "@/lib/ai/documentExtractionEngine";
 import type { LicenseStatusData } from "@/components/LicenseActivationModal";
 import type {
+  ExtractedDocumentDraft,
   LanguageCode,
   TabId,
   UasBootstrapState,
@@ -207,14 +225,24 @@ export function UasAiCopilot({
   const [threadTab, setThreadTab] = useState<"active" | "archived">("active");
 
   // Voice Recognition & TTS state: Arabic pinned to ar-YE with ar-SA fallback
-  const [voiceLang, setVoiceLang] = useState<"ar-YE" | "ar-SA" | "en-US">(
+  const [voiceLang, setVoiceLang] = useState<"ar-YE" | "ar-SA" | "en-US" | "en-GB">(
     isAr ? "ar-YE" : "en-US"
   );
   const [listening, setListening] = useState(false);
+  const [interimTranscript, setInterimTranscript] = useState("");
+  const [micDiagnostics, setMicDiagnostics] = useState<VoiceDiagnosticStatus | null>(null);
+  const [micSettingsPrompt, setMicSettingsPrompt] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const isStartingVoiceRef = useRef(false);
+  const transcriptAccRef = useRef(createSpeechTranscriptAccumulator());
   const textInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Document & Image Extraction state
+  const [pendingDocDraft, setPendingDocDraft] = useState<ExtractedDocumentDraft | null>(null);
+  const [docExtractBusy, setDocExtractBusy] = useState(false);
+  const [docPostBusy, setDocPostBusy] = useState(false);
+  const docFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // User Manual search & selected chapter state
   const [manualSearch, setManualSearch] = useState("");
@@ -404,16 +432,38 @@ export function UasAiCopilot({
     if (listening || isStartingVoiceRef.current) {
       try {
         recognitionRef.current?.stop?.();
-        recognitionRef.current?.abort?.();
       } catch {
         // ignore
       }
+      const flushed = transcriptAccRef.current.flushOnStop();
       setListening(false);
       isStartingVoiceRef.current = false;
+      setInterimTranscript("");
+      if (flushed) {
+        setInputPrompt(flushed);
+        await handleSendPrompt(flushed);
+      }
       return;
     }
 
     if (typeof window === "undefined") return;
+
+    // Language-independent mic permission & unused-app check (works identically for ar-YE, ar-SA, en-US, en-GB)
+    const diag = await checkMicrophoneDiagnostics();
+    setMicDiagnostics(diag);
+    if (diag.permissionState !== "granted") {
+      const grantedState = await requestMicrophoneAccess();
+      if (grantedState === "denied") {
+        setMicSettingsPrompt(true);
+        onToast(
+          isAr
+            ? "⚠️ تم رفض إذن الميكروفون؛ اضغط «فتح إعدادات التطبيق» لمنح صلاحية الصوت أو استخدم الكتابة."
+            : "⚠️ Microphone permission denied; tap 'Open App Settings' to grant access or use text input."
+        );
+        return;
+      }
+    }
+    setMicSettingsPrompt(false);
 
     const win = window as unknown as WindowWithSpeech;
 
@@ -428,12 +478,13 @@ export function UasAiCopilot({
           language: voiceLang,
           maxResults: 1,
           prompt: isAr ? "تحدث بأمرك المحاسبي..." : "Speak your ERP command...",
-          partialResults: false,
+          partialResults: true,
           popup: true,
         });
         const transcript = Array.isArray(res?.matches) ? res.matches[0] : "";
         setListening(false);
         isStartingVoiceRef.current = false;
+        setInterimTranscript("");
         if (transcript) {
           setInputPrompt(transcript);
           await handleSendPrompt(transcript);
@@ -442,6 +493,7 @@ export function UasAiCopilot({
       } catch {
         setListening(false);
         isStartingVoiceRef.current = false;
+        setInterimTranscript("");
       }
     }
 
@@ -457,11 +509,13 @@ export function UasAiCopilot({
       return;
     }
 
-    try {
+    const startSpeechEngine = (targetLocale: string) => {
+      transcriptAccRef.current.reset();
       isStartingVoiceRef.current = true;
       const rec = new SpeechRec();
-      rec.lang = voiceLang;
-      rec.interimResults = false;
+      rec.lang = targetLocale;
+      rec.interimResults = true;
+      rec.continuous = true;
       rec.maxAlternatives = 1;
 
       rec.onstart = () => {
@@ -470,81 +524,37 @@ export function UasAiCopilot({
       };
 
       rec.onresult = (event: SpeechRecognitionEventLike) => {
-        const transcript = event?.results?.[0]?.[0]?.transcript || "";
-        setListening(false);
-        isStartingVoiceRef.current = false;
-        if (transcript.trim()) {
-          setInputPrompt(transcript.trim());
-          handleSendPrompt(transcript.trim());
+        const resList = event?.results;
+        const { combined } = transcriptAccRef.current.ingestResults(resList as any);
+        if (combined) {
+          setInterimTranscript(combined);
+          setInputPrompt(combined);
         }
       };
 
       rec.onerror = (event: SpeechRecognitionErrorEventLike) => {
-        setListening(false);
-        isStartingVoiceRef.current = false;
-        const errCode = String(event?.error || "").toLowerCase();
-
-        // Automatic fallback from ar-YE to ar-SA if Yemeni dialect is not installed in the browser/engine
-        if (errCode.includes("language-not-supported") || errCode.includes("bad-grammar")) {
-          if (rec.lang === "ar-YE") {
-            setVoiceLang("ar-SA");
-            try {
-              const fallbackRec = new SpeechRec();
-              fallbackRec.lang = "ar-SA";
-              fallbackRec.interimResults = false;
-              fallbackRec.maxAlternatives = 1;
-              fallbackRec.onstart = () => {
-                isStartingVoiceRef.current = false;
-                setListening(true);
-              };
-              fallbackRec.onresult = rec.onresult;
-              fallbackRec.onerror = () => {
-                setListening(false);
-                isStartingVoiceRef.current = false;
-                onToast(
-                  isAr
-                    ? "⚠️ تعذر التعرف على الصوت؛ يرجى الكتابة يدوياً في الحقل النصي."
-                    : "⚠️ Speech recognition error; please type your command manually."
-                );
-                textInputRef.current?.focus();
-              };
-              fallbackRec.onend = () => {
-                setListening(false);
-                isStartingVoiceRef.current = false;
-              };
-              recognitionRef.current = fallbackRec;
-              isStartingVoiceRef.current = true;
-              fallbackRec.start();
-              return;
-            } catch {
-              // fallback failed, continue to notification
-            }
-          }
+        const normErr = normalizeSpeechError(event?.error);
+        if (normErr.code === "language-not-supported" && targetLocale === "ar-YE") {
+          setVoiceLang("ar-SA");
+          try {
+            rec.abort();
+          } catch {}
+          startSpeechEngine("ar-SA");
+          return;
         }
 
-        if (
-          errCode.includes("not-allowed") ||
-          errCode.includes("permission") ||
-          errCode.includes("service-not-allowed")
-        ) {
-          onToast(
-            isAr
-              ? "⚠️ تم رفض إذن الميكروفون؛ يرجى السماح بصلاحية الصوت أو استخدام الكتابة النصية."
-              : "⚠️ Microphone permission denied; please allow audio permission or type your command."
-          );
-          textInputRef.current?.focus();
-        } else if (errCode.includes("no-speech")) {
-          onToast(
-            isAr
-              ? "لم يتم التقاط صوت واضح؛ اضغط رمز الميكروفون وتحدث مجدداً."
-              : "No speech detected; tap the microphone and speak again."
-          );
-        } else if (!errCode.includes("aborted")) {
-          onToast(
-            isAr
-              ? `⚠️ حالة الصوت: ${errCode}؛ يمكنك المتابعة بالكتابة النصية.`
-              : `⚠️ Voice status: ${errCode}; you can continue with manual text.`
-          );
+        setListening(false);
+        isStartingVoiceRef.current = false;
+        const partial = transcriptAccRef.current.flushOnStop();
+        setInterimTranscript("");
+        if (partial) {
+          setInputPrompt(partial);
+        }
+        if (normErr.shouldOpenSettings) {
+          setMicSettingsPrompt(true);
+        }
+        if (normErr.code !== "aborted") {
+          onToast(isAr ? normErr.messageAr : normErr.messageEn);
           textInputRef.current?.focus();
         }
       };
@@ -552,19 +562,161 @@ export function UasAiCopilot({
       rec.onend = () => {
         setListening(false);
         isStartingVoiceRef.current = false;
+        const flushed = transcriptAccRef.current.flushOnStop();
+        setInterimTranscript("");
+        if (flushed) {
+          setInputPrompt(flushed);
+          void handleSendPrompt(flushed);
+        }
       };
 
       recognitionRef.current = rec;
       rec.start();
+    };
+
+    try {
+      startSpeechEngine(voiceLang);
     } catch {
       setListening(false);
       isStartingVoiceRef.current = false;
+      setInterimTranscript("");
       onToast(
         isAr
           ? "⚠️ تعذر بدء الميكروفون الصوتي؛ يرجى استخدام الإدخال النصي."
           : "⚠️ Could not start voice microphone; please use manual text input."
       );
       textInputRef.current?.focus();
+    }
+  }
+
+  async function handleDocumentFileSelected(file?: File | null) {
+    if (!file) return;
+    setDocExtractBusy(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      if (inputPrompt.trim()) {
+        formData.append("text", inputPrompt.trim());
+      }
+
+      const res = await fetch("/api/ai/extract-document", {
+        method: "POST",
+        body: formData,
+      });
+      if (res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { draft?: ExtractedDocumentDraft };
+        if (data.draft) {
+          setPendingDocDraft(data.draft);
+          onToast(
+            isAr
+              ? "✅ تم استخراج مسودة المستند — يرجى المراجعة وتأكيد الترحيل"
+              : "✅ Document extracted into editable draft — review and confirm posting"
+          );
+          return;
+        }
+      }
+
+      // Offline / local fallback
+      let textContent = file.name;
+      if (file.type.startsWith("text/") || file.name.endsWith(".csv") || file.name.endsWith(".txt")) {
+        textContent = await file.text().catch(() => file.name);
+      }
+      const localDraft = await extractDocumentDraft({
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        textContent,
+        defaultCurrency: state.settings.defaultCurrency || "YER",
+        validationContext: { periodLockDate: state.settings.periodLockDate ?? null },
+      });
+      setPendingDocDraft(localDraft);
+      onToast(
+        isAr
+          ? "✅ تم إعداد مسودة المستند محلياً — يرجى المراجعة قبل الترحيل"
+          : "✅ Document draft prepared locally — review before posting"
+      );
+    } finally {
+      setDocExtractBusy(false);
+      if (docFileInputRef.current) {
+        docFileInputRef.current.value = "";
+      }
+    }
+  }
+
+  function updatePendingDraft(updater: (prev: ExtractedDocumentDraft) => ExtractedDocumentDraft) {
+    setPendingDocDraft((prev) => {
+      if (!prev) return null;
+      const next = updater(prev);
+      next.warnings = validateExtractedDraft(next, {
+        periodLockDate: state.settings.periodLockDate ?? null,
+      });
+      return next;
+    });
+  }
+
+  async function handleConfirmPostExtractedDraft() {
+    if (!pendingDocDraft || docPostBusy) return;
+    const blockingErrors = validateExtractedDraft(pendingDocDraft, {
+      periodLockDate: state.settings.periodLockDate ?? null,
+    }).filter((w) => w.severity === "error");
+
+    if (blockingErrors.length > 0) {
+      onToast(isAr ? blockingErrors[0].messageAr : blockingErrors[0].messageEn);
+      return;
+    }
+
+    setDocPostBusy(true);
+    try {
+      const res = await safeFetchJson<{
+        success?: boolean;
+        entryNumber?: string;
+        error?: string;
+      }>("/api/ai/extract-document/post", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(currentUser?.id ? { "x-uas-user-id": currentUser.id } : {}),
+          ...(currentUser?.role ? { "x-uas-role": String(currentUser.role) } : {}),
+        },
+        body: JSON.stringify({
+          confirmed: true,
+          draft: pendingDocDraft,
+          actor: currentUser
+            ? {
+                userId: currentUser.id,
+                userDisplay: currentUser.name,
+                userRole: currentUser.role,
+              }
+            : undefined,
+        }),
+      });
+
+      if (!res.ok || !res.data?.success) {
+        onToast(
+          res.data?.error ||
+            (isAr ? "تعذر ترحيل المستند المستخرج" : "Failed to post extracted document")
+        );
+        return;
+      }
+
+      const postedNum = res.data.entryNumber || pendingDocDraft.reference;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: getNextMsgId("doc-posted"),
+          role: "assistant",
+          text: isAr
+            ? `✅ تم ترحيل المستند (${pendingDocDraft.fileName}) بقيد يومية معتمد رقم **${postedNum}**.`
+            : `✅ Extracted document (${pendingDocDraft.fileName}) posted as Journal Entry **${postedNum}**.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        },
+      ]);
+      setPendingDocDraft(null);
+      await onRefreshState();
+      onToast(
+        isAr ? `✅ تم ترحيل القيد (${postedNum}) بنجاح` : `✅ Posted Journal Entry (${postedNum})`
+      );
+    } finally {
+      setDocPostBusy(false);
     }
   }
 
@@ -1888,26 +2040,234 @@ export function UasAiCopilot({
                 <div ref={chatEndRef} />
               </div>
 
-              {/* Voice + Text Input Bar */}
+              {/* Editable Document & Image Extraction Draft Card */}
+              {pendingDocDraft && (
+                <div className="mx-3 mb-2 p-3 rounded-2xl border-2 border-indigo-400/70 bg-indigo-50/70 dark:bg-indigo-950/30 space-y-2.5 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-black text-indigo-800 dark:text-indigo-200 flex items-center gap-1.5">
+                      <FileText className="w-4 h-4" />
+                      <span>
+                        {isAr ? "معاينة وتعديل المستند المستخرج" : "Extracted Document Draft"} (
+                        {Math.round(pendingDocDraft.confidence * 100)}%)
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPendingDocDraft(null)}
+                      className="p-1 rounded-lg text-slate-400 hover:text-rose-600"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {pendingDocDraft.warnings.length > 0 && (
+                    <div className="space-y-1">
+                      {pendingDocDraft.warnings.map((w, idx) => (
+                        <div
+                          key={idx}
+                          className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 ${
+                            w.severity === "error"
+                              ? "bg-rose-500/15 text-rose-700 dark:text-rose-300"
+                              : "bg-amber-500/15 text-amber-800 dark:text-amber-300"
+                          }`}
+                        >
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{isAr ? w.messageAr : w.messageEn}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2 text-[11px]">
+                    <input
+                      type="text"
+                      value={pendingDocDraft.partyName}
+                      onChange={(e) =>
+                        updatePendingDraft((d) => ({ ...d, partyName: e.target.value }))
+                      }
+                      placeholder={isAr ? "اسم المورد / العميل" : "Vendor / Customer"}
+                      className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-bold"
+                    />
+                    <input
+                      type="date"
+                      value={pendingDocDraft.date}
+                      onChange={(e) => updatePendingDraft((d) => ({ ...d, date: e.target.value }))}
+                      className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-mono"
+                    />
+                    <input
+                      type="text"
+                      value={pendingDocDraft.reference}
+                      onChange={(e) =>
+                        updatePendingDraft((d) => ({ ...d, reference: e.target.value }))
+                      }
+                      placeholder={isAr ? "رقم المرجع / الفاتورة" : "Reference #"}
+                      className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-mono"
+                    />
+                    <select
+                      value={pendingDocDraft.currency}
+                      onChange={(e) =>
+                        updatePendingDraft((d) => ({ ...d, currency: e.target.value }))
+                      }
+                      className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-bold"
+                    >
+                      <option value="YER">YER</option>
+                      <option value="SAR">SAR</option>
+                      <option value="USD">USD</option>
+                    </select>
+                  </div>
+
+                  {/* Editable GL Lines */}
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {pendingDocDraft.lines.map((ln, idx) => (
+                      <div key={idx} className="grid grid-cols-12 gap-1 text-[10px]">
+                        <input
+                          type="text"
+                          value={ln.accountCode}
+                          onChange={(e) =>
+                            updatePendingDraft((d) => ({
+                              ...d,
+                              lines: d.lines.map((x, j) =>
+                                j === idx ? { ...x, accountCode: e.target.value } : x
+                              ),
+                            }))
+                          }
+                          className="col-span-3 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-1.5 py-1 font-mono font-bold"
+                        />
+                        <input
+                          type="number"
+                          value={ln.debit}
+                          onChange={(e) =>
+                            updatePendingDraft((d) => ({
+                              ...d,
+                              lines: d.lines.map((x, j) =>
+                                j === idx ? { ...x, debit: Number(e.target.value) || 0 } : x
+                              ),
+                            }))
+                          }
+                          placeholder="Dr"
+                          className="col-span-4 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-1.5 py-1 font-mono"
+                        />
+                        <input
+                          type="number"
+                          value={ln.credit}
+                          onChange={(e) =>
+                            updatePendingDraft((d) => ({
+                              ...d,
+                              lines: d.lines.map((x, j) =>
+                                j === idx ? { ...x, credit: Number(e.target.value) || 0 } : x
+                              ),
+                            }))
+                          }
+                          placeholder="Cr"
+                          className="col-span-4 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-1.5 py-1 font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updatePendingDraft((d) => ({
+                              ...d,
+                              lines: d.lines.filter((_, j) => j !== idx),
+                            }))
+                          }
+                          className="col-span-1 text-rose-500 font-bold"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      data-testid="ai-doc-confirm-post-btn"
+                      disabled={
+                        docPostBusy ||
+                        pendingDocDraft.warnings.some((w) => w.severity === "error")
+                      }
+                      onClick={() => void handleConfirmPostExtractedDraft()}
+                      className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs disabled:opacity-50 flex items-center justify-center gap-1.5"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>
+                        {docPostBusy
+                          ? isAr
+                            ? "جاري الترحيل..."
+                            : "Posting..."
+                          : isAr
+                          ? "تأكيد الترحيل"
+                          : "Confirm Post"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingDocDraft(null)}
+                      className="py-2 px-3 rounded-xl border border-slate-300 dark:border-slate-700 font-bold text-xs"
+                    >
+                      {isAr ? "إلغاء" : "Cancel"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Voice + Text + Document Input Bar */}
               <div className="p-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 space-y-2">
+                {micSettingsPrompt && (
+                  <div className="p-2 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-300 dark:border-rose-800 flex items-center justify-between gap-2 text-[11px]">
+                    <span className="font-bold text-rose-700 dark:text-rose-300">
+                      {isAr
+                        ? "صلاحية الميكروفون مرفوضة أو مقيدة."
+                        : "Microphone permission is denied or restricted."}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => openNativeAppSettings()}
+                      className="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold inline-flex items-center gap-1 shrink-0"
+                    >
+                      <Settings className="w-3 h-3" />
+                      <span>{isAr ? "فتح إعدادات التطبيق" : "Open App Settings"}</span>
+                    </button>
+                  </div>
+                )}
+
+                {micDiagnostics?.unusedAppRestrictionsEnabled && (
+                  <div className="p-2 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 flex items-center justify-between gap-2 text-[11px]">
+                    <span className="font-bold text-amber-800 dark:text-amber-300">
+                      {isAr
+                        ? "تنبيه أندرويد: ميزة «إدارة التطبيق إذا لم يُستخدم» مفعلة وقد تلغي صلاحية الميكروفون."
+                        : "Android warning: 'Manage app if unused' is active and may revoke mic/notification permissions."}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => openUnusedAppRestrictionsSettings()}
+                      className="px-2 py-1 rounded-lg bg-amber-600 text-white font-bold shrink-0"
+                    >
+                      {isAr ? "تعديل" : "Fix"}
+                    </button>
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between text-[10px] text-slate-500">
                   <div className="flex items-center gap-1.5">
                     <span>{isAr ? "لغة الميكروفون:" : "Voice Mic Locale:"}</span>
                     <select
                       value={voiceLang}
                       onChange={(e) =>
-                        setVoiceLang(e.target.value as "ar-SA" | "ar-YE" | "en-US")
+                        setVoiceLang(e.target.value as "ar-SA" | "ar-YE" | "en-US" | "en-GB")
                       }
                       className="rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-1.5 py-0.5 font-mono text-[10px]"
                     >
                       <option value="ar-YE">العربية (اليمن ar-YE)</option>
                       <option value="ar-SA">العربية (السعودية ar-SA)</option>
                       <option value="en-US">English (en-US)</option>
+                      <option value="en-GB">English (en-GB)</option>
                     </select>
                   </div>
                   <span>
                     {listening
-                      ? isAr
+                      ? interimTranscript
+                        ? `🎙️ ${interimTranscript.slice(0, 32)}...`
+                        : isAr
                         ? "🎙️ جاري الاستماع... تحدث الآن"
                         : "🎙️ Listening... speak now"
                       : isAr
@@ -1916,6 +2276,15 @@ export function UasAiCopilot({
                   </span>
                 </div>
 
+                <input
+                  ref={docFileInputRef}
+                  type="file"
+                  accept="image/*,.pdf,.txt,.csv"
+                  capture="environment"
+                  className="hidden"
+                  onChange={(e) => void handleDocumentFileSelected(e.target.files?.[0])}
+                />
+
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
@@ -1923,6 +2292,16 @@ export function UasAiCopilot({
                   }}
                   className="flex items-center gap-1.5"
                 >
+                  <button
+                    type="button"
+                    data-testid="copilot-doc-upload-btn"
+                    disabled={docExtractBusy}
+                    onClick={() => docFileInputRef.current?.click()}
+                    className="p-2.5 rounded-xl border bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-500 transition shrink-0 disabled:opacity-50"
+                    title={isAr ? "إرفاق / تصوير فاتورة أو مستند للاستخراج" : "Upload / Capture Invoice or Receipt"}
+                  >
+                    {docExtractBusy ? <Camera className="w-4 h-4 animate-pulse text-indigo-600" /> : <Paperclip className="w-4 h-4" />}
+                  </button>
                   <button
                     type="button"
                     data-testid="copilot-voice-mic-btn"

@@ -2,11 +2,27 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { PrismaClient } from "@prisma/client";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { extractSubdomainSlugFromHost, validateTenantSlug } from "./tenantSlug";
 
 export interface TenantContext {
   tenantId: string;
+  slug?: string;
   companyName?: string;
   prisma: PrismaClient;
+}
+
+export type TenantResolutionSource =
+  | "subdomain"
+  | "header"
+  | "session"
+  | "query"
+  | "body"
+  | "default";
+
+export interface TenantResolutionResult {
+  tenantId: string;
+  slug: string | null;
+  source: TenantResolutionSource;
 }
 
 const tenantStorage = new AsyncLocalStorage<TenantContext>();
@@ -41,38 +57,101 @@ export function normalizeTenantId(raw?: string | null): string {
 }
 
 /**
- * Extracts tenant identifier from NextRequest headers, query params, cookies or body.
+ * Deterministic tenant resolution following exact priority order:
+ * 1. Subdomain `<slug>.qat.world` from `X-Forwarded-Host` / `Host` / URL
+ * 2. Explicit `x-uas-tenant-id` (or alias) header
+ * 3. Authenticated session/token tenant binding (`x-uas-session-tenant`, `uas_tenant_id` cookie)
+ * 4. Query param / body fallback
+ * 5. `"default"`
  */
-export function extractTenantIdFromRequest(
+export function extractTenantResolutionFromRequest(
   req?: NextRequest | Request,
   body?: Record<string, unknown>
-): string {
+): TenantResolutionResult {
   if (req) {
     const headers = req.headers;
+
+    // 1. Subdomain from X-Forwarded-Host / Host / request URL
+    const forwardedHost = headers.get("x-forwarded-host");
+    const hostHeader = headers.get("host");
+    let urlHost = "";
+    try {
+      urlHost = new URL(req.url).host;
+    } catch {
+      urlHost = "";
+    }
+    const subSlug =
+      extractSubdomainSlugFromHost(forwardedHost) ||
+      extractSubdomainSlugFromHost(hostHeader) ||
+      extractSubdomainSlugFromHost(urlHost);
+    if (subSlug) {
+      return {
+        tenantId: normalizeTenantId(subSlug),
+        slug: subSlug,
+        source: "subdomain",
+      };
+    }
+
+    // 2. Explicit header (Desktop / Mobile / API / LAN clients)
     const headerTenant =
       headers.get("x-uas-tenant-id") ||
       headers.get("x-tenant-id") ||
       headers.get("x-uas-company-id") ||
-      headers.get("x-uas-company");
-    if (headerTenant) return normalizeTenantId(headerTenant);
+      headers.get("x-uas-company") ||
+      headers.get("x-uas-resolved-tenant");
+    if (headerTenant) {
+      const slugCheck = validateTenantSlug(headerTenant);
+      return {
+        tenantId: normalizeTenantId(headerTenant),
+        slug: slugCheck.valid ? slugCheck.normalized : null,
+        source: "header",
+      };
+    }
 
+    // 3. Authenticated session/token tenant binding
+    const sessionHeader = headers.get("x-uas-session-tenant");
+    if (sessionHeader && sessionHeader.trim()) {
+      const slugCheck = validateTenantSlug(sessionHeader);
+      return {
+        tenantId: normalizeTenantId(sessionHeader),
+        slug: slugCheck.valid ? slugCheck.normalized : null,
+        source: "session",
+      };
+    }
+
+    if ("cookies" in req && typeof req.cookies?.get === "function") {
+      const cookieTenant = req.cookies.get("uas_tenant_id")?.value;
+      if (cookieTenant) {
+        const slugCheck = validateTenantSlug(cookieTenant);
+        return {
+          tenantId: normalizeTenantId(cookieTenant),
+          slug: slugCheck.valid ? slugCheck.normalized : null,
+          source: "session",
+        };
+      }
+    }
+
+    // 4a. Query parameter fallback
     try {
       const url = new URL(req.url);
       const queryTenant =
         url.searchParams.get("tenantId") ||
         url.searchParams.get("tenant") ||
         url.searchParams.get("company");
-      if (queryTenant) return normalizeTenantId(queryTenant);
+      if (queryTenant) {
+        const slugCheck = validateTenantSlug(queryTenant);
+        return {
+          tenantId: normalizeTenantId(queryTenant),
+          slug: slugCheck.valid ? slugCheck.normalized : null,
+          source: "query",
+        };
+      }
     } catch {
       // Ignore URL parse error
     }
-
-    if ("cookies" in req && typeof req.cookies?.get === "function") {
-      const cookieTenant = req.cookies.get("uas_tenant_id")?.value;
-      if (cookieTenant) return normalizeTenantId(cookieTenant);
-    }
   }
 
+  // 4b. Body fallback
   if (body) {
     const bodyTenant =
       body.tenantId ||
@@ -80,11 +159,26 @@ export function extractTenantIdFromRequest(
       body.companyId ||
       body.companyName;
     if (typeof bodyTenant === "string" && bodyTenant.trim()) {
-      return normalizeTenantId(bodyTenant);
+      const slugCheck = validateTenantSlug(bodyTenant);
+      return {
+        tenantId: normalizeTenantId(bodyTenant),
+        slug: slugCheck.valid ? slugCheck.normalized : null,
+        source: "body",
+      };
     }
   }
 
-  return "default";
+  return { tenantId: "default", slug: null, source: "default" };
+}
+
+/**
+ * Extracts tenant identifier from NextRequest headers, query params, cookies or body.
+ */
+export function extractTenantIdFromRequest(
+  req?: NextRequest | Request,
+  body?: Record<string, unknown>
+): string {
+  return extractTenantResolutionFromRequest(req, body).tenantId;
 }
 
 /**
@@ -133,17 +227,81 @@ export async function runWithTenant<T>(
 /**
  * Higher-order helper for Next.js App Router route handlers.
  * Automatically resolves tenant from request, sets TenantContext in AsyncLocalStorage,
- * and sets `x-uas-tenant-id` in response headers.
+ * enforces per-tenant device access governance (`403 DEVICE_REVOKED` / `DEVICE_LOCKED`),
+ * and sets `x-uas-tenant-id` / `x-uas-tenant-slug` in response headers.
  */
 export function withTenantRoute<
   T extends (req: NextRequest, context?: any) => Promise<NextResponse>
 >(handler: T): T {
   return (async (req: NextRequest, context?: any) => {
-    const tenantId = extractTenantIdFromRequest(req);
+    const resolution = extractTenantResolutionFromRequest(req);
+    const tenantId = resolution.tenantId;
     return runWithTenant(tenantId, async () => {
+      const deviceId = (req.headers.get("x-uas-device-id") || "").trim();
+      if (deviceId) {
+        let pathname = "";
+        try {
+          pathname = req.nextUrl?.pathname || new URL(req.url, "http://localhost").pathname;
+        } catch {
+          pathname = "";
+        }
+        const isExempt =
+          pathname.startsWith("/api/public/") ||
+          pathname.startsWith("/api/auth/logout") ||
+          pathname.startsWith("/api/devices") ||
+          pathname.startsWith("/api/licensing/");
+        if (!isExempt) {
+          try {
+            const ctx = getTenantContext();
+            const device = await ctx?.prisma.tenantDevice.findUnique({
+              where: { deviceId },
+              select: { status: true },
+            });
+            if (device?.status === "REVOKED") {
+              return NextResponse.json(
+                {
+                  error:
+                    "تم إلغاء صلاحية هذا الجهاز من قبل مسؤول المنشأة / This device has been revoked by tenant administrator.",
+                  code: "DEVICE_REVOKED",
+                  clearCredentials: true,
+                },
+                {
+                  status: 403,
+                  headers: {
+                    "x-uas-tenant-id": tenantId,
+                    ...(resolution.slug ? { "x-uas-tenant-slug": resolution.slug } : {}),
+                  },
+                }
+              );
+            }
+            if (device?.status === "SUSPENDED") {
+              return NextResponse.json(
+                {
+                  error:
+                    "تم إيقاف/قفل هذا الجهاز مؤقتاً من قبل مسؤول المنشأة / This device is suspended by tenant administrator.",
+                  code: "DEVICE_LOCKED",
+                },
+                {
+                  status: 403,
+                  headers: {
+                    "x-uas-tenant-id": tenantId,
+                    ...(resolution.slug ? { "x-uas-tenant-slug": resolution.slug } : {}),
+                  },
+                }
+              );
+            }
+          } catch {
+            // Do not break requests if TenantDevice table is unavailable during early bootstrap
+          }
+        }
+      }
+
       const res = await handler(req, context);
       try {
         res.headers.set("x-uas-tenant-id", tenantId);
+        if (resolution.slug) {
+          res.headers.set("x-uas-tenant-slug", resolution.slug);
+        }
       } catch {
         // Response may be immutable in some contexts
       }

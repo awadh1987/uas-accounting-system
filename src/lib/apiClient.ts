@@ -28,8 +28,47 @@ export const RUNTIME_MODE_STORAGE_KEY = "uas_runtime_mode";
 export const LAN_URL_STORAGE_KEY = "uas_lan_server_url";
 export const CLOUD_URL_STORAGE_KEY = "uas_cloud_server_url";
 export const TENANT_ID_STORAGE_KEY = "uas_tenant_id";
+export const DEVICE_ID_STORAGE_KEY = "uas_device_id";
 export const DEFAULT_CLOUD_API_URL = "https://qat.world";
 export const DEFAULT_LAN_API_URL = "http://192.168.1.10:3000";
+
+export function getOrCreateClientDeviceId(storage?: StorageLike | null): string {
+  const s = getWritableStorage(storage);
+  if (s) {
+    const existing = (s.getItem(DEVICE_ID_STORAGE_KEY) || "").trim();
+    if (existing) return existing;
+    const generated = `dev-${generateClientUuid()}`;
+    try {
+      s.setItem(DEVICE_ID_STORAGE_KEY, generated);
+    } catch {
+      // Ignore quota errors
+    }
+    return generated;
+  }
+  return "dev-ephemeral";
+}
+
+export function detectClientDevicePlatform(winOverride?: BrowserEnvLike): "android" | "windows" | "web" {
+  if (isNativeAndroid(winOverride)) return "android";
+  const win: BrowserEnvLike | undefined =
+    winOverride ?? (typeof window !== "undefined" ? (window as unknown as BrowserEnvLike) : undefined);
+  const ua = win?.navigator?.userAgent || (typeof navigator !== "undefined" ? navigator.userAgent : "");
+  if (/electron|uas-desktop|windows nt/i.test(ua)) return "windows";
+  return "web";
+}
+
+function handlePotentialRevocation(status: number, bodyObj: unknown): void {
+  if (status === 403 && bodyObj && typeof bodyObj === "object" && (bodyObj as any).code === "DEVICE_REVOKED") {
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.removeItem("uas_user");
+        window.dispatchEvent(new CustomEvent("uas:device-revoked", { detail: bodyObj }));
+      } catch {
+        // Ignore
+      }
+    }
+  }
+}
 
 export function getStoredTenantId(storage?: Pick<StorageLike, "getItem"> | null): string {
   const s = getStorage(storage);
@@ -298,12 +337,19 @@ export async function safeFetchJson<T = Record<string, unknown>>(
         headers.set("x-uas-tenant-id", tid);
       }
     }
+    if (!headers.has("x-uas-device-id")) {
+      headers.set("x-uas-device-id", getOrCreateClientDeviceId());
+    }
+    if (!headers.has("x-uas-platform")) {
+      headers.set("x-uas-platform", detectClientDevicePlatform());
+    }
     const finalInit = { ...init, headers };
 
     const baseUrl = resolveApiBaseUrl();
     const finalUrl = baseUrl && url.startsWith("/api/") ? `${baseUrl}${url}` : url;
 
-    const res = await fn(finalUrl, finalInit);
+    const { resilientFetch } = await import("@/lib/transportResolver");
+    const res = await resilientFetch(finalUrl, finalInit, { fetchImpl: fn });
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
     const text = await res.text();
     const trimmed = text.trim();
@@ -325,6 +371,7 @@ export async function safeFetchJson<T = Record<string, unknown>>(
 
     try {
       const parsed = JSON.parse(trimmed) as T;
+      handlePotentialRevocation(res.status, parsed);
       const parsedErr = (parsed as any)?.error || (parsed as any)?.message;
       return {
         ok: res.ok,
@@ -379,6 +426,12 @@ export function installGlobalApiFetchInterceptor(): void {
           headers.set("x-uas-tenant-id", tid);
         }
       }
+      if (!headers.has("x-uas-device-id")) {
+        headers.set("x-uas-device-id", getOrCreateClientDeviceId());
+      }
+      if (!headers.has("x-uas-platform")) {
+        headers.set("x-uas-platform", detectClientDevicePlatform());
+      }
       const patchedInit = { ...init, headers };
 
       // On Android in `"local"` mode, route all local `/api/*` calls to on-device localStorage adapter
@@ -431,7 +484,10 @@ export async function fetchBootstrapState(): Promise<{
   try {
     const base = resolveApiBaseUrl();
     const tid = getStoredTenantId();
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = {
+      "x-uas-device-id": getOrCreateClientDeviceId(),
+      "x-uas-platform": detectClientDevicePlatform(),
+    };
     if (tid && tid !== "default") {
       headers["x-uas-tenant-id"] = tid;
     }
@@ -818,6 +874,7 @@ export async function executeMutation(opts: {
     actor: makeActorPayload(opts.currentUser),
   };
 
+  const idempotencyKey = generateClientUuid();
   const isBrowserOffline = typeof navigator !== "undefined" && !navigator.onLine;
   if (opts.offlineMode || isBrowserOffline) {
     const optimistic = applyLocalOptimistic(
@@ -842,6 +899,7 @@ export async function executeMutation(opts: {
       method: opts.method,
       payload: bodyWithActor,
       label: opts.label,
+      idempotencyKey,
     });
     return {
       state: optimistic.next,
@@ -855,12 +913,15 @@ export async function executeMutation(opts: {
     const tid = getStoredTenantId();
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      "X-Idempotency-Key": generateClientUuid(),
+      "X-Idempotency-Key": idempotencyKey,
+      "x-uas-device-id": getOrCreateClientDeviceId(),
+      "x-uas-platform": detectClientDevicePlatform(),
     };
     if (tid && tid !== "default") {
       headers["x-uas-tenant-id"] = tid;
     }
-    const res = await fetch(`${base}${opts.endpoint}`, {
+    const { resilientFetch } = await import("@/lib/transportResolver");
+    const res = await resilientFetch(`${base}${opts.endpoint}`, {
       method: opts.method,
       headers,
       body: JSON.stringify(bodyWithActor),
@@ -868,7 +929,9 @@ export async function executeMutation(opts: {
     const data = (await res.json().catch(() => ({}))) as {
       state?: UasBootstrapState;
       error?: string;
+      code?: string;
     };
+    handlePotentialRevocation(res.status, data);
 
     if (!res.ok) {
       // Static Capacitor APK without a configured LAN/Cloud server returns HTML 404 for /api/*
@@ -920,6 +983,7 @@ export async function executeMutation(opts: {
       method: opts.method,
       payload: bodyWithActor,
       label: opts.label,
+      idempotencyKey,
     });
     return {
       state: optimistic.next,
@@ -941,15 +1005,23 @@ export async function syncQueuedOfflineMutations(currentUser: UasUser): Promise<
 
   const base = getApiBaseUrl();
   const tid = getStoredTenantId();
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "x-uas-device-id": getOrCreateClientDeviceId(),
+    "x-uas-platform": detectClientDevicePlatform(),
+  };
   if (tid && tid !== "default") {
     headers["x-uas-tenant-id"] = tid;
   }
+  const { resilientFetch } = await import("@/lib/transportResolver");
   for (const item of items) {
     try {
-      const res = await fetch(`${base}${item.endpoint}`, {
+      const res = await resilientFetch(`${base}${item.endpoint}`, {
         method: item.method,
-        headers,
+        headers: {
+          ...headers,
+          "X-Idempotency-Key": item.idempotencyKey || generateClientUuid(),
+        },
         body: JSON.stringify(item.payload),
       });
       if (res.ok || res.status === 404 || res.status === 423) {
