@@ -57,6 +57,12 @@ const standaloneDir = path.join(projectRoot, ".next", "standalone");
 
 if (!skipBuild || !fs.existsSync(standaloneDir)) {
   execSync("npm run build", { stdio: "inherit", cwd: projectRoot });
+  for (const stray of ["android", "ios"]) {
+    const strayPath = path.join(standaloneDir, stray);
+    if (fs.existsSync(strayPath)) {
+      fs.rmSync(strayPath, { recursive: true, force: true });
+    }
+  }
 } else {
   console.log("[OK] Using existing standalone build (--skip-build).");
 }

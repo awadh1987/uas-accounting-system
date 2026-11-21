@@ -4,6 +4,16 @@ const isCapacitorExport = process.env.CAPACITOR_EXPORT === "1";
 
 const nextConfig: NextConfig = {
   ...(isCapacitorExport ? { output: "export" } : { output: "standalone" }),
+  outputFileTracingExcludes: {
+    "*": [
+      "./android/**",
+      "./ios/**",
+      "./release/**",
+      "./tests/**",
+      "./docs/**",
+      "./out/**",
+    ],
+  },
   productionBrowserSourceMaps: false,
   images: {
     unoptimized: true,
