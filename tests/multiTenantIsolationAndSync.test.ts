@@ -15,6 +15,11 @@ import {
   remapPostgresEnumColumns,
   provisionPostgresTenantSchema,
   resetTenantClientsForTests,
+  getRegistryFilePath,
+  getDynamicDataDirectory,
+  getTenantMetadata,
+  registerTenant,
+  ensureTenantRegistered,
 } from "../src/lib/tenant";
 import { safeDeleteOrArchiveUser } from "../src/lib/userLifecycle";
 import { hashPassword } from "../src/lib/serverBootstrap";
@@ -658,6 +663,48 @@ describe("Isolated Multi-Tenant Databases, Multi-Device Sync & Notification Fixe
       assert.ok(result.tablesProvisioned.length > 0);
       assert.ok(executedSql.some((q) => q.includes('CREATE SCHEMA IF NOT EXISTS "tenant_fallback_test"')));
       assert.ok(executedSql.some((q) => q.includes('CREATE TABLE IF NOT EXISTS "tenant_fallback_test"."Account"')));
+    });
+  });
+
+  describe("7. Dynamic Tenant Registry Path Resolution & Lazy Loading (Turbopack Safe)", () => {
+    it("resolves dynamic data directory without hardcoded static path constants", () => {
+      const dir = getDynamicDataDirectory();
+      assert.ok(typeof dir === "string" && dir.length > 0);
+      assert.ok(!dir.includes("[object Object]"));
+
+      const filePath = getRegistryFilePath();
+      assert.ok(typeof filePath === "string" && filePath.length > 0);
+      assert.ok(filePath.endsWith("tenants_registry.json"));
+      assert.ok(path.isAbsolute(filePath));
+    });
+
+    it("lazily initializes default tenant metadata without throwing on missing files", () => {
+      const defaultMeta = getTenantMetadata("default");
+      assert.ok(defaultMeta, "Default tenant metadata must exist");
+      assert.equal(defaultMeta.tenantId, "default");
+      assert.equal(defaultMeta.status, "ACTIVE");
+      assert.equal(defaultMeta.schemaOrDb, "default");
+    });
+
+    it("registers and retrieves tenant metadata safely at runtime", () => {
+      const testTenantId = `dynamic_reg_${Date.now()}`;
+      const registered = registerTenant({
+        tenantId: testTenantId,
+        companyName: "Dynamic Registry Test Company",
+        slug: testTenantId,
+        maxSeats: 5,
+      });
+
+      assert.equal(registered.tenantId, testTenantId);
+      assert.equal(registered.companyName, "Dynamic Registry Test Company");
+      assert.equal(registered.maxSeats, 5);
+
+      const retrieved = getTenantMetadata(testTenantId);
+      assert.ok(retrieved, "Registered tenant must be retrievable");
+      assert.equal(retrieved.companyName, "Dynamic Registry Test Company");
+
+      const ensured = ensureTenantRegistered(testTenantId, "Updated Company Name");
+      assert.equal(ensured.companyName, "Updated Company Name");
     });
   });
 });
