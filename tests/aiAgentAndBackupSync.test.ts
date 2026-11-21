@@ -333,7 +333,7 @@ describe("Phase 3 — AI Agent Copilot, Support Engine, Full-Schema Backup & And
         `Expected model '${mod}' to be exported in full schema backup tables`
       );
       assert.ok(
-        FULL_SCHEMA_TABLE_ORDER.includes(mod as any),
+        (FULL_SCHEMA_TABLE_ORDER as readonly string[]).includes(mod),
         `Expected model '${mod}' in FULL_SCHEMA_TABLE_ORDER`
       );
     }

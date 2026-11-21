@@ -35,7 +35,15 @@ import {
   DEFAULT_WAREHOUSES,
   slugifyLookupCode,
 } from "@/lib/multiUnitInventoryEngine";
-import type { UasBootstrapState, UasEnterpriseProfile, UasUser } from "@/types/uas";
+import type {
+  UasBootstrapState,
+  UasEnterpriseProfile,
+  UasOperatingExpense,
+  UasProject,
+  UasTreasuryAccount,
+  UasUser,
+  UasWorkerWage,
+} from "@/types/uas";
 
 export const OFFLINE_DB_STATE_KEY = "uas_offline_db_state";
 export const OFFLINE_DB_PASSWORDS_KEY = "uas_offline_db_passwords";
@@ -215,7 +223,7 @@ export function getOfflineSyncQueue(storage?: OfflineStorageLike | null): Offlin
  * Ensures parent master models (Currencies, Cost Centers, UOMs, Categories, Items, Accounts)
  * sync before child transactions, movements, drafts, and approval decisions.
  */
-export function getEndpointSyncPriority(endpoint: string, _method = "POST"): number {
+export function getEndpointSyncPriority(endpoint: string): number {
   const ep = endpoint.toLowerCase();
 
   // Tier 1: Currencies, Exchange Rates, Fiscal Years, System Settings
@@ -271,8 +279,8 @@ export function getEndpointSyncPriority(endpoint: string, _method = "POST"): num
 
 export function sortSyncQueueTopologically(queue: OfflineSyncQueueEntry[]): OfflineSyncQueueEntry[] {
   return [...queue].sort((a, b) => {
-    const prioA = getEndpointSyncPriority(a.endpoint, a.method);
-    const prioB = getEndpointSyncPriority(b.endpoint, b.method);
+    const prioA = getEndpointSyncPriority(a.endpoint);
+    const prioB = getEndpointSyncPriority(b.endpoint);
     if (prioA !== prioB) return prioA - prioB;
     // Maintain FIFO for identical priority
     return (a.createdAt || "").localeCompare(b.createdAt || "");
@@ -856,7 +864,7 @@ export function handleLocalMasterLifecycle(
 
     if (normAction === "RESTORE") {
       state.treasuryAccounts[idx].isActive = true;
-      (state.treasuryAccounts[idx] as any).archivedAt = null;
+      state.treasuryAccounts[idx].archivedAt = null;
       addLocalAudit(state, actor.userDisplay, "استعادة حساب خزينة (محلي)", state.treasuryAccounts[idx].nameAr || id);
       saveOfflineAndroidState(state, s);
       return jsonResponse({ ok: true, restored: true, message: "تمت استعادة حساب الخزينة بنجاح", entityType, id });
@@ -864,7 +872,7 @@ export function handleLocalMasterLifecycle(
 
     if (normAction === "ARCHIVE") {
       state.treasuryAccounts[idx].isActive = false;
-      (state.treasuryAccounts[idx] as any).archivedAt = now;
+      state.treasuryAccounts[idx].archivedAt = now;
       addLocalAudit(state, actor.userDisplay, "أرشفة حساب خزينة (محلي)", state.treasuryAccounts[idx].nameAr || id);
       saveOfflineAndroidState(state, s);
       return jsonResponse({ ok: true, archived: true, message: "تمت أرشفة حساب الخزينة بنجاح", entityType, id });
@@ -876,7 +884,7 @@ export function handleLocalMasterLifecycle(
     );
     if (dispatches.length > 0 || (Number(state.treasuryAccounts[idx].balance) || 0) > 0) {
       state.treasuryAccounts[idx].isActive = false;
-      (state.treasuryAccounts[idx] as any).archivedAt = now;
+      state.treasuryAccounts[idx].archivedAt = now;
       addLocalAudit(
         state,
         actor.userDisplay,
@@ -1021,7 +1029,45 @@ function handleOfflineScopedReset(
     );
   }
 
-  const state = loadOfflineAndroidState(s) as any;
+  interface OfflineResetState extends Omit<UasBootstrapState, "treasuryAccounts" | "workers" | "projects" | "expenses"> {
+    treasuryAccounts: Array<UasTreasuryAccount & { currentBalance?: number }>;
+    workers: Array<UasWorkerWage & { currentBalance?: number }>;
+    projects: Array<UasProject & { spentAmount?: number; revenueAmount?: number }>;
+    expenses: Array<UasOperatingExpense & { costCenterId?: string }>;
+    salesInvoices?: Array<{ projectId?: string }>;
+    saleTransactions?: unknown[];
+    installmentVouchers?: unknown[];
+    customers?: Array<{ balance?: number; currentBalance?: number }>;
+    purchaseOrders?: Array<{ projectId?: string }>;
+    vendorBills?: unknown[];
+    paymentVouchers?: unknown[];
+    vendors?: Array<{ balance?: number; currentBalance?: number }>;
+    stockMovements?: unknown[];
+    stockBalances?: unknown[];
+    inventoryLots?: unknown[];
+    stockItems?: Array<{ currentStock?: number }>;
+    treasuryTransactions?: unknown[];
+    vouchers?: unknown[];
+    wageEntries?: Array<{ projectId?: string }>;
+    costCenters?: Array<{ id?: string; currentBalance?: number }>;
+    journalEntries?: unknown[];
+    drafts?: unknown[];
+    accounts?: unknown[];
+  }
+
+  interface OfflineCoaAccountResetItem {
+    code: string;
+    nameAr: string;
+    nameEn: string;
+    level: number;
+    type: string;
+    isPosting: boolean;
+    debit?: number;
+    credit?: number;
+    balance?: number;
+  }
+
+  const state = loadOfflineAndroidState(s) as OfflineResetState;
   const deletedCounts: Record<string, number> = {};
 
   const backupKey = `uas_offline_prereset_${Date.now()}`;
@@ -1033,11 +1079,11 @@ function handleOfflineScopedReset(
 
   // Purge sync queue entries matching the reset scope to prevent sync loops
   const syncQueueRaw = s?.getItem("uas_offline_sync_queue");
-  let syncQueue: any[] = [];
+  let syncQueue: OfflineSyncQueueEntry[] = [];
   if (syncQueueRaw) {
     try {
-      syncQueue = JSON.parse(syncQueueRaw);
-      if (!Array.isArray(syncQueue)) syncQueue = [];
+      const parsed = JSON.parse(syncQueueRaw);
+      if (Array.isArray(parsed)) syncQueue = parsed as OfflineSyncQueueEntry[];
     } catch {
       syncQueue = [];
     }
@@ -1054,7 +1100,7 @@ function handleOfflineScopedReset(
         c.currentBalance = 0;
       }
       syncQueue = syncQueue.filter(
-        (item: any) =>
+        (item: OfflineSyncQueueEntry) =>
           !item.endpoint?.includes("/api/commercial/sales") &&
           !item.endpoint?.includes("/api/installments")
       );
@@ -1068,7 +1114,7 @@ function handleOfflineScopedReset(
         v.currentBalance = 0;
       }
       syncQueue = syncQueue.filter(
-        (item: any) =>
+        (item: OfflineSyncQueueEntry) =>
           !item.endpoint?.includes("/api/procurement") &&
           !item.endpoint?.includes("/api/purchases")
       );
@@ -1079,14 +1125,14 @@ function handleOfflineScopedReset(
       for (const it of state.stockItems || []) {
         it.currentStock = 0;
       }
-      syncQueue = syncQueue.filter((item: any) => !item.endpoint?.includes("/api/inventory"));
+      syncQueue = syncQueue.filter((item: OfflineSyncQueueEntry) => !item.endpoint?.includes("/api/inventory"));
     } else if (sectionModule === "treasury") {
       state.treasuryTransactions = [];
       state.vouchers = [];
       for (const t of state.treasuryAccounts || []) {
         t.currentBalance = 0;
       }
-      syncQueue = syncQueue.filter((item: any) => !item.endpoint?.includes("/api/treasury"));
+      syncQueue = syncQueue.filter((item: OfflineSyncQueueEntry) => !item.endpoint?.includes("/api/treasury"));
     } else if (sectionModule === "expenses_wages") {
       state.expenses = [];
       state.wageEntries = [];
@@ -1094,30 +1140,36 @@ function handleOfflineScopedReset(
         w.currentBalance = 0;
       }
       syncQueue = syncQueue.filter(
-        (item: any) =>
+        (item: OfflineSyncQueueEntry) =>
           !item.endpoint?.includes("/api/expenses") &&
           !item.endpoint?.includes("/api/workers")
       );
     }
   } else if (scope === "unit") {
     if (unitType === "project" && unitId) {
-      state.expenses = (state.expenses || []).filter((e: any) => e.projectId !== unitId);
-      state.wageEntries = (state.wageEntries || []).filter((w: any) => w.projectId !== unitId);
-      state.purchaseOrders = (state.purchaseOrders || []).filter((p: any) => p.projectId !== unitId);
-      state.salesInvoices = (state.salesInvoices || []).filter((s: any) => s.projectId !== unitId);
-      const proj = (state.projects || []).find((p: any) => p.id === unitId);
+      state.expenses = (state.expenses || []).filter((e: { projectId?: string }) => e.projectId !== unitId);
+      state.wageEntries = (state.wageEntries || []).filter((w: { projectId?: string }) => w.projectId !== unitId);
+      state.purchaseOrders = (state.purchaseOrders || []).filter((p: { projectId?: string }) => p.projectId !== unitId);
+      state.salesInvoices = (state.salesInvoices || []).filter((s: { projectId?: string }) => s.projectId !== unitId);
+      const proj = (state.projects || []).find((p: { id?: string }) => p.id === unitId);
       if (proj) {
         proj.spentAmount = 0;
         proj.revenueAmount = 0;
       }
-      syncQueue = syncQueue.filter((item: any) => item.payload?.projectId !== unitId);
+      syncQueue = syncQueue.filter(
+        (item: OfflineSyncQueueEntry) =>
+          (item.payload as Record<string, unknown> | undefined)?.projectId !== unitId
+      );
     } else if (unitType === "costCenter" && unitId) {
-      state.expenses = (state.expenses || []).filter((e: any) => e.costCenterId !== unitId);
-      const cc = (state.costCenters || []).find((c: any) => c.id === unitId);
+      state.expenses = (state.expenses || []).filter((e: { costCenterId?: string }) => e.costCenterId !== unitId);
+      const cc = (state.costCenters || []).find((c: { id?: string }) => c.id === unitId);
       if (cc) {
         cc.currentBalance = 0;
       }
-      syncQueue = syncQueue.filter((item: any) => item.payload?.costCenterId !== unitId);
+      syncQueue = syncQueue.filter(
+        (item: OfflineSyncQueueEntry) =>
+          (item.payload as Record<string, unknown> | undefined)?.costCenterId !== unitId
+      );
     }
   } else if (scope === "factory") {
     state.journalEntries = [];
@@ -1144,18 +1196,20 @@ function handleOfflineScopedReset(
     for (const p of state.projects || []) { p.spentAmount = 0; p.revenueAmount = 0; }
     for (const cc of state.costCenters || []) { cc.currentBalance = 0; }
 
-    let coa = readCollection<any>(OFFLINE_DB_COA_KEY, s);
+    let coa = readCollection<OfflineCoaAccountResetItem>(OFFLINE_DB_COA_KEY, s);
     if (!Array.isArray(coa) || coa.length === 0) {
-      coa = Array.isArray(state.accounts) && state.accounts.length > 0 ? state.accounts : [
-        { code: "1", nameAr: "الأصول", nameEn: "Assets", level: 1, type: "ASSET", isPosting: false },
-        { code: "2", nameAr: "الخصوم", nameEn: "Liabilities", level: 1, type: "LIABILITY", isPosting: false },
-        { code: "3", nameAr: "حقوق الملكية", nameEn: "Equity", level: 1, type: "EQUITY", isPosting: false },
-        { code: "4", nameAr: "الإيرادات", nameEn: "Revenue", level: 1, type: "REVENUE", isPosting: false },
-        { code: "5", nameAr: "المصروفات", nameEn: "Expenses", level: 1, type: "EXPENSE", isPosting: false },
-      ];
+      coa = (Array.isArray(state.accounts) && state.accounts.length > 0
+        ? (state.accounts as unknown as OfflineCoaAccountResetItem[])
+        : [
+            { code: "1", nameAr: "الأصول", nameEn: "Assets", level: 1, type: "ASSET", isPosting: false },
+            { code: "2", nameAr: "الخصوم", nameEn: "Liabilities", level: 1, type: "LIABILITY", isPosting: false },
+            { code: "3", nameAr: "حقوق الملكية", nameEn: "Equity", level: 1, type: "EQUITY", isPosting: false },
+            { code: "4", nameAr: "الإيرادات", nameEn: "Revenue", level: 1, type: "REVENUE", isPosting: false },
+            { code: "5", nameAr: "المصروفات", nameEn: "Expenses", level: 1, type: "EXPENSE", isPosting: false },
+          ]);
     }
     if (coaMode === "blank_coa") {
-      coa = coa.filter((a: any) => ["1", "2", "3", "4", "5"].includes(a.code));
+      coa = coa.filter((a: OfflineCoaAccountResetItem) => ["1", "2", "3", "4", "5"].includes(a.code));
     }
     for (const a of coa) {
       a.debit = 0;
@@ -2116,12 +2170,12 @@ async function handleOfflineAndroidApiRequestCore(
       }
 
       const todayStr = new Date().toISOString().slice(0, 10);
-      if ((treasury as any).lastDailyResetDate !== todayStr) {
-        (treasury as any).dailyUsedAmount = 0;
-        (treasury as any).lastDailyResetDate = todayStr;
+      if (treasury.lastDailyResetDate !== todayStr) {
+        treasury.dailyUsedAmount = 0;
+        treasury.lastDailyResetDate = todayStr;
       }
       const dailyLimit = Number(treasury.dailyLimit) || 0;
-      const currentUsed = Number((treasury as any).dailyUsedAmount) || 0;
+      const currentUsed = Number(treasury.dailyUsedAmount) || 0;
       if (dailyLimit > 0 && currentUsed + numAmount > dailyLimit) {
         return jsonResponse(
           {
@@ -2149,11 +2203,11 @@ async function handleOfflineAndroidApiRequestCore(
       }
 
       treasury.balance = currentBal - totalDeduct;
-      (treasury as any).dailyUsedAmount = currentUsed + numAmount;
+      treasury.dailyUsedAmount = currentUsed + numAmount;
 
       const dispatches = readCollection<Record<string, unknown>>(OFFLINE_DB_DISPATCHES_KEY, s);
       const dispatchNumber = `DSP-${new Date().getFullYear()}-${String(dispatches.length + 1).padStart(4, "0")}`;
-      const provider = (treasury as any).gatewayProvider || "MANUAL";
+      const provider = treasury.gatewayProvider || "MANUAL";
       const extRef = `${provider.slice(0, 3)}-SBX-${Date.now().toString().slice(-6)}`;
 
       const dispatchRecord = {
@@ -2191,7 +2245,7 @@ async function handleOfflineAndroidApiRequestCore(
           ok: true,
           dispatch: dispatchRecord,
           balanceAfter: treasury.balance,
-          dailyRemaining: dailyLimit > 0 ? dailyLimit - (treasury as any).dailyUsedAmount : null,
+          dailyRemaining: dailyLimit > 0 ? dailyLimit - (treasury.dailyUsedAmount ?? 0) : null,
           offline: true,
         },
         200
@@ -2201,24 +2255,35 @@ async function handleOfflineAndroidApiRequestCore(
 
   // Bulk Bank/Wallet Transfer Export
   if (pathname === "/api/treasury/batch-export" && method === "POST") {
-    const { treasuryAccountId: _treasuryAccountId, treasuryName = "Bank", provider = "BANK", items = [], format = "xlsx" } = body;
-    const rows = (Array.isArray(items) ? items : []).map((it: any, idx: number) => ({
-      serial: idx + 1,
-      beneficiaryName: it.beneficiaryName,
-      accountOrPhone: it.accountOrPhone,
-      amount: Number(it.amount) || 0,
-      currencyCode: it.currencyCode || "YER",
-      reference: it.reference || `BATCH-${Date.now().toString().slice(-4)}-${idx + 1}`,
-      notes: it.notes || "مستحقات دفعات UAS",
-    }));
-    const totalAmount = rows.reduce((acc: number, r: any) => acc + r.amount, 0);
+    const { treasuryName = "Bank", provider = "BANK", items = [], format = "xlsx" } = body;
+    interface BatchExportRow {
+      serial: number;
+      beneficiaryName: string;
+      accountOrPhone: string;
+      amount: number;
+      currencyCode: string;
+      reference: string;
+      notes: string;
+    }
+    const rows: BatchExportRow[] = (Array.isArray(items) ? (items as Array<Record<string, unknown>>) : []).map(
+      (it, idx: number) => ({
+        serial: idx + 1,
+        beneficiaryName: String(it.beneficiaryName || ""),
+        accountOrPhone: String(it.accountOrPhone || ""),
+        amount: Number(it.amount) || 0,
+        currencyCode: String(it.currencyCode || "YER"),
+        reference: String(it.reference || `BATCH-${Date.now().toString().slice(-4)}-${idx + 1}`),
+        notes: String(it.notes || "مستحقات دفعات UAS"),
+      })
+    );
+    const totalAmount = rows.reduce((acc: number, r: BatchExportRow) => acc + r.amount, 0);
     const header = "رقم التسلسل,اسم المستفيد,رقم الحساب أو المحفظة,المبلغ,العملة,المرجع,البيان\n";
     const csvContent =
       "\uFEFF" +
       header +
       rows
         .map(
-          (r: any) =>
+          (r: BatchExportRow) =>
             `"${r.serial}","${r.beneficiaryName}","${r.accountOrPhone}","${r.amount}","${r.currencyCode}","${r.reference}","${r.notes}"`
         )
         .join("\n");
@@ -2245,15 +2310,24 @@ async function handleOfflineAndroidApiRequestCore(
   // Statement Auto-Reconciliation Import
   if (pathname === "/api/treasury/reconcile-import" && method === "POST") {
     const { treasuryAccountId, statementRows = [] } = body;
-    const dispatches = readCollection<Record<string, any>>(OFFLINE_DB_DISPATCHES_KEY, s).filter(
+    interface OfflineDispatchRecord {
+      id: string;
+      dispatchNumber?: string;
+      treasuryAccountId?: string;
+      amount?: number;
+      beneficiaryName?: string;
+      externalReferenceId?: string;
+      createdAt?: string;
+    }
+    const dispatches = readCollection<OfflineDispatchRecord>(OFFLINE_DB_DISPATCHES_KEY, s).filter(
       (d) => d.treasuryAccountId === treasuryAccountId
     );
 
-    const matchedRows: any[] = [];
-    const unmatchedInUas: any[] = [];
+    const matchedRows: Array<Record<string, unknown>> = [];
+    const unmatchedInUas: Array<Record<string, unknown>> = [];
     const matchedDispatchIds = new Set<string>();
 
-    for (const row of Array.isArray(statementRows) ? statementRows : []) {
+    for (const row of Array.isArray(statementRows) ? (statementRows as Array<Record<string, unknown>>) : []) {
       const rowAmt = Number(row.credit || row.debit) || 0;
       let match = row.referenceId
         ? dispatches.find(
@@ -2307,7 +2381,7 @@ async function handleOfflineAndroidApiRequestCore(
         ok: true,
         result: {
           treasuryAccountId,
-          statementTotalRows: (statementRows as any[]).length,
+          statementTotalRows: Array.isArray(statementRows) ? statementRows.length : 0,
           matchedCount: matchedRows.length,
           unmatchedInUasCount: unmatchedInUas.length,
           unmatchedInBankCount: unmatchedInBank.length,

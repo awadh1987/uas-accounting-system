@@ -429,7 +429,7 @@ export function SystemTab({
       : `Delete user "${user.name}"? Users with no linked records are permanently deleted; users with accounting/audit records are automatically archived and their license seat is released.`;
     if (typeof window !== "undefined" && !window.confirm(confirmText)) return;
 
-    const activeTenantId = getStoredTenantId() || (currentUser as any)?.tenantId || "default";
+    const activeTenantId = getStoredTenantId() || (currentUser as { tenantId?: string })?.tenantId || "default";
     setUserLifecycleBusyId(user.id);
     try {
       const res = await safeFetchJson<{
@@ -563,8 +563,8 @@ export function SystemTab({
             : `⚠️ Saved (${cleaned}) but server returned ${res.status}`
         );
       }
-    } catch (err: any) {
-      const isTimeout = err?.name === "AbortError";
+    } catch (err: unknown) {
+      const isTimeout = err instanceof Error && err.name === "AbortError";
       onToast(
         isAr
           ? (isTimeout
