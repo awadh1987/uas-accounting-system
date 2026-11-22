@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import {
   createWorkspaceDraft,
   listWorkspaceDrafts,
@@ -9,23 +10,24 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
+    const auth = await authorizeApiAction({}, req, {});
+    if (!auth.ok) return auth.response;
+
     const { searchParams } = new URL(req.url);
     const moduleFilter = searchParams.get("module") || undefined;
     const formType = searchParams.get("formType") || undefined;
     const status = searchParams.get("status") || undefined;
     const includeInactive = searchParams.get("includeInactive") === "true";
-    const userId = searchParams.get("userId") || req.headers.get("x-uas-user-id") || undefined;
-    const userRole = searchParams.get("userRole") || req.headers.get("x-uas-user-role") || undefined;
 
     const drafts = await listWorkspaceDrafts({
       module: moduleFilter,
       formType,
       status,
-      userId,
-      userRole,
+      userId: auth.actor.userId ?? undefined,
+      userRole: auth.actor.userRole,
       includeInactive,
     });
     return NextResponse.json({
@@ -36,13 +38,15 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/drafts error:", error);
     return jsonError("تعذر تحميل المسودات / Failed to load drafts", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, { action: "create" });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
     const draft = await createWorkspaceDraft({
       module: String(body.module || "ACCOUNTING"),
@@ -58,8 +62,8 @@ export async function POST(req: NextRequest) {
       currencyCode: body.currencyCode ? String(body.currencyCode) : "YER",
       visibility: (body.visibility === "PRIVATE" ? "PRIVATE" : "SHARED_WORKSPACE") as DraftVisibility,
       actor: {
-        userId: actor.userId || "u1",
-        userName: actor.userDisplay || "مستخدم النظام",
+        userId: actor.userId!,
+        userName: actor.userDisplay,
         userRole: actor.userRole,
       },
     });
@@ -68,4 +72,4 @@ export async function POST(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر حفظ المسودة";
     return jsonError(msg, msg.startsWith("DRAFT_") ? 400 : 500);
   }
-}
+});

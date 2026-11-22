@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { ensureDefaultUomsSeeded } from "@/app/api/inventory/uom/route";
 import { ensureDefaultCategoriesSeeded } from "@/app/api/inventory/categories/route";
@@ -8,7 +8,7 @@ import {
   formatCompoundStockBreakdown,
   slugifyLookupCode,
 } from "@/lib/multiUnitInventoryEngine";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import { appendAuditLogTx } from "@/lib/serverBootstrap";
 import { withIdempotency } from "@/lib/idempotencyGuard";
 import {
@@ -19,7 +19,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     await ensureSqliteDatabaseReady();
     await Promise.all([
@@ -40,13 +40,13 @@ export async function GET() {
     });
 
     const enriched = items.map((item) => {
-      const totalBaseQty = item.balances.reduce((acc, b) => acc + b.qtyOnHandBase, 0);
+      const totalBaseQty = item.balances.reduce((acc, b) => acc + Number(b.qtyOnHandBase), 0);
       const breakdown = formatCompoundStockBreakdown(
         totalBaseQty,
         item.baseUnit.nameAr,
         item.conversions.map((c) => ({
           label: c.customUnitLabel || c.unit.nameAr,
-          factorToBase: c.factorToBase,
+          factorToBase: Number(c.factorToBase),
         }))
       );
       return {
@@ -62,7 +62,7 @@ export async function GET() {
     console.error("GET /api/inventory/items error:", error);
     return jsonError("تعذر تحميل بطاقات الأصناف / Failed to load inventory items", 500);
   }
-}
+});
 
 async function upsertItem(req: NextRequest) {
   try {
@@ -74,7 +74,12 @@ async function upsertItem(req: NextRequest) {
     ]);
 
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "inventory",
+      action: body.id ? "edit" : "create",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
     const nameAr = String(body.nameAr || "").trim();
     const nameEn = String(body.nameEn || nameAr).trim();
@@ -292,15 +297,15 @@ async function upsertItem(req: NextRequest) {
   }
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, (r) => upsertItem(r));
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return upsertItem(req);
-}
+});
 
-export async function DELETE(req: NextRequest) {
+export const DELETE = withTenantRoute(async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     let body: Record<string, unknown> = {};
@@ -309,7 +314,12 @@ export async function DELETE(req: NextRequest) {
     } catch {
       body = {};
     }
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "inventory",
+      action: "delete",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
     const id = searchParams.get("id") || String(body.id || "");
     const action = String(body.action || searchParams.get("action") || "SAFE_DELETE").toUpperCase();
     if (!id) return jsonError("معرف الصنف مطلوب / Item id is required", 400);
@@ -334,4 +344,4 @@ export async function DELETE(req: NextRequest) {
     console.error("DELETE /api/inventory/items error:", error);
     return jsonError("تعذر حذف أو أرشفة الصنف", 500);
   }
-}
+});

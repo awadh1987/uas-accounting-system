@@ -1,14 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "projects",
+      action: "create",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
+
     const projectId = String(body.projectId || "").trim();
     const harvestName = String(body.name || "").trim();
-    const actor = extractActor(body);
 
     if (!projectId || !harvestName) {
       return jsonError("يرجى اختيار المشروع وإدخال اسم القطفة/المرشة", 400);
@@ -55,5 +61,5 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/projects/harvests error:", error);
     return jsonError("تعذر إضافة القطفة", 500);
   }
-}
+});
 

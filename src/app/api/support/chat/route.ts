@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { UAS_SUPPORT_CHAPTERS } from "@/lib/uasSupportKnowledge";
 import {
   answerSupportQuery,
@@ -9,7 +10,7 @@ import { collectServerSupportDiagnostics } from "@/lib/supportDiagnosticsServer"
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     const liveDiagnostics = await collectServerSupportDiagnostics();
     const q = (req.nextUrl?.searchParams.get("q") || "").trim();
@@ -40,9 +41,9 @@ export async function GET(req: NextRequest) {
       { status: 500 }
     );
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const query = String(body.query ?? body.message ?? body.prompt ?? "").trim();
@@ -82,4 +83,4 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

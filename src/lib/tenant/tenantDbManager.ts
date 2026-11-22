@@ -9,14 +9,27 @@ import { ensureSqliteAdditiveSchema, isSqliteRuntime, resolveSqliteFilePath } fr
 import { normalizeTenantId } from "./tenantContext";
 import { ensureTenantRegistered, getTenantMetadata } from "./tenantRegistry";
 
+export interface TenantInitOptions {
+  adminUsername?: string;
+  adminEmail?: string;
+  adminPassword?: string;
+  adminName?: string;
+  forceReinitialize?: boolean;
+}
+
 const tenantPrismaCache = new Map<string, PrismaClient>();
 const readyTenantDbUrls = new Set<string>();
+const pendingTenantInitializations = new Map<string, Promise<PrismaClient>>();
+
+function cleanEnvDatabaseUrl(raw?: string | null): string {
+  return (raw || "").trim().replace(/^["']|["']$/g, "");
+}
 
 /**
  * Checks whether the active database runtime is PostgreSQL.
  */
 export function isPostgresRuntime(): boolean {
-  const url = (process.env.DATABASE_URL || "").trim().toLowerCase();
+  const url = cleanEnvDatabaseUrl(process.env.DATABASE_URL).toLowerCase();
   return url.startsWith("postgresql://") || url.startsWith("postgres://");
 }
 
@@ -62,13 +75,14 @@ export function resolveTenantDatabaseUrl(
   overrideBaseUrl?: string
 ): string {
   const tenantId = normalizeTenantId(rawTenantId);
-  const rawBaseUrl = (overrideBaseUrl || process.env.DATABASE_URL || "file:./dev.db").trim();
+  const rawBaseUrl = cleanEnvDatabaseUrl(overrideBaseUrl || process.env.DATABASE_URL) || "file:./dev.db";
+  const lowerBaseUrl = rawBaseUrl.toLowerCase();
 
   const isSqlite =
-    rawBaseUrl.startsWith("file:") ||
-    (!rawBaseUrl.startsWith("postgresql://") &&
-      !rawBaseUrl.startsWith("postgres://") &&
-      !rawBaseUrl.includes("://"));
+    lowerBaseUrl.startsWith("file:") ||
+    (!lowerBaseUrl.startsWith("postgresql://") &&
+      !lowerBaseUrl.startsWith("postgres://") &&
+      !lowerBaseUrl.includes("://"));
 
   if (isSqlite) {
     if (tenantId === "default") {
@@ -150,6 +164,10 @@ export function convertSqliteStatementToPostgres(stmt: string, schemaName: strin
   let s = stmt.trim();
   if (!s) return "";
 
+  // Replace SQLite AUTOINCREMENT with PostgreSQL SERIAL
+  s = s.replace(/\bINTEGER\s+NOT\s+NULL\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b/gi, "SERIAL PRIMARY KEY");
+  s = s.replace(/\bAUTOINCREMENT\b/gi, "");
+
   // Replace DATETIME with TIMESTAMP(3)
   s = s.replace(/\bDATETIME\b/g, "TIMESTAMP(3)");
 
@@ -196,8 +214,8 @@ export function generatePostgresDdlFromSqlite(rawSql: string, schemaName: string
 }
 
 export type QueryableClient = {
-  $executeRawUnsafe: (query: string, ...values: any[]) => Promise<any>;
-  $queryRawUnsafe: <T = any>(query: string, ...values: any[]) => Promise<T>;
+  $executeRawUnsafe: (query: string, ...values: unknown[]) => Promise<unknown>;
+  $queryRawUnsafe: <T = unknown>(query: string, ...values: unknown[]) => Promise<T>;
 };
 
 export interface PostgresProvisioningResult {
@@ -367,6 +385,109 @@ export async function remapPostgresEnumColumns(
   return remappedCount;
 }
 
+async function executePostgresFallbackDdl(
+  client: QueryableClient,
+  schemaName: string
+): Promise<{ tablesProvisioned: string[]; enumsProvisioned: string[]; fksProvisioned: number }> {
+  const roleLabels = [
+    "SUPER_ADMIN",
+    "PROJECT_MANAGER",
+    "CHIEF_ACCOUNTANT",
+    "PROCUREMENT_OFFICER",
+    "SALES_COLLECTOR",
+    "FIELD_ACCOUNTANT",
+    "EXTERNAL_AUDITOR",
+  ];
+  const quotedRoleLabels = roleLabels.map((l) => `'${l}'`).join(", ");
+  await client.$executeRawUnsafe(`
+    DO $$
+    BEGIN
+      CREATE TYPE "${schemaName}"."Role" AS ENUM (${quotedRoleLabels});
+    EXCEPTION
+      WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+
+  const postgresStatements = generatePostgresDdlFromSqlite(EMBEDDED_SQLITE_MIGRATION_SQL, schemaName);
+  const tableStatements: string[] = [];
+  const indexStatements: string[] = [];
+  const deferredFks: Array<{ table: string; name: string; def: string }> = [];
+
+  for (const stmt of postgresStatements) {
+    const createTableMatch = stmt.match(
+      new RegExp(`^CREATE\\s+TABLE\\s+IF\\s+NOT\\s+EXISTS\\s+"${schemaName}"\\."([^"]+)"`, "i")
+    );
+    if (createTableMatch) {
+      const tableName = createTableMatch[1];
+      let adjusted = stmt;
+
+      if (tableName === "AuditLog") {
+        adjusted = adjusted.replace(/"details"\s+TEXT\s+NOT\s+NULL/i, `"details" JSONB NOT NULL`);
+      }
+      if (tableName === "User") {
+        adjusted = adjusted.replace(
+          /"role"\s+TEXT\s+NOT\s+NULL\s+DEFAULT\s+'FIELD_ACCOUNTANT'/i,
+          `"role" "${schemaName}"."Role" NOT NULL DEFAULT 'FIELD_ACCOUNTANT'::"${schemaName}"."Role"`
+        );
+      }
+
+      const fkRegex =
+        /,\s*CONSTRAINT\s+"([^"]+)"\s+(FOREIGN\s+KEY\s*\([^)]+\)\s*REFERENCES\s+[^\n;]+?)(?=\s*(?:,\s*CONSTRAINT|\n\s*\)|\)))/gi;
+      adjusted = adjusted.replace(fkRegex, (_match, name: string, def: string) => {
+        deferredFks.push({ table: tableName, name: name.slice(0, 63), def: def.trim() });
+        return "";
+      });
+
+      adjusted = adjusted.replace(/,\s*\n(\s*\);?\s*)$/, "\n$1");
+      tableStatements.push(adjusted);
+    } else {
+      indexStatements.push(stmt);
+    }
+  }
+
+  const tablesProvisioned: string[] = [];
+  for (const stmt of tableStatements) {
+    try {
+      await client.$executeRawUnsafe(stmt);
+      tablesProvisioned.push("DDL_STATEMENT");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("already exists") || msg.includes("duplicate")) continue;
+      throw err;
+    }
+  }
+
+  for (const stmt of indexStatements) {
+    try {
+      await client.$executeRawUnsafe(stmt);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("already exists") || msg.includes("duplicate")) continue;
+      console.warn(`[TenantDbManager] Fallback index creation notice for ${schemaName}:`, msg);
+    }
+  }
+
+  let fksProvisioned = 0;
+  for (const fk of deferredFks) {
+    try {
+      await client.$executeRawUnsafe(
+        `ALTER TABLE "${schemaName}"."${fk.table}" ADD CONSTRAINT "${fk.name}" ${fk.def};`
+      );
+      fksProvisioned++;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("already exists") || msg.includes("duplicate")) continue;
+      console.warn(`[TenantDbManager] Fallback FK notice on ${schemaName}.${fk.table}:`, msg);
+    }
+  }
+
+  return {
+    tablesProvisioned,
+    enumsProvisioned: ["Role"],
+    fksProvisioned,
+  };
+}
+
 /**
  * Provisions all Prisma tables, indexes, constraints, and sequences into a PostgreSQL tenant schema.
  * Clones structure from the authoritative 'public' schema using:
@@ -377,6 +498,10 @@ export async function provisionPostgresTenantSchema(
   client: QueryableClient,
   schemaName: string
 ): Promise<PostgresProvisioningResult> {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schemaName)) {
+    throw new Error(`Invalid PostgreSQL tenant schema identifier: "${schemaName}"`);
+  }
+
   // 1. Ensure schema exists
   await client.$executeRawUnsafe(`CREATE SCHEMA IF NOT EXISTS "${schemaName}";`);
 
@@ -483,22 +608,12 @@ export async function provisionPostgresTenantSchema(
     };
   } else {
     // Fallback: public schema is empty or inaccessible, provision from embedded migration DDL
-    const postgresStatements = generatePostgresDdlFromSqlite(EMBEDDED_SQLITE_MIGRATION_SQL, schemaName);
-    for (const stmt of postgresStatements) {
-      try {
-        await client.$executeRawUnsafe(stmt);
-        tablesProvisioned.push("DDL_STATEMENT");
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("already exists") || msg.includes("duplicate")) continue;
-        console.warn(`[TenantDbManager] Fallback DDL execution notice for ${schemaName}:`, msg);
-      }
-    }
+    const fallback = await executePostgresFallbackDdl(client, schemaName);
     return {
-      tablesProvisioned,
-      enumsProvisioned: [],
+      tablesProvisioned: fallback.tablesProvisioned,
+      enumsProvisioned: fallback.enumsProvisioned,
       columnsRemapped: 0,
-      fksProvisioned: 0,
+      fksProvisioned: fallback.fksProvisioned,
       clonedFromPublic: false,
     };
   }
@@ -509,7 +624,8 @@ export async function provisionPostgresTenantSchema(
  */
 async function initializeTenantDatabase(
   client: PrismaClient,
-  tenantId: string
+  tenantId: string,
+  options?: TenantInitOptions
 ): Promise<void> {
   const meta = getTenantMetadata(tenantId) || ensureTenantRegistered(tenantId);
   const companyName = meta.companyName || (tenantId === "default" ? "النظام المحاسبي الموحد" : `منشأة ${tenantId}`);
@@ -545,6 +661,30 @@ async function initializeTenantDatabase(
     }
     const schemaName = resolveTenantSchemaName(tenantId);
     await provisionPostgresTenantSchema(client, schemaName);
+
+    const requiredCoreTables = [
+      "User",
+      "EnterpriseProfile",
+      "SystemSettings",
+      "Account",
+      "TreasuryAccount",
+      "CurrencyRate",
+      "LicenseState",
+      "ImmutableAuditLog",
+      "SyncChangeLog",
+      "TenantDevice",
+    ];
+    const tableRows = await client.$queryRawUnsafe<Array<{ tablename: string }>>(
+      `SELECT tablename FROM pg_tables WHERE schemaname = $1;`,
+      schemaName
+    );
+    const presentTables = new Set((tableRows || []).map((r) => r.tablename));
+    const missingTables = requiredCoreTables.filter((tbl) => !presentTables.has(tbl));
+    if (missingTables.length > 0) {
+      throw new Error(
+        `PostgreSQL tenant schema "${schemaName}" is incomplete; missing required tables: ${missingTables.join(", ")}`
+      );
+    }
   }
 
   // 1. EnterpriseProfile
@@ -684,25 +824,44 @@ async function initializeTenantDatabase(
     }
   }
 
-  // 7. Initial SUPER_ADMIN user
-  const usersCount = await client.user.count();
-  if (usersCount === 0) {
-    const adminEmail = tenantId === "default" ? "admin@uas-ye.com" : `admin@${tenantId}.uas`;
+  // 7. Initial SUPER_ADMIN / OWNER user
+  const adminUsername = (options?.adminUsername || "system_owner").trim() || "system_owner";
+  const adminEmail = (
+    options?.adminEmail ||
+    (tenantId === "default" ? "admin@uas-ye.com" : `admin@${tenantId}.uas`)
+  )
+    .trim()
+    .toLowerCase();
+  const adminPassword = options?.adminPassword || "123456";
+  const adminName = (options?.adminName || "مدير النظام العام").trim() || "مدير النظام العام";
+
+  const activeSuperAdmin = await client.user.findFirst({
+    where: {
+      role: "SUPER_ADMIN",
+      active: true,
+      isActive: true,
+    },
+    select: { id: true },
+  });
+
+  if (!activeSuperAdmin) {
+    const existingU1 = await client.user.findUnique({ where: { id: "u1" }, select: { id: true } });
+    const targetId = existingU1 ? undefined : "u1";
     await client.user.create({
       data: {
-        id: "u1",
-        username: "system_owner",
-        name: "مدير النظام العام",
-        fullName: `مدير النظام العام / ${companyName}`,
+        ...(targetId ? { id: targetId } : {}),
+        username: existingU1 ? `${adminUsername}_${tenantId}` : adminUsername,
+        name: adminName,
+        fullName: `${adminName} / ${companyName}`,
         displayName: "مدير النظام",
         phone: "",
-        email: adminEmail,
-        passwordHash: hashPassword("123456"),
+        email: existingU1 ? `owner.${Date.now()}@${tenantId}.uas` : adminEmail,
+        passwordHash: hashPassword(adminPassword),
         role: "SUPER_ADMIN",
         department: "الإدارة العليا",
         active: true,
         isActive: true,
-        avatarChar: "م",
+        avatarChar: adminName.charAt(0) || "م",
         avatarColor: "#059669",
         preferredLang: "ar",
         preferredCurrency: "YER",
@@ -743,40 +902,62 @@ async function initializeTenantDatabase(
 
 /**
  * Retrieves or initializes an isolated PrismaClient for the given tenant ID.
+ * Never caches an uninitialized client or marks a URL ready if initialization fails.
  */
-export async function getTenantPrisma(rawTenantId?: string | null): Promise<PrismaClient> {
+export async function getTenantPrisma(
+  rawTenantId?: string | null,
+  options?: TenantInitOptions
+): Promise<PrismaClient> {
   const tenantId = normalizeTenantId(rawTenantId);
-
-  // Return cached client if already loaded
-  const existing = tenantPrismaCache.get(tenantId);
-  if (existing) {
-    return existing;
-  }
-
   const tenantDbUrl = resolveTenantDatabaseUrl(tenantId);
 
-  const client = new PrismaClient({
-    datasources: {
-      db: {
-        url: tenantDbUrl,
-      },
-    },
-    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
-  });
-
-  // Ensure tables and baseline records exist
-  if (!readyTenantDbUrls.has(tenantDbUrl)) {
-    try {
-      await initializeTenantDatabase(client, tenantId);
-      readyTenantDbUrls.add(tenantDbUrl);
-    } catch (err) {
-      console.error(`[TenantDbManager] Error initializing tenant DB for '${tenantId}':`, err);
-      // Still cache client so subsequent operations can proceed or retry
+  if (!options?.forceReinitialize) {
+    const existing = tenantPrismaCache.get(tenantId);
+    if (existing && readyTenantDbUrls.has(tenantDbUrl)) {
+      return existing;
+    }
+  } else {
+    const stale = tenantPrismaCache.get(tenantId);
+    if (stale) {
+      tenantPrismaCache.delete(tenantId);
+      readyTenantDbUrls.delete(tenantDbUrl);
+      await stale.$disconnect().catch(() => {});
     }
   }
 
-  tenantPrismaCache.set(tenantId, client);
-  return client;
+  const inflight = pendingTenantInitializations.get(tenantId);
+  if (inflight) {
+    return inflight;
+  }
+
+  const initPromise = (async (): Promise<PrismaClient> => {
+    const client = new PrismaClient({
+      datasources: {
+        db: {
+          url: tenantDbUrl,
+        },
+      },
+      log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
+    });
+
+    try {
+      await initializeTenantDatabase(client, tenantId, options);
+      readyTenantDbUrls.add(tenantDbUrl);
+      tenantPrismaCache.set(tenantId, client);
+      return client;
+    } catch (err) {
+      readyTenantDbUrls.delete(tenantDbUrl);
+      tenantPrismaCache.delete(tenantId);
+      await client.$disconnect().catch(() => {});
+      console.error(`[TenantDbManager] Error initializing tenant DB for '${tenantId}':`, err);
+      throw err;
+    }
+  })().finally(() => {
+    pendingTenantInitializations.delete(tenantId);
+  });
+
+  pendingTenantInitializations.set(tenantId, initPromise);
+  return initPromise;
 }
 
 /**
@@ -792,4 +973,5 @@ export async function resetTenantClientsForTests(): Promise<void> {
   }
   tenantPrismaCache.clear();
   readyTenantDbUrls.clear();
+  pendingTenantInitializations.clear();
 }

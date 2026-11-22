@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { computeOperatingExpenseTotal } from "@/lib/formulas";
 import {
   postOperatingExpenseJournalTx,
@@ -13,7 +13,7 @@ import {
 } from "@/lib/serverBootstrap";
 import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, {
@@ -82,6 +82,9 @@ export async function POST(req: NextRequest) {
         expenseAccountCode,
         customAccount,
         treasuryAccountId,
+        taxCodeId: body.taxCodeId ? String(body.taxCodeId).trim() : null,
+        whtCodeId: body.whtCodeId ? String(body.whtCodeId).trim() : null,
+        taxInclusive: Boolean(body.taxInclusive),
         createdById: actor.userId ?? undefined,
       });
 
@@ -112,7 +115,7 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/expenses error:", error);
     return jsonError("تعذر حفظ المصروف التشغيلي", 500);
   }
-}
+});
 
 async function handleExpensePatch(req: NextRequest) {
   try {
@@ -160,10 +163,10 @@ async function handleExpensePatch(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleExpensePatch(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleExpensePatch(req);
-}
+});

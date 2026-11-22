@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import {
   postJournalEntry,
   postVendorPayment,
@@ -10,14 +10,16 @@ import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const vendorId = searchParams.get("vendorId");
+    const includeVoided = searchParams.get("includeVoided") === "true";
 
     const payments = await prisma.paymentVoucher.findMany({
       where: {
         ...(vendorId && vendorId !== "ALL" ? { vendorId } : {}),
+        ...(includeVoided ? {} : { documentStatus: { not: "VOIDED" } }),
       },
       include: {
         vendor: { select: { id: true, code: true, nameAr: true, nameEn: true, phone: true } },
@@ -63,9 +65,9 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/procurement/payments error:", error);
     return jsonError("تعذر تحميل سندات صرف الموردين", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, {
@@ -92,9 +94,16 @@ export async function POST(req: NextRequest) {
       return jsonError("يرجى تحديد المورد والخزينة وإدخال مبلغ صحيح", 400);
     }
 
+    const allocations = Array.isArray(body.allocations)
+      ? (body.allocations as Array<Record<string, unknown>>)
+          .filter((a) => a.billId && Number(a.amount) > 0)
+          .map((a) => ({ billId: String(a.billId).trim(), amount: Number(a.amount) }))
+      : undefined;
+
     const result = await postVendorPayment({
       vendorId,
       billId,
+      allocations,
       projectId,
       subProjectId,
       acquisitionCycleId,
@@ -117,7 +126,7 @@ export async function POST(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر إصدار سند صرف المورد";
     return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
   }
-}
+});
 
 async function handlePaymentUpdate(req: NextRequest) {
   try {
@@ -130,6 +139,9 @@ async function handlePaymentUpdate(req: NextRequest) {
       include: { vendor: true, treasury: true },
     });
     if (!existing) return jsonError("سند الصرف غير موجود", 404);
+    if (existing.documentStatus === "VOIDED") {
+      return jsonError("لا يمكن تعديل سند صرف ملغى", 400);
+    }
 
     const dateChanged =
       body.date !== undefined &&
@@ -166,6 +178,7 @@ async function handlePaymentUpdate(req: NextRequest) {
         : existing.referenceNumber;
 
     const financialChanged =
+      dateChanged ||
       Math.abs(nextAmount - Number(existing.amount)) > 0.005 ||
       Math.abs(nextFee - Number(existing.transferFee)) > 0.005 ||
       nextTreasuryId !== existing.treasuryId ||
@@ -179,7 +192,7 @@ async function handlePaymentUpdate(req: NextRequest) {
         const payRate =
           existing.currency === "YER"
             ? 1
-            : rateRow?.rateToYER || (existing.currency === "SAR" ? 425 : 1620);
+            : Number(rateRow?.rateToYER) || (existing.currency === "SAR" ? 425 : 1620);
 
         const oldOut = Number(existing.amount) + Number(existing.transferFee);
         const oldOutYER = oldOut * payRate;
@@ -189,14 +202,14 @@ async function handlePaymentUpdate(req: NextRequest) {
         const oldTrRate =
           existing.treasury.currency === "YER"
             ? 1
-            : oldTrRateRow?.rateToYER || (existing.treasury.currency === "SAR" ? 425 : 1620);
+            : Number(oldTrRateRow?.rateToYER) || (existing.treasury.currency === "SAR" ? 425 : 1620);
 
         // Restore old treasury deduction
         await tx.treasuryAccount.update({
           where: { id: existing.treasuryId },
           data: {
             balance: Number(existing.treasury.balance) + oldOutYER / oldTrRate,
-            balanceYER: existing.treasury.balanceYER + oldOutYER,
+            balanceYER: Number(existing.treasury.balanceYER) + oldOutYER,
           },
         });
 
@@ -208,7 +221,7 @@ async function handlePaymentUpdate(req: NextRequest) {
         const nextTrRate =
           nextTreasury.currency === "YER"
             ? 1
-            : nextTrRateRow?.rateToYER || (nextTreasury.currency === "SAR" ? 425 : 1620);
+            : Number(nextTrRateRow?.rateToYER) || (nextTreasury.currency === "SAR" ? 425 : 1620);
         const newOut = nextAmount + nextFee;
         const newOutYER = newOut * payRate;
 
@@ -216,7 +229,7 @@ async function handlePaymentUpdate(req: NextRequest) {
           where: { id: nextTreasury.id },
           data: {
             balance: Number(nextTreasury.balance) - newOutYER / nextTrRate,
-            balanceYER: nextTreasury.balanceYER - newOutYER,
+            balanceYER: Number(nextTreasury.balanceYER) - newOutYER,
           },
         });
 
@@ -229,7 +242,7 @@ async function handlePaymentUpdate(req: NextRequest) {
             const billRate =
               bill.currency === "YER"
                 ? 1
-                : billRateRow?.rateToYER || (bill.currency === "SAR" ? 425 : 1620);
+                : Number(billRateRow?.rateToYER) || (bill.currency === "SAR" ? 425 : 1620);
             const deltaInBill = ((nextAmount - Number(existing.amount)) * payRate) / billRate;
             const nextPaid = Math.max(0, Number(bill.paidAmount) + deltaInBill);
             const nextDue = Math.max(0, Number(bill.totalAmount) - nextPaid);
@@ -245,12 +258,18 @@ async function handlePaymentUpdate(req: NextRequest) {
         }
 
         if (existing.journalEntryId) {
-          await reverseJournalEntry({
-            tx,
-            journalEntryId: existing.journalEntryId,
-            createdById: auth.actor.userId ?? undefined,
-            reason: `تعديل سند الصرف ${existing.voucherNumber}`,
+          const existingJe = await tx.journalEntry.findUnique({
+            where: { id: existing.journalEntryId },
+            select: { status: true, isReversed: true },
           });
+          if (existingJe && existingJe.status !== "VOIDED" && !existingJe.isReversed) {
+            await reverseJournalEntry({
+              tx,
+              journalEntryId: existing.journalEntryId,
+              createdById: auth.actor.userId ?? undefined,
+              reason: `تعديل سند الصرف ${existing.voucherNumber}`,
+            });
+          }
         }
 
         const newJe = await postJournalEntry({
@@ -299,11 +318,6 @@ async function handlePaymentUpdate(req: NextRequest) {
           ],
         });
         nextJournalEntryId = newJe.id;
-      } else if (existing.journalEntryId && dateChanged) {
-        await tx.journalEntry.update({
-          where: { id: existing.journalEntryId },
-          data: { date: nextDate },
-        });
       }
 
       const voucher = await tx.paymentVoucher.update({
@@ -350,15 +364,15 @@ async function handlePaymentUpdate(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handlePaymentUpdate(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handlePaymentUpdate(req);
-}
+});
 
-export async function DELETE(req: NextRequest) {
+export const DELETE = withTenantRoute(async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     let id = searchParams.get("id");
@@ -380,16 +394,36 @@ export async function DELETE(req: NextRequest) {
 
     const existing = await prisma.paymentVoucher.findUnique({
       where: { id },
-      include: { bill: true },
+      include: { bill: true, treasury: true },
     });
     if (!existing) return jsonError("سند صرف المورد غير موجود", 404);
+    if (existing.documentStatus === "VOIDED") {
+      return jsonError("سند صرف المورد ملغى مسبقاً", 400);
+    }
 
     await prisma.$transaction(async (tx) => {
       // 1. Revert bill balance if linked
       if (existing.billId && existing.bill) {
-        const nextPaid = Math.max(0, Number(existing.bill.paidAmount) - Number(existing.amount));
+        const payRateRow = await tx.currencyRate.findUnique({ where: { currencyCode: existing.currency } });
+        const payRate =
+          existing.currency === "YER"
+            ? 1
+            : Number(payRateRow?.rateToYER) || (existing.currency === "SAR" ? 425 : 1620);
+        const billRateRow = await tx.currencyRate.findUnique({ where: { currencyCode: existing.bill.currency } });
+        const billRate =
+          existing.bill.currency === "YER"
+            ? 1
+            : Number(billRateRow?.rateToYER) || (existing.bill.currency === "SAR" ? 425 : 1620);
+
+        const revertInBill = (Number(existing.amount) * payRate) / billRate;
+        const nextPaid = Math.max(0, Number(existing.bill.paidAmount) - revertInBill);
         const nextDue = Math.max(0, Number(existing.bill.totalAmount) - nextPaid);
-        const nextStatus = nextPaid <= 0.005 ? "POSTED" : "PARTIALLY_PAID";
+        const nextStatus =
+          existing.bill.status === "VOIDED"
+            ? "VOIDED"
+            : nextPaid <= 0.005
+            ? "POSTED"
+            : "PARTIALLY_PAID";
         await tx.vendorBill.update({
           where: { id: existing.billId },
           data: {
@@ -400,22 +434,46 @@ export async function DELETE(req: NextRequest) {
         });
       }
 
-      // 2. Reverse/delete GL entry
+      // 2. Restore Treasury balance & balanceYER (amount + transferFee)
+      if (existing.treasury) {
+        const payRateRow = await tx.currencyRate.findUnique({ where: { currencyCode: existing.currency } });
+        const payRate =
+          existing.currency === "YER"
+            ? 1
+            : Number(payRateRow?.rateToYER) || (existing.currency === "SAR" ? 425 : 1620);
+        const trRateRow = await tx.currencyRate.findUnique({ where: { currencyCode: existing.treasury.currency } });
+        const trRate =
+          existing.treasury.currency === "YER"
+            ? 1
+            : Number(trRateRow?.rateToYER) || (existing.treasury.currency === "SAR" ? 425 : 1620);
+
+        const totalOutYER = (Number(existing.amount) + Number(existing.transferFee)) * payRate;
+        await tx.treasuryAccount.update({
+          where: { id: existing.treasuryId },
+          data: {
+            balance: Number(existing.treasury.balance) + totalOutYER / trRate,
+            balanceYER: Number(existing.treasury.balanceYER) + totalOutYER,
+          },
+        });
+      }
+
+      // 3. Atomic GL reversal (never hard-delete posted GL entries)
       if (existing.journalEntryId) {
-        try {
+        const existingJe = await tx.journalEntry.findUnique({
+          where: { id: existing.journalEntryId },
+          select: { status: true, isReversed: true },
+        });
+        if (existingJe && existingJe.status !== "VOIDED" && !existingJe.isReversed) {
           await reverseJournalEntry({
             journalEntryId: existing.journalEntryId,
-            reason: `إلغاء سند صرف مورد محذوف: ${existing.voucherNumber}`,
+            reason: `إلغاء وعكس سند صرف مورد: ${existing.voucherNumber}`,
             createdById: auth.actor.userId ?? undefined,
             tx,
           });
-        } catch {
-          await tx.journalEntryLine.deleteMany({ where: { journalEntryId: existing.journalEntryId } });
-          await tx.journalEntry.delete({ where: { id: existing.journalEntryId } });
         }
       }
 
-      // 3. Audit trail
+      // 4. Audit trail
       await recordAuditDiffTx(tx, {
         userId: auth.actor.userId,
         action: "VOID",
@@ -425,19 +483,31 @@ export async function DELETE(req: NextRequest) {
           voucherNumber: existing.voucherNumber,
           vendorId: existing.vendorId,
           amount: Number(existing.amount),
+          transferFee: Number(existing.transferFee),
+          documentStatus: existing.documentStatus,
           date: existing.date.toISOString().slice(0, 10),
         },
-        after: null,
+        after: {
+          documentStatus: "VOIDED",
+        },
       });
 
-      // 4. Delete payment voucher
-      await tx.paymentVoucher.delete({ where: { id } });
+      // 5. Soft-void payment voucher instead of hard-delete
+      await tx.paymentVoucher.update({
+        where: { id },
+        data: { documentStatus: "VOIDED" },
+      });
     });
 
-    return NextResponse.json({ success: true, deletedId: id, voucherNumber: existing.voucherNumber });
+    return NextResponse.json({
+      success: true,
+      voided: true,
+      deletedId: id,
+      voucherNumber: existing.voucherNumber,
+    });
   } catch (error) {
-    const msg = error instanceof Error ? error.message : "تعذر حذف سند الصرف";
+    const msg = error instanceof Error ? error.message : "تعذر إلغاء سند الصرف";
     return jsonError(msg, 400);
   }
-}
+});
 

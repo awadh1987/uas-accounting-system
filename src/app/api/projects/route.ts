@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { provisionEntityGen6AccountAndCostCenter } from "@/lib/accountingCoreEngine";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { generateFinancialReports, recordAuditDiffTx } from "@/lib/accounting/ledgerService";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
@@ -21,7 +21,7 @@ const ORDINAL_HARVESTS = [
   "القطفة الخامسة",
 ];
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     const [projects, reports] = await Promise.all([
       prisma.project.findMany({
@@ -120,9 +120,9 @@ export async function GET() {
     console.error("GET /api/projects error:", error);
     return jsonError("تعذر تحميل المشاريع", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (r) => {
     try {
       const body = (await r.json()) as Record<string, unknown>;
@@ -212,7 +212,7 @@ export async function POST(req: NextRequest) {
       return jsonError("تعذر إنشاء المشروع", 500);
     }
   });
-}
+});
 
 async function handleProjectUpdate(req: NextRequest) {
   try {
@@ -375,15 +375,15 @@ async function handleProjectUpdate(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleProjectUpdate(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleProjectUpdate(req);
-}
+});
 
-export async function DELETE(req: NextRequest) {
+export const DELETE = withTenantRoute(async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     let body: Record<string, unknown> = {};
@@ -422,4 +422,4 @@ export async function DELETE(req: NextRequest) {
     console.error("DELETE /api/projects error:", error);
     return jsonError("تعذر حذف أو أرشفة المشروع", 500);
   }
-}
+});

@@ -388,7 +388,7 @@ describe("Enterprise Double-Entry General Ledger & Accounting Assertions", () =>
             tx,
           });
           assert.ok(newBank.treasury.account.code.startsWith("1112"));
-          assert.equal(newBank.treasury.balanceYER, 100000);
+          assert.equal(Number(newBank.treasury.balanceYER), 100000);
           assert.ok(newBank.journalEntry);
 
           // 2. Update treasury setup metadata
@@ -434,14 +434,59 @@ describe("Enterprise Double-Entry General Ledger & Accounting Assertions", () =>
           assert.equal(Number(ownerPay.voucher.amount), 50000);
           assert.equal(Number(ownerPay.voucher.transferFee), 250);
 
-          // 5. Journal Entry edit preserves strict balance & updates date/narration
+          // 5. Journal Entry immutability on POSTED entries + full line editing on DRAFT entries
+          await assert.rejects(
+            () =>
+              updateJournalEntry({
+                id: acqBill.journalEntry.id,
+                date: "2026-11-10T10:00:00Z",
+                narrationAr: "محاولة تغيير تاريخ قيد مرحل",
+                tx,
+              }),
+            /POSTED_JOURNAL_IMMUTABLE/
+          );
+          await assert.rejects(
+            () =>
+              updateJournalEntry({
+                id: acqBill.journalEntry.id,
+                lines: [
+                  { accountCode: "111101", debit: 999 },
+                  { accountCode: "311101", credit: 999 },
+                ],
+                tx,
+              }),
+            /POSTED_JOURNAL_IMMUTABLE/
+          );
+
           const editedJe = await updateJournalEntry({
             id: acqBill.journalEntry.id,
-            date: "2026-11-10T10:00:00Z",
             narrationAr: "قيد استحواذ معدل",
             tx,
           });
           assert.equal(editedJe.narrationAr, "قيد استحواذ معدل");
+
+          const draftJe = await postJournalEntry({
+            narrationAr: "مسودة قيد أجنبي",
+            status: "DRAFT",
+            date: new Date(),
+            lines: [
+              { accountCode: "111101", debit: 100, currency: "SAR", exchangeRate: 425 },
+              { accountCode: "311101", credit: 100, currency: "SAR", exchangeRate: 425 },
+            ],
+            tx,
+          });
+          const updatedDraft = await updateJournalEntry({
+            id: draftJe.id,
+            narrationAr: "مسودة معدلة بالكامل",
+            lines: [
+              { accountCode: "111101", debit: 200, currency: "SAR", exchangeRate: 425 },
+              { accountCode: "311101", credit: 200, currency: "SAR", exchangeRate: 425 },
+            ],
+            tx,
+          });
+          assert.equal(updatedDraft.lines[0].currencyCode, "SAR");
+          assert.equal(Number(updatedDraft.lines[0].foreignDebit), 200);
+          assert.equal(Number(updatedDraft.lines[0].baseDebit), 85000);
 
           // Verify global double-entry equilibrium across ALL posted lines
           const allPostedLines = await tx.journalEntryLine.findMany({

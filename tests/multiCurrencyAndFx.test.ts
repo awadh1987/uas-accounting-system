@@ -150,6 +150,6 @@ describe("Phase 2 — Multi-Currency, FX Revaluation, Period Lock & Sequences", 
         source: "TEST",
       },
     });
-    assert.equal(rate.midRate, 505);
+    assert.equal(Number(rate.midRate), 505);
   });
 });

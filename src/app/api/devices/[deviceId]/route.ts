@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withTenantRoute } from "@/lib/prisma";
-import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
+import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import {
   removeTenantDevice,
   updateDeviceGovernance,
@@ -25,7 +25,9 @@ export const PATCH = withTenantRoute(async function PATCH(
   context: { params: Promise<{ deviceId: string }> }
 ) {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
     const { deviceId } = await context.params;
     const cleanId = decodeURIComponent(deviceId).trim();
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -71,7 +73,9 @@ export const DELETE = withTenantRoute(async function DELETE(
   context: { params: Promise<{ deviceId: string }> }
 ) {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
     const { deviceId } = await context.params;
     const cleanId = decodeURIComponent(deviceId).trim();
     let body: Record<string, unknown> = {};

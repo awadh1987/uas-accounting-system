@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { generateFinancialReports } from "@/lib/accounting/ledgerService";
-import { jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
+    const auth = await authorizeApiAction({}, req, { moduleId: "reports" });
+    if (!auth.ok) return auth.response;
+
     const { searchParams } = new URL(req.url);
     const fromDate = searchParams.get("fromDate") || undefined;
     const toDate = searchParams.get("toDate") || undefined;
@@ -24,5 +28,5 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/accounting/reports/trial-balance error:", error);
     return jsonError("تعذر توليد ميزان المراجعة", 500);
   }
-}
+});
 

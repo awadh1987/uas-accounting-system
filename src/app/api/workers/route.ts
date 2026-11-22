@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { computeWorkerWageTotals } from "@/lib/formulas";
 import {
   ensureWorkerWithAccountTx,
@@ -20,7 +20,7 @@ import {
   safeDeleteOrArchiveMasterRecord,
 } from "@/lib/masterLifecycle";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (r) => {
     try {
       const body = (await r.json()) as Record<string, unknown>;
@@ -126,7 +126,7 @@ export async function POST(req: NextRequest) {
       return jsonError("تعذر حفظ سجل العامل", 500);
     }
   });
-}
+});
 
 async function handleWorkerPatch(req: NextRequest) {
   try {
@@ -174,15 +174,15 @@ async function handleWorkerPatch(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleWorkerPatch(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleWorkerPatch(req);
-}
+});
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     const workers = await prisma.worker.findMany({
       orderBy: { name: "asc" },
@@ -193,14 +193,14 @@ export async function GET() {
     });
     return NextResponse.json({
       workers: workers.map((w) => {
-        const totalWages = w.wageEntries.reduce((s, e) => s + (e.totalWage || 0), 0);
-        const totalPaid = w.wageEntries.reduce((s, e) => s + (e.creditAmount || 0), 0);
-        const balanceDue = w.wageEntries.reduce((s, e) => s + (e.debitBalance || 0), 0);
+        const totalWages = w.wageEntries.reduce((s, e) => s + (Number(e.totalWage) || 0), 0);
+        const totalPaid = w.wageEntries.reduce((s, e) => s + (Number(e.creditAmount) || 0), 0);
+        const balanceDue = w.wageEntries.reduce((s, e) => s + (Number(e.debitBalance) || 0), 0);
         return {
           id: w.id,
           name: w.name,
           phone: w.phone,
-          defaultDailyWage: w.defaultDailyWage,
+          defaultDailyWage: Number(w.defaultDailyWage),
           accountId: w.accountId,
           account: w.account,
           costCenterId: w.costCenterId,
@@ -217,9 +217,9 @@ export async function GET() {
     console.error("GET /api/workers error:", error);
     return jsonError("تعذر تحميل قائمة العمال", 500);
   }
-}
+});
 
-export async function DELETE(req: NextRequest) {
+export const DELETE = withTenantRoute(async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     let body: Record<string, unknown> = {};
@@ -258,4 +258,4 @@ export async function DELETE(req: NextRequest) {
     console.error("DELETE /api/workers error:", error);
     return jsonError("تعذر حذف أو أرشفة العامل", 500);
   }
-}
+});

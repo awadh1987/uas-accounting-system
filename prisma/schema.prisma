@@ -8,7 +8,7 @@ datasource db {
 }
 
 // Note: For production Supabase / Cloud PostgreSQL deployment, run `npm run db:postgres`
-// (or set provider = "postgresql") and apply Row-Level Security (RLS) policies.
+// (or set provider = "sqlite") and apply Row-Level Security (RLS) policies.
 
 // ---------------------------------------------------------
 // 1. CHART OF ACCOUNTS & DOUBLE-ENTRY GENERAL LEDGER
@@ -79,8 +79,10 @@ model JournalEntry {
 
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
-  documentStatus String   @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | AMENDMENT_PENDING | REJECTED | VOIDED
-  revisionNumber Int      @default(1)
+  documentStatus    String   @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | AMENDMENT_PENDING | REJECTED | VOIDED
+  revisionNumber    Int      @default(1)
+  isReversed        Boolean  @default(false)
+  reversedByEntryId String?
 }
 
 model JournalEntryLine {
@@ -189,6 +191,9 @@ model SystemSettings {
   fiscalYearEnd           String?  @default("2026-12-31")
   periodLockDate          String?
   requireApprovalWorkflow Boolean  @default(false)
+  enforceThreeWayMatch    Boolean  @default(true)
+  threeWayTolerancePct    Decimal  @default(0)
+  threeWayToleranceAmount Decimal  @default(0.01)
   costingMethod           String   @default("WEIGHTED_AVERAGE") // WEIGHTED_AVERAGE | FIFO
   negativeStockPolicy     String   @default("BLOCK") // BLOCK | WARN
   printLayout             String   @default("A4") // A4 | 80MM | CUSTOM
@@ -204,7 +209,7 @@ model SystemSettings {
 
 model CurrencyRate {
   currencyCode String   @id // YER | SAR | USD
-  rateToYER    Float
+  rateToYER    Decimal
   updatedAt    DateTime @updatedAt
 }
 
@@ -228,9 +233,9 @@ model ExchangeRate {
   currencyCode String
   currency     Currency @relation(fields: [currencyCode], references: [code], onDelete: Cascade)
   rateDate     DateTime @default(now())
-  buyRate      Float
-  sellRate     Float
-  midRate      Float
+  buyRate      Decimal
+  sellRate     Decimal
+  midRate      Decimal
   source       String   @default("MANUAL")
   createdBy    String?
   createdAt    DateTime @default(now())
@@ -251,7 +256,7 @@ model Project {
   vendorId            String?
   ownerVendor         Vendor?   @relation("ProjectOwnerVendor", fields: [vendorId], references: [id], onDelete: SetNull)
   budgetTotal         Decimal   @default(0)
-  estimatedValue      Float     @default(0)
+  estimatedValue      Decimal   @default(0)
   plannedHarvestCount Int       @default(1)
   status              String    @default("ACTIVE")
   startDate           DateTime?
@@ -441,10 +446,13 @@ model GoodsReceipt {
   grnNumber       String        @unique // e.g. "GRN-2026-0012"
   purchaseOrderId String
   purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  warehouseId     String?
+  journalEntryId  String?
   receivedDate    DateTime      @default(now())
   receivedTotal   Decimal       @default(0)
   hasVariance     Boolean       @default(false)
   itemsSummary    String? // JSON summary of received quantities vs ordered
+  itemsJson       String? // Optional line items received into warehouse inventory
   warehouseNotes  String?
   createdAt       DateTime      @default(now())
 }
@@ -452,6 +460,8 @@ model GoodsReceipt {
 model VendorBill {
   id                 String                   @id @default(cuid())
   billNumber         String                   @unique // e.g. "BILL-2026-0089"
+  billType           String                   @default("BILL") // BILL | CREDIT_NOTE | DEBIT_NOTE
+  originalBillId     String?
   vendorId           String
   vendor             Vendor                   @relation(fields: [vendorId], references: [id], onDelete: Restrict)
   projectId          String
@@ -465,20 +475,24 @@ model VendorBill {
 
   date           DateTime
   dueDate        DateTime?
-  status         String    @default("APPROVED") // DRAFT | APPROVED | POSTED | PARTIALLY_PAID | PAID | VOIDED
+  status         String    @default("APPROVED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | PARTIALLY_PAID | PAID | VOIDED
+  subTotal       Decimal   @default(0)
+  taxAmount      Decimal   @default(0)
+  whtAmount      Decimal   @default(0)
   totalAmount    Decimal
   paidAmount     Decimal   @default(0)
   balanceDue     Decimal
   currency       String    @default("YER")
   currencyCode   String    @default("YER")
-  exchangeRate   Float     @default(1.0)
-  foreignAmount  Float     @default(0)
-  baseAmount     Float     @default(0)
+  exchangeRate   Decimal   @default(1.0)
+  foreignAmount  Decimal   @default(0)
+  baseAmount     Decimal   @default(0)
   isInventory    Boolean   @default(false)
   debitAccountId String?
   journalEntryId String?
   notes          String?
 
+  items           VendorBillItem[]
   paymentVouchers PaymentVoucher[]
   createdAt       DateTime         @default(now())
 
@@ -486,6 +500,26 @@ model VendorBill {
   costCenter     CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
   documentStatus String      @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | AMENDMENT_PENDING | REJECTED | VOIDED
   revisionNumber Int         @default(1)
+}
+
+model VendorBillItem {
+  id          String     @id @default(cuid())
+  billId      String
+  bill        VendorBill @relation(fields: [billId], references: [id], onDelete: Cascade)
+  itemId      String?
+  warehouseId String?
+  taxCodeId   String?
+  description String
+  unitId      String?
+  quantity    Decimal
+  unitPrice   Decimal
+  netAmount   Decimal
+  taxAmount   Decimal    @default(0)
+  whtAmount   Decimal    @default(0)
+  totalAmount Decimal
+
+  @@index([billId])
+  @@index([itemId])
 }
 
 model PaymentVoucher {
@@ -496,6 +530,7 @@ model PaymentVoucher {
   vendor        Vendor          @relation(fields: [vendorId], references: [id], onDelete: Restrict)
   billId        String?
   bill          VendorBill?     @relation(fields: [billId], references: [id], onDelete: SetNull)
+  allocationsJson String?
   treasuryId    String
   treasury      TreasuryAccount @relation(fields: [treasuryId], references: [id], onDelete: Restrict)
 
@@ -503,9 +538,9 @@ model PaymentVoucher {
   transferFee        Decimal                  @default(0)
   currency           String                   @default("YER")
   currencyCode       String                   @default("YER")
-  exchangeRate       Float                    @default(1.0)
-  foreignAmount      Float                    @default(0)
-  baseAmount         Float                    @default(0)
+  exchangeRate       Decimal                  @default(1.0)
+  foreignAmount      Decimal                  @default(0)
+  baseAmount         Decimal                  @default(0)
   referenceNumber    String?
   notes              String?
   projectId          String?
@@ -559,6 +594,8 @@ model Customer {
 model SalesInvoice {
   id             String        @id @default(cuid())
   invoiceNumber  String        @unique
+  invoiceType    String        @default("INVOICE") // INVOICE | CREDIT_NOTE | DEBIT_NOTE
+  originalInvoiceId String?
   customerId     String
   customer       Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
   projectId      String
@@ -576,20 +613,26 @@ model SalesInvoice {
   treasuryAccountId  String?
   treasuryAccount    TreasuryAccount? @relation(fields: [treasuryAccountId], references: [id], onDelete: SetNull)
 
-  date               DateTime @default(now())
+  date               DateTime  @default(now())
+  dueDate            DateTime?
+  subTotal           Decimal   @default(0)
+  taxAmount          Decimal   @default(0)
+  whtAmount          Decimal   @default(0)
   totalAmount        Decimal
-  paidAmount         Decimal  @default(0)
+  paidAmount         Decimal   @default(0)
   balanceDue         Decimal
-  status             String   @default("POSTED") // DRAFT | POSTED | PARTIALLY_PAID | PAID | VOIDED
-  currency           String   @default("YER")
-  currencyCode       String   @default("YER")
-  exchangeRate       Float    @default(1.0)
-  foreignAmount      Float    @default(0)
-  baseAmount         Float    @default(0)
+  status             String    @default("POSTED") // DRAFT | PENDING_APPROVAL | POSTED | PARTIALLY_PAID | PAID | VOIDED
+  currency           String    @default("YER")
+  currencyCode       String    @default("YER")
+  exchangeRate       Decimal   @default(1.0)
+  foreignAmount      Decimal   @default(0)
+  baseAmount         Decimal   @default(0)
   notes              String?
   journalEntryId     String?
+  cogsJournalEntryId String?
   qrVerificationHash String?
 
+  items     SalesInvoiceItem[]
   receipts  ReceiptVoucher[]
   createdAt DateTime         @default(now())
 
@@ -597,6 +640,27 @@ model SalesInvoice {
   costCenter     CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
   documentStatus String      @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | AMENDMENT_PENDING | REJECTED | VOIDED
   revisionNumber Int         @default(1)
+}
+
+model SalesInvoiceItem {
+  id              String       @id @default(cuid())
+  invoiceId       String
+  invoice         SalesInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  itemId          String?
+  warehouseId     String?
+  taxCodeId       String?
+  description     String
+  unitId          String?
+  quantity        Decimal
+  unitPrice       Decimal
+  netAmount       Decimal
+  taxAmount       Decimal      @default(0)
+  whtAmount       Decimal      @default(0)
+  totalAmount     Decimal
+  costOfGoodsSold Decimal      @default(0)
+
+  @@index([invoiceId])
+  @@index([itemId])
 }
 
 model ReceiptVoucher {
@@ -607,6 +671,7 @@ model ReceiptVoucher {
   customer      Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
   invoiceId     String?
   invoice       SalesInvoice?   @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  allocationsJson String?
   treasuryId    String
   treasury      TreasuryAccount @relation(fields: [treasuryId], references: [id], onDelete: Restrict)
   subProjectId  String?
@@ -615,9 +680,9 @@ model ReceiptVoucher {
   amount             Decimal
   currency           String   @default("YER")
   currencyCode       String   @default("YER")
-  exchangeRate       Float    @default(1.0)
-  foreignAmount      Float    @default(0)
-  baseAmount         Float    @default(0)
+  exchangeRate       Decimal  @default(1.0)
+  foreignAmount      Decimal  @default(0)
+  baseAmount         Decimal  @default(0)
   notes              String?
   journalEntryId     String?
   qrVerificationHash String?
@@ -636,16 +701,21 @@ model ReceiptVoucher {
 model InventoryLot {
   id              String        @id @default(cuid())
   lotNumber       String        @unique
-  projectId       String
-  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId       String?
+  project         Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   harvestCycleId  String?
   harvestCycle    HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
-  grade           String // "صنف 1", "صنف 2", "روس", "بزغة"
+  itemId          String?
+  warehouseId     String?
+  grade           String // "صنف 1", "صنف 2", "روس", "بزغة" or warehouse SKU lot
   initialQuantity Decimal
   currentQuantity Decimal
   shrinkageCount  Decimal       @default(0)
   unitCost        Decimal       @default(0)
+  receivedDate    DateTime      @default(now())
   createdAt       DateTime      @default(now())
+
+  @@index([itemId, warehouseId, receivedDate])
 }
 
 model HarvestInventoryBatch {
@@ -681,7 +751,7 @@ model TreasuryAccount {
   accountNumber      String
   ibanOrSwift        String   @default("")
   branchOrAgent      String   @default("")
-  transferFeePercent Float    @default(0)
+  transferFeePercent Decimal  @default(0)
   dailyLimit         Decimal  @default(0)
   isDefaultReceipts  Boolean  @default(false)
   isDefaultPayments  Boolean  @default(false)
@@ -690,7 +760,7 @@ model TreasuryAccount {
   accountId          String   @unique
   account            Account  @relation(fields: [accountId], references: [id], onDelete: Restrict)
   balance            Decimal  @default(0)
-  balanceYER         Float    @default(0)
+  balanceYER         Decimal  @default(0)
   currency           String   @default("YER")
   currencyCode       String   @default("YER")
   gatewayProvider    String   @default("MANUAL") // MANUAL | KURAIMI_API | JAWALI_API | JEEB_API | ONECASH_API | FLOOSAK_API | CUSTOM_WEBHOOK
@@ -698,7 +768,7 @@ model TreasuryAccount {
   gatewayEndpointUrl String?
   gatewayCredentialsEnc String?
   isSandbox          Boolean  @default(true)
-  dailyUsedAmount    Float    @default(0)
+  dailyUsedAmount    Decimal  @default(0)
   lastDailyResetDate String?  // YYYY-MM-DD
   archivedAt         DateTime?
   updatedAt          DateTime @updatedAt
@@ -722,12 +792,17 @@ model OperatingExpense {
   harvestName    String
   category       String // وقود/محروقات | وجبات غذائية | مواد غذائية | أجور نقل | أخرى
   subType        String
-  quantity       Float         @default(1)
-  unitPrice      Float         @default(0)
-  totalAmount    Float         @default(0)
+  quantity       Decimal       @default(1)
+  unitPrice      Decimal       @default(0)
+  taxCodeId      String?
+  netAmount      Decimal       @default(0)
+  taxAmount      Decimal       @default(0)
+  whtAmount      Decimal       @default(0)
+  totalAmount    Decimal       @default(0)
   expenseDate    String
   notes          String        @default("")
   journalEntryId String?
+  documentStatus String        @default("POSTED")
   createdAt      DateTime      @default(now())
 }
 
@@ -735,7 +810,7 @@ model Worker {
   id               String            @id @default(cuid())
   name             String            @unique
   phone            String            @default("")
-  defaultDailyWage Float             @default(0)
+  defaultDailyWage Decimal           @default(0)
   accountId        String?
   account          Account?          @relation(fields: [accountId], references: [id], onDelete: SetNull)
   createdAt        DateTime          @default(now())
@@ -762,14 +837,15 @@ model WorkerWageEntry {
   harvestCycleId String?
   harvestCycle   HarvestCycle?        @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
   harvestName    String
-  dailyWage      Float
-  daysWorked     Float
-  totalWage      Float
-  creditAmount   Float                @default(0)
-  debitBalance   Float
+  dailyWage      Decimal
+  daysWorked     Decimal
+  totalWage      Decimal
+  creditAmount   Decimal              @default(0)
+  debitBalance   Decimal
   workDate       String
   notes          String               @default("")
   journalEntryId String?
+  documentStatus String               @default("POSTED")
   createdAt      DateTime             @default(now())
   installments   InstallmentVoucher[]
 }
@@ -798,10 +874,10 @@ model SaleTransaction {
   customerPhone    String
   productGrade     String
   bundlesCount     Int
-  unitPrice        Float
-  totalAmount      Float
-  creditPaid       Float                @default(0)
-  debitReceivable  Float
+  unitPrice        Decimal
+  totalAmount      Decimal
+  creditPaid       Decimal              @default(0)
+  debitReceivable  Decimal
   saleDate         String
   receiptVoucherNo String
   notes            String               @default("")
@@ -822,7 +898,7 @@ model InstallmentVoucher {
   phone              String           @default("")
   treasuryAccountId  String
   treasuryAccount    TreasuryAccount  @relation(fields: [treasuryAccountId], references: [id], onDelete: Restrict)
-  amountYER          Float
+  amountYER          Decimal
   qrVerificationHash String
   paymentDate        String
   notes              String           @default("")
@@ -908,7 +984,7 @@ model AdjustmentEntry {
   harvestCycle   HarvestCycle? @relation(fields: [harvestCycleId], references: [id], onDelete: SetNull)
   periodLabel    String
   reason         String
-  amountYER      Float
+  amountYER      Decimal
   createdByUser  String
   journalEntryId String?
   createdAt      DateTime      @default(now())
@@ -953,9 +1029,9 @@ model TreasuryTransaction {
   treasuryId    String
   direction     String // IN | OUT | TRANSFER
   currencyCode  String   @default("YER")
-  exchangeRate  Float    @default(1.0)
-  foreignAmount Float    @default(0)
-  baseAmount    Float    @default(0)
+  exchangeRate  Decimal  @default(1.0)
+  foreignAmount Decimal  @default(0)
+  baseAmount    Decimal  @default(0)
   referenceType String? // RECEIPT | PAYMENT | TRANSFER | FX_REVALUATION
   referenceId   String?
   notes         String?
@@ -1027,12 +1103,12 @@ model InventoryItem {
   baseUnit           UnitOfMeasure        @relation("ItemBaseUnit", fields: [baseUnitId], references: [id], onDelete: Restrict)
   defaultWarehouseId String?
   defaultWarehouse   Warehouse?           @relation("ItemDefaultWarehouse", fields: [defaultWarehouseId], references: [id], onDelete: SetNull)
-  purchasePrice      Float                @default(0)
-  wholesalePrice     Float                @default(0)
-  retailPrice        Float                @default(0)
-  minSellPrice       Float                @default(0)
-  minStockAlert      Float                @default(0)
-  maxStockLevel      Float                @default(0)
+  purchasePrice      Decimal              @default(0)
+  wholesalePrice     Decimal              @default(0)
+  retailPrice        Decimal              @default(0)
+  minSellPrice       Decimal              @default(0)
+  minStockAlert      Decimal              @default(0)
+  maxStockLevel      Decimal              @default(0)
   inventoryAccountId String?
   cogsAccountId      String?
   revenueAccountId   String?
@@ -1052,10 +1128,10 @@ model ItemUnitConversion {
   unitId                String
   unit                  UnitOfMeasure @relation(fields: [unitId], references: [id], onDelete: Restrict)
   customUnitLabel       String?
-  factorToBase          Float // Must be > 0, e.g. 1 bundle = 10 pieces, 1 carton = 240 pieces
+  factorToBase          Decimal // Must be > 0, e.g. 1 bundle = 10 pieces, 1 carton = 240 pieces
   barcode               String?
-  purchasePrice         Float?
-  sellPrice             Float?
+  purchasePrice         Decimal?
+  sellPrice             Decimal?
   isDefaultSalesUnit    Boolean       @default(false)
   isDefaultPurchaseUnit Boolean       @default(false)
 
@@ -1068,8 +1144,8 @@ model StockBalance {
   item            InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
   warehouseId     String
   warehouse       Warehouse     @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  qtyOnHandBase   Float         @default(0)
-  avgUnitCostBase Float         @default(0)
+  qtyOnHandBase   Decimal       @default(0)
+  avgUnitCostBase Decimal       @default(0)
   updatedAt       DateTime      @updatedAt
 
   @@unique([itemId, warehouseId])
@@ -1082,12 +1158,12 @@ model StockMovement {
   warehouseId   String
   warehouse     Warehouse     @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
   movementType  String // PURCHASE_IN | SALE_OUT | ADJUSTMENT_IN | ADJUSTMENT_OUT | TRANSFER_IN | TRANSFER_OUT | OPENING
-  enteredQty    Float
+  enteredQty    Decimal
   enteredUnitId String
   enteredUnit   UnitOfMeasure @relation(fields: [enteredUnitId], references: [id], onDelete: Restrict)
-  factorToBase  Float         @default(1)
-  baseQtyDelta  Float // Positive for IN, negative for OUT
-  unitCostBase  Float         @default(0)
+  factorToBase  Decimal       @default(1)
+  baseQtyDelta  Decimal // Positive for IN, negative for OUT
+  unitCostBase  Decimal       @default(0)
   referenceType String? // INVOICE | BILL | ADJUSTMENT | TRANSFER
   referenceId   String?
   notes         String?
@@ -1149,8 +1225,61 @@ model FiscalYear {
   closedByName              String?
   closedAt                  DateTime?
   journalEntries            JournalEntry[]
-  createdAt                 DateTime       @default(now())
-  updatedAt                 DateTime       @updatedAt
+  periods                   AccountingPeriod[]
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
+}
+
+model AccountingPeriod {
+  id           String      @id @default(cuid())
+  fiscalYearId String?
+  fiscalYear   FiscalYear? @relation(fields: [fiscalYearId], references: [id], onDelete: SetNull)
+  year         Int
+  month        Int
+  code         String      @unique // e.g. "2026-05"
+  nameAr       String
+  nameEn       String
+  startDate    DateTime
+  endDate      DateTime
+  status       String      @default("OPEN") // OPEN | SOFT_CLOSED | HARD_CLOSED
+  closedById   String?
+  closedAt     DateTime?
+  notes        String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@unique([year, month])
+  @@index([startDate, endDate, status])
+}
+
+model TaxCode {
+  id                     String    @id @default(cuid())
+  code                   String    @unique // VAT15 | VAT0 | WHT2
+  nameAr                 String
+  nameEn                 String
+  taxType                String    @default("VAT") // VAT | WHT | SALES_TAX
+  ratePct                Decimal   @default(0)
+  isCompound             Boolean   @default(false)
+  isInclusive            Boolean   @default(false)
+  salesTaxAccountCode    String?   @default("214101")
+  purchaseTaxAccountCode String?   @default("114301")
+  whtAccountCode         String?   @default("214201")
+  isActive               Boolean   @default(true)
+  rates                  TaxRate[]
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+}
+
+model TaxRate {
+  id            String    @id @default(cuid())
+  taxCodeId     String
+  taxCode       TaxCode   @relation(fields: [taxCodeId], references: [id], onDelete: Cascade)
+  ratePct       Decimal
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([taxCodeId, effectiveFrom])
 }
 
 model WorkspaceDraft {
@@ -1162,7 +1291,7 @@ model WorkspaceDraft {
   titleAr           String
   titleEn           String   @default("")
   payloadJson       String // Full serialized form + subform line items + cost center + currency
-  totalAmount       Float?
+  totalAmount       Decimal?
   currencyCode      String   @default("YER")
   visibility        String   @default("SHARED_WORKSPACE") // SHARED_WORKSPACE | PRIVATE
   status            String   @default("ACTIVE_DRAFT") // ACTIVE_DRAFT | SUBMITTED_FOR_APPROVAL | CONVERTED | DISCARDED
@@ -1182,7 +1311,7 @@ model ApprovalRule {
   id                  String            @id @default(cuid())
   module              String // ACCOUNTING | SALES | PROCUREMENT | TREASURY | INVENTORY | PROJECTS | WORKERS | FISCAL_YEAR
   actionType          String // CREATE_AND_POST | GL_POSTING | AMEND_POSTED_RECORD | VOID_RECORD | HIGH_VALUE_TRANSACTION | FISCAL_YEAR_CLOSE
-  minAmountBase       Float             @default(0)
+  minAmountBase       Decimal           @default(0)
   currencyCode        String            @default("YER")
   requiredRole        String            @default("CHIEF_ACCOUNTANT")
   approverUserIdsJson String            @default("[]")
@@ -1207,7 +1336,7 @@ model ApprovalRequest {
   documentNumber     String
   summaryAr          String
   summaryEn          String        @default("")
-  amountBase         Float         @default(0)
+  amountBase         Decimal       @default(0)
   currencyCode       String        @default("YER")
   beforeSnapshotJson String?
   afterSnapshotJson  String
@@ -1250,11 +1379,11 @@ model BankPaymentDispatch {
   sourceVoucherId           String
   beneficiaryName           String
   beneficiaryAccountOrPhone String
-  amount                    Float
-  feeAmount                 Float           @default(0)
+  amount                    Decimal
+  feeAmount                 Decimal         @default(0)
   currencyCode              String          @default("YER")
-  exchangeRate              Float           @default(1)
-  baseAmount                Float
+  exchangeRate              Decimal         @default(1)
+  baseAmount                Decimal
   provider                  String          // MANUAL | KURAIMI_API | JAWALI_API | JEEB_API | ONECASH_API | FLOOSAK_API | CUSTOM_WEBHOOK
   externalReferenceId       String?
   status                    String          @default("QUEUED") // QUEUED | PENDING_OTP | EXECUTED | FAILED | RECONCILED

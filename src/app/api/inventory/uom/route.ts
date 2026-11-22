@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { DEFAULT_UOMS, slugifyLookupCode } from "@/lib/multiUnitInventoryEngine";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, forbiddenError, jsonError } from "@/lib/apiHelpers";
+import { hasGranularPermission } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,7 @@ export async function ensureDefaultUomsSeeded() {
   }
 }
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     await ensureSqliteDatabaseReady();
     await ensureDefaultUomsSeeded();
@@ -30,18 +31,22 @@ export async function GET() {
     console.error("GET /api/inventory/uom error:", error);
     return jsonError("تعذر تحميل وحدات القياس / Failed to load units of measure", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     await ensureDefaultUomsSeeded();
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "inventory",
+      action: "create",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
-    const { hasGranularPermission } = await import("@/lib/permissions");
-    if (!hasGranularPermission(actor.userRole, "inventory.custom_uom")) {
-      return jsonError("غير مصرح: ليس لديك صلاحية إضافة وحدات قياس مخصصة", 403);
+    if (!hasGranularPermission(actor.user || actor.userRole, "inventory.custom_uom")) {
+      return forbiddenError("غير مصرح: ليس لديك صلاحية إضافة وحدات قياس مخصصة");
     }
 
     const nameAr = String(body.nameAr || body.customUnitLabel || "").trim();
@@ -68,4 +73,4 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/inventory/uom error:", error);
     return jsonError("تعذر حفظ وحدة القياس / Failed to save unit of measure", 500);
   }
-}
+});

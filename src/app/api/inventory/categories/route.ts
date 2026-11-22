@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { DEFAULT_CATEGORIES, slugifyLookupCode } from "@/lib/multiUnitInventoryEngine";
-import { jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +18,7 @@ export async function ensureDefaultCategoriesSeeded() {
   }
 }
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     await ensureSqliteDatabaseReady();
     await ensureDefaultCategoriesSeeded();
@@ -30,13 +30,19 @@ export async function GET() {
     console.error("GET /api/inventory/categories error:", error);
     return jsonError("تعذر تحميل تصنيفات الأصناف / Failed to load item categories", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     await ensureDefaultCategoriesSeeded();
     const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "inventory",
+      action: "create",
+    });
+    if (!auth.ok) return auth.response;
+
     const nameAr = String(body.nameAr || "").trim();
     const nameEn = String(body.nameEn || nameAr).trim();
     if (!nameAr) {
@@ -61,4 +67,4 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/inventory/categories error:", error);
     return jsonError("تعذر حفظ التصنيف / Failed to save item category", 500);
   }
-}
+});

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import {
   getTreasuryLedgerAndReconcile,
   reconcileTreasuryAccount,
@@ -7,8 +8,11 @@ import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
+    const auth = await authorizeApiAction({}, req, { moduleId: "treasury" });
+    if (!auth.ok) return auth.response;
+
     const { searchParams } = new URL(req.url);
     const treasuryId = searchParams.get("treasuryId")?.trim();
     if (!treasuryId) {
@@ -20,7 +24,7 @@ export async function GET(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر تحميل كشف المطابقة";
     return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
   }
-}
+});
 
 async function handleReconcile(req: NextRequest) {
   try {
@@ -57,11 +61,11 @@ async function handleReconcile(req: NextRequest) {
   }
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return handleReconcile(req);
-}
+});
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleReconcile(req);
-}
+});
 

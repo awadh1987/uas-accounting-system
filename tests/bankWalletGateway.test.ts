@@ -5,6 +5,8 @@ import { ensure6GenerationCoaHierarchy } from "../src/lib/accountingCoreEngine";
 import {
   executeBankOrWalletPayout,
   processInboundCollectionWebhook,
+  computeWebhookSignature,
+  verifyWebhookSignature,
   exportBulkBankTransferFile,
   autoReconcileStatementRows,
   SUPPORTED_GATEWAY_PROVIDERS,
@@ -51,7 +53,9 @@ describe("Phase 1 — Bank & E-Wallet Gateway Engine Invariants", () => {
         generation: 6,
         level: 6,
         parentCode: "111290",
+        parentId: parent?.id || null,
         parentAccountId: parent?.id || null,
+        isPosting: true,
         isPostable: true,
       },
     });
@@ -376,14 +380,14 @@ describe("Phase 1 — Bank & E-Wallet Gateway Engine Invariants", () => {
         date: "2026-11-20",
         referenceId: target1.externalReferenceId || undefined,
         description: "تحويل بنكي صادر",
-        debit: target1.amount,
+        debit: Number(target1.amount),
       },
       // 2. Matched by amount & date
       {
         date: "2026-11-20",
         referenceId: "BANK-STMT-UNKNOWN-REF",
         description: "حركة بنكية بمبلغ مطابق",
-        debit: target2.amount,
+        debit: Number(target2.amount),
       },
       // 3. Unmatched in UAS (bank fee or external movement)
       {
@@ -532,5 +536,51 @@ describe("Phase 1 — Bank & E-Wallet Gateway Engine Invariants", () => {
     assert.equal(recJson.ok, true);
     assert.equal(recJson.result.matchedCount, 1);
     assert.equal(recJson.result.unmatchedInUasCount, 1);
+  });
+
+  it("8. Enforces HMAC-SHA256 webhook signature verification and rejects missing or forged signatures", async () => {
+    const secret = "test-webhook-secret-2026";
+    const payload = {
+      eventId: `EVT-SIG-${TEST_RUN_TAG}`,
+      referenceId: `REF-SIG-${TEST_RUN_TAG}`,
+      amount: 12000,
+      currency: "YER",
+      treasuryAccountId,
+    };
+    const rawBody = JSON.stringify(payload);
+    const validSig = computeWebhookSignature(rawBody, secret);
+    assert.equal(verifyWebhookSignature(rawBody, validSig, secret), true);
+    assert.equal(verifyWebhookSignature(rawBody, `sha256=${validSig}`, secret), true);
+    assert.equal(verifyWebhookSignature(rawBody, "0".repeat(64), secret), false);
+
+    // Reject missing signature when requireSignature=true
+    await assert.rejects(
+      () =>
+        processInboundCollectionWebhook({
+          provider: "KURAIMI_API",
+          payload,
+          rawBody,
+          requireSignature: true,
+        }),
+      /INVALID_WEBHOOK_SIGNATURE/
+    );
+
+    // Accept validly signed webhook using configured treasury secret (fallback env)
+    const prevSecret = process.env.UAS_WEBHOOK_SECRET;
+    process.env.UAS_WEBHOOK_SECRET = secret;
+    try {
+      const accepted = await processInboundCollectionWebhook({
+        provider: "KURAIMI_API",
+        payload,
+        rawBody,
+        signatureHeader: `sha256=${validSig}`,
+        requireSignature: true,
+      });
+      assert.equal(accepted.ok, true);
+      assert.ok(accepted.dispatchId);
+    } finally {
+      if (prevSecret === undefined) delete process.env.UAS_WEBHOOK_SECRET;
+      else process.env.UAS_WEBHOOK_SECRET = prevSecret;
+    }
   });
 });

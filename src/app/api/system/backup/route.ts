@@ -7,7 +7,7 @@ import {
   exportFullSchemaJsonBackup,
 } from "@/lib/backupService";
 import { emitNotification } from "@/lib/notifications/notificationService";
-import { extractActor, jsonError, forbiddenError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError, forbiddenError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +15,9 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
 
-    const actor = extractActor({}, req);
+    const auth = await authorizeApiAction({}, req, { moduleId: "system" });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
     if (actor.userRole !== "SUPER_ADMIN") {
       return forbiddenError("⛔ إجراء تصدير النسخ الاحتياطية محصور بمدير النظام العام (SUPER_ADMIN)");
     }

@@ -1,15 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, forbiddenError, jsonError } from "@/lib/apiHelpers";
+import { canLockPeriod } from "@/lib/permissions";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "audit",
+      action: "approve",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
+
+    if (!canLockPeriod(actor.user || actor.userRole)) {
+      return forbiddenError("⛔ إغلاق وإعادة فتح فترات القطفات محصور بالإدارة العليا ورئيس الحسابات");
+    }
+
     const key = String(body.key || "").trim();
     const cycleId = String(body.cycleId || "").trim();
     const [projectId, harvestName] = key.split("::");
-    const actor = extractActor(body);
 
     if (!cycleId && (!projectId || !harvestName)) {
       return jsonError("معرف القطفة غير صالح", 400);
@@ -64,4 +75,4 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/audit/lock error:", error);
     return jsonError("تعذر تغيير حالة إغلاق القطفة", 500);
   }
-}
+});

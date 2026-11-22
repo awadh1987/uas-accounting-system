@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
+import { withTenantRoute } from "@/lib/prisma";
+import { authorizeApiAction } from "@/lib/apiHelpers";
 import { autoReconcileStatementRows, StatementRowInput } from "@/lib/treasury/bankWalletGateway";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { treasuryAccountId } = body;
+    const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "treasury",
+      action: "treasury",
+    });
+    if (!auth.ok) return auth.response;
+
+    const treasuryAccountId = String(body.treasuryAccountId || "").trim();
 
     if (!treasuryAccountId) {
       return NextResponse.json(
@@ -28,7 +36,7 @@ export async function POST(req: NextRequest) {
         balance: r.balance !== undefined && r.balance !== null ? Number(r.balance) : undefined,
       }));
     } else if (body.base64File) {
-      const buffer = Buffer.from(body.base64File, "base64");
+      const buffer = Buffer.from(String(body.base64File), "base64");
       const workbook = XLSX.read(buffer, { type: "buffer" });
       const firstSheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[firstSheetName];
@@ -74,4 +82,4 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-}
+});

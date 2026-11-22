@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { transferBetweenTreasuries } from "@/lib/accounting/ledgerService";
 import { getBootstrapState } from "@/lib/serverBootstrap";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, {
@@ -41,5 +42,5 @@ export async function POST(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر تنفيذ التحويل المالي";
     return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
   }
-}
+});
 

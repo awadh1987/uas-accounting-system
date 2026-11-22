@@ -15,6 +15,7 @@
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { dAdd, dMul, dSub, round4Decimal, toDecimalNumber } from "@/lib/decimalMath";
 
 type Db = Prisma.TransactionClient | typeof prisma;
 
@@ -459,15 +460,30 @@ export async function deleteCostCenter(id: string, client: Db = prisma) {
 // Cost Center P&L report
 // ----------------------------------------------------------------------------
 export async function costCenterProfitAndLoss(
-  filters: { costCenterId?: string; fromDate?: string | Date; toDate?: string | Date } = {},
+  filters: {
+    costCenterId?: string;
+    fromDate?: string | Date;
+    toDate?: string | Date;
+    includeYearEndClosing?: boolean;
+  } = {},
   client: Db = prisma
 ) {
+  const dateFilter: Prisma.DateTimeFilter = {};
+  if (filters.fromDate) dateFilter.gte = new Date(filters.fromDate);
+  if (filters.toDate) {
+    const end = new Date(filters.toDate);
+    if (typeof filters.toDate === "string" && filters.toDate.length <= 10) {
+      end.setUTCHours(23, 59, 59, 999);
+    }
+    dateFilter.lte = end;
+  }
+
   const where: Prisma.JournalEntryLineWhereInput = {
     journalEntry: {
       status: "POSTED",
-      ...(filters.fromDate || filters.toDate
-        ? { date: { ...(filters.fromDate ? { gte: new Date(filters.fromDate) } : {}), ...(filters.toDate ? { lte: new Date(filters.toDate) } : {}) } }
-        : {}),
+      documentStatus: "POSTED",
+      ...(filters.includeYearEndClosing ? {} : { entryType: { not: "YEAR_END_CLOSING" } }),
+      ...(filters.fromDate || filters.toDate ? { date: dateFilter } : {}),
     },
     account: { type: { in: ["REVENUE", "EXPENSE"] } },
     ...(filters.costCenterId ? { costCenterId: filters.costCenterId } : {}),
@@ -482,22 +498,27 @@ export async function costCenterProfitAndLoss(
     const row = rows.get(key) ?? {
       costCenterId: l.costCenterId, code: cc?.code ?? "—", nameAr: cc?.nameAr ?? "بدون مركز تكلفة", nameEn: cc?.nameEn ?? "Unassigned", revenue: 0, expense: 0, net: 0,
     };
-    const dr = Number(l.debit.toString()), cr = Number(l.credit.toString());
-    const rate = Number(l.exchangeRate.toString()) || 1;
-    if (l.account.type === "REVENUE") row.revenue += (cr - dr) * rate;
-    else row.expense += (dr - cr) * rate;
+    const rate = toDecimalNumber(l.exchangeRate, 1) || 1;
+    const baseDr = toDecimalNumber(l.baseDebit) || toDecimalNumber(l.debitBase) || dMul(l.debit, rate, 4);
+    const baseCr = toDecimalNumber(l.baseCredit) || toDecimalNumber(l.creditBase) || dMul(l.credit, rate, 4);
+    if (l.account.type === "REVENUE") row.revenue = dAdd(row.revenue, dSub(baseCr, baseDr, 4), 4);
+    else row.expense = dAdd(row.expense, dSub(baseDr, baseCr, 4), 4);
     rows.set(key, row);
   }
   const out = [...rows.values()].map((r) => ({
     ...r,
-    revenue: Math.round(r.revenue * 10000) / 10000,
-    expense: Math.round(r.expense * 10000) / 10000,
-    net: Math.round((r.revenue - r.expense) * 10000) / 10000,
+    revenue: round4Decimal(r.revenue),
+    expense: round4Decimal(r.expense),
+    net: dSub(r.revenue, r.expense, 4),
   }));
   return {
     rows: out,
     totals: out.reduce(
-      (t, r) => ({ revenue: t.revenue + r.revenue, expense: t.expense + r.expense, net: t.net + r.net }),
+      (t, r) => ({
+        revenue: dAdd(t.revenue, r.revenue, 4),
+        expense: dAdd(t.expense, r.expense, 4),
+        net: dAdd(t.net, r.net, 4),
+      }),
       { revenue: 0, expense: 0, net: 0 }
     ),
   };

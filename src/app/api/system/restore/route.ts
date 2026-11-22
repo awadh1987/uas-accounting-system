@@ -13,7 +13,7 @@ import {
   type UasbakEnvelope,
   type UasbakPortableEnvelopeV2,
 } from "@/lib/backupService";
-import { extractActor, jsonError, forbiddenError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError, forbiddenError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
@@ -112,7 +112,12 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       }
     }
 
-    const actor = extractActor(actorInput, req);
+    const auth = await authorizeApiAction(actorInput, req, {
+      moduleId: "system",
+      action: "delete",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
     if (actor.userRole !== "SUPER_ADMIN") {
       return forbiddenError("⛔ استعادة النسخ الاحتياطية محصورة بمدير النظام العام (SUPER_ADMIN)");
     }

@@ -3,7 +3,7 @@ import { prisma, withTenantRoute } from "@/lib/prisma";
 import { canManageUsers, normalizeRole } from "@/lib/permissions";
 import { appendAuditLogTx, hashPassword } from "@/lib/serverBootstrap";
 import { emitNotification } from "@/lib/notifications/notificationService";
-import { extractActor, forbiddenError } from "@/lib/apiHelpers";
+import { authorizeApiAction, forbiddenError } from "@/lib/apiHelpers";
 
 export const POST = withTenantRoute(async function POST(
   req: NextRequest,
@@ -18,9 +18,14 @@ export const POST = withTenantRoute(async function POST(
     } catch {
       body = {};
     }
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "system",
+      action: "edit",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
-    if (!canManageUsers(actor.userRole)) {
+    if (!canManageUsers(actor.user || actor.userRole)) {
       return forbiddenError("⛔ إعادة تعيين كلمات المرور محصورة بمدير النظام العام");
     }
 

@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
+    const auth = await authorizeApiAction({}, req, { moduleId: "audit" });
+    if (!auth.ok) return auth.response;
+
     const diffLogs = await prisma.auditLog.findMany({
       orderBy: { timestamp: "desc" },
       take: 80,
@@ -19,15 +22,18 @@ export async function GET() {
     console.error("GET /api/audit/log error:", error);
     return jsonError("تعذر تحميل سجل تعديلات الحقول", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {});
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
+
     const actionType = String(body.action || "").trim();
     const details = String(body.details || "").trim();
     const entityReference = String(body.entityReference || "system").trim();
-    const actor = extractActor(body);
 
     if (!actionType) {
       return jsonError("نوع الحدث مطلوب", 400);
@@ -48,5 +54,5 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/audit/log error:", error);
     return jsonError("تعذر توثيق الحدث", 500);
   }
-}
+});
 

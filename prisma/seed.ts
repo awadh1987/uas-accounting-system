@@ -5,7 +5,9 @@ import { STANDARD_COA_NODES } from "../src/lib/accounting/coaCatalog";
 const prisma = new PrismaClient();
 
 function hashPassword(password: string): string {
-  return crypto.createHash("sha256").update(password).digest("hex");
+  const salt = crypto.randomBytes(16).toString("hex");
+  const derived = crypto.scryptSync(password, salt, 64).toString("hex");
+  return `scrypt$${salt}$${derived}`;
 }
 
 function sha256Audit(payload: string): string {

@@ -100,7 +100,7 @@ export async function buildServerAgentContext(
         documentType: installment.type === "CUSTOMER_RECEIPT" ? "سند قبض عميل" : "سند صرف عامل",
         reference: installment.voucherNo,
         party: installment.targetName,
-        amount: installment.amountYER,
+        amount: Number(installment.amountYER),
         currency: "YER",
         date: installment.paymentDate,
         status: "VERIFIED_IMMUTABLE",

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { validateLicenseStructure, type SeatPlatform, type UasSignedLicense } from "@/lib/licensing/licenseSchema";
 import { verifyLicense, saveInstalledLicense } from "@/lib/licensing/verifier";
@@ -21,7 +21,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     let licenseObj: UasSignedLicense | null = null;
@@ -251,4 +251,4 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

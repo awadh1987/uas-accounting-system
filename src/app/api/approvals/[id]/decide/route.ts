@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, forbiddenError, jsonError } from "@/lib/apiHelpers";
 import { decideApprovalRequest, type ApprovalDecision } from "@/lib/approvalEngine";
 import { withIdempotency } from "@/lib/idempotencyGuard";
+import { hasGranularPermission } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(
+export const POST = withTenantRoute(async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
@@ -15,15 +17,20 @@ export async function POST(
       await ensureSqliteDatabaseReady();
       const { id } = await context.params;
       const body = (await r.json()) as Record<string, unknown>;
-      const actor = extractActor(body, r);
+      const auth = await authorizeApiAction(body, r, {
+        moduleId: "ledger",
+        action: "approve",
+      });
+      if (!auth.ok) return auth.response;
+      const actor = auth.actor;
+
       const decision = String(body.decision || "").toUpperCase() as ApprovalDecision;
       if (!["APPROVED", "REJECTED", "RETURNED_FOR_EDIT"].includes(decision)) {
         return jsonError("قرار الاعتماد غير صالح (APPROVED | REJECTED | RETURNED_FOR_EDIT)", 400);
       }
 
-      const { hasGranularPermission } = await import("@/lib/permissions");
-      if (!hasGranularPermission(actor.userRole, "approvals.decide")) {
-        return jsonError("غير مصرح: ليس لديك صلاحية اتخاذ قرارات الاعتماد المالي", 403);
+      if (!hasGranularPermission(actor.user || actor.userRole, "approvals.decide")) {
+        return forbiddenError("غير مصرح: ليس لديك صلاحية اتخاذ قرارات الاعتماد المالي");
       }
 
       const result = await decideApprovalRequest({
@@ -31,9 +38,9 @@ export async function POST(
         decision,
         reviewNotes: body.reviewNotes ? String(body.reviewNotes) : null,
         reviewer: {
-          userId: actor.userId || "u1",
-          userName: actor.userDisplay || "المدير المالي",
-          userRole: actor.userRole || "SUPER_ADMIN",
+          userId: actor.userId!,
+          userName: actor.userDisplay,
+          userRole: actor.userRole,
         },
       });
       return NextResponse.json({ success: true, ...result });
@@ -47,4 +54,4 @@ export async function POST(
       return jsonError(msg, status);
     }
   });
-}
+});

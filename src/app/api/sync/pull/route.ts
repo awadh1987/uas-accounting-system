@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withTenantRoute } from "@/lib/prisma";
-import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
+import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import { pullChangesSince } from "@/lib/sync/syncEngine";
-import { jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
 export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
+    const auth = await authorizeApiAction({}, req, {});
+    if (!auth.ok) return auth.response;
+
     const { searchParams } = new URL(req.url);
     const sinceCursor = Number(searchParams.get("sinceCursor") || 0);
     const limit = Number(searchParams.get("limit") || 100);

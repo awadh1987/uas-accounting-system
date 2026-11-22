@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
-import { normalizeRole, ROLE_DEFINITIONS } from "@/lib/permissions";
+import { canManageUsers, normalizeRole, ROLE_DEFINITIONS } from "@/lib/permissions";
 import { appendAuditLogTx, getBootstrapState, hashPassword } from "@/lib/serverBootstrap";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, forbiddenError, jsonError } from "@/lib/apiHelpers";
 
 export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
+    const auth = await authorizeApiAction({}, req, {});
+    if (!auth.ok) return auth.response;
+
     const includeArchived = req.nextUrl.searchParams.get("includeArchived") === "true";
     const state = await getBootstrapState();
     const users = includeArchived ? state.users : state.users.filter((u) => !u.archivedAt);
@@ -19,6 +22,17 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
 export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "system",
+      action: "create",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
+
+    if (!canManageUsers(actor.user || actor.userRole)) {
+      return forbiddenError("⛔ إدارة وإضافة حسابات المستخدمين محصورة بمدير النظام العام");
+    }
+
     const name = String(body.name || "").trim();
     const email = String(body.email || "").trim() || `user-${Date.now()}@uas-ye.com`;
     const role = normalizeRole(String(body.role || "FIELD_ACCOUNTANT").trim());
@@ -28,7 +42,6 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     const assignedProjects = Array.isArray(body.assignedProjects)
       ? JSON.stringify(body.assignedProjects.map(String))
       : JSON.stringify(["p1", "p2", "p3"]);
-    const actor = extractActor(body, req);
 
     if (!name) {
       return jsonError("يرجى إدخال اسم المستخدم", 400);

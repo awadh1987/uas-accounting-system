@@ -429,12 +429,12 @@ export function TreasuryTab({
     }
 
     try {
-      const res = await fetch("/api/records/lifecycle", {
+      const res = await fetch("/api/system/lifecycle", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           entityType: "TreasuryAccount",
-          entityId: t.id,
+          id: t.id,
           action,
           actor,
         }),

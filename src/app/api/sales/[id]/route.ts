@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import {
   reverseJournalEntry,
   updateSaleTransactionAtomic,
@@ -63,21 +63,21 @@ async function handleSaleByIdUpdate(
   }
 }
 
-export async function PATCH(
+export const PATCH = withTenantRoute(async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   return handleSaleByIdUpdate(req, context);
-}
+});
 
-export async function PUT(
+export const PUT = withTenantRoute(async function PUT(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   return handleSaleByIdUpdate(req, context);
-}
+});
 
-export async function DELETE(
+export const DELETE = withTenantRoute(async function DELETE(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
@@ -102,20 +102,93 @@ export async function DELETE(
       if (await isHarvestLockedTx(tx, rec.projectId, rec.harvestName)) {
         return { status: "LOCKED" as const };
       }
-      if (rec.journalEntryId) {
-        await reverseJournalEntry({
-          journalEntryId: rec.journalEntryId,
-          createdById: actor.userId ?? undefined,
-          reason: `حذف عملية بيع (${rec.customerName})`,
-          tx,
-        }).catch(() => null);
+
+      const reversedJeIds = new Set<string>();
+      const reverseIfPosted = async (journalEntryId: string, reason: string) => {
+        if (!journalEntryId || reversedJeIds.has(journalEntryId)) return;
+        const je = await tx.journalEntry.findUnique({
+          where: { id: journalEntryId },
+          select: { status: true, isReversed: true },
+        });
+        if (je && je.status !== "VOIDED" && !je.isReversed) {
+          await reverseJournalEntry({
+            journalEntryId,
+            createdById: actor.userId ?? undefined,
+            reason,
+            tx,
+          });
+        }
+        reversedJeIds.add(journalEntryId);
+      };
+
+      const resolveTreasuryRate = async (currency: string) => {
+        const c = (currency || "YER").toUpperCase();
+        if (c === "YER") return 1;
+        const r = await tx.currencyRate.findUnique({ where: { currencyCode: c } });
+        return Number(r?.rateToYER) || (c === "SAR" ? 425 : c === "USD" ? 1620 : 1);
+      };
+
+      // 1. Reverse and remove any linked installment vouchers first + restore their treasury balances
+      const linkedInstallments = await tx.installmentVoucher.findMany({
+        where: { saleTransactionId: rec.id },
+      });
+      let installmentPaidTotal = 0;
+      for (const inst of linkedInstallments) {
+        const instAmt = Number(inst.amountYER);
+        installmentPaidTotal += instAmt;
+        if (inst.journalEntryId) {
+          await reverseIfPosted(inst.journalEntryId, `عكس سند دفعة بيع ملغى: ${inst.voucherNo}`);
+        }
+        const tr = await tx.treasuryAccount.findUnique({ where: { id: inst.treasuryAccountId } });
+        if (tr) {
+          const trRate = await resolveTreasuryRate(tr.currency);
+          await tx.treasuryAccount.update({
+            where: { id: tr.id },
+            data: {
+              balance: Number(tr.balance) - instAmt / trRate,
+              balanceYER: Number(tr.balanceYER) - instAmt,
+            },
+          });
+        }
+        await tx.installmentVoucher.delete({ where: { id: inst.id } });
       }
+
+      // 2. Reverse remaining direct cash receipt from treasury if collected at sale creation
+      const directCashPaid = Math.max(0, Number(rec.creditPaid) - installmentPaidTotal);
+      if (directCashPaid > 0.005) {
+        const directTreasury = rec.treasuryAccountId
+          ? await tx.treasuryAccount.findUnique({ where: { id: rec.treasuryAccountId } })
+          : await tx.treasuryAccount.findFirst({ where: { isDefaultReceipts: true } });
+        if (directTreasury) {
+          const trRate = await resolveTreasuryRate(directTreasury.currency);
+          await tx.treasuryAccount.update({
+            where: { id: directTreasury.id },
+            data: {
+              balance: Number(directTreasury.balance) - directCashPaid / trRate,
+              balanceYER: Number(directTreasury.balanceYER) - directCashPaid,
+            },
+          });
+        }
+      }
+
+      // 3. Reverse primary sale journal entry and all linked sourceId journal entries
+      if (rec.journalEntryId) {
+        await reverseIfPosted(rec.journalEntryId, `عكس وإلغاء عملية بيع (${rec.customerName})`);
+      }
+      const linkedJes = await tx.journalEntry.findMany({
+        where: { sourceId: rec.id, status: "POSTED", isReversed: false },
+        select: { id: true },
+      });
+      for (const je of linkedJes) {
+        await reverseIfPosted(je.id, `عكس قيد بيع مرتبط (${rec.customerName})`);
+      }
+
       await tx.saleTransaction.delete({ where: { id } });
       await appendAuditLogTx(tx, {
         ...actor,
-        actionType: "حذف عملية بيع",
+        actionType: "عكس وحذف عملية بيع",
         entityReference: id,
-        details: `${rec.customerName} - ${rec.totalAmount.toLocaleString("en-US")} ريال`,
+        details: `${rec.customerName} - ${Number(rec.totalAmount).toLocaleString("en-US")} ريال`,
       });
       return { status: "OK" as const };
     });
@@ -127,6 +200,7 @@ export async function DELETE(
     return NextResponse.json({ state });
   } catch (error) {
     console.error("DELETE /api/sales/[id] error:", error);
-    return jsonError("تعذر حذف عملية البيع", 500);
+    const msg = error instanceof Error ? error.message : "تعذر عكس وحذف عملية البيع";
+    return jsonError(msg, 400);
   }
-}
+});

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const projectId = searchParams.get("projectId") || undefined;
@@ -95,9 +95,9 @@ export async function GET(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر جلب القطاعات والمشاريع الفرعية";
     return jsonError(msg, 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, {
@@ -182,7 +182,7 @@ export async function POST(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر إنشاء القطاع الفرعي";
     return jsonError(msg, 500);
   }
-}
+});
 
 async function handleSubProjectUpdate(req: NextRequest) {
   try {
@@ -301,15 +301,15 @@ async function handleSubProjectUpdate(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleSubProjectUpdate(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleSubProjectUpdate(req);
-}
+});
 
-export async function DELETE(req: NextRequest) {
+export const DELETE = withTenantRoute(async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     let id = searchParams.get("id") || "";
@@ -396,5 +396,5 @@ export async function DELETE(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر حذف/أرشفة القطاع الفرعي";
     return jsonError(msg, 500);
   }
-}
+});
 

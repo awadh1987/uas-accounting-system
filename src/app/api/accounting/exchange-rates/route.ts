@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import { appendAuditLogTx } from "@/lib/serverBootstrap";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const currencyCode = req.nextUrl.searchParams.get("currencyCode")?.trim().toUpperCase() || "";
@@ -50,13 +50,18 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/accounting/exchange-rates error:", error);
     return jsonError("تعذر تحميل أسعار الصرف / Failed to load exchange rates", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "ledger",
+      action: "edit",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
     const currencyCode = String(body.currencyCode || "").trim().toUpperCase();
     const buyRate = Number(body.buyRate ?? body.midRate ?? 0);
@@ -119,4 +124,4 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/accounting/exchange-rates error:", error);
     return jsonError("تعذر حفظ سعر الصرف / Failed to save exchange rate", 500);
   }
-}
+});

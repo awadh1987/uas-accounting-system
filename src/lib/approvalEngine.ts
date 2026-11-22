@@ -213,7 +213,142 @@ async function setTargetDocumentStatus(
     const safeData = { ...data };
     delete safeData.status;
     await tx.stockMovement.updateMany({ where: { id: targetId }, data: safeData });
+  } else if (targetType === "OperatingExpense") {
+    await tx.operatingExpense.updateMany({ where: { id: targetId }, data: { documentStatus } });
+  } else if (targetType === "WorkerWageEntry") {
+    await tx.workerWageEntry.updateMany({ where: { id: targetId }, data: { documentStatus } });
   }
+}
+
+export interface EvaluateApprovalInput {
+  module: string;
+  actionType?: ApprovalActionType;
+  targetType: string;
+  targetId: string;
+  documentNumber: string;
+  summaryAr: string;
+  summaryEn?: string;
+  amountBase?: number;
+  currencyCode?: string;
+  afterSnapshot?: Record<string, unknown>;
+  requestedById?: string | null;
+  requestedByName?: string | null;
+  skipApprovalCheck?: boolean;
+}
+
+/**
+ * Unified Approval Gate (Step 2.2):
+ * Evaluates both `SystemSettings.requireApprovalWorkflow` and active `ApprovalRule`
+ * thresholds for `(module, actionType, amountBase)`. When triggered inside an active
+ * Prisma transaction `tx`, creates a PENDING `ApprovalRequest` and marks the target
+ * document `PENDING_APPROVAL` atomically.
+ */
+export async function evaluateAndRouteApprovalTx(
+  tx: Db,
+  input: EvaluateApprovalInput
+): Promise<{ requiresApproval: boolean; request: { id: string; requestNumber: string } | null }> {
+  if (input.skipApprovalCheck) {
+    return { requiresApproval: false, request: null };
+  }
+
+  const mod = (input.module || "ACCOUNTING").toUpperCase();
+  const actionType: ApprovalActionType = input.actionType || "CREATE_AND_POST";
+  const amountBase = Math.max(0, Number(input.amountBase) || 0);
+
+  const settingsRow = await tx.systemSettings.findUnique({
+    where: { id: "default" },
+    select: { requireApprovalWorkflow: true },
+  });
+  const globalRequire = Boolean(settingsRow?.requireApprovalWorkflow);
+
+  let matchedRule = await findMatchingApprovalRule(
+    { module: mod, actionType, amountBase },
+    tx
+  );
+  if (!matchedRule && actionType !== "GL_POSTING") {
+    matchedRule = await findMatchingApprovalRule(
+      { module: mod, actionType: "GL_POSTING", amountBase },
+      tx
+    );
+  }
+  if (!matchedRule && actionType !== "HIGH_VALUE_TRANSACTION") {
+    matchedRule = await findMatchingApprovalRule(
+      { module: mod, actionType: "HIGH_VALUE_TRANSACTION", amountBase },
+      tx
+    );
+  }
+
+  if (!globalRequire && !matchedRule) {
+    return { requiresApproval: false, request: null };
+  }
+
+  const requesterId = await resolveValidAuditUserId(tx, input.requestedById ?? undefined);
+  let requesterName = input.requestedByName?.trim() || "";
+  if (!requesterName) {
+    const u = await tx.user.findUnique({
+      where: { id: requesterId },
+      select: { fullName: true, name: true },
+    });
+    requesterName = u?.fullName || u?.name || "مستخدم النظام";
+  }
+
+  const requestNumber = await nextApprovalRequestNumber(tx);
+  const request = await tx.approvalRequest.create({
+    data: {
+      requestNumber,
+      ruleId: matchedRule?.id ?? null,
+      module: mod,
+      actionType,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      documentNumber: input.documentNumber,
+      summaryAr: input.summaryAr,
+      summaryEn: input.summaryEn || input.summaryAr,
+      amountBase,
+      currencyCode: (input.currencyCode || "YER").toUpperCase(),
+      beforeSnapshotJson: null,
+      afterSnapshotJson: JSON.stringify(input.afterSnapshot ?? {}),
+      reasonAr: globalRequire
+        ? "تتطلب سياسة المنظومة اعتماد المراجعة قبل الترحيل النهائي"
+        : `تجاوز حد قاعدة الاعتماد (${matchedRule?.requiredRole || "CHIEF_ACCOUNTANT"})`,
+      status: "PENDING",
+      requestedById: requesterId,
+      requestedByName: requesterName,
+    },
+    select: { id: true, requestNumber: true },
+  });
+
+  await setTargetDocumentStatus(
+    tx,
+    input.targetType,
+    input.targetId,
+    "PENDING_APPROVAL",
+    input.targetType === "JournalEntry" ||
+    input.targetType === "SalesInvoice" ||
+    input.targetType === "VendorBill"
+      ? { status: "PENDING_APPROVAL" }
+      : undefined
+  );
+
+  await emitNotification(
+    {
+      eventType: "APPROVAL_REQUIRED",
+      channel: "approvals",
+      severity: "WARNING",
+      titleAr: `طلب اعتماد مالي جديد (${requestNumber})`,
+      titleEn: `Approval Required (${requestNumber})`,
+      messageAr: `${input.summaryAr} — مقدم الطلب: ${requesterName}`,
+      messageEn: `${input.summaryEn || input.summaryAr} — Requested by: ${requesterName}`,
+      targetTab: "audit",
+      targetEntityType: "ApprovalRequest",
+      targetEntityId: request.id,
+      actorUserId: requesterId,
+      metadata: { requestNumber, module: mod, actionType, amountBase },
+    },
+    tx
+  );
+
+  return { requiresApproval: true, request };
 }
 
 export interface SubmitApprovalRequestInput {
@@ -415,6 +550,40 @@ export async function decideApprovalRequest(
               ? "POSTED"
               : undefined,
         });
+
+        // Cascade approval posting to linked JournalEntry if this document held a PENDING_APPROVAL journal
+        const linkLookup =
+          req.targetType === "VendorBill"
+            ? await tx.vendorBill.findUnique({ where: { id: req.targetId }, select: { journalEntryId: true } })
+            : req.targetType === "SalesInvoice"
+            ? await tx.salesInvoice.findUnique({ where: { id: req.targetId }, select: { journalEntryId: true, cogsJournalEntryId: true } })
+            : req.targetType === "PaymentVoucher"
+            ? await tx.paymentVoucher.findUnique({ where: { id: req.targetId }, select: { journalEntryId: true } })
+            : req.targetType === "ReceiptVoucher"
+            ? await tx.receiptVoucher.findUnique({ where: { id: req.targetId }, select: { journalEntryId: true } })
+            : req.targetType === "OperatingExpense"
+            ? await tx.operatingExpense.findUnique({ where: { id: req.targetId }, select: { journalEntryId: true } })
+            : req.targetType === "WorkerWageEntry"
+            ? await tx.workerWageEntry.findUnique({ where: { id: req.targetId }, select: { journalEntryId: true } })
+            : null;
+        if (linkLookup && "journalEntryId" in linkLookup && linkLookup.journalEntryId) {
+          await tx.journalEntry.updateMany({
+            where: { id: linkLookup.journalEntryId, status: "PENDING_APPROVAL" },
+            data: { status: "POSTED", documentStatus: "POSTED" },
+          });
+        }
+        if (linkLookup && "cogsJournalEntryId" in linkLookup && linkLookup.cogsJournalEntryId) {
+          await tx.journalEntry.updateMany({
+            where: { id: linkLookup.cogsJournalEntryId, status: "PENDING_APPROVAL" },
+            data: { status: "POSTED", documentStatus: "POSTED" },
+          });
+        }
+        if (req.targetType === "WorkerWageEntry") {
+          await tx.journalEntry.updateMany({
+            where: { sourceId: req.targetId, status: "PENDING_APPROVAL" },
+            data: { status: "POSTED", documentStatus: "POSTED" },
+          });
+        }
       }
 
       await tx.auditLog.create({
@@ -472,7 +641,7 @@ export async function decideApprovalRequest(
           titleAr: `معاد للتعديل: ${req.summaryAr}`,
           titleEn: `Returned for Edit: ${req.summaryEn || req.summaryAr}`,
           payload: { ...afterSnapshot, _reviewNotes: input.reviewNotes || "" },
-          totalAmount: req.amountBase,
+          totalAmount: Number(req.amountBase),
           currencyCode: req.currencyCode,
           visibility: "SHARED_WORKSPACE",
           actor: {

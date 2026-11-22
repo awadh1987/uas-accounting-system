@@ -1,68 +1,68 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { appendAuditLogTx } from "@/lib/serverBootstrap";
 import { normalizeRole } from "@/lib/permissions";
+import { clearSessionCookies } from "@/lib/authSession";
+import { resolveVerifiedActor } from "@/lib/apiHelpers";
 
-const AUTH_COOKIE_NAMES = ["uas_session", "uas_token", "uas_auth", "uas_user"];
-
-export async function POST(req: NextRequest) {
-  let actorId = "";
-  let actorRole = "";
-
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
+  let body: Record<string, unknown> = {};
   try {
-    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-    actorId = String(body.actorId || body.userId || "").trim();
-    actorRole = String(body.actorRole || body.role || "").trim();
+    body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   } catch {
-    // Ignore malformed or empty request body; logout must always succeed.
+    body = {};
   }
 
-  if (actorId || actorRole) {
-    try {
+  try {
+    const actor = await resolveVerifiedActor(body, req);
+    const targetUserId =
+      actor.authenticated && actor.userId
+        ? actor.userId
+        : String(body.actorId || body.userId || "").trim();
+
+    if (targetUserId) {
       const ipAddress =
         req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
         req.headers.get("x-real-ip") ||
         null;
 
-      if (actorId) {
-        const user = await prisma.user.findUnique({
-          where: { id: actorId },
-          select: { id: true, name: true, displayName: true, role: true },
-        });
+      const user = await prisma.user.findUnique({
+        where: { id: targetUserId },
+        select: { id: true, name: true, displayName: true, role: true },
+      });
 
-        if (user) {
-          const resolvedRole = actorRole || user.role;
-          const display = user.displayName || user.name;
-          await prisma.$transaction(async (tx) => {
-            await tx.auditLog.create({
-              data: {
-                userId: user.id,
-                action: "USER_LOGOUT",
-                entity: "User",
-                entityId: user.id,
-                details: {
-                  actorId: user.id,
-                  actorRole: resolvedRole,
-                  event: "USER_LOGOUT",
-                },
-                ipAddress,
-              },
-            });
-
-            await appendAuditLogTx(tx, {
+      if (user) {
+        const resolvedRole = normalizeRole(user.role);
+        const display = user.displayName || user.name;
+        await prisma.$transaction(async (tx) => {
+          await tx.auditLog.create({
+            data: {
               userId: user.id,
-              userDisplay: `${display} (${normalizeRole(resolvedRole)})`,
-              userRole: resolvedRole,
-              actionType: "USER_LOGOUT",
-              entityReference: user.id,
-              details: `تم تسجيل الخروج بنجاح لحساب ${display}`,
-            });
+              action: "USER_LOGOUT",
+              entity: "User",
+              entityId: user.id,
+              details: {
+                actorId: user.id,
+                actorRole: resolvedRole,
+                event: "USER_LOGOUT",
+              },
+              ipAddress,
+            },
           });
-        }
+
+          await appendAuditLogTx(tx, {
+            userId: user.id,
+            userDisplay: `${display} (${resolvedRole})`,
+            userRole: resolvedRole,
+            actionType: "USER_LOGOUT",
+            entityReference: user.id,
+            details: `تم تسجيل الخروج بنجاح لحساب ${display}`,
+          });
+        });
       }
-    } catch (err) {
-      console.warn("POST /api/auth/logout audit log skipped:", err);
     }
+  } catch (err) {
+    console.warn("POST /api/auth/logout audit log skipped:", err);
   }
 
   const res = NextResponse.json(
@@ -73,15 +73,7 @@ export async function POST(req: NextRequest) {
       },
     }
   );
-  for (const cookieName of AUTH_COOKIE_NAMES) {
-    res.cookies.set(cookieName, "", {
-      maxAge: 0,
-      path: "/",
-      httpOnly: true,
-      sameSite: "lax",
-    });
-  }
-
+  clearSessionCookies(res);
   return res;
-}
+});
 

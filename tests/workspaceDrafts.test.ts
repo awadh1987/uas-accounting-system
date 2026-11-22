@@ -76,7 +76,7 @@ describe("Phase 4 — Universal Workspace Drafts Module (حفظ كمسودة)", 
       actor: { userId: "u-colleague", userName: "سالم المراجع", userRole: "CHIEF_ACCOUNTANT" },
     });
 
-    assert.equal(updated.totalAmount, 3000);
+    assert.equal(Number(updated.totalAmount), 3000);
     assert.equal(updated.updatedByName, "سالم المراجع");
     const linkedGl = await prisma.journalEntry.count({
       where: { OR: [{ reference: draft.draftNumber }, { narrationAr: { contains: TAG } }] },

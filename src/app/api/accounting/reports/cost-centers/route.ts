@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { costCenterProfitAndLoss } from "@/lib/accountingCoreEngine";
-import { jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
+    const auth = await authorizeApiAction({}, req, { moduleId: "reports" });
+    if (!auth.ok) return auth.response;
+
     const { searchParams } = new URL(req.url);
     const report = await costCenterProfitAndLoss({
       costCenterId: searchParams.get("costCenterId") || undefined,
@@ -17,4 +21,4 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/accounting/reports/cost-centers error:", error);
     return jsonError("Failed to build cost center report / تعذر توليد تقرير مراكز التكلفة", 500);
   }
-}
+});

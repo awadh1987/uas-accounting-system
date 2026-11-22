@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { NextRequest } from "next/server";
 import {
   buildTenantWorkspaceUrl,
+  ensureTenantRegistered,
   extractSubdomainSlugFromHost,
   extractTenantResolutionFromRequest,
   generateTenantSlug,
@@ -13,8 +14,10 @@ import {
   resolveTenantDbFilePath,
   runWithTenant,
   transliterateArabicToAscii,
+  unregisterTenant,
   validateTenantSlug,
 } from "../src/lib/tenant";
+import { GET as publicTenantGET } from "../src/app/api/public/tenant/route";
 import { prisma } from "../src/lib/prisma";
 import {
   canonicalizeLicensePayload,
@@ -134,13 +137,72 @@ describe("Multi-Tenant Subdomain-on-Key, Slug Validation & Tenant Routing", () =
     assert.equal(r3.slug, "aden-trading");
     assert.equal(r3.tenantId, "aden_trading");
 
-    // 4. Root default fallback
+    // 4. Query param ?slug= resolution
+    const querySlugReq = new NextRequest("https://qat.world/api/public/tenant?slug=al-jabri", {
+      headers: { host: "qat.world" },
+    });
+    const rQuery = extractTenantResolutionFromRequest(querySlugReq);
+    assert.equal(rQuery.source, "query");
+    assert.equal(rQuery.slug, "al-jabri");
+    assert.equal(rQuery.tenantId, "al_jabri");
+
+    // 5. Root default fallback
     const defReq = new NextRequest("https://qat.world/api/bootstrap", {
       headers: { host: "qat.world" },
     });
     const r4 = extractTenantResolutionFromRequest(defReq);
     assert.equal(r4.source, "default");
     assert.equal(r4.tenantId, "default");
+  });
+
+  it("resolves GET /api/public/tenant?slug=<slug> for registered tenants and returns 404 for unknown slugs", async () => {
+    const slug = `alwaha-${Date.now().toString().slice(-5)}`;
+    const normId = normalizeTenantId(slug);
+    ensureTenantRegistered(normId, "شركة الواحة للتجارة", {
+      slug,
+      nameAr: "شركة الواحة للتجارة",
+      nameEn: "Alwaha Trading Co",
+    });
+
+    try {
+      await runWithTenant(normId, async () => {
+        await prisma.enterpriseProfile.updateMany({
+          where: { id: "default" },
+          data: { tenantSlug: slug, legalNameAr: "شركة الواحة للتجارة" },
+        });
+      });
+
+      const okReq = new NextRequest(`http://127.0.0.1:3000/api/public/tenant?slug=${slug}`, {
+        headers: { host: "127.0.0.1:3000" },
+      });
+      const okRes = await publicTenantGET(okReq);
+      assert.equal(okRes.status, 200);
+      const okJson = await okRes.json();
+      assert.equal(okJson.isTenantWorkspace, true);
+      assert.equal(okJson.tenantSlug, slug);
+      assert.equal(okJson.tenantId, normId);
+      assert.equal(okJson.resolutionSource, "query");
+      assert.equal(okJson.profile?.legalNameAr, "شركة الواحة للتجارة");
+
+      const notFoundReq = new NextRequest("https://qat.world/api/public/tenant?slug=unregistered-co-999", {
+        headers: { host: "qat.world" },
+      });
+      const notFoundRes = await publicTenantGET(notFoundReq);
+      assert.equal(notFoundRes.status, 404);
+      const nfJson = await notFoundRes.json();
+      assert.equal(nfJson.code, "TENANT_NOT_FOUND");
+    } finally {
+      unregisterTenant(normId);
+      await resetTenantClientsForTests();
+      const dbPath = resolveTenantDbFilePath(normId);
+      if (dbPath) {
+        for (const f of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
+          if (fs.existsSync(f)) {
+            try { fs.unlinkSync(f); } catch {}
+          }
+        }
+      }
+    }
   });
 
   it("signs & verifies v3 subdomain-on-key licenses and propagates tenant_slug & tenant_url without breaking v2 compatibility", async () => {

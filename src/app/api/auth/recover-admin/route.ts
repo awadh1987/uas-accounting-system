@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import {
   companyNamesMatch,
@@ -65,7 +65,7 @@ function clearRateLimit(ip: string): void {
   recoveryAttempts.delete(ip);
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
 
@@ -254,4 +254,4 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/auth/recover-admin error:", error);
     return jsonError(`تعذر استعادة كلمة المرور: ${(error as Error).message}`, 500);
   }
-}
+});

@@ -22,7 +22,7 @@ import {
   ensureTenantRegistered,
 } from "../src/lib/tenant";
 import { safeDeleteOrArchiveUser } from "../src/lib/userLifecycle";
-import { hashPassword } from "../src/lib/serverBootstrap";
+import { hashPassword, verifyPassword } from "../src/lib/serverBootstrap";
 import {
   createUasbakEnvelope,
   validateAndInspectCandidateDb,
@@ -202,8 +202,8 @@ describe("Isolated Multi-Tenant Databases, Multi-Device Sync & Notification Fixe
           },
         });
         assert.equal(updated.mustChangePassword, true);
-        assert.equal(updated.passwordHash, hashPassword(newPassword));
-        assert.notEqual(updated.passwordHash, hashPassword("WrongPassword"));
+        assert.equal(verifyPassword(newPassword, updated.passwordHash), true);
+        assert.equal(verifyPassword("WrongPassword", updated.passwordHash), false);
       });
     });
   });

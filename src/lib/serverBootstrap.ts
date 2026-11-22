@@ -44,8 +44,54 @@ type ProjectWithRelations = Prisma.ProjectGetPayload<{
   };
 }>;
 
-export function hashPassword(password: string): string {
-  return crypto.createHash("sha256").update(password).digest("hex");
+const SCRYPT_PREFIX = "scrypt$";
+const SCRYPT_KEYLEN = 64;
+
+export function hashPassword(password: string, explicitSalt?: string): string {
+  const salt = explicitSalt || crypto.randomBytes(16).toString("hex");
+  const derived = crypto.scryptSync(password, salt, SCRYPT_KEYLEN).toString("hex");
+  return `${SCRYPT_PREFIX}${salt}$${derived}`;
+}
+
+export function isLegacySha256Hash(storedHash: string | null | undefined): boolean {
+  if (!storedHash || typeof storedHash !== "string") return false;
+  return /^[a-f0-9]{64}$/i.test(storedHash.trim());
+}
+
+export function verifyPassword(
+  password: string,
+  storedHash: string | null | undefined
+): boolean {
+  if (!password || !storedHash || typeof storedHash !== "string") return false;
+  const trimmed = storedHash.trim();
+  if (!trimmed) return false;
+
+  if (trimmed.startsWith(SCRYPT_PREFIX)) {
+    const parts = trimmed.split("$");
+    if (parts.length !== 3 || !parts[1] || !parts[2]) return false;
+    const [, salt, expectedHex] = parts;
+    try {
+      const derived = crypto.scryptSync(password, salt, SCRYPT_KEYLEN);
+      const expected = Buffer.from(expectedHex, "hex");
+      if (derived.length !== expected.length) return false;
+      return crypto.timingSafeEqual(derived, expected);
+    } catch {
+      return false;
+    }
+  }
+
+  if (isLegacySha256Hash(trimmed)) {
+    try {
+      const legacyDigest = crypto.createHash("sha256").update(password).digest();
+      const expected = Buffer.from(trimmed, "hex");
+      if (legacyDigest.length !== expected.length) return false;
+      return crypto.timingSafeEqual(legacyDigest, expected);
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
 }
 
 export function generateAuditHash(payload: string): string {
@@ -217,7 +263,7 @@ function mapExchangeRates(rates: CurrencyRate[]): Record<CurrencyCode, number> {
       r.currencyCode === "SAR" ||
       r.currencyCode === "USD"
     ) {
-      exchangeRates[r.currencyCode] = r.rateToYER;
+      exchangeRates[r.currencyCode] = Number(r.rateToYER);
     }
   }
   return exchangeRates;
@@ -243,8 +289,8 @@ function mapProjects(projects: ProjectWithRelations[]): {
         parentProjectId: p.parentProjectId || "",
         vendorId: p.vendorId ?? null,
         ownerVendorName: p.ownerVendor?.nameAr ?? null,
-        budgetTotal: Number(p.budgetTotal) || p.estimatedValue,
-        estimatedValue: p.estimatedValue,
+        budgetTotal: Number(p.budgetTotal) || Number(p.estimatedValue),
+        estimatedValue: Number(p.estimatedValue),
         plannedHarvests: p.plannedHarvestCount,
         status: p.status,
         notes: p.notes,
@@ -308,8 +354,8 @@ function mapTreasury(accounts: TreasuryAccount[]): UasTreasuryAccount[] {
     notes: t.notes,
     accountId: t.accountId,
     currencyCode: t.currencyCode || t.currency,
-    balance: Number(t.balance) || t.balanceYER,
-    balanceYER: t.balanceYER,
+    balance: Number(t.balance) || Number(t.balanceYER),
+    balanceYER: Number(t.balanceYER),
   }));
 }
 
@@ -324,7 +370,7 @@ function mapInstallments(
     targetName: inst.targetName,
     phone: inst.phone,
     treasuryId: inst.treasuryAccountId,
-    amount: inst.amountYER,
+    amount: Number(inst.amountYER),
     qrVerificationHash: inst.qrVerificationHash,
     date: inst.paymentDate,
     notes: inst.notes,
@@ -363,9 +409,9 @@ function mapExpenses(expenses: OperatingExpense[]): UasOperatingExpense[] {
     harvest: e.harvestName,
     category: e.category,
     subType: e.subType,
-    qty: e.quantity,
-    unitPrice: e.unitPrice,
-    total: e.totalAmount,
+    qty: Number(e.quantity),
+    unitPrice: Number(e.unitPrice),
+    total: Number(e.totalAmount),
     date: e.expenseDate,
     notes: e.notes,
   }));
@@ -379,11 +425,11 @@ function mapWorkers(workers: WorkerWageEntry[]): UasWorkerWage[] {
     subProjectId: w.subProjectId ?? null,
     harvest: w.harvestName,
     name: w.workerName,
-    dailyWage: w.dailyWage,
-    days: w.daysWorked,
-    total: w.totalWage,
-    credit: w.creditAmount,
-    debit: w.debitBalance,
+    dailyWage: Number(w.dailyWage),
+    days: Number(w.daysWorked),
+    total: Number(w.totalWage),
+    credit: Number(w.creditAmount),
+    debit: Number(w.debitBalance),
     date: w.workDate,
     notes: w.notes,
   }));
@@ -407,10 +453,10 @@ function mapSales(sales: SaleTransaction[]): UasSaleTransaction[] {
     phone: s.customerPhone,
     grade: s.productGrade,
     bundles: s.bundlesCount,
-    price: s.unitPrice,
-    total: s.totalAmount,
-    credit: s.creditPaid,
-    debit: s.debitReceivable,
+    price: Number(s.unitPrice),
+    total: Number(s.totalAmount),
+    credit: Number(s.creditPaid),
+    debit: Number(s.debitReceivable),
     date: s.saleDate,
     voucherNo: s.receiptVoucherNo,
     notes: s.notes,

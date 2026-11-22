@@ -126,7 +126,7 @@ export async function precheckScopedReset(params: {
   let unpostedDraftsCount = 0;
   try {
     unpostedDraftsCount = await prisma.workspaceDraft.count({
-      where: { status: "DRAFT" },
+      where: { status: "ACTIVE_DRAFT" },
     });
   } catch {
     unpostedDraftsCount = 0;
@@ -366,8 +366,32 @@ export async function executeScopedReset(
       } else if (mod === "treasury") {
         deletedCounts.treasuryTransactions = (await tx.treasuryTransaction.deleteMany()).count;
         deletedCounts.bankDispatches = (await tx.bankPaymentDispatch.deleteMany()).count;
+        deletedCounts.installmentVouchers = (await tx.installmentVoucher.deleteMany()).count;
         deletedCounts.receiptVouchers = (await tx.receiptVoucher.deleteMany()).count;
         deletedCounts.paymentVouchers = (await tx.paymentVoucher.deleteMany()).count;
+
+        const treasuryJes = await tx.journalEntry.findMany({
+          where: {
+            sourceType: {
+              in: [
+                "TREASURY_TRANSFER",
+                "TREASURY_OPENING",
+                "CUSTOMER_RECEIPT",
+                "VENDOR_PAYMENT",
+                "WORKER_PAYOUT",
+              ],
+            },
+          },
+          select: { id: true },
+        });
+        if (treasuryJes.length > 0) {
+          const ids = treasuryJes.map((j) => j.id);
+          await tx.journalEntry.deleteMany({ where: { sourceType: "REVERSAL", sourceId: { in: ids } } });
+          await tx.journalEntryLine.deleteMany({ where: { journalEntryId: { in: ids } } });
+          deletedCounts.treasuryJournalEntries = (
+            await tx.journalEntry.deleteMany({ where: { id: { in: ids } } })
+          ).count;
+        }
 
         await tx.treasuryAccount.updateMany({
           data: { balance: 0, balanceYER: 0, dailyUsedAmount: 0 },
@@ -421,20 +445,103 @@ export async function executeScopedReset(
           await tx.harvestCycle.deleteMany({ where: { projectId: unitId } })
         ).count;
 
-        // Delete journal lines tagged with this project or its cost center
+        // Delete ONLY complete, balanced JournalEntry graphs belonging cleanly to this project
         const proj = await tx.project.findUnique({
           where: { id: unitId },
           select: { costCenterId: true },
         });
-        if (proj?.costCenterId) {
-          deletedCounts.projectJournalLines = (
-            await tx.journalEntryLine.deleteMany({ where: { costCenterId: proj.costCenterId } })
+        const projectJes = await tx.journalEntry.findMany({
+          where: {
+            OR: [
+              { projectId: unitId },
+              { lines: { some: { projectId: unitId } } },
+              ...(proj?.costCenterId
+                ? [{ lines: { some: { costCenterId: proj.costCenterId } } }]
+                : []),
+            ],
+          },
+          include: { lines: true },
+        });
+        const fullDeleteIds: string[] = [];
+        const partialClearLineIds: string[] = [];
+        const partialClearHeaderIds: string[] = [];
+        for (const je of projectJes) {
+          const hasOtherProjectLines = je.lines.some(
+            (l) => l.projectId && l.projectId !== unitId
+          );
+          const allBelongToUnit =
+            !hasOtherProjectLines &&
+            (je.projectId === unitId ||
+              (je.lines.length > 0 &&
+                je.lines.every(
+                  (l) =>
+                    l.projectId === unitId ||
+                    (proj?.costCenterId ? l.costCenterId === proj.costCenterId : false)
+                )));
+          if (allBelongToUnit) {
+            fullDeleteIds.push(je.id);
+          } else {
+            if (je.projectId === unitId) partialClearHeaderIds.push(je.id);
+            for (const l of je.lines) {
+              if (
+                l.projectId === unitId ||
+                (proj?.costCenterId && l.costCenterId === proj.costCenterId)
+              ) {
+                partialClearLineIds.push(l.id);
+              }
+            }
+          }
+        }
+        if (partialClearHeaderIds.length > 0) {
+          await tx.journalEntry.updateMany({
+            where: { id: { in: partialClearHeaderIds } },
+            data: { projectId: null, subProjectId: null },
+          });
+        }
+        if (partialClearLineIds.length > 0) {
+          await tx.journalEntryLine.updateMany({
+            where: { id: { in: partialClearLineIds } },
+            data: { projectId: null, subProjectId: null, harvestCycleId: null, costCenterId: null },
+          });
+        }
+        if (fullDeleteIds.length > 0) {
+          await tx.journalEntryLine.deleteMany({ where: { journalEntryId: { in: fullDeleteIds } } });
+          deletedCounts.projectJournalEntries = (
+            await tx.journalEntry.deleteMany({ where: { id: { in: fullDeleteIds } } })
           ).count;
+          deletedCounts.projectJournalLines = fullDeleteIds.length;
         }
       } else if (unitType === "costCenter" && unitId) {
-        deletedCounts.costCenterJournalLines = (
-          await tx.journalEntryLine.deleteMany({ where: { costCenterId: unitId } })
-        ).count;
+        // Delete ONLY complete, balanced JournalEntry graphs whose lines belong strictly to this cost center;
+        // detach shared entries instead of creating single-sided unbalanced headers.
+        const ccJes = await tx.journalEntry.findMany({
+          where: { lines: { some: { costCenterId: unitId } } },
+          include: { lines: true },
+        });
+        const fullDeleteIds: string[] = [];
+        const partialLineIds: string[] = [];
+        for (const je of ccJes) {
+          if (je.lines.length > 0 && je.lines.every((l) => l.costCenterId === unitId)) {
+            fullDeleteIds.push(je.id);
+          } else {
+            for (const l of je.lines) {
+              if (l.costCenterId === unitId) partialLineIds.push(l.id);
+            }
+          }
+        }
+        if (partialLineIds.length > 0) {
+          await tx.journalEntryLine.updateMany({
+            where: { id: { in: partialLineIds } },
+            data: { costCenterId: null },
+          });
+        }
+        if (fullDeleteIds.length > 0) {
+          await tx.journalEntryLine.deleteMany({ where: { journalEntryId: { in: fullDeleteIds } } });
+          deletedCounts.costCenterJournalEntries = (
+            await tx.journalEntry.deleteMany({ where: { id: { in: fullDeleteIds } } })
+          ).count;
+          deletedCounts.costCenterJournalLines = fullDeleteIds.length;
+        }
       }
     } else if (scope === "factory") {
       // 1. Transactional & Document Collections
@@ -470,14 +577,25 @@ export async function executeScopedReset(
 
       // 3. Chart of Accounts Formatting
       if (coaMode === "blank_coa") {
-        // Keep root Gen-1 categories (Assets, Liabilities, Equity, Revenue, Expenses) and remove sub-leaves
+        // Clear FK links referencing non-root COA rows before purging child accounts
+        await tx.treasuryAccount.deleteMany();
+        await tx.vendor.deleteMany();
+        await tx.customer.deleteMany();
+        await tx.worker.updateMany({ data: { accountId: null, glAccountId: null } });
+        await tx.project.updateMany({ data: { glAccountId: null } });
+        await tx.warehouse.updateMany({ data: { glAccountId: null } });
+        await tx.account.updateMany({
+          data: { parentId: null, parentAccountId: null },
+        });
+        // Keep Gen-1 root classes ("100000".."500000") intact and remove child accounts
         await tx.account.deleteMany({
           where: {
-            code: { notIn: ["1", "2", "3", "4", "5"] },
+            code: { notIn: ["100000", "200000", "300000", "400000", "500000", "1", "2", "3", "4", "5"] },
           },
         });
         await tx.account.updateMany({
-          data: { isPostable: true, isPosting: true },
+          where: { code: { in: ["100000", "200000", "300000", "400000", "500000"] } },
+          data: { isPostable: false, isPosting: false },
         });
       }
 

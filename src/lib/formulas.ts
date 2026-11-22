@@ -1,6 +1,7 @@
 /**
  * Pure accounting formulas and deterministic verification utilities grounded in UAS.xlsx.
  */
+import { dMul, dSub } from "@/lib/decimalMath";
 
 export type CurrencyCode = "YER" | "SAR" | "USD";
 
@@ -14,9 +15,7 @@ export const DEFAULT_EXCHANGE_RATES: Record<CurrencyCode, number> = {
  * Operating expense total = quantity * unitPrice
  */
 export function computeOperatingExpenseTotal(quantity: number, unitPrice: number): number {
-  const q = Number(quantity) || 0;
-  const p = Number(unitPrice) || 0;
-  return q * p;
+  return dMul(Number(quantity) || 0, Number(unitPrice) || 0, 4);
 }
 
 /**
@@ -29,11 +28,8 @@ export function computeWorkerWageTotals(
   daysWorked: number,
   creditAmount: number
 ): { totalWage: number; debitBalance: number } {
-  const wage = Number(dailyWage) || 0;
-  const days = Number(daysWorked) || 0;
-  const credit = Number(creditAmount) || 0;
-  const totalWage = wage * days;
-  const debitBalance = totalWage - credit;
+  const totalWage = dMul(Number(dailyWage) || 0, Number(daysWorked) || 0, 4);
+  const debitBalance = dSub(totalWage, Number(creditAmount) || 0, 4);
   return { totalWage, debitBalance };
 }
 
@@ -47,11 +43,8 @@ export function computeSaleTotals(
   unitPrice: number,
   creditPaid: number
 ): { totalAmount: number; debitReceivable: number } {
-  const bundles = Number(bundlesCount) || 0;
-  const price = Number(unitPrice) || 0;
-  const credit = Number(creditPaid) || 0;
-  const totalAmount = bundles * price;
-  const debitReceivable = totalAmount - credit;
+  const totalAmount = dMul(Number(bundlesCount) || 0, Number(unitPrice) || 0, 4);
+  const debitReceivable = dSub(totalAmount, Number(creditPaid) || 0, 4);
   return { totalAmount, debitReceivable };
 }
 

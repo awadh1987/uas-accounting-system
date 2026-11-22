@@ -1,4 +1,8 @@
+import crypto from "node:crypto";
 import { prisma } from "@/lib/prisma";
+import { parseAccountingSettings } from "@/lib/accountingSettings";
+import { postJournalEntry } from "@/lib/accounting/ledgerService";
+import { dAdd, dDiv, dMul, dSub } from "@/lib/decimalMath";
 import { assertDateNotInClosedFiscalYear } from "@/lib/fiscalYearClosingEngine";
 import type {
   BankPayoutPayload,
@@ -44,7 +48,54 @@ export interface InboundWebhookInput {
     treasuryAccountId?: string;
     notes?: string;
   };
+  rawBody?: string;
   signatureHeader?: string | null;
+  requireSignature?: boolean;
+}
+
+export function computeWebhookSignature(
+  payload: Record<string, unknown> | string,
+  secret: string
+): string {
+  const bodyStr = typeof payload === "string" ? payload : JSON.stringify(payload);
+  return crypto.createHmac("sha256", secret).update(bodyStr, "utf8").digest("hex");
+}
+
+export function verifyWebhookSignature(
+  payload: Record<string, unknown> | string,
+  signatureHeader: string | null | undefined,
+  secret: string
+): boolean {
+  if (!signatureHeader || !secret) return false;
+  const cleaned = signatureHeader
+    .trim()
+    .replace(/^sha256=/i, "")
+    .replace(/^hmac-sha256=/i, "")
+    .trim()
+    .toLowerCase();
+  if (!cleaned) return false;
+  try {
+    const expectedHex = computeWebhookSignature(payload, secret).toLowerCase();
+    const gotBuf = Buffer.from(cleaned, "utf8");
+    const expectedBuf = Buffer.from(expectedHex, "utf8");
+    if (gotBuf.length !== expectedBuf.length) return false;
+    return crypto.timingSafeEqual(gotBuf, expectedBuf);
+  } catch {
+    return false;
+  }
+}
+
+function resolveSecretFromCredentialsEnc(enc: string | null | undefined): string | null {
+  if (!enc || !enc.trim()) return null;
+  const trimmed = enc.trim();
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const candidate = parsed.webhookSecret || parsed.hmacSecret || parsed.secret;
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  } catch {
+    // Plain secret fallback
+  }
+  return trimmed;
 }
 
 export interface StatementRowInput {
@@ -160,8 +211,8 @@ export async function executeBankOrWalletPayout(
     return {
       ok: true,
       dispatch: existing as unknown as UasBankPaymentDispatch,
-      feeAmount: existing.feeAmount,
-      totalDebited: existing.amount + existing.feeAmount,
+      feeAmount: Number(existing.feeAmount),
+      totalDebited: dAdd(existing.amount, existing.feeAmount, 4),
       externalReferenceId: existing.externalReferenceId,
       journalEntryId: existing.journalEntryId,
       messageAr: `تم استرجاع العملية مسبقاً (${existing.dispatchNumber}) - محصنة ضد التكرار.`,
@@ -212,7 +263,6 @@ export async function executeBankOrWalletPayout(
     // Currency & Base Conversion
     const rate = Number(exchangeRate) > 0 ? Number(exchangeRate) : 1;
     const baseAmount = amount * rate;
-    const baseFeeAmount = feeAmount * rate;
     const baseTotalDebited = totalDebited * rate;
 
     // 4. Provider Connector & Sandbox Simulation
@@ -299,71 +349,85 @@ export async function executeBankOrWalletPayout(
     const count = await tx.bankPaymentDispatch.count();
     const dispatchNumber = `DSP-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`;
 
-    // 6. Balanced Double-Entry General Ledger Posting
-    // Credit: Treasury Bank/Wallet account (111190xxx / 111290xxx)
-    // Debit: Beneficiary / Expense Account
-    // Debit: Bank Transfer Fee Expense (531201) if feeAmount > 0
-    let targetDebitAccountId = treasury.accountId;
+    // 6. Centralized Balanced Double-Entry GL Posting via postJournalEntry()
+    const settingsRow = await tx.systemSettings.findUnique({ where: { id: "default" } });
+    const controlAccounts = parseAccountingSettings(settingsRow).controlAccounts;
+    let targetDebitAccountId: string | undefined;
 
-    // Resolve target account if worker or vendor
     if (sourceVoucherType === "WORKER_WAGE") {
-      const workerAccount = await tx.account.findFirst({
-        where: { code: { startsWith: "212190" }, isPostable: true },
+      const wageRow = await tx.workerWageEntry.findUnique({
+        where: { id: sourceVoucherId },
+        include: { worker: { select: { accountId: true } } },
       });
-      if (workerAccount) targetDebitAccountId = workerAccount.id;
-    } else if (sourceVoucherType === "VENDOR_BILL" || sourceVoucherType === "PAYMENT_VOUCHER") {
-      const vendorAccount = await tx.account.findFirst({
-        where: { code: { startsWith: "211190" }, isPostable: true },
+      if (wageRow?.worker?.accountId) {
+        targetDebitAccountId = wageRow.worker.accountId;
+      } else {
+        const workerAccount = await tx.account.findFirst({
+          where: { code: { startsWith: "212190" }, isPostable: true },
+        });
+        targetDebitAccountId = workerAccount?.id;
+      }
+    } else if (sourceVoucherType === "VENDOR_BILL") {
+      const billRow = await tx.vendorBill.findFirst({
+        where: { OR: [{ id: sourceVoucherId }, { billNumber: sourceVoucherId }] },
+        include: { vendor: { select: { accountId: true } } },
       });
-      if (vendorAccount) targetDebitAccountId = vendorAccount.id;
-    } else {
-      const operatingExpenseAcc = await tx.account.findFirst({
-        where: { code: "521101" },
+      if (billRow?.vendor?.accountId) {
+        targetDebitAccountId = billRow.vendor.accountId;
+      }
+    } else if (sourceVoucherType === "PAYMENT_VOUCHER") {
+      const pvRow = await tx.paymentVoucher.findFirst({
+        where: { OR: [{ id: sourceVoucherId }, { voucherNumber: sourceVoucherId }] },
+        include: { vendor: { select: { accountId: true } } },
       });
-      if (operatingExpenseAcc) targetDebitAccountId = operatingExpenseAcc.id;
+      if (pvRow?.vendor?.accountId) {
+        targetDebitAccountId = pvRow.vendor.accountId;
+      } else {
+        const vendorAccount = await tx.account.findFirst({
+          where: { code: { startsWith: "211190" }, isPostable: true },
+        });
+        targetDebitAccountId = vendorAccount?.id;
+      }
     }
 
-    // Find or fallback bank fee account
-    const feeExpenseAccount = await tx.account.findFirst({
-      where: { code: "531201" },
-    });
+    if (!targetDebitAccountId) {
+      const fallbackCode =
+        sourceVoucherType === "WORKER_WAGE"
+          ? "212101"
+          : sourceVoucherType === "VENDOR_BILL" || sourceVoucherType === "PAYMENT_VOUCHER"
+          ? controlAccounts.apAccount || "211101"
+          : controlAccounts.operatingExpenseAccount || "524101";
+      const fallbackAcc = await tx.account.findUnique({ where: { code: fallbackCode } });
+      targetDebitAccountId = fallbackAcc?.id ?? treasury.accountId;
+    }
 
-    const entryNumber = `JV-DSP-${dispatchNumber}`;
-    const lines = [
-      // Credit: Treasury Account for total debited (payout + fee)
+    const feeAccountCode = controlAccounts.bankFeeAccount || "531201";
+    const feeExpenseAccount = await tx.account.findUnique({ where: { code: feeAccountCode } });
+    const validUserId = await resolveExistingUserId(tx, actor.userId, actor.userName);
+
+    const jeLines = [
       {
         accountId: treasury.accountId,
-        debit: 0,
         credit: totalDebited,
-        debitBase: 0,
-        creditBase: baseTotalDebited,
-        currencyCode,
+        currency: currencyCode,
         exchangeRate: rate,
         costCenterId,
         memo: `صرف بنكي/محفظة (${providerMeta.ar}) للمستفيد: ${beneficiaryName} - مرجع: ${externalReferenceId}`,
       },
-      // Debit: Beneficiary Account for payout amount
       {
         accountId: targetDebitAccountId,
         debit: amount,
-        credit: 0,
-        debitBase: baseAmount,
-        creditBase: 0,
-        currencyCode,
+        currency: currencyCode,
         exchangeRate: rate,
         costCenterId,
         memo: `حوالة مصرفية (${providerMeta.ar}) إلى ${beneficiaryName} (${beneficiaryAccountOrPhone})`,
       },
-      // Debit: Bank/Wallet Transfer Fee (if > 0)
       ...(feeAmount > 0 && feeExpenseAccount
         ? [
             {
               accountId: feeExpenseAccount.id,
               debit: feeAmount,
-              credit: 0,
-              debitBase: baseFeeAmount,
-              creditBase: 0,
-              currencyCode,
+              currency: currencyCode,
               exchangeRate: rate,
               costCenterId,
               memo: `عمولة تحويل بنكي (${providerMeta.ar}) - ${beneficiaryName}`,
@@ -372,22 +436,18 @@ export async function executeBankOrWalletPayout(
         : []),
     ];
 
-    const validUserId = await resolveExistingUserId(tx, actor.userId, actor.userName);
-
-    const journalEntry = await tx.journalEntry.create({
-      data: {
-        entryNumber,
-        date: new Date(),
-        reference: externalReferenceId,
-        narrationAr: `تحويل بنكي آلي (${providerMeta.ar}) - سند ${sourceVoucherType} #${sourceVoucherId}`,
-        narrationEn: `Automated Bank Transfer (${providerMeta.en}) - Voucher ${sourceVoucherType} #${sourceVoucherId}`,
-        status: "POSTED",
-        documentStatus: "POSTED",
-        createdById: validUserId,
-        lines: {
-          create: lines,
-        },
-      },
+    const journalEntry = await postJournalEntry({
+      tx,
+      date: new Date(),
+      costCenterId,
+      reference: externalReferenceId,
+      narrationAr: `تحويل بنكي آلي (${providerMeta.ar}) - سند ${sourceVoucherType} #${sourceVoucherId}`,
+      narrationEn: `Automated Bank Transfer (${providerMeta.en}) - Voucher ${sourceVoucherType} #${sourceVoucherId}`,
+      sourceType: "BANK_GATEWAY_DISPATCH",
+      sourceId: sourceVoucherId,
+      createdById: validUserId,
+      status: "POSTED",
+      lines: jeLines,
     });
 
     // 7. Record BankPaymentDispatch
@@ -418,12 +478,16 @@ export async function executeBankOrWalletPayout(
     });
 
     // 8. Update Treasury Account Balances & Daily Counter
+    const trCur = (treasury.currency || "YER").toUpperCase();
+    const trRateRow = trCur === "YER" ? null : await tx.currencyRate.findUnique({ where: { currencyCode: trCur } });
+    const trRate = trCur === "YER" ? 1 : Number(trRateRow?.rateToYER) || rate;
+    const balanceDec = dDiv(baseTotalDebited, trRate, 4);
     await tx.treasuryAccount.update({
       where: { id: treasuryAccountId },
       data: {
-        balance: { decrement: totalDebited },
-        balanceYER: { decrement: baseTotalDebited },
-        dailyUsedAmount: dailyUsed + amount,
+        balance: dSub(treasury.balance, balanceDec, 4),
+        balanceYER: dSub(treasury.balanceYER, baseTotalDebited, 4),
+        dailyUsedAmount: dAdd(dailyUsed, amount, 4),
         lastDailyResetDate: todayStr,
       },
     });
@@ -472,6 +536,29 @@ export async function processInboundCollectionWebhook(
   input: InboundWebhookInput
 ): Promise<{ ok: boolean; duplicate?: boolean; dispatchId?: string; message: string }> {
   const { provider, payload } = input;
+
+  if (input.requireSignature || input.signatureHeader) {
+    const targetTreasury = payload.treasuryAccountId
+      ? await prisma.treasuryAccount.findUnique({
+          where: { id: payload.treasuryAccountId },
+          select: { gatewayCredentialsEnc: true },
+        })
+      : await prisma.treasuryAccount.findFirst({
+          where: { gatewayProvider: provider, isActive: true },
+          select: { gatewayCredentialsEnc: true },
+        });
+    const secret =
+      resolveSecretFromCredentialsEnc(targetTreasury?.gatewayCredentialsEnc) ||
+      process.env.UAS_WEBHOOK_SECRET ||
+      "uas-default-webhook-hmac-secret-2026";
+    const verified =
+      (input.rawBody && verifyWebhookSignature(input.rawBody, input.signatureHeader, secret)) ||
+      verifyWebhookSignature(payload as Record<string, unknown>, input.signatureHeader, secret);
+    if (!verified) {
+      throw new Error("INVALID_WEBHOOK_SIGNATURE: Webhook HMAC signature verification failed");
+    }
+  }
+
   const eventId = payload.eventId || payload.referenceId;
   const idempotencyKey = `WH-${provider}-${eventId || Date.now()}`;
 
@@ -512,7 +599,92 @@ export async function processInboundCollectionWebhook(
     const dispatchNumber = `DSP-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`;
 
     const amount = Number(payload.amount) || 0;
-    const currencyCode = payload.currency || treasury.currencyCode || "YER";
+    const currencyCode = (payload.currency || treasury.currencyCode || "YER").toUpperCase();
+    const curRateRow =
+      currencyCode === "YER"
+        ? null
+        : await tx.currencyRate.findUnique({ where: { currencyCode } });
+    const fxRate =
+      currencyCode === "YER"
+        ? 1
+        : Number(curRateRow?.rateToYER) || (currencyCode === "SAR" ? 425 : currencyCode === "USD" ? 1620 : 1);
+    const baseAmount = dMul(amount, fxRate, 4);
+
+    // Match SalesInvoice / Customer if supplied, otherwise post to Customer Advances (213101)
+    let matchedInvoice = payload.invoiceNumber
+      ? await tx.salesInvoice.findFirst({
+          where: { invoiceNumber: payload.invoiceNumber },
+          include: { customer: true },
+        })
+      : null;
+    let matchedCustomer = matchedInvoice?.customer ?? null;
+    if (!matchedCustomer && (payload.customerCode || payload.customerPhone)) {
+      matchedCustomer = await tx.customer.findFirst({
+        where: {
+          OR: [
+            ...(payload.customerCode ? [{ code: payload.customerCode }] : []),
+            ...(payload.customerPhone ? [{ phone: payload.customerPhone }] : []),
+          ],
+        },
+      });
+    }
+
+    const creditAccountSpec = matchedCustomer?.accountId
+      ? { accountId: matchedCustomer.accountId }
+      : { accountCode: "213101" };
+    const validUserId = await resolveExistingUserId(tx, "system", `Gateway Webhook (${provider})`);
+
+    const collectionJe =
+      amount > 0
+        ? await postJournalEntry({
+            tx,
+            date: new Date(),
+            costCenterId: matchedInvoice?.costCenterId ?? matchedCustomer?.costCenterId ?? null,
+            reference: payload.referenceId || eventId || dispatchNumber,
+            narrationAr: `تحصيل إلكتروني وارد (${provider}) - ${matchedCustomer?.nameAr || payload.customerPhone || dispatchNumber}`,
+            narrationEn: `Inbound Collection Webhook (${provider}) - ${payload.referenceId || dispatchNumber}`,
+            sourceType: "BANK_GATEWAY_COLLECTION",
+            sourceId: matchedInvoice?.id ?? matchedCustomer?.id ?? dispatchNumber,
+            projectId: matchedInvoice?.projectId ?? null,
+            createdById: validUserId,
+            status: "POSTED",
+            lines: [
+              {
+                accountId: treasury.accountId,
+                debit: amount,
+                currency: currencyCode,
+                exchangeRate: fxRate,
+                memo: `توريد تحصيل إلكتروني إلى ${treasury.nameAr}`,
+              },
+              {
+                ...creditAccountSpec,
+                credit: amount,
+                currency: currencyCode,
+                exchangeRate: fxRate,
+                memo: matchedCustomer
+                  ? `تحصيل من العميل ${matchedCustomer.nameAr}`
+                  : `دفعة إلكترونية معلقة تحت الحساب (${provider})`,
+              },
+            ],
+          })
+        : null;
+
+    if (matchedInvoice && amount > 0) {
+      const invCur = (matchedInvoice.currency || "YER").toUpperCase();
+      const invRateRow = invCur === "YER" ? null : await tx.currencyRate.findUnique({ where: { currencyCode: invCur } });
+      const invRate = invCur === "YER" ? 1 : Number(invRateRow?.rateToYER) || (invCur === "SAR" ? 425 : 1620);
+      const amountInInvCurr = dDiv(baseAmount, invRate, 4);
+      const nextPaid = dAdd(matchedInvoice.paidAmount, amountInInvCurr, 4);
+      const nextDue = Math.max(0, dSub(matchedInvoice.totalAmount, nextPaid, 4));
+      await tx.salesInvoice.update({
+        where: { id: matchedInvoice.id },
+        data: {
+          paidAmount: nextPaid,
+          balanceDue: nextDue,
+          status: nextDue <= 0.005 ? "PAID" : "PARTIALLY_PAID",
+        },
+      });
+    }
 
     // Record reconciled dispatch
     const dispatch = await tx.bankPaymentDispatch.create({
@@ -521,30 +693,35 @@ export async function processInboundCollectionWebhook(
         treasuryAccountId: treasury.id,
         sourceVoucherType: "RECEIPT_VOUCHER",
         sourceVoucherId: payload.invoiceNumber || payload.referenceId || "COLLECTION",
-        beneficiaryName: payload.customerCode || payload.customerPhone || "Inbound Payer",
+        beneficiaryName: matchedCustomer?.nameAr || payload.customerCode || payload.customerPhone || "Inbound Payer",
         beneficiaryAccountOrPhone: payload.customerPhone || "N/A",
         amount,
         feeAmount: 0,
         currencyCode,
-        exchangeRate: 1,
-        baseAmount: amount,
+        exchangeRate: fxRate,
+        baseAmount,
         provider,
         externalReferenceId: payload.referenceId || eventId,
         status: "RECONCILED",
         rawResponseJson: JSON.stringify(payload),
         idempotencyKey,
-        executedById: "webhook",
+        journalEntryId: collectionJe?.id ?? null,
+        executedById: validUserId,
         executedByName: `Gateway Webhook (${provider})`,
         executedAt: new Date(),
       },
     });
 
-    // Credit revenue / customer and debit treasury
+    // Update Treasury Account balance & balanceYER atomically in treasury native currency + base YER
+    const trCur = (treasury.currency || "YER").toUpperCase();
+    const trRateRow = trCur === "YER" ? null : await tx.currencyRate.findUnique({ where: { currencyCode: trCur } });
+    const trRate = trCur === "YER" ? 1 : Number(trRateRow?.rateToYER) || fxRate;
+    const balanceInc = dDiv(baseAmount, trRate, 4);
     await tx.treasuryAccount.update({
       where: { id: treasury.id },
       data: {
-        balance: { increment: amount },
-        balanceYER: { increment: amount },
+        balance: dAdd(treasury.balance, balanceInc, 4),
+        balanceYER: dAdd(treasury.balanceYER, baseAmount, 4),
       },
     });
 
@@ -661,7 +838,7 @@ export async function autoReconcileStatementRows(input: {
 
     if (match) {
       matchedDispatchIds.add(match.id);
-      totalMatchedAmount += match.amount;
+      totalMatchedAmount = dAdd(totalMatchedAmount, match.amount, 4);
       matchedRows.push({
         statementRow: row,
         dispatchId: match.id,
@@ -674,12 +851,12 @@ export async function autoReconcileStatementRows(input: {
 
     // 2. Try matching by exact amount
     match = dispatches.find(
-      (d) => Math.abs(d.amount - rowAmt) < 0.01 && !matchedDispatchIds.has(d.id)
+      (d) => Math.abs(Number(d.amount) - rowAmt) < 0.01 && !matchedDispatchIds.has(d.id)
     );
 
     if (match) {
       matchedDispatchIds.add(match.id);
-      totalMatchedAmount += match.amount;
+      totalMatchedAmount = dAdd(totalMatchedAmount, match.amount, 4);
       matchedRows.push({
         statementRow: row,
         dispatchId: match.id,
@@ -698,7 +875,7 @@ export async function autoReconcileStatementRows(input: {
     .map((d) => ({
       dispatchId: d.id,
       dispatchNumber: d.dispatchNumber,
-      amount: d.amount,
+      amount: Number(d.amount),
       beneficiaryName: d.beneficiaryName,
       externalReferenceId: d.externalReferenceId,
       createdAt: d.createdAt.toISOString(),

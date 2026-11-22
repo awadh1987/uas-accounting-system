@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { recordAuditDiffTx } from "@/lib/accounting/ledgerService";
+import { prisma, withTenantRoute } from "@/lib/prisma";
+import { postJournalEntry, recordAuditDiffTx } from "@/lib/accounting/ledgerService";
+import { parseAccountingSettings } from "@/lib/accountingSettings";
+import { recordStockLayerInTx } from "@/lib/inventoryGlBridge";
+import { convertToBaseQty } from "@/lib/multiUnitInventoryEngine";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const projectId = searchParams.get("projectId");
@@ -87,9 +90,9 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/procurement/pos error:", error);
     return jsonError("تعذر تحميل أوامر الشراء", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, {
@@ -114,19 +117,80 @@ export async function POST(req: NextRequest) {
       const grnNumber = `GRN-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}-${Date.now().toString().slice(-3)}`;
 
       const grn = await prisma.$transaction(async (tx) => {
+        const warehouseId = body.warehouseId ? String(body.warehouseId).trim() : null;
+        const grnItems = Array.isArray(body.items) ? (body.items as Array<Record<string, unknown>>) : [];
+        let grnJournalEntryId: string | null = null;
+
         const created = await tx.goodsReceipt.create({
           data: {
             grnNumber,
             purchaseOrderId: po.id,
+            warehouseId,
             receivedTotal,
             hasVariance,
+            itemsJson: grnItems.length > 0 ? JSON.stringify(grnItems) : null,
             warehouseNotes: warehouseNotes || (hasVariance ? "يوجد فرق استلام مخزني" : "مطابق للكمية المطلوبة"),
           },
         });
+
+        // Bridge Step 2.1: If GRN specifies inventory items, post StockMovement + FIFO InventoryLot + DR Inventory / CR GRN-IR Clearing (215101)
+        const defaultWh = warehouseId
+          ? await tx.warehouse.findUnique({ where: { id: warehouseId } })
+          : await tx.warehouse.findFirst({ orderBy: { isDefault: "desc" } });
+        if (grnItems.length > 0 && defaultWh) {
+          const settingsRow = await tx.systemSettings.findUnique({ where: { id: "default" } });
+          const controlAccounts = parseAccountingSettings(settingsRow).controlAccounts;
+          for (const rawIt of grnItems) {
+            const itemId = rawIt.itemId ? String(rawIt.itemId).trim() : "";
+            const qty = Number(rawIt.quantity) || 0;
+            const unitCost = Number(rawIt.unitCost ?? rawIt.unitPrice ?? 0);
+            if (!itemId || qty <= 0) continue;
+            const itemRec = await tx.inventoryItem.findUnique({
+              where: { id: itemId },
+              include: { conversions: true },
+            });
+            if (!itemRec) continue;
+            const whId = rawIt.warehouseId ? String(rawIt.warehouseId).trim() : defaultWh.id;
+            const unitId = rawIt.unitId ? String(rawIt.unitId).trim() : itemRec.baseUnitId;
+            let factor = 1;
+            if (unitId !== itemRec.baseUnitId) {
+              const conv = itemRec.conversions.find((c) => c.unitId === unitId);
+              if (conv && Number(conv.factorToBase) > 0) factor = Number(conv.factorToBase);
+            }
+            const qtyBase = convertToBaseQty(qty, factor);
+            const unitCostBase = factor > 0 ? unitCost / factor : unitCost;
+            const resLayer = await recordStockLayerInTx(tx, {
+              itemId,
+              warehouseId: whId,
+              enteredQty: qty,
+              enteredUnitId: unitId,
+              factorToBase: factor,
+              qtyBase,
+              unitCostBase,
+              movementType: "PURCHASE_IN",
+              referenceType: "GRN",
+              referenceId: created.id,
+              projectId: po.projectId,
+              notes: `استلام مخزني ${grnNumber} لأمر الشراء ${po.poNumber}`,
+              postGl: true,
+              contraAccountCode: controlAccounts.grnClearingAccount || "215101",
+              createdById: auth.actor.userId ?? undefined,
+              postJeFn: postJournalEntry,
+            });
+            if (resLayer.journalEntry) grnJournalEntryId = resLayer.journalEntry.id;
+          }
+          if (grnJournalEntryId) {
+            await tx.goodsReceipt.update({
+              where: { id: created.id },
+              data: { journalEntryId: grnJournalEntryId },
+            });
+          }
+        }
+
         if (po.status === "DRAFT" || po.status === "PENDING_APPROVAL") {
           await tx.purchaseOrder.update({ where: { id: po.id }, data: { status: "APPROVED" } });
         }
-        return created;
+        return grnJournalEntryId ? { ...created, journalEntryId: grnJournalEntryId } : created;
       });
 
       return NextResponse.json({ goodsReceipt: grn }, { status: 201 });
@@ -186,7 +250,7 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/procurement/pos error:", error);
     return jsonError("تعذر إنشاء أمر الشراء", 500);
   }
-}
+});
 
 async function handlePoUpdate(req: NextRequest) {
   try {
@@ -247,10 +311,10 @@ async function handlePoUpdate(req: NextRequest) {
             : {}),
           ...(body.acquisitionCycleId !== undefined
             ? {
-                acquisitionCycleId: body.acquisitionCycleId
-                  ? String(body.acquisitionCycleId).trim()
-                  : null,
-              }
+              acquisitionCycleId: body.acquisitionCycleId
+                ? String(body.acquisitionCycleId).trim()
+                : null,
+            }
             : {}),
           ...(body.date !== undefined ? { date: new Date(String(body.date)) } : {}),
           ...(body.status !== undefined ? { status: String(body.status).trim() } : {}),
@@ -290,11 +354,11 @@ async function handlePoUpdate(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handlePoUpdate(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handlePoUpdate(req);
-}
+});
 

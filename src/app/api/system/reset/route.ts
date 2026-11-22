@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
+import { authorizeApiAction, forbiddenError } from "@/lib/apiHelpers";
 import {
   precheckScopedReset,
   executeScopedReset,
@@ -8,8 +10,14 @@ import {
   type FactoryCoaMode,
 } from "@/lib/scopedResetEngine";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
+    const auth = await authorizeApiAction({}, req, { moduleId: "system" });
+    if (!auth.ok) return auth.response;
+    if (auth.actor.userRole !== "SUPER_ADMIN") {
+      return forbiddenError("صلاحية المشرف العام (SUPER_ADMIN) مطلوبة لفحص عمليات إعادة الضبط");
+    }
+
     const url = new URL(req.url);
     const scope = (url.searchParams.get("scope") as ResetScopeType) || "section";
     const sectionModule = (url.searchParams.get("sectionModule") as ResetSectionModule) || "sales";
@@ -34,37 +42,26 @@ export async function GET(req: NextRequest) {
       { status: 500 }
     );
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "system",
+      action: "delete",
+    });
+    if (!auth.ok) return auth.response;
+    if (auth.actor.userRole !== "SUPER_ADMIN") {
+      return forbiddenError("صلاحية المشرف العام (SUPER_ADMIN) مطلوبة لتنفيذ عمليات إعادة الضبط");
+    }
+
     const scope = (body.scope as ResetScopeType) || "section";
     const sectionModule = body.sectionModule as ResetSectionModule | undefined;
     const unitType = body.unitType as ResetUnitType | undefined;
     const unitId = body.unitId ? String(body.unitId) : undefined;
     const coaMode = (body.coaMode as FactoryCoaMode) || "starter_template";
     const confirmationPhrase = String(body.confirmationPhrase || "").trim();
-
-    // Actor identification
-    const headerUserId = req.headers.get("x-uas-user-id");
-    const headerRole = req.headers.get("x-uas-role");
-
-    const actor = {
-      userId: body.actor?.userId || headerUserId || null,
-      userDisplay: body.actor?.userDisplay || "مدير النظام",
-      userRole: body.actor?.userRole || headerRole || "SUPER_ADMIN",
-    };
-
-    if (actor.userRole !== "SUPER_ADMIN") {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "صلاحية المشرف العام (SUPER_ADMIN) مطلوبة لتنفيذ عمليات إعادة الضبط",
-        },
-        { status: 403 }
-      );
-    }
 
     const result = await executeScopedReset({
       scope,
@@ -73,7 +70,11 @@ export async function POST(req: NextRequest) {
       unitId,
       coaMode,
       confirmationPhrase,
-      actor,
+      actor: {
+        userId: auth.actor.userId,
+        userDisplay: auth.actor.userDisplay,
+        userRole: auth.actor.userRole,
+      },
     });
 
     return NextResponse.json({ ok: true, result });
@@ -87,4 +88,4 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-}
+});

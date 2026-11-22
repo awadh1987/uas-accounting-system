@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { computeQrVerificationCode, computeSaleTotals } from "@/lib/formulas";
+import { prisma, withTenantRoute } from "@/lib/prisma";
+import { computeSaleTotals } from "@/lib/formulas";
 import {
   ensureCustomerWithAccountTx,
   postCustomerReceipt,
@@ -16,7 +16,7 @@ import {
 import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
 import { withIdempotency } from "@/lib/idempotencyGuard";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (r) => {
     try {
       const body = (await r.json()) as Record<string, unknown>;
@@ -99,6 +99,40 @@ export async function POST(req: NextRequest) {
       let journalEntryId: string | null = null;
       let finalRevenueCode = revenueAccountCode || "411101";
 
+      const itemId = body.itemId ? String(body.itemId).trim() : null;
+      const warehouseId = body.warehouseId ? String(body.warehouseId).trim() : null;
+      const taxCodeId = body.taxCodeId ? String(body.taxCodeId).trim() : null;
+      const whtCodeId = body.whtCodeId ? String(body.whtCodeId).trim() : null;
+      const taxInclusive = Boolean(body.taxInclusive);
+      const dueDate = body.dueDate ? String(body.dueDate) : null;
+      const overrideCreditLimit =
+        Boolean(body.overrideCreditLimit) &&
+        (actor.userRole === "SUPER_ADMIN" || actor.userRole === "CHIEF_ACCOUNTANT");
+      const rawItems = Array.isArray(body.items) ? (body.items as Array<Record<string, unknown>>) : undefined;
+      const parsedItems = rawItems
+        ? rawItems.map((it) => ({
+            description: String(it.description || dailyBatchLabel).trim(),
+            quantity: Number(it.quantity) || 1,
+            unitPrice: Number(it.unitPrice) || 0,
+            itemId: it.itemId ? String(it.itemId).trim() : null,
+            warehouseId: it.warehouseId ? String(it.warehouseId).trim() : warehouseId,
+            unitId: it.unitId ? String(it.unitId).trim() : null,
+            taxCodeId: it.taxCodeId ? String(it.taxCodeId).trim() : taxCodeId,
+          }))
+        : itemId && bundlesCount > 0
+        ? [
+            {
+              description: `${dailyBatchLabel} (${productGrade})`,
+              quantity: bundlesCount,
+              unitPrice,
+              itemId,
+              warehouseId,
+              unitId: body.unitId ? String(body.unitId).trim() : null,
+              taxCodeId,
+            },
+          ]
+        : undefined;
+
       if (totalAmount > 0) {
         const invRes = await postSalesInvoice({
           tx,
@@ -106,9 +140,16 @@ export async function POST(req: NextRequest) {
           projectId,
           subProjectId,
           harvestCycleId: cycle?.id ?? null,
+          items: parsedItems,
           amount: totalAmount,
           currency: "YER",
           date: new Date(`${saleDate}T10:00:00Z`),
+          dueDate,
+          taxCodeId,
+          whtCodeId,
+          taxInclusive,
+          overrideCreditLimit,
+          creditPaidImmediate: creditPaid,
           notes: notes || `${dailyBatchLabel} (${bundlesCount} × ${unitPrice})`,
           sequenceNumber,
           dailyBatchLabel,
@@ -137,6 +178,25 @@ export async function POST(req: NextRequest) {
             date: new Date(`${saleDate}T10:05:00Z`),
             notes: `تحصيل عند البيع (${receiptVoucherNo})`,
             createdById: actor.userId ?? undefined,
+          });
+        }
+      }
+
+      // Deduct HarvestInventoryBatch availability when a matching harvest batch exists & no Warehouse SKU was deducted
+      if (!itemId && bundlesCount > 0) {
+        const matchingBatch = await tx.harvestInventoryBatch.findFirst({
+          where: {
+            projectId,
+            harvestName,
+            productGrade,
+          },
+          orderBy: { createdAt: "desc" },
+        });
+        if (matchingBatch) {
+          const nextBundles = Math.max(0, matchingBatch.harvestedBundles - bundlesCount);
+          await tx.harvestInventoryBatch.update({
+            where: { id: matchingBatch.id },
+            data: { harvestedBundles: nextBundles },
           });
         }
       }
@@ -170,30 +230,6 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      if (creditPaid > 0) {
-        const existingV = await tx.installmentVoucher.findUnique({
-          where: { voucherNo: receiptVoucherNo },
-        });
-        const finalVNo = existingV ? `${receiptVoucherNo}-${Date.now().toString().slice(-4)}` : receiptVoucherNo;
-        await tx.installmentVoucher.create({
-          data: {
-            voucherNo: finalVNo,
-            type: "CUSTOMER_RECEIPT",
-            saleTransactionId: sale.id,
-            targetName: `${customer.name} (${dailyBatchLabel})`,
-            phone: customer.phone,
-            treasuryAccountId,
-            amountYER: creditPaid,
-            qrVerificationHash: computeQrVerificationCode(
-              `INST:${finalVNo}|PARTY:${customer.name}|AMT:${creditPaid}|DATE:${saleDate}`
-            ),
-            paymentDate: saleDate,
-            notes: `دفعة مسددة عند البيع (${dailyBatchLabel})`,
-            journalEntryId,
-          },
-        });
-      }
-
       await appendAuditLogTx(tx, {
         ...actor,
         actionType: "إضافة عملية بيع",
@@ -209,11 +245,15 @@ export async function POST(req: NextRequest) {
     const state = await getBootstrapState();
     return NextResponse.json({ createdId: result.sale.id, state }, { status: 201 });
   } catch (error) {
+    const msg = error instanceof Error ? error.message : "تعذر حفظ عملية البيع";
+    if (msg.includes("CREDIT_LIMIT_EXCEEDED") || msg.includes("NEGATIVE_STOCK_BLOCKED")) {
+      return jsonError(msg, 400);
+    }
     console.error("POST /api/sales error:", error);
-    return jsonError("تعذر حفظ عملية البيع", 500);
+    return jsonError(msg, 500);
   }
   });
-}
+});
 
 async function handleSalePatch(req: NextRequest) {
   try {
@@ -270,10 +310,10 @@ async function handleSalePatch(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleSalePatch(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleSalePatch(req);
-}
+});

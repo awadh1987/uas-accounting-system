@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { getRuntimeConfig } from "@/lib/runtimeMode";
 import { getMachineHwid } from "@/lib/licensing/hwid";
@@ -29,7 +30,7 @@ function noLicense() {
 }
 
 /** Seat usage for the installed license. Per-user device details are returned to SUPER_ADMIN only. */
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const { license } = loadInstalledLicense();
@@ -54,13 +55,13 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/licensing/seats error:", err);
     return NextResponse.json({ success: false, error: "تعذر تحميل المقاعد. / Failed to load seats." }, { status: 500 });
   }
-}
+});
 
 /**
  * Bind (or refresh) the seat of the signed-in user on this device.
  * Body: { userEmail, platform?: "windows"|"android", deviceId?, deviceName? }
  */
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const body = (await req.json()) as Record<string, unknown>;
@@ -137,4 +138,4 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/licensing/seats error:", err);
     return NextResponse.json({ success: false, error: "تعذر ربط الجهاز. / Failed to bind device." }, { status: 500 });
   }
-}
+});

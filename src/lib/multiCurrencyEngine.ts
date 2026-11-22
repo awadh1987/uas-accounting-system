@@ -1,4 +1,5 @@
 import { DEFAULT_CONTROL_ACCOUNTS } from "@/lib/accountingSettings";
+import { dAdd, dMul, dSub, roundDecimal } from "@/lib/decimalMath";
 
 export interface CurrencySeedDef {
   code: string;
@@ -90,8 +91,7 @@ export interface BalancedDualCurrencyLine {
 }
 
 function roundMoney(n: number, decimals = 2): number {
-  const factor = 10 ** decimals;
-  return Math.round((n + Number.EPSILON) * factor) / factor;
+  return roundDecimal(n, decimals);
 }
 
 /**
@@ -224,12 +224,12 @@ export function computeRealizedFxGainLoss(params: {
   lossAmount: number;
   netFxDiff: number;
 } {
-  const bookedBase = roundMoney(params.foreignAmount * params.bookedRate, 2);
-  const settledBase = roundMoney(params.foreignAmount * params.settlementRate, 2);
+  const bookedBase = dMul(params.foreignAmount, params.bookedRate, 2);
+  const settledBase = dMul(params.foreignAmount, params.settlementRate, 2);
   const signedImpact =
     params.side === "RECEIVABLE"
-      ? roundMoney(settledBase - bookedBase, 2)
-      : roundMoney(bookedBase - settledBase, 2);
+      ? dSub(settledBase, bookedBase, 2)
+      : dSub(bookedBase, settledBase, 2);
 
   return {
     bookedBase,
@@ -286,8 +286,8 @@ export function computeUnrealizedFxRevaluation(
 
   for (const pos of positions) {
     if (pos.currencyCode.toUpperCase() === "YER" || pos.foreignBalance === 0) continue;
-    const revaluedBaseBalance = roundMoney(pos.foreignBalance * pos.spotRate, 2);
-    const rawDiff = roundMoney(revaluedBaseBalance - pos.bookedBaseBalance, 2);
+    const revaluedBaseBalance = dMul(pos.foreignBalance, pos.spotRate, 2);
+    const rawDiff = dSub(revaluedBaseBalance, pos.bookedBaseBalance, 2);
     if (rawDiff === 0) continue;
 
     const isLiability = pos.accountType.toUpperCase() === "LIABILITY";
@@ -297,8 +297,8 @@ export function computeUnrealizedFxRevaluation(
     const unrealizedGain = netDiff > 0 ? netDiff : 0;
     const unrealizedLoss = netDiff < 0 ? Math.abs(netDiff) : 0;
 
-    totalUnrealizedGain = roundMoney(totalUnrealizedGain + unrealizedGain, 2);
-    totalUnrealizedLoss = roundMoney(totalUnrealizedLoss + unrealizedLoss, 2);
+    totalUnrealizedGain = dAdd(totalUnrealizedGain, unrealizedGain, 2);
+    totalUnrealizedLoss = dAdd(totalUnrealizedLoss, unrealizedLoss, 2);
 
     rows.push({
       ...pos,

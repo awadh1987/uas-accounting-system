@@ -1,17 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { extractActor, jsonError, forbiddenError } from "@/lib/apiHelpers";
+import { prisma, withTenantRoute } from "@/lib/prisma";
+import {
+  forbiddenError,
+  jsonError,
+  resolveVerifiedActor,
+  unauthorizedError,
+} from "@/lib/apiHelpers";
 import { appendAuditLogTx, getBootstrapState, parseAssignedProjects } from "@/lib/serverBootstrap";
 import { getAccessibleGroups, getAccessibleTabs, normalizeRole } from "@/lib/permissions";
 import type { UasUser } from "@/types/uas";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
-    const actor = extractActor({}, req);
-    if (!actor.userId) {
-      return jsonError("غير مصرح: لم يتم تحديد المستخدم", 401);
+    const actor = await resolveVerifiedActor({}, req);
+    if (actor.spoofAttempt) {
+      return forbiddenError("⛔ رفض أمني: عدم تطابق الصلاحية المرسلة");
+    }
+    if (actor.inactive) {
+      return forbiddenError("الحساب موقوف. يرجى التواصل مع الإدارة");
+    }
+    if (!actor.authenticated || !actor.userId) {
+      return unauthorizedError("غير مصرح: يرجى تسجيل الدخول أولاً");
     }
 
     const user = await prisma.user.findUnique({
@@ -85,14 +96,20 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/users/me/profile error:", error);
     return jsonError("تعذر استرجاع الملف الشخصي", 500);
   }
-}
+});
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body, req);
-    if (!actor.userId) {
-      return jsonError("غير مصرح: لم يتم تحديد المستخدم", 401);
+    const actor = await resolveVerifiedActor(body, req);
+    if (actor.spoofAttempt) {
+      return forbiddenError("⛔ رفض أمني: عدم تطابق الصلاحية المرسلة");
+    }
+    if (actor.inactive) {
+      return forbiddenError("الحساب موقوف. يرجى التواصل مع الإدارة");
+    }
+    if (!actor.authenticated || !actor.userId) {
+      return unauthorizedError("غير مصرح: يرجى تسجيل الدخول أولاً");
     }
 
     const existing = await prisma.user.findUnique({
@@ -277,5 +294,5 @@ export async function PATCH(req: NextRequest) {
     console.error("PATCH /api/users/me/profile error:", error);
     return jsonError("تعذر تحديث الملف الشخصي", 500);
   }
-}
+});
 

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import { withIdempotency } from "@/lib/idempotencyGuard";
@@ -22,7 +23,7 @@ function fail(error: unknown, fallback: string) {
   return jsonError(known ? msg : fallback, known ? 400 : 500);
 }
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     await ensureSqliteDatabaseReady();
     await ensure6GenerationCoaHierarchy();
@@ -32,9 +33,9 @@ export async function GET() {
     console.error("GET /api/accounting/cost-centers error:", error);
     return fail(error, "Failed to load cost centers / تعذر تحميل مراكز التكلفة");
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (r) => {
     try {
       await ensureSqliteDatabaseReady();
@@ -55,9 +56,9 @@ export async function POST(req: NextRequest) {
       return fail(error, "Failed to create cost center / تعذر إنشاء مركز التكلفة");
     }
   });
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const body = (await req.json()) as Record<string, unknown>;
@@ -77,9 +78,9 @@ export async function PUT(req: NextRequest) {
     console.error("PUT /api/accounting/cost-centers error:", error);
     return fail(error, "Failed to update cost center / تعذر تحديث مركز التكلفة");
   }
-}
+});
 
-export async function DELETE(req: NextRequest) {
+export const DELETE = withTenantRoute(async function DELETE(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const { searchParams } = new URL(req.url);
@@ -115,4 +116,4 @@ export async function DELETE(req: NextRequest) {
     console.error("DELETE /api/accounting/cost-centers error:", error);
     return fail(error, "Failed to delete cost center / تعذر حذف مركز التكلفة");
   }
-}
+});

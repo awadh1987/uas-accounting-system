@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { getMachineHwid, getMachineRequestCode } from "@/lib/licensing/hwid";
 import { loadInstalledLicense } from "@/lib/licensing/verifier";
 import { checkLicenseAndClock } from "@/lib/licensing/guard";
@@ -11,7 +12,7 @@ import { getSeatUsage, seatPolicyFromLicense } from "@/lib/licensing/seatService
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   const hwid = getMachineHwid();
   const requestCode = getMachineRequestCode();
   const runtimeConfig = getRuntimeConfig();
@@ -77,4 +78,4 @@ export async function GET(req: NextRequest) {
     lan_url: lanUrl,
     cloud_url: runtimeConfig.cloudUrl,
   });
-}
+});

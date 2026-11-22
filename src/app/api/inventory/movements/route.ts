@@ -1,24 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import {
-  checkNegativeStockPolicy,
-  computeWeightedAverageCost,
-  convertToBaseQty,
   formatCompoundStockBreakdown,
   slugifyLookupCode,
 } from "@/lib/multiUnitInventoryEngine";
 import { parseAccountingSettings } from "@/lib/accountingSettings";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
+import { postJournalEntry } from "@/lib/accounting/ledgerService";
+import { consumeStockLayersOutTx, recordStockLayerInTx } from "@/lib/inventoryGlBridge";
 import { appendAuditLogTx } from "@/lib/serverBootstrap";
 import { emitNotification } from "@/lib/notifications/notificationService";
 import { withIdempotency } from "@/lib/idempotencyGuard";
 
+import { convertToBaseQty } from "@/lib/multiUnitInventoryEngine";
+
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
+    const auth = await authorizeApiAction({}, req, { moduleId: "inventory" });
+    if (!auth.ok) return auth.response;
+
     const itemId = req.nextUrl.searchParams.get("itemId")?.trim() || undefined;
     const warehouseId = req.nextUrl.searchParams.get("warehouseId")?.trim() || undefined;
 
@@ -41,14 +45,19 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/inventory/movements error:", error);
     return jsonError("تعذر تحميل حركات المخزون / Failed to load stock movements", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (r) => {
     try {
       await ensureSqliteDatabaseReady();
       const body = (await r.json()) as Record<string, unknown>;
-      const actor = extractActor(body, r);
+      const auth = await authorizeApiAction(body, r, {
+        moduleId: "inventory",
+        action: "create",
+      });
+      if (!auth.ok) return auth.response;
+      const actor = auth.actor;
 
     const itemId = String(body.itemId || "").trim();
     const movementType = String(body.movementType || "ADJUSTMENT_IN").trim().toUpperCase();
@@ -115,75 +124,90 @@ export async function POST(req: NextRequest) {
           factorToBase = 1;
         } else {
           const conv = item.conversions.find((c) => c.unitId === enteredUnitId);
-          factorToBase = conv ? conv.factorToBase : 1;
+          factorToBase = conv ? Number(conv.factorToBase) : 1;
         }
       }
 
       const absBaseQty = convertToBaseQty(enteredQty, factorToBase);
       const baseQtyDelta = isOutgoing ? -absBaseQty : absBaseQty;
+      const whForCc = await tx.warehouse.findUnique({ where: { id: warehouseId }, select: { costCenterId: true } });
+      const resolvedCostCenterId = body.costCenterId ? String(body.costCenterId) : whForCc?.costCenterId ?? null;
+      const projectId = body.projectId ? String(body.projectId).trim() : null;
+      const postGl = body.postGl !== false;
+      const contraAccountCode = body.contraAccountCode ? String(body.contraAccountCode).trim() : undefined;
+      const contraAccountId = body.contraAccountId ? String(body.contraAccountId).trim() : undefined;
+      const moveDate = body.date ? new Date(String(body.date)) : new Date();
 
-      const existingBalance = await tx.stockBalance.findUnique({
-        where: { itemId_warehouseId: { itemId: item.id, warehouseId } },
-      });
-      const prevQtyBase = existingBalance?.qtyOnHandBase ?? 0;
-      const prevAvgCostBase = existingBalance?.avgUnitCostBase ?? item.purchasePrice ?? 0;
-
+      let movement;
+      let balance;
       let warning: string | undefined;
-      let newQtyBase = prevQtyBase;
-      let newAvgCostBase = prevAvgCostBase;
+      let journalEntry: { id: string; entryNumber: string; status: string } | null = null;
 
       if (isOutgoing) {
-        const policyCheck = checkNegativeStockPolicy({
-          currentQtyBase: prevQtyBase,
-          outgoingQtyBase: absBaseQty,
-          policy: settings.negativeStockPolicy,
-        });
-        if (!policyCheck.ok) {
-          return { error: policyCheck.error, status: 400 as const };
+        try {
+          const outRes = await consumeStockLayersOutTx(tx, {
+            itemId: item.id,
+            warehouseId,
+            enteredQty,
+            enteredUnitId,
+            factorToBase,
+            qtyBase: absBaseQty,
+            movementType: movementType as "SALE_OUT" | "ADJUSTMENT_OUT" | "TRANSFER_OUT",
+            referenceType: body.referenceType ? String(body.referenceType) : "MANUAL",
+            referenceId: body.referenceId ? String(body.referenceId) : undefined,
+            projectId,
+            costCenterId: resolvedCostCenterId,
+            notes: body.notes ? String(body.notes) : null,
+            date: moveDate,
+            postGl,
+            contraAccountCode,
+            contraAccountId,
+            createdById: actor.userId ?? undefined,
+            postJeFn: postJournalEntry,
+          });
+          movement = outRes.movement;
+          balance = outRes.balance;
+          warning = outRes.warning;
+          journalEntry = outRes.journalEntry;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "NEGATIVE_STOCK_BLOCKED";
+          return { error: msg.replace(/^NEGATIVE_STOCK_BLOCKED:\s*/, ""), status: 400 as const };
         }
-        warning = policyCheck.warning;
-        newQtyBase = policyCheck.resultingQtyBase;
       } else {
-        const incomingUnitCostBase =
-          enteredUnitCost > 0 ? enteredUnitCost / factorToBase : prevAvgCostBase;
-        const wac = computeWeightedAverageCost({
-          prevQtyBase,
-          prevAvgCostBase,
-          incomingQtyBase: absBaseQty,
-          incomingUnitCostBase,
+        const existingBalance = await tx.stockBalance.findUnique({
+          where: { itemId_warehouseId: { itemId: item.id, warehouseId } },
         });
-        newQtyBase = wac.newQtyBase;
-        newAvgCostBase = wac.newAvgCostBase;
-      }
+        const fallbackUnitCostBase = Number(existingBalance?.avgUnitCostBase ?? item.purchasePrice ?? 0);
+        const incomingUnitCostBase =
+          enteredUnitCost > 0 ? enteredUnitCost / factorToBase : fallbackUnitCostBase;
 
-      const balance = await tx.stockBalance.upsert({
-        where: { itemId_warehouseId: { itemId: item.id, warehouseId } },
-        update: { qtyOnHandBase: newQtyBase, avgUnitCostBase: newAvgCostBase },
-        create: {
+        const inRes = await recordStockLayerInTx(tx, {
           itemId: item.id,
           warehouseId,
-          qtyOnHandBase: newQtyBase,
-          avgUnitCostBase: newAvgCostBase,
-        },
-      });
-
-      const whForCc = await tx.warehouse.findUnique({ where: { id: warehouseId }, select: { costCenterId: true } });
-      const movement = await tx.stockMovement.create({
-        data: {
-          costCenterId: body.costCenterId ? String(body.costCenterId) : whForCc?.costCenterId ?? null,
-          itemId: item.id,
-          warehouseId,
-          movementType,
           enteredQty,
           enteredUnitId,
           factorToBase,
-          baseQtyDelta,
-          unitCostBase: isOutgoing ? prevAvgCostBase : newAvgCostBase,
+          qtyBase: absBaseQty,
+          unitCostBase: incomingUnitCostBase,
+          movementType: movementType as "PURCHASE_IN" | "ADJUSTMENT_IN" | "TRANSFER_IN" | "OPENING",
           referenceType: body.referenceType ? String(body.referenceType) : "MANUAL",
-          referenceId: body.referenceId ? String(body.referenceId) : null,
+          referenceId: body.referenceId ? String(body.referenceId) : undefined,
+          projectId,
+          costCenterId: resolvedCostCenterId,
           notes: body.notes ? String(body.notes) : null,
-        },
-      });
+          date: moveDate,
+          postGl,
+          contraAccountCode,
+          contraAccountId,
+          createdById: actor.userId ?? undefined,
+          postJeFn: postJournalEntry,
+        });
+        movement = inRes.movement;
+        balance = inRes.balance;
+        journalEntry = inRes.journalEntry;
+      }
+
+      void settings;
 
       await appendAuditLogTx(tx, {
         ...actor,
@@ -192,7 +216,7 @@ export async function POST(req: NextRequest) {
         details: `${item.nameAr} | ${enteredQty} × ${factorToBase} = ${baseQtyDelta} base`,
       });
 
-      if (item.minStockAlert > 0 && balance.qtyOnHandBase <= item.minStockAlert) {
+      if (Number(item.minStockAlert) > 0 && Number(balance.qtyOnHandBase) <= Number(item.minStockAlert)) {
         await emitNotification(
           {
             eventType: "LOW_STOCK",
@@ -206,24 +230,25 @@ export async function POST(req: NextRequest) {
             targetEntityType: "InventoryItem",
             targetEntityId: item.id,
             actorUserId: actor.userId,
-            metadata: { itemId: item.id, sku: item.sku, qtyOnHandBase: balance.qtyOnHandBase, minStockAlert: item.minStockAlert },
+            metadata: { itemId: item.id, sku: item.sku, qtyOnHandBase: Number(balance.qtyOnHandBase), minStockAlert: Number(item.minStockAlert) },
           },
           tx
         );
       }
 
       const breakdown = formatCompoundStockBreakdown(
-        balance.qtyOnHandBase,
+        Number(balance.qtyOnHandBase),
         item.baseUnit.nameAr,
         item.conversions.map((c) => ({
           label: c.customUnitLabel || c.unit.nameAr,
-          factorToBase: c.factorToBase,
+          factorToBase: Number(c.factorToBase),
         }))
       );
 
       return {
         movement,
         balance,
+        journalEntry,
         warning,
         compoundBreakdown: breakdown.formatted,
       };
@@ -239,4 +264,4 @@ export async function POST(req: NextRequest) {
     return jsonError("تعذر تسجيل الحركة المخزنية / Failed to record stock movement", 500);
   }
   });
-}
+});

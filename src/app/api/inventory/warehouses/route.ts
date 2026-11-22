@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { DEFAULT_WAREHOUSES, slugifyLookupCode } from "@/lib/multiUnitInventoryEngine";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import { provisionEntityGen6AccountAndCostCenter } from "@/lib/accountingCoreEngine";
 import { withIdempotency } from "@/lib/idempotencyGuard";
 import {
@@ -25,7 +25,7 @@ export async function ensureDefaultWarehousesSeeded() {
   }
 }
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     await ensureDefaultWarehousesSeeded();
@@ -39,14 +39,20 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/inventory/warehouses error:", error);
     return jsonError("تعذر تحميل المستودعات / Failed to load warehouses", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (r) => {
     try {
       await ensureSqliteDatabaseReady();
       await ensureDefaultWarehousesSeeded();
       const body = (await r.json()) as Record<string, unknown>;
+      const auth = await authorizeApiAction(body, r, {
+        moduleId: "inventory",
+        action: "create",
+      });
+      if (!auth.ok) return auth.response;
+
       const nameAr = String(body.nameAr || "").trim();
       const nameEn = String(body.nameEn || nameAr).trim();
       if (!nameAr) {
@@ -92,9 +98,9 @@ export async function POST(req: NextRequest) {
       return jsonError("تعذر حفظ المستودع / Failed to save warehouse", 500);
     }
   });
-}
+});
 
-export async function DELETE(req: NextRequest) {
+export const DELETE = withTenantRoute(async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     let body: Record<string, unknown> = {};
@@ -103,7 +109,12 @@ export async function DELETE(req: NextRequest) {
     } catch {
       body = {};
     }
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "inventory",
+      action: "delete",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
     const id = searchParams.get("id") || String(body.id || "");
     const action = String(body.action || searchParams.get("action") || "SAFE_DELETE").toUpperCase();
     if (!id) return jsonError("معرف المستودع مطلوب / Warehouse id is required", 400);
@@ -128,4 +139,4 @@ export async function DELETE(req: NextRequest) {
     console.error("DELETE /api/inventory/warehouses error:", error);
     return jsonError("تعذر حذف أو أرشفة المستودع", 500);
   }
-}
+});

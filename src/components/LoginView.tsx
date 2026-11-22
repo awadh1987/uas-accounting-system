@@ -25,7 +25,13 @@ import {
 } from "lucide-react";
 import { DualLogoBadge } from "@/components/DualLogoBadge";
 import { isInstalledClientApp } from "@/lib/runtimePlatform";
-import { getApiBaseUrl, resetApiBaseUrl, setApiBaseUrl, setStoredTenantId } from "@/lib/apiClient";
+import {
+  getApiBaseUrl,
+  resetApiBaseUrl,
+  setApiBaseUrl,
+  setStoredSessionToken,
+  setStoredTenantId,
+} from "@/lib/apiClient";
 import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
 import type { LicenseStatusData } from "@/components/LicenseActivationModal";
 import type { LanguageCode, ThemeName, UasEnterpriseProfile, UasUser } from "@/types/uas";
@@ -264,6 +270,7 @@ export function LoginView({
       });
       const data = (await res.json().catch(() => ({}))) as {
         user?: UasUser;
+        sessionToken?: string;
         error?: string;
         tenantId?: string;
       };
@@ -279,6 +286,9 @@ export function LoginView({
         return;
       }
       if (typeof window !== "undefined") {
+        if (data.sessionToken) {
+          setStoredSessionToken(data.sessionToken);
+        }
         if (data.tenantId) {
           setStoredTenantId(data.tenantId);
         } else if ((data.user as any)?.tenantId) {

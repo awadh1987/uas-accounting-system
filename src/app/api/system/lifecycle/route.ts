@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, forbiddenError, jsonError } from "@/lib/apiHelpers";
 import { withIdempotency } from "@/lib/idempotencyGuard";
 import { hasGranularPermission } from "@/lib/permissions";
 import {
@@ -12,15 +13,20 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (r) => {
     try {
       await ensureSqliteDatabaseReady();
       const body = (await r.json()) as Record<string, unknown>;
-      const actor = extractActor(body, r);
+      const auth = await authorizeApiAction(body, r, {
+        moduleId: "system",
+        action: "delete",
+      });
+      if (!auth.ok) return auth.response;
+      const actor = auth.actor;
 
-      if (!hasGranularPermission(actor.userRole, "records.archive_delete")) {
-        return jsonError("غير مصرح: ليس لديك صلاحية أرشفة أو حذف السجلات الأساسية", 403);
+      if (!hasGranularPermission(actor.user || actor.userRole, "records.archive_delete")) {
+        return forbiddenError("غير مصرح: ليس لديك صلاحية أرشفة أو حذف السجلات الأساسية");
       }
 
       const entityType = String(body.entityType || "") as MasterEntityType;
@@ -52,4 +58,4 @@ export async function POST(req: NextRequest) {
       return jsonError("تعذر تنفيذ العملية على السجل", 500);
     }
   });
-}
+});

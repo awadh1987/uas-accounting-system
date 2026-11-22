@@ -1,15 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { extractActor, jsonError, forbiddenError } from "@/lib/apiHelpers";
-import { appendAuditLogTx, hashPassword } from "@/lib/serverBootstrap";
+import { prisma, withTenantRoute } from "@/lib/prisma";
+import { forbiddenError, jsonError, resolveVerifiedActor, unauthorizedError } from "@/lib/apiHelpers";
+import { appendAuditLogTx, hashPassword, verifyPassword } from "@/lib/serverBootstrap";
 import { normalizeRole } from "@/lib/permissions";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body, req);
-    if (!actor.userId) {
-      return jsonError("غير مصرح: لم يتم تحديد المستخدم", 401);
+    const actor = await resolveVerifiedActor(body, req);
+    if (actor.spoofAttempt) {
+      return forbiddenError("⛔ رفض أمني: عدم تطابق الصلاحية المرسلة");
+    }
+    if (actor.inactive) {
+      return forbiddenError("الحساب موقوف. يرجى التواصل مع الإدارة");
+    }
+    if (!actor.authenticated || !actor.userId) {
+      return unauthorizedError("غير مصرح: يرجى تسجيل الدخول أولاً");
     }
 
     const currentPassword = String(body.currentPassword || "");
@@ -38,7 +44,7 @@ export async function POST(req: NextRequest) {
       return forbiddenError("الحساب موقوف. يرجى التواصل مع الإدارة");
     }
 
-    if (user.passwordHash !== hashPassword(currentPassword)) {
+    if (!verifyPassword(currentPassword, user.passwordHash)) {
       return jsonError("كلمة المرور الحالية غير صحيحة", 400);
     }
 
@@ -73,5 +79,5 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/users/me/password error:", error);
     return jsonError("تعذر تغيير كلمة المرور", 500);
   }
-}
+});
 

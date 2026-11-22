@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { recordAuditDiffTx } from "@/lib/accounting/ledgerService";
 import {
   appendAuditLogTx,
@@ -11,7 +11,7 @@ import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     const state = await getBootstrapState();
     return NextResponse.json({ inventoryBatches: state.inventoryBatches });
@@ -19,9 +19,9 @@ export async function GET() {
     console.error("GET /api/inventory error:", error);
     return jsonError("تعذر تحميل سجل المخزون", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, {
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/inventory error:", error);
     return jsonError("تعذر تسجيل دفعة المخزون", 500);
   }
-}
+});
 
 async function handleInventoryUpdate(req: NextRequest) {
   try {
@@ -172,11 +172,11 @@ async function handleInventoryUpdate(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleInventoryUpdate(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleInventoryUpdate(req);
-}
+});
 

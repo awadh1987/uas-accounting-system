@@ -9,6 +9,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { parseAccountingSettings } from "@/lib/accountingSettings";
+import { evaluateAndRouteApprovalTx } from "@/lib/approvalEngine";
 import {
   createVendorWithAccountTx,
   ensureCustomerWithAccountTx,
@@ -436,6 +437,39 @@ export async function promoteWorkspaceDraft(
         updatedByName: actor.userName,
       },
     });
+
+    // Ensure matching ApprovalRequest exists in ApprovalsCenter if draft promoted into PENDING_APPROVAL
+    if (convertedEntityId) {
+      const targetTypeMap: Record<string, string> = {
+        JOURNAL_VOUCHER: "JournalEntry",
+        SALES_INVOICE: "SalesInvoice",
+        PURCHASE_BILL: "VendorBill",
+        RECEIPT_VOUCHER: "ReceiptVoucher",
+        PAYMENT_VOUCHER: "PaymentVoucher",
+      };
+      const targetType = targetTypeMap[draft.formType];
+      if (targetType) {
+        const existingApproval = await tx.approvalRequest.findFirst({
+          where: { targetType, targetId: convertedEntityId, status: "PENDING" },
+        });
+        if (!existingApproval && requireApproval) {
+          await evaluateAndRouteApprovalTx(tx, {
+            module: draft.module,
+            actionType: "CREATE_AND_POST",
+            targetType,
+            targetId: convertedEntityId,
+            documentNumber: draft.draftNumber,
+            summaryAr: `اعتماد ترحيل مسودة (${draft.draftNumber}): ${draft.titleAr}`,
+            summaryEn: `Draft Promotion Approval (${draft.draftNumber})`,
+            amountBase: Number(draft.totalAmount || 0),
+            currencyCode: draft.currencyCode,
+            afterSnapshot: payload,
+            requestedById: actor.userId,
+            requestedByName: actor.userName,
+          });
+        }
+      }
+    }
 
     return {
       draft: { ...updatedDraft, payload },

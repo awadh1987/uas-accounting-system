@@ -3,6 +3,7 @@ import type { PrismaClient } from "@prisma/client";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { extractSubdomainSlugFromHost, validateTenantSlug } from "./tenantSlug";
+import { extractSessionTokenFromRequest } from "@/lib/authSession";
 
 export interface TenantContext {
   tenantId: string;
@@ -76,7 +77,7 @@ export function extractTenantResolutionFromRequest(
     const hostHeader = headers.get("host");
     let urlHost = "";
     try {
-      urlHost = new URL(req.url).host;
+      urlHost = new URL(req.url, "http://localhost").host;
     } catch {
       urlHost = "";
     }
@@ -109,6 +110,16 @@ export function extractTenantResolutionFromRequest(
     }
 
     // 3. Authenticated session/token tenant binding
+    const verifiedSession = extractSessionTokenFromRequest(req);
+    if (verifiedSession.payload?.tid && verifiedSession.payload.tid !== "default") {
+      const slugCheck = validateTenantSlug(verifiedSession.payload.tid);
+      return {
+        tenantId: normalizeTenantId(verifiedSession.payload.tid),
+        slug: slugCheck.valid ? slugCheck.normalized : null,
+        source: "session",
+      };
+    }
+
     const sessionHeader = headers.get("x-uas-session-tenant");
     if (sessionHeader && sessionHeader.trim()) {
       const slugCheck = validateTenantSlug(sessionHeader);
@@ -133,8 +144,9 @@ export function extractTenantResolutionFromRequest(
 
     // 4a. Query parameter fallback
     try {
-      const url = new URL(req.url);
+      const url = new URL(req.url, "http://localhost");
       const queryTenant =
+        url.searchParams.get("slug") ||
         url.searchParams.get("tenantId") ||
         url.searchParams.get("tenant") ||
         url.searchParams.get("company");
@@ -230,10 +242,10 @@ export async function runWithTenant<T>(
  * enforces per-tenant device access governance (`403 DEVICE_REVOKED` / `DEVICE_LOCKED`),
  * and sets `x-uas-tenant-id` / `x-uas-tenant-slug` in response headers.
  */
-export function withTenantRoute<
-  T extends (req: NextRequest, context?: any) => Promise<NextResponse>
->(handler: T): T {
-  return (async (req: NextRequest, context?: any) => {
+export function withTenantRoute<Args extends unknown[]>(
+  handler: (req: NextRequest, ...args: Args) => Promise<NextResponse>
+): (req: NextRequest, ...args: Args) => Promise<NextResponse> {
+  return async (req: NextRequest, ...args: Args): Promise<NextResponse> => {
     const resolution = extractTenantResolutionFromRequest(req);
     const tenantId = resolution.tenantId;
     return runWithTenant(tenantId, async () => {
@@ -296,7 +308,7 @@ export function withTenantRoute<
         }
       }
 
-      const res = await handler(req, context);
+      const res = await handler(req, ...args);
       try {
         res.headers.set("x-uas-tenant-id", tenantId);
         if (resolution.slug) {
@@ -307,5 +319,5 @@ export function withTenantRoute<
       }
       return res;
     });
-  }) as T;
+  };
 }

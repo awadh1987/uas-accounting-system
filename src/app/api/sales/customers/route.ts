@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import {
   ensureCustomerWithAccountTx,
   recordAuditDiffTx,
@@ -14,7 +14,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     const customers = await prisma.customer.findMany({
       orderBy: { code: "asc" },
@@ -57,9 +57,9 @@ export async function GET() {
     console.error("GET /api/sales/customers error:", error);
     return jsonError("تعذر تحميل قائمة العملاء", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (r) => {
     try {
       const body = (await r.json()) as Record<string, unknown>;
@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
       return jsonError("تعذر إنشاء ملف العميل", 500);
     }
   });
-}
+});
 
 async function handleUpdateCustomer(req: NextRequest) {
   try {
@@ -185,15 +185,15 @@ async function handleUpdateCustomer(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleUpdateCustomer(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleUpdateCustomer(req);
-}
+});
 
-export async function DELETE(req: NextRequest) {
+export const DELETE = withTenantRoute(async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     let body: Record<string, unknown> = {};
@@ -232,4 +232,4 @@ export async function DELETE(req: NextRequest) {
     console.error("DELETE /api/sales/customers error:", error);
     return jsonError("تعذر حذف أو أرشفة العميل", 500);
   }
-}
+});

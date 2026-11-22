@@ -6,7 +6,7 @@ import {
   listNotifications,
   markAllNotificationsRead,
 } from "@/lib/notifications/notificationService";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import type { NotificationChannelId, NotificationEventType, NotificationSeverity } from "@/types/uas";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +14,9 @@ export const dynamic = "force-dynamic";
 export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
+    const auth = await authorizeApiAction({}, req, {});
+    if (!auth.ok) return auth.response;
+
     const { searchParams } = new URL(req.url);
     const unreadOnly = searchParams.get("unreadOnly") === "true";
     const channel = searchParams.get("channel") || undefined;
@@ -43,7 +46,9 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, {});
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
     if (body.action === "mark_all_read") {
       const updatedCount = await markAllNotificationsRead(

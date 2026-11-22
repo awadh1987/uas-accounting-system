@@ -48,6 +48,8 @@ CREATE TABLE "JournalEntry" (
     "updatedAt" DATETIME NOT NULL,
     "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
     "revisionNumber" INTEGER NOT NULL DEFAULT 1,
+    "isReversed" BOOLEAN NOT NULL DEFAULT false,
+    "reversedByEntryId" TEXT,
     CONSTRAINT "JournalEntry_fiscalYearId_fkey" FOREIGN KEY ("fiscalYearId") REFERENCES "FiscalYear" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "JournalEntry_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "JournalEntry_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
@@ -148,6 +150,9 @@ CREATE TABLE "SystemSettings" (
     "fiscalYearEnd" TEXT DEFAULT '2026-12-31',
     "periodLockDate" TEXT,
     "requireApprovalWorkflow" BOOLEAN NOT NULL DEFAULT false,
+    "enforceThreeWayMatch" BOOLEAN NOT NULL DEFAULT true,
+    "threeWayTolerancePct" DECIMAL NOT NULL DEFAULT 0,
+    "threeWayToleranceAmount" DECIMAL NOT NULL DEFAULT 0.01,
     "costingMethod" TEXT NOT NULL DEFAULT 'WEIGHTED_AVERAGE',
     "negativeStockPolicy" TEXT NOT NULL DEFAULT 'BLOCK',
     "printLayout" TEXT NOT NULL DEFAULT 'A4',
@@ -164,7 +169,7 @@ CREATE TABLE "SystemSettings" (
 -- CreateTable
 CREATE TABLE "CurrencyRate" (
     "currencyCode" TEXT NOT NULL PRIMARY KEY,
-    "rateToYER" REAL NOT NULL,
+    "rateToYER" DECIMAL NOT NULL,
     "updatedAt" DATETIME NOT NULL
 );
 
@@ -188,9 +193,9 @@ CREATE TABLE "ExchangeRate" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "currencyCode" TEXT NOT NULL,
     "rateDate" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "buyRate" REAL NOT NULL,
-    "sellRate" REAL NOT NULL,
-    "midRate" REAL NOT NULL,
+    "buyRate" DECIMAL NOT NULL,
+    "sellRate" DECIMAL NOT NULL,
+    "midRate" DECIMAL NOT NULL,
     "source" TEXT NOT NULL DEFAULT 'MANUAL',
     "createdBy" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -208,7 +213,7 @@ CREATE TABLE "Project" (
     "parentProjectId" TEXT,
     "vendorId" TEXT,
     "budgetTotal" DECIMAL NOT NULL DEFAULT 0,
-    "estimatedValue" REAL NOT NULL DEFAULT 0,
+    "estimatedValue" DECIMAL NOT NULL DEFAULT 0,
     "plannedHarvestCount" INTEGER NOT NULL DEFAULT 1,
     "status" TEXT NOT NULL DEFAULT 'ACTIVE',
     "startDate" DATETIME,
@@ -336,10 +341,13 @@ CREATE TABLE "GoodsReceipt" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "grnNumber" TEXT NOT NULL,
     "purchaseOrderId" TEXT NOT NULL,
+    "warehouseId" TEXT,
+    "journalEntryId" TEXT,
     "receivedDate" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "receivedTotal" DECIMAL NOT NULL DEFAULT 0,
     "hasVariance" BOOLEAN NOT NULL DEFAULT false,
     "itemsSummary" TEXT,
+    "itemsJson" TEXT,
     "warehouseNotes" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "GoodsReceipt_purchaseOrderId_fkey" FOREIGN KEY ("purchaseOrderId") REFERENCES "PurchaseOrder" ("id") ON DELETE CASCADE ON UPDATE CASCADE
@@ -349,6 +357,8 @@ CREATE TABLE "GoodsReceipt" (
 CREATE TABLE "VendorBill" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "billNumber" TEXT NOT NULL,
+    "billType" TEXT NOT NULL DEFAULT 'BILL',
+    "originalBillId" TEXT,
     "vendorId" TEXT NOT NULL,
     "projectId" TEXT NOT NULL,
     "subProjectId" TEXT,
@@ -357,14 +367,17 @@ CREATE TABLE "VendorBill" (
     "date" DATETIME NOT NULL,
     "dueDate" DATETIME,
     "status" TEXT NOT NULL DEFAULT 'APPROVED',
+    "subTotal" DECIMAL NOT NULL DEFAULT 0,
+    "taxAmount" DECIMAL NOT NULL DEFAULT 0,
+    "whtAmount" DECIMAL NOT NULL DEFAULT 0,
     "totalAmount" DECIMAL NOT NULL,
     "paidAmount" DECIMAL NOT NULL DEFAULT 0,
     "balanceDue" DECIMAL NOT NULL,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
-    "exchangeRate" REAL NOT NULL DEFAULT 1.0,
-    "foreignAmount" REAL NOT NULL DEFAULT 0,
-    "baseAmount" REAL NOT NULL DEFAULT 0,
+    "exchangeRate" DECIMAL NOT NULL DEFAULT 1.0,
+    "foreignAmount" DECIMAL NOT NULL DEFAULT 0,
+    "baseAmount" DECIMAL NOT NULL DEFAULT 0,
     "isInventory" BOOLEAN NOT NULL DEFAULT false,
     "debitAccountId" TEXT,
     "journalEntryId" TEXT,
@@ -382,20 +395,39 @@ CREATE TABLE "VendorBill" (
 );
 
 -- CreateTable
+CREATE TABLE "VendorBillItem" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "billId" TEXT NOT NULL,
+    "itemId" TEXT,
+    "warehouseId" TEXT,
+    "taxCodeId" TEXT,
+    "description" TEXT NOT NULL,
+    "unitId" TEXT,
+    "quantity" DECIMAL NOT NULL,
+    "unitPrice" DECIMAL NOT NULL,
+    "netAmount" DECIMAL NOT NULL,
+    "taxAmount" DECIMAL NOT NULL DEFAULT 0,
+    "whtAmount" DECIMAL NOT NULL DEFAULT 0,
+    "totalAmount" DECIMAL NOT NULL,
+    CONSTRAINT "VendorBillItem_billId_fkey" FOREIGN KEY ("billId") REFERENCES "VendorBill" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
 CREATE TABLE "PaymentVoucher" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "voucherNumber" TEXT NOT NULL,
     "date" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "vendorId" TEXT NOT NULL,
     "billId" TEXT,
+    "allocationsJson" TEXT,
     "treasuryId" TEXT NOT NULL,
     "amount" DECIMAL NOT NULL,
     "transferFee" DECIMAL NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
-    "exchangeRate" REAL NOT NULL DEFAULT 1.0,
-    "foreignAmount" REAL NOT NULL DEFAULT 0,
-    "baseAmount" REAL NOT NULL DEFAULT 0,
+    "exchangeRate" DECIMAL NOT NULL DEFAULT 1.0,
+    "foreignAmount" DECIMAL NOT NULL DEFAULT 0,
+    "baseAmount" DECIMAL NOT NULL DEFAULT 0,
     "referenceNumber" TEXT,
     "notes" TEXT,
     "projectId" TEXT,
@@ -441,6 +473,8 @@ CREATE TABLE "Customer" (
 CREATE TABLE "SalesInvoice" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "invoiceNumber" TEXT NOT NULL,
+    "invoiceType" TEXT NOT NULL DEFAULT 'INVOICE',
+    "originalInvoiceId" TEXT,
     "customerId" TEXT NOT NULL,
     "projectId" TEXT NOT NULL,
     "subProjectId" TEXT,
@@ -452,17 +486,22 @@ CREATE TABLE "SalesInvoice" (
     "revenueAccountCode" TEXT DEFAULT '411101',
     "treasuryAccountId" TEXT,
     "date" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "dueDate" DATETIME,
+    "subTotal" DECIMAL NOT NULL DEFAULT 0,
+    "taxAmount" DECIMAL NOT NULL DEFAULT 0,
+    "whtAmount" DECIMAL NOT NULL DEFAULT 0,
     "totalAmount" DECIMAL NOT NULL,
     "paidAmount" DECIMAL NOT NULL DEFAULT 0,
     "balanceDue" DECIMAL NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'POSTED',
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
-    "exchangeRate" REAL NOT NULL DEFAULT 1.0,
-    "foreignAmount" REAL NOT NULL DEFAULT 0,
-    "baseAmount" REAL NOT NULL DEFAULT 0,
+    "exchangeRate" DECIMAL NOT NULL DEFAULT 1.0,
+    "foreignAmount" DECIMAL NOT NULL DEFAULT 0,
+    "baseAmount" DECIMAL NOT NULL DEFAULT 0,
     "notes" TEXT,
     "journalEntryId" TEXT,
+    "cogsJournalEntryId" TEXT,
     "qrVerificationHash" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "costCenterId" TEXT,
@@ -477,20 +516,40 @@ CREATE TABLE "SalesInvoice" (
 );
 
 -- CreateTable
+CREATE TABLE "SalesInvoiceItem" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "invoiceId" TEXT NOT NULL,
+    "itemId" TEXT,
+    "warehouseId" TEXT,
+    "taxCodeId" TEXT,
+    "description" TEXT NOT NULL,
+    "unitId" TEXT,
+    "quantity" DECIMAL NOT NULL,
+    "unitPrice" DECIMAL NOT NULL,
+    "netAmount" DECIMAL NOT NULL,
+    "taxAmount" DECIMAL NOT NULL DEFAULT 0,
+    "whtAmount" DECIMAL NOT NULL DEFAULT 0,
+    "totalAmount" DECIMAL NOT NULL,
+    "costOfGoodsSold" DECIMAL NOT NULL DEFAULT 0,
+    CONSTRAINT "SalesInvoiceItem_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "SalesInvoice" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
 CREATE TABLE "ReceiptVoucher" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "voucherNumber" TEXT NOT NULL,
     "date" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "customerId" TEXT NOT NULL,
     "invoiceId" TEXT,
+    "allocationsJson" TEXT,
     "treasuryId" TEXT NOT NULL,
     "subProjectId" TEXT,
     "amount" DECIMAL NOT NULL,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
-    "exchangeRate" REAL NOT NULL DEFAULT 1.0,
-    "foreignAmount" REAL NOT NULL DEFAULT 0,
-    "baseAmount" REAL NOT NULL DEFAULT 0,
+    "exchangeRate" DECIMAL NOT NULL DEFAULT 1.0,
+    "foreignAmount" DECIMAL NOT NULL DEFAULT 0,
+    "baseAmount" DECIMAL NOT NULL DEFAULT 0,
     "notes" TEXT,
     "journalEntryId" TEXT,
     "qrVerificationHash" TEXT,
@@ -509,13 +568,16 @@ CREATE TABLE "ReceiptVoucher" (
 CREATE TABLE "InventoryLot" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "lotNumber" TEXT NOT NULL,
-    "projectId" TEXT NOT NULL,
+    "projectId" TEXT,
     "harvestCycleId" TEXT,
+    "itemId" TEXT,
+    "warehouseId" TEXT,
     "grade" TEXT NOT NULL,
     "initialQuantity" DECIMAL NOT NULL,
     "currentQuantity" DECIMAL NOT NULL,
     "shrinkageCount" DECIMAL NOT NULL DEFAULT 0,
     "unitCost" DECIMAL NOT NULL DEFAULT 0,
+    "receivedDate" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "InventoryLot_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "InventoryLot_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE
@@ -552,7 +614,7 @@ CREATE TABLE "TreasuryAccount" (
     "accountNumber" TEXT NOT NULL,
     "ibanOrSwift" TEXT NOT NULL DEFAULT '',
     "branchOrAgent" TEXT NOT NULL DEFAULT '',
-    "transferFeePercent" REAL NOT NULL DEFAULT 0,
+    "transferFeePercent" DECIMAL NOT NULL DEFAULT 0,
     "dailyLimit" DECIMAL NOT NULL DEFAULT 0,
     "isDefaultReceipts" BOOLEAN NOT NULL DEFAULT false,
     "isDefaultPayments" BOOLEAN NOT NULL DEFAULT false,
@@ -560,7 +622,7 @@ CREATE TABLE "TreasuryAccount" (
     "notes" TEXT NOT NULL DEFAULT '',
     "accountId" TEXT NOT NULL,
     "balance" DECIMAL NOT NULL DEFAULT 0,
-    "balanceYER" REAL NOT NULL DEFAULT 0,
+    "balanceYER" DECIMAL NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
     "gatewayProvider" TEXT NOT NULL DEFAULT 'MANUAL',
@@ -568,7 +630,7 @@ CREATE TABLE "TreasuryAccount" (
     "gatewayEndpointUrl" TEXT,
     "gatewayCredentialsEnc" TEXT,
     "isSandbox" BOOLEAN NOT NULL DEFAULT true,
-    "dailyUsedAmount" REAL NOT NULL DEFAULT 0,
+    "dailyUsedAmount" DECIMAL NOT NULL DEFAULT 0,
     "lastDailyResetDate" TEXT,
     "archivedAt" DATETIME,
     "updatedAt" DATETIME NOT NULL,
@@ -584,12 +646,17 @@ CREATE TABLE "OperatingExpense" (
     "harvestName" TEXT NOT NULL,
     "category" TEXT NOT NULL,
     "subType" TEXT NOT NULL,
-    "quantity" REAL NOT NULL DEFAULT 1,
-    "unitPrice" REAL NOT NULL DEFAULT 0,
-    "totalAmount" REAL NOT NULL DEFAULT 0,
+    "quantity" DECIMAL NOT NULL DEFAULT 1,
+    "unitPrice" DECIMAL NOT NULL DEFAULT 0,
+    "taxCodeId" TEXT,
+    "netAmount" DECIMAL NOT NULL DEFAULT 0,
+    "taxAmount" DECIMAL NOT NULL DEFAULT 0,
+    "whtAmount" DECIMAL NOT NULL DEFAULT 0,
+    "totalAmount" DECIMAL NOT NULL DEFAULT 0,
     "expenseDate" TEXT NOT NULL,
     "notes" TEXT NOT NULL DEFAULT '',
     "journalEntryId" TEXT,
+    "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "OperatingExpense_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "OperatingExpense_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
@@ -601,7 +668,7 @@ CREATE TABLE "Worker" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "name" TEXT NOT NULL,
     "phone" TEXT NOT NULL DEFAULT '',
-    "defaultDailyWage" REAL NOT NULL DEFAULT 0,
+    "defaultDailyWage" DECIMAL NOT NULL DEFAULT 0,
     "accountId" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "glAccountId" TEXT,
@@ -622,14 +689,15 @@ CREATE TABLE "WorkerWageEntry" (
     "subProjectId" TEXT,
     "harvestCycleId" TEXT,
     "harvestName" TEXT NOT NULL,
-    "dailyWage" REAL NOT NULL,
-    "daysWorked" REAL NOT NULL,
-    "totalWage" REAL NOT NULL,
-    "creditAmount" REAL NOT NULL DEFAULT 0,
-    "debitBalance" REAL NOT NULL,
+    "dailyWage" DECIMAL NOT NULL,
+    "daysWorked" DECIMAL NOT NULL,
+    "totalWage" DECIMAL NOT NULL,
+    "creditAmount" DECIMAL NOT NULL DEFAULT 0,
+    "debitBalance" DECIMAL NOT NULL,
     "workDate" TEXT NOT NULL,
     "notes" TEXT NOT NULL DEFAULT '',
     "journalEntryId" TEXT,
+    "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "WorkerWageEntry_workerId_fkey" FOREIGN KEY ("workerId") REFERENCES "Worker" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "WorkerWageEntry_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
@@ -656,10 +724,10 @@ CREATE TABLE "SaleTransaction" (
     "customerPhone" TEXT NOT NULL,
     "productGrade" TEXT NOT NULL,
     "bundlesCount" INTEGER NOT NULL,
-    "unitPrice" REAL NOT NULL,
-    "totalAmount" REAL NOT NULL,
-    "creditPaid" REAL NOT NULL DEFAULT 0,
-    "debitReceivable" REAL NOT NULL,
+    "unitPrice" DECIMAL NOT NULL,
+    "totalAmount" DECIMAL NOT NULL,
+    "creditPaid" DECIMAL NOT NULL DEFAULT 0,
+    "debitReceivable" DECIMAL NOT NULL,
     "saleDate" TEXT NOT NULL,
     "receiptVoucherNo" TEXT NOT NULL,
     "notes" TEXT NOT NULL DEFAULT '',
@@ -682,7 +750,7 @@ CREATE TABLE "InstallmentVoucher" (
     "targetName" TEXT NOT NULL,
     "phone" TEXT NOT NULL DEFAULT '',
     "treasuryAccountId" TEXT NOT NULL,
-    "amountYER" REAL NOT NULL,
+    "amountYER" DECIMAL NOT NULL,
     "qrVerificationHash" TEXT NOT NULL,
     "paymentDate" TEXT NOT NULL,
     "notes" TEXT NOT NULL DEFAULT '',
@@ -760,7 +828,7 @@ CREATE TABLE "AdjustmentEntry" (
     "harvestCycleId" TEXT,
     "periodLabel" TEXT NOT NULL,
     "reason" TEXT NOT NULL,
-    "amountYER" REAL NOT NULL,
+    "amountYER" DECIMAL NOT NULL,
     "createdByUser" TEXT NOT NULL,
     "journalEntryId" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -801,9 +869,9 @@ CREATE TABLE "TreasuryTransaction" (
     "treasuryId" TEXT NOT NULL,
     "direction" TEXT NOT NULL,
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
-    "exchangeRate" REAL NOT NULL DEFAULT 1.0,
-    "foreignAmount" REAL NOT NULL DEFAULT 0,
-    "baseAmount" REAL NOT NULL DEFAULT 0,
+    "exchangeRate" DECIMAL NOT NULL DEFAULT 1.0,
+    "foreignAmount" DECIMAL NOT NULL DEFAULT 0,
+    "baseAmount" DECIMAL NOT NULL DEFAULT 0,
     "referenceType" TEXT,
     "referenceId" TEXT,
     "notes" TEXT,
@@ -865,12 +933,12 @@ CREATE TABLE "InventoryItem" (
     "origin" TEXT,
     "baseUnitId" TEXT NOT NULL,
     "defaultWarehouseId" TEXT,
-    "purchasePrice" REAL NOT NULL DEFAULT 0,
-    "wholesalePrice" REAL NOT NULL DEFAULT 0,
-    "retailPrice" REAL NOT NULL DEFAULT 0,
-    "minSellPrice" REAL NOT NULL DEFAULT 0,
-    "minStockAlert" REAL NOT NULL DEFAULT 0,
-    "maxStockLevel" REAL NOT NULL DEFAULT 0,
+    "purchasePrice" DECIMAL NOT NULL DEFAULT 0,
+    "wholesalePrice" DECIMAL NOT NULL DEFAULT 0,
+    "retailPrice" DECIMAL NOT NULL DEFAULT 0,
+    "minSellPrice" DECIMAL NOT NULL DEFAULT 0,
+    "minStockAlert" DECIMAL NOT NULL DEFAULT 0,
+    "maxStockLevel" DECIMAL NOT NULL DEFAULT 0,
     "inventoryAccountId" TEXT,
     "cogsAccountId" TEXT,
     "revenueAccountId" TEXT,
@@ -889,10 +957,10 @@ CREATE TABLE "ItemUnitConversion" (
     "itemId" TEXT NOT NULL,
     "unitId" TEXT NOT NULL,
     "customUnitLabel" TEXT,
-    "factorToBase" REAL NOT NULL,
+    "factorToBase" DECIMAL NOT NULL,
     "barcode" TEXT,
-    "purchasePrice" REAL,
-    "sellPrice" REAL,
+    "purchasePrice" DECIMAL,
+    "sellPrice" DECIMAL,
     "isDefaultSalesUnit" BOOLEAN NOT NULL DEFAULT false,
     "isDefaultPurchaseUnit" BOOLEAN NOT NULL DEFAULT false,
     CONSTRAINT "ItemUnitConversion_itemId_fkey" FOREIGN KEY ("itemId") REFERENCES "InventoryItem" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
@@ -904,8 +972,8 @@ CREATE TABLE "StockBalance" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "itemId" TEXT NOT NULL,
     "warehouseId" TEXT NOT NULL,
-    "qtyOnHandBase" REAL NOT NULL DEFAULT 0,
-    "avgUnitCostBase" REAL NOT NULL DEFAULT 0,
+    "qtyOnHandBase" DECIMAL NOT NULL DEFAULT 0,
+    "avgUnitCostBase" DECIMAL NOT NULL DEFAULT 0,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "StockBalance_itemId_fkey" FOREIGN KEY ("itemId") REFERENCES "InventoryItem" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "StockBalance_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse" ("id") ON DELETE CASCADE ON UPDATE CASCADE
@@ -917,11 +985,11 @@ CREATE TABLE "StockMovement" (
     "itemId" TEXT NOT NULL,
     "warehouseId" TEXT NOT NULL,
     "movementType" TEXT NOT NULL,
-    "enteredQty" REAL NOT NULL,
+    "enteredQty" DECIMAL NOT NULL,
     "enteredUnitId" TEXT NOT NULL,
-    "factorToBase" REAL NOT NULL DEFAULT 1,
-    "baseQtyDelta" REAL NOT NULL,
-    "unitCostBase" REAL NOT NULL DEFAULT 0,
+    "factorToBase" DECIMAL NOT NULL DEFAULT 1,
+    "baseQtyDelta" DECIMAL NOT NULL,
+    "unitCostBase" DECIMAL NOT NULL DEFAULT 0,
     "referenceType" TEXT,
     "referenceId" TEXT,
     "notes" TEXT,
@@ -974,6 +1042,55 @@ CREATE TABLE "FiscalYear" (
 );
 
 -- CreateTable
+CREATE TABLE "AccountingPeriod" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "fiscalYearId" TEXT,
+    "year" INTEGER NOT NULL,
+    "month" INTEGER NOT NULL,
+    "code" TEXT NOT NULL,
+    "nameAr" TEXT NOT NULL,
+    "nameEn" TEXT NOT NULL,
+    "startDate" DATETIME NOT NULL,
+    "endDate" DATETIME NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'OPEN',
+    "closedById" TEXT,
+    "closedAt" DATETIME,
+    "notes" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "AccountingPeriod_fiscalYearId_fkey" FOREIGN KEY ("fiscalYearId") REFERENCES "FiscalYear" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "TaxCode" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "code" TEXT NOT NULL,
+    "nameAr" TEXT NOT NULL,
+    "nameEn" TEXT NOT NULL,
+    "taxType" TEXT NOT NULL DEFAULT 'VAT',
+    "ratePct" DECIMAL NOT NULL DEFAULT 0,
+    "isCompound" BOOLEAN NOT NULL DEFAULT false,
+    "isInclusive" BOOLEAN NOT NULL DEFAULT false,
+    "salesTaxAccountCode" TEXT DEFAULT '214101',
+    "purchaseTaxAccountCode" TEXT DEFAULT '114301',
+    "whtAccountCode" TEXT DEFAULT '214201',
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "TaxRate" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "taxCodeId" TEXT NOT NULL,
+    "ratePct" DECIMAL NOT NULL,
+    "effectiveFrom" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "effectiveTo" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "TaxRate_taxCodeId_fkey" FOREIGN KEY ("taxCodeId") REFERENCES "TaxCode" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
 CREATE TABLE "WorkspaceDraft" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "draftNumber" TEXT NOT NULL,
@@ -983,7 +1100,7 @@ CREATE TABLE "WorkspaceDraft" (
     "titleAr" TEXT NOT NULL,
     "titleEn" TEXT NOT NULL DEFAULT '',
     "payloadJson" TEXT NOT NULL,
-    "totalAmount" REAL,
+    "totalAmount" DECIMAL,
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
     "visibility" TEXT NOT NULL DEFAULT 'SHARED_WORKSPACE',
     "status" TEXT NOT NULL DEFAULT 'ACTIVE_DRAFT',
@@ -1001,7 +1118,7 @@ CREATE TABLE "ApprovalRule" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "module" TEXT NOT NULL,
     "actionType" TEXT NOT NULL,
-    "minAmountBase" REAL NOT NULL DEFAULT 0,
+    "minAmountBase" DECIMAL NOT NULL DEFAULT 0,
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
     "requiredRole" TEXT NOT NULL DEFAULT 'CHIEF_ACCOUNTANT',
     "approverUserIdsJson" TEXT NOT NULL DEFAULT '[]',
@@ -1023,7 +1140,7 @@ CREATE TABLE "ApprovalRequest" (
     "documentNumber" TEXT NOT NULL,
     "summaryAr" TEXT NOT NULL,
     "summaryEn" TEXT NOT NULL DEFAULT '',
-    "amountBase" REAL NOT NULL DEFAULT 0,
+    "amountBase" DECIMAL NOT NULL DEFAULT 0,
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
     "beforeSnapshotJson" TEXT,
     "afterSnapshotJson" TEXT NOT NULL,
@@ -1062,11 +1179,11 @@ CREATE TABLE "BankPaymentDispatch" (
     "sourceVoucherId" TEXT NOT NULL,
     "beneficiaryName" TEXT NOT NULL,
     "beneficiaryAccountOrPhone" TEXT NOT NULL,
-    "amount" REAL NOT NULL,
-    "feeAmount" REAL NOT NULL DEFAULT 0,
+    "amount" DECIMAL NOT NULL,
+    "feeAmount" DECIMAL NOT NULL DEFAULT 0,
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
-    "exchangeRate" REAL NOT NULL DEFAULT 1,
-    "baseAmount" REAL NOT NULL,
+    "exchangeRate" DECIMAL NOT NULL DEFAULT 1,
+    "baseAmount" DECIMAL NOT NULL,
     "provider" TEXT NOT NULL,
     "externalReferenceId" TEXT,
     "status" TEXT NOT NULL DEFAULT 'QUEUED',
@@ -1199,6 +1316,12 @@ CREATE UNIQUE INDEX "GoodsReceipt_grnNumber_key" ON "GoodsReceipt"("grnNumber");
 CREATE UNIQUE INDEX "VendorBill_billNumber_key" ON "VendorBill"("billNumber");
 
 -- CreateIndex
+CREATE INDEX "VendorBillItem_billId_idx" ON "VendorBillItem"("billId");
+
+-- CreateIndex
+CREATE INDEX "VendorBillItem_itemId_idx" ON "VendorBillItem"("itemId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "PaymentVoucher_voucherNumber_key" ON "PaymentVoucher"("voucherNumber");
 
 -- CreateIndex
@@ -1214,10 +1337,19 @@ CREATE UNIQUE INDEX "Customer_accountId_key" ON "Customer"("accountId");
 CREATE UNIQUE INDEX "SalesInvoice_invoiceNumber_key" ON "SalesInvoice"("invoiceNumber");
 
 -- CreateIndex
+CREATE INDEX "SalesInvoiceItem_invoiceId_idx" ON "SalesInvoiceItem"("invoiceId");
+
+-- CreateIndex
+CREATE INDEX "SalesInvoiceItem_itemId_idx" ON "SalesInvoiceItem"("itemId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "ReceiptVoucher_voucherNumber_key" ON "ReceiptVoucher"("voucherNumber");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "InventoryLot_lotNumber_key" ON "InventoryLot"("lotNumber");
+
+-- CreateIndex
+CREATE INDEX "InventoryLot_itemId_warehouseId_receivedDate_idx" ON "InventoryLot"("itemId", "warehouseId", "receivedDate");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "TreasuryAccount_code_key" ON "TreasuryAccount"("code");
@@ -1272,6 +1404,21 @@ CREATE UNIQUE INDEX "CostCenter_code_key" ON "CostCenter"("code");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "FiscalYear_code_key" ON "FiscalYear"("code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "AccountingPeriod_code_key" ON "AccountingPeriod"("code");
+
+-- CreateIndex
+CREATE INDEX "AccountingPeriod_startDate_endDate_status_idx" ON "AccountingPeriod"("startDate", "endDate", "status");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "AccountingPeriod_year_month_key" ON "AccountingPeriod"("year", "month");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TaxCode_code_key" ON "TaxCode"("code");
+
+-- CreateIndex
+CREATE INDEX "TaxRate_taxCodeId_effectiveFrom_idx" ON "TaxRate"("taxCodeId", "effectiveFrom");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "WorkspaceDraft_draftNumber_key" ON "WorkspaceDraft"("draftNumber");

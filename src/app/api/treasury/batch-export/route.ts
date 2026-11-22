@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
+import { authorizeApiAction } from "@/lib/apiHelpers";
 import { exportBulkBankTransferFile } from "@/lib/treasury/bankWalletGateway";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { treasuryAccountId, treasuryName, provider, items, format = "xlsx" } = body;
+    const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "treasury",
+      action: "treasury",
+    });
+    if (!auth.ok) return auth.response;
+
+    const { treasuryAccountId, treasuryName, provider, items, format = "xlsx" } = body as any;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json(
@@ -41,4 +49,4 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-}
+});

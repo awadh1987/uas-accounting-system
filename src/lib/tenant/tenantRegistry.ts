@@ -20,6 +20,7 @@ export interface TenantMetadata {
 
 const inMemoryRegistry = new Map<string, TenantMetadata>();
 let isRegistryInitialized = false;
+let lastLoadedMtimeMs = -1;
 
 function createDefaultTenantMetadata(): TenantMetadata {
   const now = new Date().toISOString();
@@ -99,9 +100,15 @@ function loadRegistryFromDisk(): void {
     }
 
     if (fs.existsSync(/*turbopackIgnore: true*/ filePath)) {
+      try {
+        lastLoadedMtimeMs = fs.statSync(/*turbopackIgnore: true*/ filePath).mtimeMs;
+      } catch {
+        lastLoadedMtimeMs = -1;
+      }
       const raw = fs.readFileSync(/*turbopackIgnore: true*/ filePath, "utf8");
       const list = JSON.parse(raw);
       if (Array.isArray(list)) {
+        inMemoryRegistry.clear();
         for (const item of list) {
           if (item && item.tenantId) {
             inMemoryRegistry.set(item.tenantId, item);
@@ -114,6 +121,7 @@ function loadRegistryFromDisk(): void {
       inMemoryRegistry.set("default", defaultMeta);
       try {
         fs.writeFileSync(/*turbopackIgnore: true*/ filePath, JSON.stringify([defaultMeta], null, 2), "utf8");
+        lastLoadedMtimeMs = fs.statSync(/*turbopackIgnore: true*/ filePath).mtimeMs;
       } catch (writeErr) {
         console.warn("[TenantRegistry] Notice writing initial registry to disk:", writeErr);
       }
@@ -137,6 +145,11 @@ function saveRegistryToDisk(): void {
     }
     const list = Array.from(inMemoryRegistry.values());
     fs.writeFileSync(/*turbopackIgnore: true*/ filePath, JSON.stringify(list, null, 2), "utf8");
+    try {
+      lastLoadedMtimeMs = fs.statSync(/*turbopackIgnore: true*/ filePath).mtimeMs;
+    } catch {
+      // Ignore stat error
+    }
   } catch (err) {
     console.warn("[TenantRegistry] Warning saving registry to disk:", err);
   }
@@ -145,9 +158,23 @@ function saveRegistryToDisk(): void {
 /**
  * Ensures the tenant registry is loaded into memory lazily upon first access at runtime,
  * never during static module evaluation or build-time bundling.
+ * Reloads transparently if `tenants_registry.json` was updated externally on disk.
  */
 export function ensureRegistryInitialized(): void {
-  if (isRegistryInitialized) return;
+  if (isRegistryInitialized) {
+    try {
+      const filePath = getRegistryFilePath();
+      if (fs.existsSync(/*turbopackIgnore: true*/ filePath)) {
+        const mtimeMs = fs.statSync(/*turbopackIgnore: true*/ filePath).mtimeMs;
+        if (mtimeMs !== lastLoadedMtimeMs) {
+          loadRegistryFromDisk();
+        }
+      }
+    } catch {
+      // Non-fatal
+    }
+    return;
+  }
   isRegistryInitialized = true;
   loadRegistryFromDisk();
 }
@@ -158,6 +185,18 @@ export function ensureRegistryInitialized(): void {
 export function resetRegistryForTests(): void {
   inMemoryRegistry.clear();
   isRegistryInitialized = false;
+  lastLoadedMtimeMs = -1;
+}
+
+export function unregisterTenant(rawTenantId?: string | null): boolean {
+  ensureRegistryInitialized();
+  const normId = normalizeTenantId(rawTenantId);
+  if (normId === "default") return false;
+  const existed = inMemoryRegistry.delete(normId);
+  if (existed) {
+    saveRegistryToDisk();
+  }
+  return existed;
 }
 
 export function getTenantMetadata(rawTenantId?: string | null): TenantMetadata | null {
@@ -214,9 +253,9 @@ export function registerTenant(params: {
     (normId === "default"
       ? "default"
       : generateTenantSlug(params.nameEn || params.companyName || normId, {
-          existingSlugs,
-          preferredSlug: normId.replace(/_/g, "-"),
-        }).slug);
+        existingSlugs,
+        preferredSlug: normId.replace(/_/g, "-"),
+      }).slug);
 
   const resolvedUrl =
     params.tenantUrl ||

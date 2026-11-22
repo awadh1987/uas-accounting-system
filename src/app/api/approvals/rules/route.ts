@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import {
@@ -10,18 +11,21 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
+    const auth = await authorizeApiAction({}, req, { moduleId: "system" });
+    if (!auth.ok) return auth.response;
+
     const rules = await listApprovalRules();
     return NextResponse.json({ rules });
   } catch (error) {
     console.error("GET /api/approvals/rules error:", error);
     return jsonError("تعذر تحميل سياسات الاعتماد", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const body = (await req.json()) as Record<string, unknown>;
@@ -48,9 +52,9 @@ export async function POST(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر إنشاء قاعدة الاعتماد";
     return jsonError(msg, 400);
   }
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const body = (await req.json()) as Record<string, unknown>;
@@ -77,9 +81,9 @@ export async function PUT(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر تحديث قاعدة الاعتماد";
     return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
   }
-}
+});
 
-export async function DELETE(req: NextRequest) {
+export const DELETE = withTenantRoute(async function DELETE(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const { searchParams } = new URL(req.url);
@@ -104,4 +108,4 @@ export async function DELETE(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر حذف قاعدة الاعتماد";
     return jsonError(msg, 400);
   }
-}
+});

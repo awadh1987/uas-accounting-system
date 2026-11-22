@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { computeQrVerificationCode } from "@/lib/formulas";
 import { ensureWorkerWithAccountTx, postJournalEntry, reverseJournalEntry } from "@/lib/accounting/ledgerService";
 import { appendAuditLogTx, getBootstrapState, isHarvestLockedTx } from "@/lib/serverBootstrap";
-import { extractActor, jsonError, lockedError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "treasury",
+      action: "create",
+      dateChanged: Boolean(body.date),
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
+
     const type = String(body.type || "CUSTOMER_RECEIPT");
     const targetId = String(body.targetId || "").trim();
     const treasuryId = String(body.treasuryId || "t1").trim();
@@ -17,7 +25,6 @@ export async function POST(req: NextRequest) {
       `${type === "CUSTOMER_RECEIPT" ? "RV" : "PV"}-INST-${Math.floor(100 + Math.random() * 900)}`;
     const paymentDate = String(body.date || new Date().toISOString().slice(0, 10));
     const notes = String(body.notes || "دفعة مسجلة").trim();
-    const actor = extractActor(body);
 
     if (amount <= 0 || !targetId) {
       return jsonError("يرجى تحديد السجل وإدخال مبلغ صحيح", 400);
@@ -40,6 +47,14 @@ export async function POST(req: NextRequest) {
         ? `${baseVoucherNo}-${Date.now().toString().slice(-4)}`
         : baseVoucherNo;
 
+      const resolveTreasuryRate = async (currency: string) => {
+        const c = (currency || "YER").toUpperCase();
+        if (c === "YER") return 1;
+        const r = await tx.currencyRate.findUnique({ where: { currencyCode: c } });
+        return Number(r?.rateToYER) || (c === "SAR" ? 425 : c === "USD" ? 1620 : 1);
+      };
+      const trRate = await resolveTreasuryRate(treasury.currency);
+
       if (type === "CUSTOMER_RECEIPT") {
         const sale = await tx.saleTransaction.findUnique({
           where: { id: targetId },
@@ -49,8 +64,8 @@ export async function POST(req: NextRequest) {
         if (await isHarvestLockedTx(tx, sale.projectId, sale.harvestName)) {
           return { status: "LOCKED" as const };
         }
-        const nextCredit = sale.creditPaid + amount;
-        const nextDebit = sale.totalAmount - nextCredit;
+        const nextCredit = Number(sale.creditPaid) + amount;
+        const nextDebit = Number(sale.totalAmount) - nextCredit;
         await tx.saleTransaction.update({
           where: { id: sale.id },
           data: { creditPaid: nextCredit, debitReceivable: nextDebit },
@@ -58,8 +73,8 @@ export async function POST(req: NextRequest) {
         await tx.treasuryAccount.update({
           where: { id: treasury.id },
           data: {
-            balance: Number(treasury.balance) + amount,
-            balanceYER: treasury.balanceYER + amount,
+            balance: Number(treasury.balance) + amount / trRate,
+            balanceYER: Number(treasury.balanceYER) + amount,
           },
         });
         const je = await postJournalEntry({
@@ -102,8 +117,8 @@ export async function POST(req: NextRequest) {
         if (await isHarvestLockedTx(tx, workerEntry.projectId, workerEntry.harvestName)) {
           return { status: "LOCKED" as const };
         }
-        const nextCredit = workerEntry.creditAmount + amount;
-        const nextDebit = workerEntry.totalWage - nextCredit;
+        const nextCredit = Number(workerEntry.creditAmount) + amount;
+        const nextDebit = Number(workerEntry.totalWage) - nextCredit;
         await tx.workerWageEntry.update({
           where: { id: workerEntry.id },
           data: { creditAmount: nextCredit, debitBalance: nextDebit },
@@ -111,8 +126,8 @@ export async function POST(req: NextRequest) {
         await tx.treasuryAccount.update({
           where: { id: treasury.id },
           data: {
-            balance: Number(treasury.balance) - amount,
-            balanceYER: treasury.balanceYER - amount,
+            balance: Number(treasury.balance) - amount / trRate,
+            balanceYER: Number(treasury.balanceYER) - amount,
           },
         });
         const workerRec = workerEntry.worker.accountId
@@ -196,9 +211,9 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/installments error:", error);
     return jsonError("تعذر حفظ سند الدفعة", 500);
   }
-}
+});
 
-export async function DELETE(req: NextRequest) {
+export const DELETE = withTenantRoute(async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     let id = searchParams.get("id");
@@ -211,18 +226,25 @@ export async function DELETE(req: NextRequest) {
     }
 
     if (!id) return jsonError("يرجى تحديد معرف السند المطلوب حذفه", 400);
-    const actor = extractActor(body);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "treasury",
+      action: "delete",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
     const result = await prisma.$transaction(async (tx) => {
       const voucher = await tx.installmentVoucher.findUnique({ where: { id } });
       if (!voucher) return { status: "NOT_FOUND" as const };
 
+      const voucherAmt = Number(voucher.amountYER);
+
       // Revert sale balances
       if (voucher.saleTransactionId) {
         const sale = await tx.saleTransaction.findUnique({ where: { id: voucher.saleTransactionId } });
         if (sale) {
-          const nextCredit = Math.max(0, sale.creditPaid - voucher.amountYER);
-          const nextDebit = Math.max(0, sale.totalAmount - nextCredit);
+          const nextCredit = Math.max(0, Number(sale.creditPaid) - voucherAmt);
+          const nextDebit = Math.max(0, Number(sale.totalAmount) - nextCredit);
           await tx.saleTransaction.update({
             where: { id: sale.id },
             data: { creditPaid: nextCredit, debitReceivable: nextDebit },
@@ -234,8 +256,8 @@ export async function DELETE(req: NextRequest) {
       if (voucher.workerWageEntryId) {
         const worker = await tx.workerWageEntry.findUnique({ where: { id: voucher.workerWageEntryId } });
         if (worker) {
-          const nextCredit = Math.max(0, worker.creditAmount - voucher.amountYER);
-          const nextDebit = Math.max(0, worker.totalWage - nextCredit);
+          const nextCredit = Math.max(0, Number(worker.creditAmount) - voucherAmt);
+          const nextDebit = Math.max(0, Number(worker.totalWage) - nextCredit);
           await tx.workerWageEntry.update({
             where: { id: worker.id },
             data: { creditAmount: nextCredit, debitBalance: nextDebit },
@@ -243,36 +265,44 @@ export async function DELETE(req: NextRequest) {
         }
       }
 
-      // Revert treasury balance
+      // Revert treasury balance & balanceYER atomically
       const treasury = await tx.treasuryAccount.findUnique({ where: { id: voucher.treasuryAccountId } });
       if (treasury) {
-        const delta = voucher.type === "CUSTOMER_RECEIPT" ? -voucher.amountYER : voucher.amountYER;
+        const tCur = (treasury.currency || "YER").toUpperCase();
+        const tRateRow =
+          tCur === "YER" ? null : await tx.currencyRate.findUnique({ where: { currencyCode: tCur } });
+        const tRate = tCur === "YER" ? 1 : Number(tRateRow?.rateToYER) || (tCur === "SAR" ? 425 : 1620);
+        const delta = voucher.type === "CUSTOMER_RECEIPT" ? -voucherAmt : voucherAmt;
         await tx.treasuryAccount.update({
           where: { id: treasury.id },
-          data: { balanceYER: treasury.balanceYER + delta },
+          data: {
+            balance: Number(treasury.balance) + delta / tRate,
+            balanceYER: Number(treasury.balanceYER) + delta,
+          },
         });
       }
 
-      // Reversal of journal entry
+      // Atomic reversal of journal entry (never hard-delete posted GL entries)
       if (voucher.journalEntryId) {
-        try {
+        const existingJe = await tx.journalEntry.findUnique({
+          where: { id: voucher.journalEntryId },
+          select: { status: true, isReversed: true },
+        });
+        if (existingJe && existingJe.status !== "VOIDED" && !existingJe.isReversed) {
           await reverseJournalEntry({
             journalEntryId: voucher.journalEntryId,
-            reason: `إلغاء سند دفعة محذوف: ${voucher.voucherNo}`,
+            reason: `إلغاء سند دفعة: ${voucher.voucherNo}`,
             createdById: actor.userId ?? undefined,
             tx,
           });
-        } catch {
-          await tx.journalEntryLine.deleteMany({ where: { journalEntryId: voucher.journalEntryId } });
-          await tx.journalEntry.delete({ where: { id: voucher.journalEntryId } });
         }
       }
 
       await appendAuditLogTx(tx, {
         ...actor,
-        actionType: "حذف سند دفعة",
+        actionType: "عكس وحذف سند دفعة",
         entityReference: voucher.id,
-        details: `حذف سند ${voucher.voucherNo} — المبلغ: ${voucher.amountYER.toLocaleString()} ريال`,
+        details: `سند ${voucher.voucherNo} — المبلغ: ${voucherAmt.toLocaleString()} ريال`,
       });
 
       await tx.installmentVoucher.delete({ where: { id: voucher.id } });
@@ -288,4 +318,4 @@ export async function DELETE(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر حذف سند الدفعة";
     return jsonError(msg, 400);
   }
-}
+});

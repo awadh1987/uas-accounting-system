@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import {
   postJournalEntry,
   reverseJournalEntry,
@@ -12,7 +12,7 @@ import { withIdempotency } from "@/lib/idempotencyGuard";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const projectId = searchParams.get("projectId");
@@ -136,9 +136,9 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/accounting/journal error:", error);
     return jsonError("تعذر تحميل قيود دفتر اليومية", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (r) => {
     try {
       const body = (await r.json()) as Record<string, unknown>;
@@ -200,7 +200,7 @@ export async function POST(req: NextRequest) {
       return jsonError(msg, status);
     }
   });
-}
+});
 
 async function handleJournalUpdate(req: NextRequest) {
   try {
@@ -253,11 +253,11 @@ async function handleJournalUpdate(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleJournalUpdate(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleJournalUpdate(req);
-}
+});
 

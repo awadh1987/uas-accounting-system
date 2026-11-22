@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
 import { getActiveTenantId } from "@/lib/tenant/tenantContext";
-import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
-import { appendAuditLogTx, hashPassword, parseAssignedProjects } from "@/lib/serverBootstrap";
+import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
+import {
+  appendAuditLogTx,
+  hashPassword,
+  isLegacySha256Hash,
+  parseAssignedProjects,
+  verifyPassword,
+} from "@/lib/serverBootstrap";
+import { attachSessionCookie, issueSessionToken } from "@/lib/authSession";
 import { jsonError } from "@/lib/apiHelpers";
 import {
   canApprove,
@@ -24,7 +31,9 @@ import type { UasUser } from "@/types/uas";
 
 export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
     const body = (await req.json()) as Record<string, unknown>;
     const userId = String(body.userId || "").trim();
     const identifier = String(body.identifier || body.email || body.username || "").trim();
@@ -73,15 +82,19 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       );
     }
 
-    if (user.passwordHash !== hashPassword(password)) {
+    if (!verifyPassword(password, user.passwordHash)) {
       return jsonError("كلمة المرور غير صحيحة", 401);
     }
 
     const now = new Date();
+    const shouldUpgradeHash = isLegacySha256Hash(user.passwordHash);
     await prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id: user.id },
-        data: { lastLoginAt: now },
+        data: {
+          lastLoginAt: now,
+          ...(shouldUpgradeHash ? { passwordHash: hashPassword(password), passwordUpdatedAt: now } : {}),
+        },
       });
 
       await appendAuditLogTx(tx, {
@@ -142,9 +155,19 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       assignedProjects: parseAssignedProjects(user.assignedProjects),
     };
 
-    return NextResponse.json(
+    const normalizedUserRole = normalizeRole(user.role);
+    const activeTenantId = getActiveTenantId();
+    const sessionToken = issueSessionToken({
+      userId: user.id,
+      userRole: normalizedUserRole,
+      tenantId: activeTenantId,
+      userDisplay: `${user.displayName || user.name} (${normalizedUserRole})`,
+    });
+
+    const response = NextResponse.json(
       {
         user: uasUser,
+        sessionToken,
         preferences: {
           preferredLang: uasUser.preferredLang,
           preferredCurrency: uasUser.preferredCurrency,
@@ -152,7 +175,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
           defaultModule: uasUser.defaultModule,
         },
         mustChangePassword: uasUser.mustChangePassword,
-        tenantId: getActiveTenantId(),
+        tenantId: activeTenantId,
         permissions: {
           allowedGroups: getAccessibleGroups(uasUser),
           accessibleTabs: getAccessibleTabs(uasUser),
@@ -175,6 +198,8 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         },
       }
     );
+    attachSessionCookie(response, sessionToken);
+    return response;
   } catch (error) {
     console.error("POST /api/auth/login error:", error);
     return jsonError("تعذر تسجيل الدخول", 500);

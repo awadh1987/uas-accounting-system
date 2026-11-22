@@ -34,7 +34,10 @@ const globalForSqliteInit = globalThis as unknown as {
 };
 
 export function isSqliteRuntime(): boolean {
-  const url = (process.env.DATABASE_URL || "").trim().toLowerCase();
+  const url = (process.env.DATABASE_URL || "")
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .toLowerCase();
   if (!url) return true;
   if (url.startsWith("postgresql://") || url.startsWith("postgres://")) {
     return false;
@@ -454,9 +457,192 @@ async function ensureAdditiveColumns(client: {
           name: "tenantAdminConfigJson",
           ddl: 'ALTER TABLE "SystemSettings" ADD COLUMN "tenantAdminConfigJson" TEXT NOT NULL DEFAULT \'{}\'',
         },
+        {
+          name: "enforceThreeWayMatch",
+          ddl: 'ALTER TABLE "SystemSettings" ADD COLUMN "enforceThreeWayMatch" INTEGER NOT NULL DEFAULT 1',
+        },
+        {
+          name: "threeWayTolerancePct",
+          ddl: 'ALTER TABLE "SystemSettings" ADD COLUMN "threeWayTolerancePct" REAL NOT NULL DEFAULT 0',
+        },
+        {
+          name: "threeWayToleranceAmount",
+          ddl: 'ALTER TABLE "SystemSettings" ADD COLUMN "threeWayToleranceAmount" REAL NOT NULL DEFAULT 0.01',
+        },
+      ],
+    },
+    {
+      table: "JournalEntry",
+      columns: [
+        {
+          name: "isReversed",
+          ddl: 'ALTER TABLE "JournalEntry" ADD COLUMN "isReversed" INTEGER NOT NULL DEFAULT 0',
+        },
+        {
+          name: "reversedByEntryId",
+          ddl: 'ALTER TABLE "JournalEntry" ADD COLUMN "reversedByEntryId" TEXT',
+        },
+      ],
+    },
+    {
+      table: "GoodsReceipt",
+      columns: [
+        { name: "warehouseId", ddl: 'ALTER TABLE "GoodsReceipt" ADD COLUMN "warehouseId" TEXT' },
+        { name: "journalEntryId", ddl: 'ALTER TABLE "GoodsReceipt" ADD COLUMN "journalEntryId" TEXT' },
+        { name: "itemsJson", ddl: 'ALTER TABLE "GoodsReceipt" ADD COLUMN "itemsJson" TEXT' },
+      ],
+    },
+    {
+      table: "VendorBill",
+      columns: [
+        { name: "billType", ddl: 'ALTER TABLE "VendorBill" ADD COLUMN "billType" TEXT NOT NULL DEFAULT \'BILL\'' },
+        { name: "originalBillId", ddl: 'ALTER TABLE "VendorBill" ADD COLUMN "originalBillId" TEXT' },
+        { name: "subTotal", ddl: 'ALTER TABLE "VendorBill" ADD COLUMN "subTotal" REAL NOT NULL DEFAULT 0' },
+        { name: "taxAmount", ddl: 'ALTER TABLE "VendorBill" ADD COLUMN "taxAmount" REAL NOT NULL DEFAULT 0' },
+        { name: "whtAmount", ddl: 'ALTER TABLE "VendorBill" ADD COLUMN "whtAmount" REAL NOT NULL DEFAULT 0' },
+      ],
+    },
+    {
+      table: "PaymentVoucher",
+      columns: [
+        { name: "allocationsJson", ddl: 'ALTER TABLE "PaymentVoucher" ADD COLUMN "allocationsJson" TEXT' },
+      ],
+    },
+    {
+      table: "SalesInvoice",
+      columns: [
+        { name: "invoiceType", ddl: 'ALTER TABLE "SalesInvoice" ADD COLUMN "invoiceType" TEXT NOT NULL DEFAULT \'INVOICE\'' },
+        { name: "originalInvoiceId", ddl: 'ALTER TABLE "SalesInvoice" ADD COLUMN "originalInvoiceId" TEXT' },
+        { name: "dueDate", ddl: 'ALTER TABLE "SalesInvoice" ADD COLUMN "dueDate" DATETIME' },
+        { name: "subTotal", ddl: 'ALTER TABLE "SalesInvoice" ADD COLUMN "subTotal" REAL NOT NULL DEFAULT 0' },
+        { name: "taxAmount", ddl: 'ALTER TABLE "SalesInvoice" ADD COLUMN "taxAmount" REAL NOT NULL DEFAULT 0' },
+        { name: "whtAmount", ddl: 'ALTER TABLE "SalesInvoice" ADD COLUMN "whtAmount" REAL NOT NULL DEFAULT 0' },
+        { name: "cogsJournalEntryId", ddl: 'ALTER TABLE "SalesInvoice" ADD COLUMN "cogsJournalEntryId" TEXT' },
+      ],
+    },
+    {
+      table: "ReceiptVoucher",
+      columns: [
+        { name: "allocationsJson", ddl: 'ALTER TABLE "ReceiptVoucher" ADD COLUMN "allocationsJson" TEXT' },
+      ],
+    },
+    {
+      table: "InventoryLot",
+      columns: [
+        { name: "itemId", ddl: 'ALTER TABLE "InventoryLot" ADD COLUMN "itemId" TEXT' },
+        { name: "warehouseId", ddl: 'ALTER TABLE "InventoryLot" ADD COLUMN "warehouseId" TEXT' },
+        { name: "receivedDate", ddl: 'ALTER TABLE "InventoryLot" ADD COLUMN "receivedDate" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP' },
+      ],
+    },
+    {
+      table: "OperatingExpense",
+      columns: [
+        { name: "taxCodeId", ddl: 'ALTER TABLE "OperatingExpense" ADD COLUMN "taxCodeId" TEXT' },
+        { name: "netAmount", ddl: 'ALTER TABLE "OperatingExpense" ADD COLUMN "netAmount" REAL NOT NULL DEFAULT 0' },
+        { name: "taxAmount", ddl: 'ALTER TABLE "OperatingExpense" ADD COLUMN "taxAmount" REAL NOT NULL DEFAULT 0' },
+        { name: "whtAmount", ddl: 'ALTER TABLE "OperatingExpense" ADD COLUMN "whtAmount" REAL NOT NULL DEFAULT 0' },
+        { name: "documentStatus", ddl: 'ALTER TABLE "OperatingExpense" ADD COLUMN "documentStatus" TEXT NOT NULL DEFAULT \'POSTED\'' },
+      ],
+    },
+    {
+      table: "WorkerWageEntry",
+      columns: [
+        { name: "documentStatus", ddl: 'ALTER TABLE "WorkerWageEntry" ADD COLUMN "documentStatus" TEXT NOT NULL DEFAULT \'POSTED\'' },
       ],
     },
   ];
+
+  const additiveTables = [
+    `CREATE TABLE IF NOT EXISTS "VendorBillItem" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "billId" TEXT NOT NULL,
+      "itemId" TEXT,
+      "warehouseId" TEXT,
+      "taxCodeId" TEXT,
+      "description" TEXT NOT NULL,
+      "unitId" TEXT,
+      "quantity" DECIMAL NOT NULL,
+      "unitPrice" DECIMAL NOT NULL,
+      "netAmount" DECIMAL NOT NULL,
+      "taxAmount" DECIMAL NOT NULL DEFAULT 0,
+      "whtAmount" DECIMAL NOT NULL DEFAULT 0,
+      "totalAmount" DECIMAL NOT NULL,
+      CONSTRAINT "VendorBillItem_billId_fkey" FOREIGN KEY ("billId") REFERENCES "VendorBill" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    )`,
+    `CREATE INDEX IF NOT EXISTS "VendorBillItem_billId_idx" ON "VendorBillItem"("billId")`,
+    `CREATE TABLE IF NOT EXISTS "SalesInvoiceItem" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "invoiceId" TEXT NOT NULL,
+      "itemId" TEXT,
+      "warehouseId" TEXT,
+      "taxCodeId" TEXT,
+      "description" TEXT NOT NULL,
+      "unitId" TEXT,
+      "quantity" DECIMAL NOT NULL,
+      "unitPrice" DECIMAL NOT NULL,
+      "netAmount" DECIMAL NOT NULL,
+      "taxAmount" DECIMAL NOT NULL DEFAULT 0,
+      "whtAmount" DECIMAL NOT NULL DEFAULT 0,
+      "totalAmount" DECIMAL NOT NULL,
+      "costOfGoodsSold" DECIMAL NOT NULL DEFAULT 0,
+      CONSTRAINT "SalesInvoiceItem_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "SalesInvoice" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    )`,
+    `CREATE INDEX IF NOT EXISTS "SalesInvoiceItem_invoiceId_idx" ON "SalesInvoiceItem"("invoiceId")`,
+    `CREATE TABLE IF NOT EXISTS "AccountingPeriod" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "fiscalYearId" TEXT,
+      "year" INTEGER NOT NULL,
+      "month" INTEGER NOT NULL,
+      "code" TEXT NOT NULL,
+      "nameAr" TEXT NOT NULL,
+      "nameEn" TEXT NOT NULL,
+      "startDate" DATETIME NOT NULL,
+      "endDate" DATETIME NOT NULL,
+      "status" TEXT NOT NULL DEFAULT 'OPEN',
+      "closedById" TEXT,
+      "closedAt" DATETIME,
+      "notes" TEXT,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL,
+      CONSTRAINT "AccountingPeriod_fiscalYearId_fkey" FOREIGN KEY ("fiscalYearId") REFERENCES "FiscalYear" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "AccountingPeriod_code_key" ON "AccountingPeriod"("code")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "AccountingPeriod_year_month_key" ON "AccountingPeriod"("year", "month")`,
+    `CREATE TABLE IF NOT EXISTS "TaxCode" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "code" TEXT NOT NULL,
+      "nameAr" TEXT NOT NULL,
+      "nameEn" TEXT NOT NULL,
+      "taxType" TEXT NOT NULL DEFAULT 'VAT',
+      "ratePct" DECIMAL NOT NULL DEFAULT 0,
+      "isCompound" INTEGER NOT NULL DEFAULT 0,
+      "isInclusive" INTEGER NOT NULL DEFAULT 0,
+      "salesTaxAccountCode" TEXT DEFAULT '214101',
+      "purchaseTaxAccountCode" TEXT DEFAULT '114301',
+      "whtAccountCode" TEXT DEFAULT '214201',
+      "isActive" INTEGER NOT NULL DEFAULT 1,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "TaxCode_code_key" ON "TaxCode"("code")`,
+    `CREATE TABLE IF NOT EXISTS "TaxRate" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "taxCodeId" TEXT NOT NULL,
+      "ratePct" DECIMAL NOT NULL,
+      "effectiveFrom" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "effectiveTo" DATETIME,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "TaxRate_taxCodeId_fkey" FOREIGN KEY ("taxCodeId") REFERENCES "TaxCode" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    )`,
+  ];
+
+  for (const ddl of additiveTables) {
+    try {
+      await client.$executeRawUnsafe(ddl);
+    } catch {
+      // Ignore table already exists / lock
+    }
+  }
 
   for (const spec of specs) {
     try {

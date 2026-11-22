@@ -29,8 +29,25 @@ export const LAN_URL_STORAGE_KEY = "uas_lan_server_url";
 export const CLOUD_URL_STORAGE_KEY = "uas_cloud_server_url";
 export const TENANT_ID_STORAGE_KEY = "uas_tenant_id";
 export const DEVICE_ID_STORAGE_KEY = "uas_device_id";
+export const SESSION_TOKEN_STORAGE_KEY = "uas_session_token";
 export const DEFAULT_CLOUD_API_URL = "https://qat.world";
 export const DEFAULT_LAN_API_URL = "http://192.168.1.10:3000";
+
+export function getStoredSessionToken(storage?: Pick<StorageLike, "getItem"> | null): string {
+  const s = getStorage(storage);
+  return (s?.getItem(SESSION_TOKEN_STORAGE_KEY) || "").trim();
+}
+
+export function setStoredSessionToken(token: string | null | undefined, storage?: StorageLike | null): void {
+  const s = getWritableStorage(storage);
+  if (!s) return;
+  const cleaned = (token || "").trim();
+  if (!cleaned) {
+    s.removeItem(SESSION_TOKEN_STORAGE_KEY);
+  } else {
+    s.setItem(SESSION_TOKEN_STORAGE_KEY, cleaned);
+  }
+}
 
 export function getOrCreateClientDeviceId(storage?: StorageLike | null): string {
   const s = getWritableStorage(storage);
@@ -58,10 +75,16 @@ export function detectClientDevicePlatform(winOverride?: BrowserEnvLike): "andro
 }
 
 function handlePotentialRevocation(status: number, bodyObj: unknown): void {
-  if (status === 403 && bodyObj && typeof bodyObj === "object" && (bodyObj as any).code === "DEVICE_REVOKED") {
+  if (
+    status === 403 &&
+    bodyObj &&
+    typeof bodyObj === "object" &&
+    (bodyObj as { code?: unknown }).code === "DEVICE_REVOKED"
+  ) {
     if (typeof window !== "undefined") {
       try {
         window.localStorage.removeItem("uas_user");
+        window.localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
         window.dispatchEvent(new CustomEvent("uas:device-revoked", { detail: bodyObj }));
       } catch {
         // Ignore
@@ -343,6 +366,10 @@ export async function safeFetchJson<T = Record<string, unknown>>(
     if (!headers.has("x-uas-platform")) {
       headers.set("x-uas-platform", detectClientDevicePlatform());
     }
+    if (!headers.has("x-uas-session-token")) {
+      const sessionTok = getStoredSessionToken();
+      if (sessionTok) headers.set("x-uas-session-token", sessionTok);
+    }
     const finalInit = { ...init, headers };
 
     const baseUrl = resolveApiBaseUrl();
@@ -372,7 +399,11 @@ export async function safeFetchJson<T = Record<string, unknown>>(
     try {
       const parsed = JSON.parse(trimmed) as T;
       handlePotentialRevocation(res.status, parsed);
-      const parsedErr = (parsed as any)?.error || (parsed as any)?.message;
+      const errRecord =
+        parsed && typeof parsed === "object"
+          ? (parsed as { error?: string; message?: string })
+          : undefined;
+      const parsedErr = errRecord?.error || errRecord?.message;
       return {
         ok: res.ok,
         status: res.status,
@@ -432,6 +463,10 @@ export function installGlobalApiFetchInterceptor(): void {
       if (!headers.has("x-uas-platform")) {
         headers.set("x-uas-platform", detectClientDevicePlatform());
       }
+      if (!headers.has("x-uas-session-token")) {
+        const sessionTok = getStoredSessionToken();
+        if (sessionTok) headers.set("x-uas-session-token", sessionTok);
+      }
       const patchedInit = { ...init, headers };
 
       // On Android in `"local"` mode, route all local `/api/*` calls to on-device localStorage adapter
@@ -490,6 +525,10 @@ export async function fetchBootstrapState(): Promise<{
     };
     if (tid && tid !== "default") {
       headers["x-uas-tenant-id"] = tid;
+    }
+    const sessionTok = getStoredSessionToken();
+    if (sessionTok) {
+      headers["x-uas-session-token"] = sessionTok;
     }
     const res = await fetch(`${base}/api/bootstrap`, {
       cache: "no-store",
@@ -920,6 +959,10 @@ export async function executeMutation(opts: {
     if (tid && tid !== "default") {
       headers["x-uas-tenant-id"] = tid;
     }
+    const sessionTok = getStoredSessionToken();
+    if (sessionTok) {
+      headers["x-uas-session-token"] = sessionTok;
+    }
     const { resilientFetch } = await import("@/lib/transportResolver");
     const res = await resilientFetch(`${base}${opts.endpoint}`, {
       method: opts.method,
@@ -1012,6 +1055,10 @@ export async function syncQueuedOfflineMutations(currentUser: UasUser): Promise<
   };
   if (tid && tid !== "default") {
     headers["x-uas-tenant-id"] = tid;
+  }
+  const sessionTok = getStoredSessionToken();
+  if (sessionTok) {
+    headers["x-uas-session-token"] = sessionTok;
   }
   const { resilientFetch } = await import("@/lib/transportResolver");
   for (const item of items) {

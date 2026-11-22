@@ -5,7 +5,7 @@
   "typescript.enablePromptUseWorkspaceTsdk": true,
   "java.jdt.ls.java.home": "C:\\Program Files\\Android\\Android Studio\\jbr",
   "java.import.gradle.java.home": "C:\\Program Files\\Android\\Android Studio\\jbr",
-  "java.configuration.updateBuildConfiguration": "interactive",
+  "java.configuration.updateBuildConfiguration": "automatic",
   "java.import.exclusions": [
     "**/node_modules/**",
     "**/.metadata/**",
@@ -17,4 +17,3 @@
     "**/dist/**"
   ]
 }
-

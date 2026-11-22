@@ -1,0 +1,51 @@
+# 11 — Recommended Implementation Roadmap
+
+> **Note:** Per Audit Directive, zero source changes were made during this audit. The roadmap below sequences remediation strictly by **severity, foundational dependency order, and financial integrity impact**.
+
+---
+
+## Phase 0 — Emergency Security, Multi-Tenancy & Posting Stop-The-Bleed (Mandatory Before Any Live Data Entry)
+
+| Step | Target Area | Specific Engineering & Accounting Remediation | Depends On | Priority |
+|---|---|---|---|---|
+| **0.1** | **Server Authentication & Sessions** | Implement cryptographically signed HTTP-only session cookies or short-lived JWTs validated in middleware/server helper inside `POST /api/auth/login` & `/logout`; migrate `hashPassword` from unsalted SHA-256 to `argon2id`/`scrypt` (`serverBootstrap.ts`) and force immediate rotation of `"123456"` defaults (`seed.ts`, `tenantDbManager.ts`). | None | **P0 — BLOCKER** |
+| **0.2** | **Eliminate `SUPER_ADMIN` Default & Actor Spoofing** | Remove `\|\| "u1"` / `\|\| "SUPER_ADMIN"` fallback in `extractActor()` (`apiHelpers.ts`), `system/reset/route.ts`, and `treasury/dispatch/route.ts`. Reject any request without verified server session identity (`401`). Fail **closed** if `checkLicenseAndClock` throws. | `0.1` | **P0 — BLOCKER** |
+| **0.3** | **Enforce `withTenantRoute` & Auth on All 90 API Routes** | Wrap all **67** unprotected `src/app/api/**/route.ts` handlers with `withTenantRoute`, apply `authorizeApiAction` across every mutating and financial-read route (replacing bare `extractActor()` on 29 routes and adding auth to 25 open routes including `reports/*`, `fx-revaluation`, `audit/*`, `drafts/*`, `approvals/*`, `system/reset`, `system/lifecycle`, `treasury/*`), and verify HMAC signatures in `/api/treasury/webhook/[provider]`. | `0.1`, `0.2` | **P0 — BLOCKER** |
+| **0.4** | **Restore Journal Immutability & Disable Destructive Deletes** | Block line/amount/date editing of `POSTED` `JournalEntry` rows inside `updateJournalEntry()` (require Reversal + Re-post or `ApprovalRequest` for non-financial metadata only). Replace `DELETE` endpoints on bills, payments, sales, expenses, workers, and installments with atomic **Void / Reverse** workflows (`reverseJournalEntry` + sub-ledger status `VOIDED`), removing all `catch { journalEntry.delete }` code! | None | **P0 — BLOCKER** |
+
+---
+
+## Phase 1 — Core General Ledger, Reversals, Financial Statements & Period Controls
+
+| Step | Target Area | Specific Engineering & Accounting Remediation | Depends On | Priority |
+|---|---|---|---|---|
+| **1.1** | **Fix Journal Reversal Double-Inversion & `costCenterId` Loss** | Choose one consistent accounting convention and enforce everywhere: Keep original `JournalEntry` `status: "POSTED"` (marking `isReversed: true` / `reversedByEntryId`) alongside its `POSTED` reversal entry so `Orig + Rev === 0.00` naturally in reports; copy `costCenterId`, `currencyCode`, `foreign*`, `base*` onto every reversal line (`reverseJournalEntry` L701). | `0.4` | **P0 — CRITICAL** |
+| **1.2** | **Fix Balance Sheet, Income Statement & Cost Center Queries** | Refactor `generateFinancialReports()` (`ledgerService.ts:L1879`) into separate queries:<br>1. **Income Statement & Project/CC P&L**: Filter `fromDate..toDate`, explicitly **excluding `entryType: "YEAR_END_CLOSING"`** (unless post-close inspection mode requested).<br>2. **Balance Sheet**: Query cumulative posted lines **`date <= toDate`** up to latest fiscal boundary (or opening balance of active fiscal year + period-to-date movement up to `toDate`, **never double-counting `OPENING` + prior year `NORMAL`**!). Compute `currentYearNetProfit` cumulatively up to `toDate`. | `1.1` | **P0 — CRITICAL** |
+| **1.3** | **Enforce `periodLockDate` & Closed FY Across Every Posting Path** | Move `assertNotInLockedPeriod()` inside `postJournalEntry()` (L481) and `fx-revaluation` / `bankWalletGateway` (have `bankWalletGateway` delegate strictly to `postJournalEntry()` instead of raw `tx.journalEntry.create`), ensuring closed fiscal years and locked dates cannot be bypassed. | `1.1` | **P1 — CRITICAL** |
+| **1.4** | **Eliminate GL ↔ Treasury Drift** | Ensure `postOperatingExpenseJournalTx`, `postWorkerWageJournalTx` (initial payout), `POST /api/audit/adjustments`, `DELETE/VOID /api/procurement/payments`, `DELETE/VOID /api/installments`, `DELETE/VOID /api/sales/[id]`, and verified inbound webhooks atomically adjust **both `TreasuryAccount.balance` and `balanceYER`** matching the GL currency. Fix `DELETE /api/workers/[id]` to reverse both `WORKER_ACCRUAL` and `WORKER_PAYOUT` entries. Fix `TreasuryTab.tsx` L432 endpoint from `/api/records/lifecycle` to `/api/system/lifecycle` (`id` field). | `0.4` | **P1 — CRITICAL** |
+| **1.5** | **Fix Multi-Currency FX Revaluation & Wire Realized FX** | Track cumulative base value of monetary foreign balances in their native currency (store `revaluedBaseDelta` or record valuation adjustment lines in a linked foreign-currency revaluation sub-account / adjustment tracker so re-running at identical spot rate calculates `diff = 0`). Wire `computeRealizedFxGainLoss()` into `postVendorPayment()` and `postCustomerReceipt()`, and wire `balanceDualCurrencyLines()` into `postJournalEntry()`. Convert all `Float` monetary/FX columns in `schema.prisma` to `Decimal` and use decimal arithmetic (`decimal.js`) in TypeScript. | `1.1`, `1.2` | **P1 — HIGH** |
+| **1.6** | **Wire Control Accounts, Document Sequences & Fix Scoped Reset** | Replace hardcoded account literals (`111101`, `113201`, `524101`, `511101`, `531201`, `311101`) in `ledgerService.ts` with `parseAccountingSettings().controlAccounts` (fixing colliding `taxPayableAccount`/`taxReceivableAccount` defaults); replace `nextSequenceCode` with transactional `generateNextDocumentNumber()` row locks; fix `scopedResetEngine.ts` to only delete balanced entire `JournalEntry` graphs (never single-sided lines by `costCenterId`), match `"ACTIVE_DRAFT"`, and keep `"100000".."500000"` Gen-1 COA nodes. | `1.1` | **P1 — HIGH** |
+
+---
+
+## Phase 2 — ERP Sub-Ledger Integration, Approvals & Missing Core Controls
+
+| Step | Target Area | Specific Engineering & Accounting Remediation | Depends On | Priority |
+|---|---|---|---|---|
+| **2.1** | **Bridge Inventory ↔ Procurement ↔ Sales ↔ GL** | 1. Make `POST /api/inventory/movements` post balanced GL journals using `InventoryItem.inventoryAccountId` / `cogsAccountId` / inventory adjustment accounts.<br>2. When `VendorBill` (`isInventory=true`) or `GoodsReceipt` is posted, create `StockMovement` + update `StockBalance` (and accrued GRN/IR clearing if 2-step GRN→Bill).<br>3. On Sales (`POST /api/sales` / `postSalesInvoice`), check/deduct `StockBalance` & `HarvestInventoryBatch` and post `DR COGS / CR Inventory` at WAC/FIFO.<br>4. Implement `FIFO` layer consumption via `InventoryLot`. | `1.2`, `1.4` | **P1 — CRITICAL** |
+| **2.2** | **Enforce Approval Workflows Everywhere** | Inject unified `evaluateAndRouteApproval()` inside `postJournalEntry()`, `postVendorBill()`, `postVendorPayment()`, `postSalesInvoice()`, `postCustomerReceipt()`, `POST /api/expenses`, `POST /api/workers`, and `promoteWorkspaceDraft()`, creating real `ApprovalRequest` entries when `requireApprovalWorkflow` or an `ApprovalRule` matches. | `0.3`, `1.1` | **P1 — HIGH** |
+| **2.3** | **Fix AR/AP Sub-Ledger Completeness** | Enforce `Customer.creditLimit` in `postSalesInvoice` / `POST /api/sales`; enforce configurable 3-Way Matching tolerance (PO vs GRN vs Bill) in `POST /api/procurement/bills`; add `VendorBillItem` & `SalesInvoiceItem` tables; eliminate duplicate `ReceiptVoucher`+`InstallmentVoucher` double-creation in `POST /api/sales`; add Sales/Purchase Credit & Debit Notes and Multi-Invoice Payment Allocation. | `2.1`, `2.2` | **P2 — HIGH** |
+| **2.4** | **Monthly Accounting Periods (`AccountingPeriod`)** | Introduce per-month open/soft-close/hard-close `AccountingPeriod` model integrated with `postJournalEntry` and period-end close checklists (depreciation run, inventory-to-GL tie-out, FX reval). | `1.3` | **P2 — HIGH** |
+
+---
+
+## Phase 3 — Missing Statutory Reports, Tax, Fixed Assets & Offline Parity
+
+| Step | Target Area | Specific Engineering & Accounting Remediation | Depends On | Priority |
+|---|---|---|---|---|
+| **3.1** | **Statutory Statements & Analytical Reports** | Implement Cash Flow Statement (IAS 7 Indirect & Direct), Statement of Changes in Equity, Disclosure Notes, AR/AP Aging Reports (`dueDate` on `SalesInvoice`), GL-derived Customer/Vendor Statements, Account Ledger Running Balance report, Financial Ratios, Comparatives, and click-through GL/Voucher **Drill-Down** UI in `FinancialReportsTab.tsx`. | `1.2`, `2.1`, `2.3` | **P2 — HIGH** |
+| **3.2** | **Tax / VAT / Withholding Tax Engine** | Create `TaxCode`/`TaxRate` schema & rules; compute line-level VAT and WHT on invoices, bills, and expenses; post split tax lines to dedicated COA accounts; add Tax Summary & VAT Return reports. | `1.6`, `2.3` | **P2 — HIGH** |
+| **3.3** | **Fixed Assets & Cheque/PDC Sub-Ledgers** | Build `FixedAsset`, `AssetCategory`, and automated monthly Depreciation Run → GL posting (`IAS 16`/`IAS 36`); add `ChequeRegister` & PDC clearing statuses under Treasury. | `1.3`, `2.4` | **P3 — MEDIUM/HIGH** |
+| **3.4** | **Budget Controls & Costing Rules** | Build account-level annual/departmental Budgets with pre-posting commitment/override rules; add automated indirect Overhead Allocation rules (`CostCenter`). | `2.4` | **P3 — MEDIUM** |
+| **3.5** | **Consolidation / Intercompany (If Multi-Entity Group Applies)** | Add Intercompany Due-To/Due-From rules, Group COA mapping, elimination journals, and IAS 21 subsidiary currency translation. | `3.1` | **P4 — ENTITY DEPENDENT** |
+| **3.6** | **Android Offline Accounting Parity & Comprehensive Automated Test Suite** | Replace `offlineAndroidStore.ts` stub responses with real local double-entry ledger, WAC stock, and TB/IS/BS calculators (or restrict offline mode strictly to validated capture queues pending server posting). Add HTTP API RBAC/multi-tenant integration tests, Ledger invariant tests (`reversal`, `BS asOfDate`, `FY close`, `FX idempotency`, `Treasury=GL`), Inventory-to-GL tests, and Playwright UI E2E tests. | `0.3`–`3.2` | **P1–P2 — ONGOING** |

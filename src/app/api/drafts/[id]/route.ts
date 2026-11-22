@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import {
   discardWorkspaceDraft,
   getWorkspaceDraftById,
@@ -11,12 +12,15 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET(
-  _req: NextRequest,
+export const GET = withTenantRoute(async function GET(
+  req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
     await ensureSqliteDatabaseReady();
+    const auth = await authorizeApiAction({}, req, {});
+    if (!auth.ok) return auth.response;
+
     const { id } = await context.params;
     const draft = await getWorkspaceDraftById(id);
     if (!draft) return jsonError("المسودة غير موجودة", 404);
@@ -25,9 +29,9 @@ export async function GET(
     console.error("GET /api/drafts/[id] error:", error);
     return jsonError("تعذر تحميل المسودة", 500);
   }
-}
+});
 
-export async function PATCH(
+export const PATCH = withTenantRoute(async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
@@ -35,7 +39,9 @@ export async function PATCH(
     await ensureSqliteDatabaseReady();
     const { id } = await context.params;
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, { action: "edit" });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
     const draft = await updateWorkspaceDraft(id, {
       titleAr: body.titleAr !== undefined ? String(body.titleAr) : undefined,
@@ -49,8 +55,8 @@ export async function PATCH(
       visibility: body.visibility !== undefined ? (body.visibility as DraftVisibility) : undefined,
       status: body.status !== undefined ? (body.status as DraftStatus) : undefined,
       actor: {
-        userId: actor.userId || "u1",
-        userName: actor.userDisplay || "مستخدم النظام",
+        userId: actor.userId!,
+        userName: actor.userDisplay,
         userRole: actor.userRole,
       },
     });
@@ -60,9 +66,9 @@ export async function PATCH(
     const status = msg.includes("NOT_FOUND") ? 404 : msg.includes("DENIED") ? 403 : 400;
     return jsonError(msg, status);
   }
-}
+});
 
-export async function DELETE(
+export const DELETE = withTenantRoute(async function DELETE(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
@@ -75,10 +81,13 @@ export async function DELETE(
     } catch {
       body = {};
     }
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, { action: "edit" });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
+
     const draft = await discardWorkspaceDraft(id, {
-      userId: actor.userId || "u1",
-      userName: actor.userDisplay || "مستخدم النظام",
+      userId: actor.userId!,
+      userName: actor.userDisplay,
       userRole: actor.userRole,
     });
     return NextResponse.json({ success: true, draft });
@@ -87,4 +96,4 @@ export async function DELETE(
     const status = msg.includes("NOT_FOUND") ? 404 : msg.includes("DENIED") ? 403 : 400;
     return jsonError(msg, status);
   }
-}
+});

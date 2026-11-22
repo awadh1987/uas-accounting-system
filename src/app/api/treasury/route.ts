@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import {
   createTreasuryAccount,
   updateTreasuryAccount,
@@ -9,7 +9,7 @@ import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     const treasuries = await prisma.treasuryAccount.findMany({
       orderBy: { id: "asc" },
@@ -29,9 +29,9 @@ export async function GET() {
     console.error("GET /api/treasury error:", error);
     return jsonError("تعذر تحميل حسابات الخزينة والبنوك", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, {
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر إنشاء حساب الخزينة";
     return jsonError(msg, 400);
   }
-}
+});
 
 async function handleUpdate(req: NextRequest) {
   try {
@@ -138,11 +138,11 @@ async function handleUpdate(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleUpdate(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleUpdate(req);
-}
+});
 

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import {
   DEFAULT_CONTROL_ACCOUNTS,
   DEFAULT_DOCUMENT_SEQUENCES,
@@ -27,7 +27,12 @@ async function saveSettings(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "system",
+      action: "edit",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
     const existingRow = await prisma.systemSettings.findUnique({ where: { id: "default" } });
     const current = parseAccountingSettings(existingRow);

@@ -897,7 +897,7 @@ export function UasAppShell() {
 
   function handleLoginUser(u: UasUser) {
     setCurrentUser(u);
-    const userTenant = (u as any)?.tenantId;
+    const userTenant = (u as UasUser & { tenantId?: string }).tenantId;
     if (userTenant) {
       setStoredTenantId(userTenant);
     }
@@ -998,6 +998,7 @@ export function UasAppShell() {
       const authKeys = [
         "uas_remembered_identifier",
         "uas_session",
+        "uas_session_token",
         "uas_token",
         "uas_auth",
         "uas_user",

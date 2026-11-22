@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resolveVerifiedActor } from "@/lib/apiHelpers";
+import { withTenantRoute } from "@/lib/prisma";
+import { authorizeApiAction } from "@/lib/apiHelpers";
 import { getBootstrapState } from "@/lib/serverBootstrap";
 import {
   UAS_AGENT_TOOL_SCHEMAS,
@@ -14,7 +15,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   return NextResponse.json({
     success: true,
     agent: "UAS Enterprise Bilingual Voice + Text Reasoning ERP Copilot",
@@ -22,12 +23,14 @@ export async function GET() {
     confirmationGate: "MANDATORY_FOR_ALL_FINANCIAL_WRITES",
     tools: UAS_AGENT_TOOL_SCHEMAS,
   });
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-    const actor = await resolveVerifiedActor(body, req);
+    const auth = await authorizeApiAction(body, req, {});
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
     const lang = body.lang === "en" || body.lang === "ar" ? body.lang : undefined;
 
     // 1. Handle explicit user confirmation click ("تأكيد وترحيل / Confirm & Execute")
@@ -80,4 +83,4 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
 import { canManageUsers, normalizeRole } from "@/lib/permissions";
 import { appendAuditLogTx, getBootstrapState, hashPassword, parseAssignedProjects } from "@/lib/serverBootstrap";
-import { extractActor, forbiddenError, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, forbiddenError, jsonError } from "@/lib/apiHelpers";
 import { archiveOrRestoreUser, safeDeleteOrArchiveUser } from "@/lib/userLifecycle";
 import type { UasUser } from "@/types/uas";
 
@@ -14,9 +14,14 @@ export const PATCH = withTenantRoute(async function PATCH(
     const { id } = await context.params;
     const decodedId = decodeURIComponent(id).trim();
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "system",
+      action: "edit",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
-    if (!canManageUsers(actor.userRole)) {
+    if (!canManageUsers(actor.user || actor.userRole)) {
       return forbiddenError("⛔ إدارة صلاحيات وحسابات المستخدمين محصورة بمدير النظام العام");
     }
 
@@ -255,7 +260,15 @@ export const DELETE = withTenantRoute(async function DELETE(
     } catch {
       body = {};
     }
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "system",
+      action: "delete",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
+    if (!canManageUsers(actor.user || actor.userRole)) {
+      return forbiddenError("⛔ حذف أو أرشفة حسابات المستخدمين محصور بمدير النظام العام");
+    }
     const targetEmail = String(body.targetUserEmail || body.email || "").trim();
     const outcome = await safeDeleteOrArchiveUser(decodedId, actor, { targetEmail });
     if (!outcome.ok) {

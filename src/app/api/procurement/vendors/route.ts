@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import {
   createVendorWithAccountTx,
   recordAuditDiffTx,
@@ -14,7 +14,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     const vendors = await prisma.vendor.findMany({
       orderBy: { code: "asc" },
@@ -56,9 +56,9 @@ export async function GET() {
     console.error("GET /api/procurement/vendors error:", error);
     return jsonError("تعذر تحميل قائمة الموردين", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (r) => {
     try {
       const body = (await r.json()) as Record<string, unknown>;
@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
       return jsonError("تعذر إنشاء ملف المورد", 500);
     }
   });
-}
+});
 
 async function handleVendorUpdate(req: NextRequest) {
   try {
@@ -180,15 +180,15 @@ async function handleVendorUpdate(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleVendorUpdate(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleVendorUpdate(req);
-}
+});
 
-export async function DELETE(req: NextRequest) {
+export const DELETE = withTenantRoute(async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     let body: Record<string, unknown> = {};
@@ -227,5 +227,5 @@ export async function DELETE(req: NextRequest) {
     console.error("DELETE /api/procurement/vendors error:", error);
     return jsonError("تعذر حذف أو أرشفة المورد", 500);
   }
-}
+});
 

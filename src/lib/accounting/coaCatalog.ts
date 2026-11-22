@@ -82,6 +82,8 @@ export const STANDARD_COA_NODES: CoaSeedNode[] = [
   { code: "114101", nameAr: "مقدمات مشتريات الموردين", nameEn: "Vendor Advances - Procurement", level: 5, type: "ASSET", isPosting: true, parentCode: "114100" },
   { code: "114200", nameAr: "سلف وعهد العمال والمزارعين", nameEn: "Worker Advances", level: 4, type: "ASSET", isPosting: false, parentCode: "114000" },
   { code: "114201", nameAr: "حساب سلف العمال", nameEn: "Worker Advances Ledger", level: 5, type: "ASSET", isPosting: true, parentCode: "114200" },
+  { code: "114300", nameAr: "ضرائب مدفوعة مقدماً / ضريبة مدخلات", nameEn: "Prepaid Taxes & Input VAT", level: 4, type: "ASSET", isPosting: false, parentCode: "114000" },
+  { code: "114301", nameAr: "ضريبة القيمة المضافة - مدخلات (دائنة للاسترداد)", nameEn: "VAT Input / Tax Receivable", level: 5, type: "ASSET", isPosting: true, parentCode: "114300" },
 
   { code: "120000", nameAr: "الأصول غير المتداولة", nameEn: "Non-Current Assets", level: 2, type: "ASSET", isPosting: false, parentCode: "100000" },
   { code: "121000", nameAr: "الأراضي، الآبار، والآلات", nameEn: "Property, Land, Wells & Equipment", level: 3, type: "ASSET", isPosting: false, parentCode: "120000" },
@@ -106,6 +108,14 @@ export const STANDARD_COA_NODES: CoaSeedNode[] = [
   { code: "213000", nameAr: "تأمينات ومقدمات العملاء", nameEn: "Unearned Revenue & Customer Deposits", level: 3, type: "LIABILITY", isPosting: false, parentCode: "210000" },
   { code: "213100", nameAr: "دفعات مقدمة من العملاء", nameEn: "Client Advances & Pre-orders", level: 4, type: "LIABILITY", isPosting: false, parentCode: "213000" },
   { code: "213101", nameAr: "دفعات عملاء تحت الحساب", nameEn: "Client Pre-order Deposits", level: 5, type: "LIABILITY", isPosting: true, parentCode: "213100" },
+  { code: "214000", nameAr: "الضرائب والزكاة المستحقة", nameEn: "Taxes & Statutory Payables", level: 3, type: "LIABILITY", isPosting: false, parentCode: "210000" },
+  { code: "214100", nameAr: "ضريبة القيمة المضافة والمستقطعات", nameEn: "VAT Output & Tax Payables", level: 4, type: "LIABILITY", isPosting: false, parentCode: "214000" },
+  { code: "214101", nameAr: "ضريبة القيمة المضافة المستحقة", nameEn: "VAT Output / Taxes Payable", level: 5, type: "LIABILITY", isPosting: true, parentCode: "214100" },
+  { code: "214200", nameAr: "ضرائب الاستقطاع من المنبع المستحقة", nameEn: "Withholding Taxes Payable", level: 4, type: "LIABILITY", isPosting: false, parentCode: "214000" },
+  { code: "214201", nameAr: "ضريبة الاستقطاع من المنبع المستحقة (WHT)", nameEn: "Withholding Tax Payable", level: 5, type: "LIABILITY", isPosting: true, parentCode: "214200" },
+  { code: "215000", nameAr: "التزامات الاستلام والمشتريات المعلقة", nameEn: "Accrued Goods Received & Clearing", level: 3, type: "LIABILITY", isPosting: false, parentCode: "210000" },
+  { code: "215100", nameAr: "وسيط استلام البضائع غير المفوترة (GRN/IR)", nameEn: "GRN / IR Accrued Purchases", level: 4, type: "LIABILITY", isPosting: false, parentCode: "215000" },
+  { code: "215101", nameAr: "حساب وسيط استلام البضائع (GRN/IR Clearing)", nameEn: "GRN/IR Clearing Account", level: 5, type: "LIABILITY", isPosting: true, parentCode: "215100" },
 
   // =========================================================================
   // 300000 EQUITY (حقوق الملكية)
@@ -136,10 +146,18 @@ export const STANDARD_COA_NODES: CoaSeedNode[] = [
   { code: "411201", nameAr: "إيراد مبيعات المحاصيل الفرعية", nameEn: "Sub-Sector Harvest Sales Revenue", level: 5, type: "REVENUE", isPosting: true, parentCode: "411200" },
   { code: "411300", nameAr: "إيرادات مبيعات المواسم الاستثمارية", nameEn: "Investment Cycle Sales", level: 4, type: "REVENUE", isPosting: false, parentCode: "411000" },
   { code: "411301", nameAr: "إيراد مبيعات المواسم الاستثمارية", nameEn: "Investment Cycle Sales Revenue", level: 5, type: "REVENUE", isPosting: true, parentCode: "411300" },
+  { code: "411400", nameAr: "مردودات ومسموحات المبيعات", nameEn: "Sales Returns & Allowances", level: 4, type: "REVENUE", isPosting: false, parentCode: "411000" },
+  { code: "411401", nameAr: "مردودات ومسموحات المبيعات (إشعارات دائنة)", nameEn: "Sales Returns & Credit Notes", level: 5, type: "REVENUE", isPosting: true, parentCode: "411400" },
 
   { code: "412000", nameAr: "إيرادات خدمات زراعية ومشتقات", nameEn: "By-Products & Agricultural Services", level: 3, type: "REVENUE", isPosting: false, parentCode: "410000" },
   { code: "412100", nameAr: "مشتقات وخدمات زراعية", nameEn: "Agricultural By-Products", level: 4, type: "REVENUE", isPosting: false, parentCode: "412000" },
   { code: "412101", nameAr: "إيرادات خدمات ومشتقات زراعية", nameEn: "Agricultural Services & By-Products Revenue", level: 5, type: "REVENUE", isPosting: true, parentCode: "412100" },
+
+  { code: "420000", nameAr: "الإيرادات الأخرى وفروق العملات", nameEn: "Other Income & FX Gains", level: 2, type: "REVENUE", isPosting: false, parentCode: "400000" },
+  { code: "421000", nameAr: "أرباح فروق أسعار الصرف", nameEn: "Foreign Exchange Gains", level: 3, type: "REVENUE", isPosting: false, parentCode: "420000" },
+  { code: "421100", nameAr: "فروق العملة الدائنة", nameEn: "FX Gain Accounts", level: 4, type: "REVENUE", isPosting: false, parentCode: "421000" },
+  { code: "421101", nameAr: "أرباح فروق عملة محققة", nameEn: "Realized FX Gain", level: 5, type: "REVENUE", isPosting: true, parentCode: "421100" },
+  { code: "421102", nameAr: "أرباح فروق عملة غير محققة (إعادة التقييم)", nameEn: "Unrealized FX Gain", level: 5, type: "REVENUE", isPosting: true, parentCode: "421100" },
 
   // =========================================================================
   // 500000 EXPENSES & COSTS (المصروفات والتكاليف)
@@ -153,6 +171,10 @@ export const STANDARD_COA_NODES: CoaSeedNode[] = [
   { code: "512000", nameAr: "تكاليف مدخلات الإنتاج المستهلكة", nameEn: "Direct Procurement & Inputs Consumed", level: 3, type: "EXPENSE", isPosting: false, parentCode: "510000" },
   { code: "512100", nameAr: "المدخلات والمستلزمات المستهلكة", nameEn: "Inputs Consumed", level: 4, type: "EXPENSE", isPosting: false, parentCode: "512000" },
   { code: "512101", nameAr: "مصروف مدخلات الإنتاج المستهلكة", nameEn: "Direct Agricultural Inputs Expense", level: 5, type: "EXPENSE", isPosting: true, parentCode: "512100" },
+  { code: "512200", nameAr: "تكلفة البضاعة والمخزون المباع (COGS)", nameEn: "Cost of Goods Sold - Inventory", level: 4, type: "EXPENSE", isPosting: false, parentCode: "512000" },
+  { code: "512201", nameAr: "تكلفة البضاعة والمبيعات المخزنية (COGS)", nameEn: "Cost of Inventory Sold", level: 5, type: "EXPENSE", isPosting: true, parentCode: "512200" },
+  { code: "512300", nameAr: "فروق جرد وتلف المخزون", nameEn: "Inventory Shrinkage & Adjustment", level: 4, type: "EXPENSE", isPosting: false, parentCode: "512000" },
+  { code: "512301", nameAr: "فروق التسوية الجردية والتلف المخزني", nameEn: "Inventory Adjustment & Shrinkage Expense", level: 5, type: "EXPENSE", isPosting: true, parentCode: "512300" },
 
   { code: "520000", nameAr: "المصروفات التشغيلية للمشاريع", nameEn: "Operating Expenses", level: 2, type: "EXPENSE", isPosting: false, parentCode: "500000" },
   { code: "521000", nameAr: "وقود ومحروقات وطاقة", nameEn: "Fuel, Diesel & Power", level: 3, type: "EXPENSE", isPosting: false, parentCode: "520000" },
@@ -179,6 +201,11 @@ export const STANDARD_COA_NODES: CoaSeedNode[] = [
   { code: "53110201", nameAr: "رسوم السجل التجاري والتراخيص السنوية", nameEn: "Commercial Registration & Annual License Fees", level: 6, type: "EXPENSE", isPosting: true, parentCode: "531102" },
   { code: "531200", nameAr: "عمولات ورسوم البنوك والمحافظ", nameEn: "Bank & Wallet Transfer Fees", level: 4, type: "EXPENSE", isPosting: false, parentCode: "531000" },
   { code: "531201", nameAr: "رسوم التحويلات البنكية والإلكترونية", nameEn: "Remittance & Wallet Transfer Fees", level: 5, type: "EXPENSE", isPosting: true, parentCode: "531200" },
+  { code: "532000", nameAr: "خسائر وفروق تقييم العملات الأجنبية", nameEn: "Foreign Exchange Losses & Rounding", level: 3, type: "EXPENSE", isPosting: false, parentCode: "530000" },
+  { code: "532100", nameAr: "فروق العملة المدينة", nameEn: "FX Loss & Rounding Accounts", level: 4, type: "EXPENSE", isPosting: false, parentCode: "532000" },
+  { code: "532101", nameAr: "خسائر فروق عملة محققة", nameEn: "Realized FX Loss", level: 5, type: "EXPENSE", isPosting: true, parentCode: "532100" },
+  { code: "532102", nameAr: "خسائر فروق عملة غير محققة (إعادة التقييم)", nameEn: "Unrealized FX Loss", level: 5, type: "EXPENSE", isPosting: true, parentCode: "532100" },
+  { code: "532103", nameAr: "فروق تقريب العملات الأجنبية", nameEn: "FX Rounding Adjustment", level: 5, type: "EXPENSE", isPosting: true, parentCode: "532100" },
 ];
 
 export function mapExpenseCategoryToCoaCode(category: string): string {

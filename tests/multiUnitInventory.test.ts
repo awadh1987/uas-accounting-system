@@ -134,7 +134,7 @@ describe("Phase 2 — Multi-Unit Inventory, Custom 'Other' Lookups, WAC & Compou
     });
     cleanupIds.itemIds.push(item.id);
     assert.equal(item.conversions.length, 1);
-    assert.equal(item.conversions[0].factorToBase, 24);
+    assert.equal(Number(item.conversions[0].factorToBase), 24);
 
     // Record incoming 3 boxes (3 * 24 = 72 base units)
     const baseDelta = convertToBaseQty(3, 24);
@@ -146,7 +146,7 @@ describe("Phase 2 — Multi-Unit Inventory, Custom 'Other' Lookups, WAC & Compou
         avgUnitCostBase: 500,
       },
     });
-    assert.equal(bal.qtyOnHandBase, 72);
+    assert.equal(Number(bal.qtyOnHandBase), 72);
   });
 
   it("supports custom 'Other' UOM and custom Currency creation in Android offline local store", async () => {

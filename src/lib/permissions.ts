@@ -674,6 +674,7 @@ export function hasGranularPermission(
     "inventory.custom_uom": "canCustomUom",
     "records.archive_delete": "canArchiveDeleteRecords",
     "treasury.execute_gateway": "canExecuteGateway",
+    "treasury.gateway_execute": "canExecuteGateway",
   };
   const key = (map[permission] || permission) as keyof GranularActionPermissions;
   return evaluateActionRight(userOrRole, key, true);

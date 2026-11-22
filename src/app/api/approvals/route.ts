@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import {
   listApprovalRequests,
   submitApprovalRequest,
@@ -9,9 +10,12 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
+    const auth = await authorizeApiAction({}, req, { moduleId: "audit" });
+    if (!auth.ok) return auth.response;
+
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status") || undefined;
     const moduleFilter = searchParams.get("module") || undefined;
@@ -22,13 +26,18 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/approvals error:", error);
     return jsonError("تعذر تحميل طلبات الاعتماد", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "ledger",
+      action: "create",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
 
     const request = await submitApprovalRequest({
       module: String(body.module || "ACCOUNTING"),
@@ -50,9 +59,9 @@ export async function POST(req: NextRequest) {
           : {},
       reasonAr: body.reasonAr ? String(body.reasonAr) : null,
       actor: {
-        userId: actor.userId || "u1",
-        userName: actor.userDisplay || "مستخدم النظام",
-        userRole: actor.userRole || "FIELD_ACCOUNTANT",
+        userId: actor.userId!,
+        userName: actor.userDisplay,
+        userRole: actor.userRole,
       },
     });
     return NextResponse.json({ success: true, request }, { status: 201 });
@@ -60,4 +69,4 @@ export async function POST(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر إرسال طلب الاعتماد";
     return jsonError(msg, 400);
   }
-}
+});

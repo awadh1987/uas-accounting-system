@@ -11,7 +11,7 @@ import {
   Tooltip,
 } from "chart.js";
 import { Bar } from "react-chartjs-2";
-import { BarChart3, CheckCircle2, FileSpreadsheet, Printer, Scale, AlertTriangle } from "lucide-react";
+import { BarChart3, CheckCircle2, FileSpreadsheet, Printer, Scale, AlertTriangle, X, Eye } from "lucide-react";
 import { exportFinancialStatementsToExcel } from "@/lib/excelExport";
 import { fmtNum } from "@/lib/formulas";
 import {
@@ -94,6 +94,7 @@ interface IncomeStatementPayload {
   netProfit: number;
   projectBreakdown: ProjectBreakdownRow[];
   subProjectBreakdown?: SubProjectBreakdownRow[];
+  comparative?: Omit<IncomeStatementPayload, "comparative"> | null;
 }
 
 interface BalanceSheetPayload {
@@ -107,6 +108,104 @@ interface BalanceSheetPayload {
   totalEquity: number;
   liabilitiesPlusEquity: number;
   isBalanced: boolean;
+  comparative?: Omit<BalanceSheetPayload, "comparative"> | null;
+}
+
+interface CashFlowPayload {
+  indirectMethod: {
+    netProfit: number;
+    adjustments: { changeInReceivables: number; changeInInventory: number; changeInPayables: number };
+    operatingCashFlow: number;
+    investingCashFlow: number;
+    financingCashFlow: number;
+    netChangeInCash: number;
+  };
+  directMethod: {
+    cashReceiptsFromCustomers: number;
+    cashPaidToSuppliersAndExpenses: number;
+    cashPaidToEmployees: number;
+    operatingCashFlow: number;
+    investingCashFlow: number;
+    financingCashFlow: number;
+  };
+  reconciliation: { openingCashBalance: number; closingCashBalance: number; actualCashChange: number };
+  comparative?: Omit<CashFlowPayload, "comparative"> | null;
+}
+
+interface ChangesInEquityPayload {
+  openingEquity: number;
+  capitalAndReserveMovements: number;
+  netProfitForPeriod: number;
+  closingEquity: number;
+  equityBreakdown: Array<{ code: string; nameAr: string; balance: number }>;
+}
+
+interface AgingPayload {
+  type: "AR" | "AP";
+  asOfDate: string;
+  rows: Array<{
+    partyId: string;
+    partyCode: string;
+    partyName: string;
+    current: number;
+    days1_30: number;
+    days31_60: number;
+    days61_90: number;
+    days90Plus: number;
+    totalOpen: number;
+    documentsCount: number;
+  }>;
+  totals: { current: number; days1_30: number; days31_60: number; days61_90: number; days90Plus: number; totalOpen: number };
+}
+
+interface StatementPayload {
+  entityType: "CUSTOMER" | "VENDOR" | "ACCOUNT";
+  code: string;
+  titleAr: string;
+  openingBalance: number;
+  closingBalance: number;
+  rows: Array<{
+    lineId: string;
+    entryNumber: string;
+    date: string;
+    reference?: string | null;
+    sourceType?: string | null;
+    memo?: string | null;
+    debitBase: number;
+    creditBase: number;
+    runningBalance: number;
+  }>;
+}
+
+interface TaxSummaryPayload {
+  taxableSalesBase: number;
+  taxablePurchasesBase: number;
+  outputVat: number;
+  inputVat: number;
+  netVatPayable: number;
+  whtPayable: number;
+  comparative?: Omit<TaxSummaryPayload, "comparative"> | null;
+}
+
+interface FinancialRatiosPayload {
+  liquidity: { currentAssets: number; currentLiabilities: number; currentRatio: number; quickRatio: number };
+  profitability: { grossMarginPct: number; netMarginPct: number; returnOnAssetsPct: number };
+  leverage: { debtToEquity: number };
+  efficiency: { arDaysDso: number; apDaysDpo: number };
+}
+
+interface DrilldownLine {
+  lineId: string;
+  entryNumber: string;
+  date: string;
+  reference?: string | null;
+  narrationAr: string;
+  sourceType?: string | null;
+  accountCode: string;
+  accountNameAr: string;
+  costCenterCode?: string | null;
+  debitBase: number;
+  creditBase: number;
 }
 
 interface CostCenterReportRow {
@@ -139,13 +238,18 @@ export function FinancialReportsTab({
   enterpriseProfile,
   onToast,
 }: FinancialReportsTabProps) {
-  const [reportTab, setReportTab] = useState<"tb" | "pl" | "bs" | "budget" | "cc">("tb");
+  const [reportTab, setReportTab] = useState<
+    "tb" | "pl" | "bs" | "cf" | "equity" | "aging" | "statements" | "tax" | "ratios" | "budget" | "cc"
+  >("tb");
   const [costCenterFilter, setCostCenterFilter] = useState("ALL");
   const [costCenterList, setCostCenterList] = useState<Array<{ id: string; code: string; nameAr: string; generation: number }>>([]);
   const [ccReport, setCcReport] = useState<CostCenterReportPayload | null>(null);
   const [currencyDisplayMode, setCurrencyDisplayMode] = useState<"BASE_YER" | "TX_CURRENCY">("BASE_YER");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const [compareEnabled, setCompareEnabled] = useState(false);
+  const [compareFromDate, setCompareFromDate] = useState("");
+  const [compareToDate, setCompareToDate] = useState("");
   const [projectIdOverride, setProjectIdOverride] = useState<string | null>(null);
   const [subProjectIdOverride, setSubProjectIdOverride] = useState<string | null>(null);
 
@@ -156,6 +260,23 @@ export function FinancialReportsTab({
   const [tb, setTb] = useState<TrialBalancePayload | null>(null);
   const [pl, setPl] = useState<IncomeStatementPayload | null>(null);
   const [bs, setBs] = useState<BalanceSheetPayload | null>(null);
+  const [cf, setCf] = useState<CashFlowPayload | null>(null);
+  const [equityStmt, setEquityStmt] = useState<ChangesInEquityPayload | null>(null);
+  const [agingType, setAgingType] = useState<"AR" | "AP">("AR");
+  const [agingReport, setAgingReport] = useState<AgingPayload | null>(null);
+  const [stmtType, setStmtType] = useState<"CUSTOMER" | "VENDOR" | "ACCOUNT">("CUSTOMER");
+  const [stmtEntityId, setStmtEntityId] = useState("");
+  const [stmtOptions, setStmtOptions] = useState<{
+    customers: Array<{ id: string; code: string; nameAr: string }>;
+    vendors: Array<{ id: string; code: string; nameAr: string }>;
+    accounts: Array<{ id: string; code: string; nameAr: string }>;
+  }>({ customers: [], vendors: [], accounts: [] });
+  const [statement, setStatement] = useState<StatementPayload | null>(null);
+  const [taxSummary, setTaxSummary] = useState<TaxSummaryPayload | null>(null);
+  const [ratios, setRatios] = useState<FinancialRatiosPayload | null>(null);
+  const [drilldownTitle, setDrilldownTitle] = useState<string | null>(null);
+  const [drilldownLines, setDrilldownLines] = useState<DrilldownLine[]>([]);
+  const [drilldownLoading, setDrilldownLoading] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const availableSubProjects = useMemo(() => {
@@ -174,6 +295,8 @@ export function FinancialReportsTab({
     if (localProjectId && localProjectId !== "ALL") qs.set("projectId", localProjectId);
     if (localSubProjectId && localSubProjectId !== "ALL") qs.set("subProjectId", localSubProjectId);
     if (costCenterFilter && costCenterFilter !== "ALL") qs.set("costCenterId", costCenterFilter);
+    if (compareEnabled && compareFromDate) qs.set("compareFromDate", compareFromDate);
+    if (compareEnabled && compareToDate) qs.set("compareToDate", compareToDate);
     qs.set("level", String(coaLevel));
 
     Promise.all([
@@ -181,13 +304,23 @@ export function FinancialReportsTab({
       fetch(`/api/accounting/reports/income-statement?${qs.toString()}`, { cache: "no-store" }),
       fetch(`/api/accounting/reports/balance-sheet?${qs.toString()}`, { cache: "no-store" }),
       fetch(`/api/accounting/reports/cost-centers?${qs.toString()}`, { cache: "no-store" }),
+      fetch(`/api/accounting/reports/cash-flow?${qs.toString()}`, { cache: "no-store" }),
+      fetch(`/api/accounting/reports/changes-in-equity?${qs.toString()}`, { cache: "no-store" }),
+      fetch(`/api/accounting/reports/aging?type=${agingType}&${qs.toString()}`, { cache: "no-store" }),
+      fetch(`/api/accounting/reports/tax-summary?${qs.toString()}`, { cache: "no-store" }),
+      fetch(`/api/accounting/reports/ratios?${qs.toString()}`, { cache: "no-store" }),
     ])
-      .then(async ([tbRes, plRes, bsRes, ccRes]) => {
+      .then(async ([tbRes, plRes, bsRes, ccRes, cfRes, eqRes, agRes, taxRes, ratRes]) => {
         if (!active) return;
         if (tbRes.ok) setTb((await tbRes.json()) as TrialBalancePayload);
         if (plRes.ok) setPl((await plRes.json()) as IncomeStatementPayload);
         if (bsRes.ok) setBs((await bsRes.json()) as BalanceSheetPayload);
         if (ccRes.ok) setCcReport((await ccRes.json()) as CostCenterReportPayload);
+        if (cfRes.ok) setCf((await cfRes.json()) as CashFlowPayload);
+        if (eqRes.ok) setEquityStmt((await eqRes.json()) as ChangesInEquityPayload);
+        if (agRes.ok) setAgingReport((await agRes.json()) as AgingPayload);
+        if (taxRes.ok) setTaxSummary((await taxRes.json()) as TaxSummaryPayload);
+        if (ratRes.ok) setRatios((await ratRes.json()) as FinancialRatiosPayload);
         setLoading(false);
       })
       .catch(() => {
@@ -199,7 +332,68 @@ export function FinancialReportsTab({
     return () => {
       active = false;
     };
-  }, [fromDate, toDate, localProjectId, localSubProjectId, costCenterFilter, coaLevel, onToast]);
+  }, [
+    fromDate,
+    toDate,
+    compareEnabled,
+    compareFromDate,
+    compareToDate,
+    localProjectId,
+    localSubProjectId,
+    costCenterFilter,
+    coaLevel,
+    agingType,
+    onToast,
+  ]);
+
+  useEffect(() => {
+    fetch("/api/accounting/reports/statements", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d) setStmtOptions({ customers: d.customers || [], vendors: d.vendors || [], accounts: d.accounts || [] });
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!stmtEntityId) return;
+    let active = true;
+    const qs = new URLSearchParams({ entityType: stmtType, entityId: stmtEntityId });
+    if (fromDate) qs.set("fromDate", fromDate);
+    if (toDate) qs.set("toDate", toDate);
+    fetch(`/api/accounting/reports/statements?${qs.toString()}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (active) setStatement(d);
+      })
+      .catch(() => {
+        if (active) setStatement(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [stmtType, stmtEntityId, fromDate, toDate]);
+
+  async function openAccountDrilldown(accountCode: string, accountNameAr: string) {
+    setDrilldownTitle(`${accountCode} — ${accountNameAr}`);
+    setDrilldownLoading(true);
+    setDrilldownLines([]);
+    try {
+      const qs = new URLSearchParams({ accountCode });
+      if (fromDate) qs.set("fromDate", fromDate);
+      if (toDate) qs.set("toDate", toDate);
+      if (localProjectId && localProjectId !== "ALL") qs.set("projectId", localProjectId);
+      if (localSubProjectId && localSubProjectId !== "ALL") qs.set("subProjectId", localSubProjectId);
+      if (costCenterFilter && costCenterFilter !== "ALL") qs.set("costCenterId", costCenterFilter);
+      const res = await fetch(`/api/accounting/reports/drilldown?${qs.toString()}`, { cache: "no-store" });
+      if (res.ok) {
+        const d = (await res.json()) as { lines?: DrilldownLine[] };
+        setDrilldownLines(d.lines || []);
+      }
+    } finally {
+      setDrilldownLoading(false);
+    }
+  }
 
   useEffect(() => {
     fetch("/api/accounting/cost-centers", { cache: "no-store" })
@@ -575,12 +769,51 @@ export function FinancialReportsTab({
           />
         </div>
 
+        {/* Comparative Period Bar */}
+        <div className="flex flex-wrap items-center gap-3 text-xs no-print">
+          <label className="inline-flex items-center gap-2 font-bold cursor-pointer">
+            <input
+              type="checkbox"
+              checked={compareEnabled}
+              onChange={(e) => setCompareEnabled(e.target.checked)}
+              className="rounded border-slate-300 text-emerald-600"
+            />
+            <span>مقارنة بفترة سابقة (Comparative Period)</span>
+          </label>
+          {compareEnabled && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-slate-500">من:</span>
+              <input
+                type="date"
+                dir="ltr"
+                value={compareFromDate}
+                onChange={(e) => setCompareFromDate(e.target.value)}
+                className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-1 text-xs font-mono"
+              />
+              <span className="text-slate-500">إلى:</span>
+              <input
+                type="date"
+                dir="ltr"
+                value={compareToDate}
+                onChange={(e) => setCompareToDate(e.target.value)}
+                className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-1 text-xs font-mono"
+              />
+            </div>
+          )}
+        </div>
+
         {/* Sub-Report Switcher */}
         <div className="flex flex-wrap gap-2 text-xs no-print">
           {[
             { id: "tb" as const, label: "ميزان المراجعة (Trial Balance)" },
             { id: "pl" as const, label: "قائمة الدخل (Profit & Loss)" },
             { id: "bs" as const, label: "الميزانية العمومية (Balance Sheet)" },
+            { id: "cf" as const, label: "التدفقات النقدية (Cash Flow IAS 7)" },
+            { id: "equity" as const, label: "التغيرات في حقوق الملكية" },
+            { id: "aging" as const, label: "أعمار الذمم (AR/AP Aging)" },
+            { id: "statements" as const, label: "كشوف الحسابات التفصيلية" },
+            { id: "tax" as const, label: "ملخص الضرائب (VAT / WHT)" },
+            { id: "ratios" as const, label: "المؤشرات والنسب المالية" },
             { id: "budget" as const, label: "الموازنة مقابل الفعلي (Budget Variance)" },
             { id: "cc" as const, label: "تقرير مراكز التكلفة (Cost Center P&L)" },
           ].map((t) => (
@@ -675,8 +908,14 @@ export function FinancialReportsTab({
                 </thead>
                 <tbody className="divide-y">
                   {tb.rows.map((r) => (
-                    <tr key={r.id} className={r.level <= 2 ? "font-extrabold bg-slate-50/70 dark:bg-slate-800/50" : ""}>
-                      <td className="py-2 font-mono">{r.code}</td>
+                    <tr
+                      key={r.id}
+                      onClick={() => void openAccountDrilldown(r.code, r.nameAr)}
+                      className={`cursor-pointer hover:bg-emerald-50/50 dark:hover:bg-slate-800/70 transition-colors ${
+                        r.level <= 2 ? "font-extrabold bg-slate-50/70 dark:bg-slate-800/50" : ""
+                      }`}
+                    >
+                      <td className="py-2 font-mono text-sky-700 underline decoration-dotted">{r.code}</td>
                       <td className="py-2" style={{ paddingInlineStart: `${(r.level - 1) * 12}px` }}>
                         {r.nameAr}
                       </td>
@@ -729,26 +968,55 @@ export function FinancialReportsTab({
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div className="p-4 rounded-2xl border space-y-2">
-                <h4 className="font-extrabold text-sm border-b pb-2 text-emerald-700">بنود الإيرادات (Revenue)</h4>
-                {pl.revenueLines.map((l) => (
-                  <div key={l.code} className="flex justify-between py-1 border-b border-dashed">
-                    <span>
-                      <strong className="font-mono">{l.code}</strong> {l.nameAr}
-                    </span>
-                    <span className="font-bold"><bdi dir="ltr">{fmtNum(l.balance)} YER</bdi></span>
-                  </div>
-                ))}
+                <h4 className="font-extrabold text-sm border-b pb-2 text-emerald-700 flex justify-between">
+                  <span>بنود الإيرادات (Revenue)</span>
+                  {pl.comparative && <span className="text-[11px] text-slate-500">مقابل المقارنة</span>}
+                </h4>
+                {pl.revenueLines.map((l) => {
+                  const cmp = pl.comparative?.revenueLines.find((c) => c.code === l.code)?.balance ?? 0;
+                  return (
+                    <div
+                      key={l.code}
+                      onClick={() => void openAccountDrilldown(l.code, l.nameAr)}
+                      className="flex justify-between py-1 border-b border-dashed cursor-pointer hover:bg-emerald-50/40"
+                    >
+                      <span>
+                        <strong className="font-mono text-sky-700 underline decoration-dotted">{l.code}</strong> {l.nameAr}
+                      </span>
+                      <span className="font-bold">
+                        <bdi dir="ltr">{fmtNum(l.balance)} YER</bdi>
+                        {pl.comparative && <span className="text-[11px] text-slate-500 mr-2">(<bdi dir="ltr">{fmtNum(cmp)}</bdi>)</span>}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
               <div className="p-4 rounded-2xl border space-y-2">
-                <h4 className="font-extrabold text-sm border-b pb-2 text-rose-700">بنود التكاليف والمصروفات (Costs &amp; Expenses)</h4>
-                {[...pl.cogsLines, ...pl.operatingExpenseLines, ...pl.adminExpenseLines].map((l) => (
-                  <div key={l.code} className="flex justify-between py-1 border-b border-dashed">
-                    <span>
-                      <strong className="font-mono">{l.code}</strong> {l.nameAr}
-                    </span>
-                    <span className="font-bold"><bdi dir="ltr">{fmtNum(l.balance)} YER</bdi></span>
-                  </div>
-                ))}
+                <h4 className="font-extrabold text-sm border-b pb-2 text-rose-700 flex justify-between">
+                  <span>بنود التكاليف والمصروفات (Costs &amp; Expenses)</span>
+                  {pl.comparative && <span className="text-[11px] text-slate-500">مقابل المقارنة</span>}
+                </h4>
+                {[...pl.cogsLines, ...pl.operatingExpenseLines, ...pl.adminExpenseLines].map((l) => {
+                  const cmpLines = pl.comparative
+                    ? [...pl.comparative.cogsLines, ...pl.comparative.operatingExpenseLines, ...pl.comparative.adminExpenseLines]
+                    : [];
+                  const cmp = cmpLines.find((c) => c.code === l.code)?.balance ?? 0;
+                  return (
+                    <div
+                      key={l.code}
+                      onClick={() => void openAccountDrilldown(l.code, l.nameAr)}
+                      className="flex justify-between py-1 border-b border-dashed cursor-pointer hover:bg-rose-50/40"
+                    >
+                      <span>
+                        <strong className="font-mono text-sky-700 underline decoration-dotted">{l.code}</strong> {l.nameAr}
+                      </span>
+                      <span className="font-bold">
+                        <bdi dir="ltr">{fmtNum(l.balance)} YER</bdi>
+                        {pl.comparative && <span className="text-[11px] text-slate-500 mr-2">(<bdi dir="ltr">{fmtNum(cmp)}</bdi>)</span>}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -780,14 +1048,24 @@ export function FinancialReportsTab({
                 <h4 className="font-extrabold text-sm border-b pb-2 text-emerald-700">
                   الأصول (Assets) — الإجمالي: <bdi dir="ltr">{fmtNum(bs.totalAssets)} YER</bdi>
                 </h4>
-                {bs.assetLines.map((a) => (
-                  <div key={a.code} className="flex justify-between py-1 border-b border-dashed">
-                    <span>
-                      <strong className="font-mono">{a.code}</strong> {a.nameAr}
-                    </span>
-                    <span className="font-bold"><bdi dir="ltr">{fmtNum(a.balance)} YER</bdi></span>
-                  </div>
-                ))}
+                {bs.assetLines.map((a) => {
+                  const cmp = bs.comparative?.assetLines.find((c) => c.code === a.code)?.balance ?? 0;
+                  return (
+                    <div
+                      key={a.code}
+                      onClick={() => void openAccountDrilldown(a.code, a.nameAr)}
+                      className="flex justify-between py-1 border-b border-dashed cursor-pointer hover:bg-emerald-50/40"
+                    >
+                      <span>
+                        <strong className="font-mono text-sky-700 underline decoration-dotted">{a.code}</strong> {a.nameAr}
+                      </span>
+                      <span className="font-bold">
+                        <bdi dir="ltr">{fmtNum(a.balance)} YER</bdi>
+                        {bs.comparative && <span className="text-[11px] text-slate-500 mr-2">(<bdi dir="ltr">{fmtNum(cmp)}</bdi>)</span>}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="p-4 rounded-2xl border space-y-3">
@@ -796,9 +1074,13 @@ export function FinancialReportsTab({
                     الالتزامات (Liabilities) — <bdi dir="ltr">{fmtNum(bs.totalLiabilities)} YER</bdi>
                   </h4>
                   {bs.liabilityLines.map((l) => (
-                    <div key={l.code} className="flex justify-between py-1 border-b border-dashed">
+                    <div
+                      key={l.code}
+                      onClick={() => void openAccountDrilldown(l.code, l.nameAr)}
+                      className="flex justify-between py-1 border-b border-dashed cursor-pointer hover:bg-amber-50/40"
+                    >
                       <span>
-                        <strong className="font-mono">{l.code}</strong> {l.nameAr}
+                        <strong className="font-mono text-sky-700 underline decoration-dotted">{l.code}</strong> {l.nameAr}
                       </span>
                       <span className="font-bold"><bdi dir="ltr">{fmtNum(l.balance)} YER</bdi></span>
                     </div>
@@ -809,9 +1091,13 @@ export function FinancialReportsTab({
                     حقوق الملكية (Equity) — <bdi dir="ltr">{fmtNum(bs.totalEquity)} YER</bdi>
                   </h4>
                   {bs.equityLines.map((eq) => (
-                    <div key={eq.code} className="flex justify-between py-1 border-b border-dashed">
+                    <div
+                      key={eq.code}
+                      onClick={() => void openAccountDrilldown(eq.code, eq.nameAr)}
+                      className="flex justify-between py-1 border-b border-dashed cursor-pointer hover:bg-indigo-50/40"
+                    >
                       <span>
-                        <strong className="font-mono">{eq.code}</strong> {eq.nameAr}
+                        <strong className="font-mono text-sky-700 underline decoration-dotted">{eq.code}</strong> {eq.nameAr}
                       </span>
                       <span className="font-bold"><bdi dir="ltr">{fmtNum(eq.balance)} YER</bdi></span>
                     </div>
@@ -950,7 +1236,215 @@ export function FinancialReportsTab({
             )}
           </div>
         )}
+
+        {/* 6. CASH FLOW STATEMENT (IAS 7) */}
+        {!loading && reportTab === "cf" && cf && (
+          <div className="space-y-4 text-xs" dir="rtl">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-4 rounded-xl border space-y-1">
+                <div className="text-slate-500 font-bold">التدفق التشغيلي (غير مباشر)</div>
+                <div className="text-lg font-black text-emerald-700"><bdi dir="ltr">{fmtNum(cf.indirectMethod.operatingCashFlow)} YER</bdi></div>
+              </div>
+              <div className="p-4 rounded-xl border space-y-1">
+                <div className="text-slate-500 font-bold">الرصيد النقدي الافتتاحي → الختامي</div>
+                <div className="text-sm font-black"><bdi dir="ltr">{fmtNum(cf.reconciliation.openingCashBalance)} → {fmtNum(cf.reconciliation.closingCashBalance)} YER</bdi></div>
+              </div>
+              <div className="p-4 rounded-xl border space-y-1">
+                <div className="text-slate-500 font-bold">صافي التغير النقدي</div>
+                <div className="text-lg font-black text-sky-700"><bdi dir="ltr">{fmtNum(cf.indirectMethod.netChangeInCash)} YER</bdi></div>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-4 rounded-2xl border space-y-2">
+                <h4 className="font-extrabold border-b pb-2">الطريقة غير المباشرة (Indirect Method)</h4>
+                <div className="flex justify-between py-1"><span>صافي الربح</span><strong className="font-mono"><bdi dir="ltr">{fmtNum(cf.indirectMethod.netProfit)}</bdi></strong></div>
+                <div className="flex justify-between py-1"><span>التغير في المدينين والأرصدة المدينة</span><strong className="font-mono"><bdi dir="ltr">{fmtNum(cf.indirectMethod.adjustments.changeInReceivables)}</bdi></strong></div>
+                <div className="flex justify-between py-1"><span>التغير في المخزون</span><strong className="font-mono"><bdi dir="ltr">{fmtNum(cf.indirectMethod.adjustments.changeInInventory)}</bdi></strong></div>
+                <div className="flex justify-between py-1"><span>التغير في الدائنين</span><strong className="font-mono"><bdi dir="ltr">{fmtNum(cf.indirectMethod.adjustments.changeInPayables)}</bdi></strong></div>
+                <div className="flex justify-between py-1 border-t font-bold"><span>الأنشطة الاستثمارية</span><span className="font-mono"><bdi dir="ltr">{fmtNum(cf.indirectMethod.investingCashFlow)}</bdi></span></div>
+                <div className="flex justify-between py-1"><span>الأنشطة التمويلية</span><span className="font-mono"><bdi dir="ltr">{fmtNum(cf.indirectMethod.financingCashFlow)}</bdi></span></div>
+              </div>
+              <div className="p-4 rounded-2xl border space-y-2">
+                <h4 className="font-extrabold border-b pb-2">الطريقة المباشرة (Direct Method)</h4>
+                <div className="flex justify-between py-1"><span>متحصلات نقدية من العملاء</span><strong className="font-mono text-emerald-700"><bdi dir="ltr">{fmtNum(cf.directMethod.cashReceiptsFromCustomers)}</bdi></strong></div>
+                <div className="flex justify-between py-1"><span>مدفوعات للموردين والمصروفات</span><strong className="font-mono text-rose-700"><bdi dir="ltr">{fmtNum(cf.directMethod.cashPaidToSuppliersAndExpenses)}</bdi></strong></div>
+                <div className="flex justify-between py-1"><span>مدفوعات لأجور العمالة</span><strong className="font-mono text-rose-700"><bdi dir="ltr">{fmtNum(cf.directMethod.cashPaidToEmployees)}</bdi></strong></div>
+                <div className="flex justify-between py-1 border-t font-black"><span>صافي النقد التشغيلي المباشر</span><span className="font-mono"><bdi dir="ltr">{fmtNum(cf.directMethod.operatingCashFlow)}</bdi></span></div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 7. STATEMENT OF CHANGES IN EQUITY */}
+        {!loading && reportTab === "equity" && equityStmt && (
+          <div className="p-4 rounded-2xl border space-y-2 text-xs" dir="rtl">
+            <h4 className="font-extrabold text-sm border-b pb-2">قائمة التغيرات في حقوق الملكية (Statement of Changes in Equity)</h4>
+            <div className="flex justify-between py-1.5"><span>رصيد حقوق الملكية في بداية الفترة</span><strong className="font-mono"><bdi dir="ltr">{fmtNum(equityStmt.openingEquity)} YER</bdi></strong></div>
+            <div className="flex justify-between py-1.5"><span>إضافات / حركات رأس المال والاحتياطيات</span><strong className="font-mono"><bdi dir="ltr">{fmtNum(equityStmt.capitalAndReserveMovements)} YER</bdi></strong></div>
+            <div className="flex justify-between py-1.5"><span>صافي ربح (خسارة) الفترة</span><strong className="font-mono text-emerald-700"><bdi dir="ltr">{fmtNum(equityStmt.netProfitForPeriod)} YER</bdi></strong></div>
+            <div className="flex justify-between py-2 border-t font-black text-sm"><span>إجمالي حقوق الملكية في نهاية الفترة</span><span className="font-mono"><bdi dir="ltr">{fmtNum(equityStmt.closingEquity)} YER</bdi></span></div>
+          </div>
+        )}
+
+        {/* 8. AR / AP AGING REPORT */}
+        {!loading && reportTab === "aging" && agingReport && (
+          <div className="space-y-3 text-xs" dir="rtl">
+            <div className="flex gap-2">
+              <button onClick={() => setAgingType("AR")} className={`px-3 py-1.5 rounded-xl font-bold ${agingType === "AR" ? "accent-bg" : "border border-slate-300"}`}>أعمار ذمم العملاء (AR)</button>
+              <button onClick={() => setAgingType("AP")} className={`px-3 py-1.5 rounded-xl font-bold ${agingType === "AP" ? "accent-bg" : "border border-slate-300"}`}>أعمار ذمم الموردين (AP)</button>
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full text-right">
+                <thead className="bg-slate-50 font-extrabold border-b">
+                  <tr>
+                    <th className="p-2.5">الطرف</th>
+                    <th className="p-2.5">جاري (Current)</th>
+                    <th className="p-2.5">1-30 يوم</th>
+                    <th className="p-2.5">31-60 يوم</th>
+                    <th className="p-2.5">61-90 يوم</th>
+                    <th className="p-2.5">+90 يوم</th>
+                    <th className="p-2.5">الإجمالي المفتوح</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {agingReport.rows.map((r) => (
+                    <tr key={r.partyId}>
+                      <td className="p-2.5 font-bold">{r.partyCode} • {r.partyName}</td>
+                      <td className="p-2.5 font-mono"><bdi dir="ltr">{fmtNum(r.current)}</bdi></td>
+                      <td className="p-2.5 font-mono"><bdi dir="ltr">{fmtNum(r.days1_30)}</bdi></td>
+                      <td className="p-2.5 font-mono"><bdi dir="ltr">{fmtNum(r.days31_60)}</bdi></td>
+                      <td className="p-2.5 font-mono"><bdi dir="ltr">{fmtNum(r.days61_90)}</bdi></td>
+                      <td className="p-2.5 font-mono text-rose-700 font-bold"><bdi dir="ltr">{fmtNum(r.days90Plus)}</bdi></td>
+                      <td className="p-2.5 font-mono font-black"><bdi dir="ltr">{fmtNum(r.totalOpen)}</bdi></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* 9. CUSTOMER / VENDOR / ACCOUNT STATEMENTS */}
+        {!loading && reportTab === "statements" && (
+          <div className="space-y-3 text-xs" dir="rtl">
+            <div className="flex flex-wrap gap-2">
+              <select value={stmtType} onChange={(e) => { setStmtType(e.target.value as "CUSTOMER" | "VENDOR" | "ACCOUNT"); setStmtEntityId(""); setStatement(null); }} className="rounded-xl border px-3 py-2 font-bold">
+                <option value="CUSTOMER">كشف حساب عميل (Customer)</option>
+                <option value="VENDOR">كشف حساب مورد (Vendor)</option>
+                <option value="ACCOUNT">كشف حساب أستاذ عام (GL Account)</option>
+              </select>
+              <select value={stmtEntityId} onChange={(e) => { const nextId = e.target.value; setStmtEntityId(nextId); if (!nextId) setStatement(null); }} className="rounded-xl border px-3 py-2 font-bold min-w-[220px]">
+                <option value="">-- اختر الحساب --</option>
+                {(stmtType === "CUSTOMER" ? stmtOptions.customers : stmtType === "VENDOR" ? stmtOptions.vendors : stmtOptions.accounts).map((o) => (
+                  <option key={o.id} value={o.id}>{o.code} • {o.nameAr}</option>
+                ))}
+              </select>
+            </div>
+            {stmtEntityId && statement && (
+              <div className="overflow-x-auto rounded-xl border border-slate-200 p-3 space-y-2">
+                <div className="flex justify-between font-bold">
+                  <span>{statement.code} — {statement.titleAr}</span>
+                  <span>الرصيد الافتتاحي: <bdi dir="ltr">{fmtNum(statement.openingBalance)}</bdi> | الختامي: <bdi dir="ltr">{fmtNum(statement.closingBalance)} YER</bdi></span>
+                </div>
+                <table className="w-full text-right">
+                  <thead className="bg-slate-50 border-b font-extrabold">
+                    <tr><th className="p-2">التاريخ</th><th className="p-2">القيد</th><th className="p-2">البيان</th><th className="p-2">مدين</th><th className="p-2">دائن</th><th className="p-2">الرصيد التراكمي</th></tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {statement.rows.map((r) => (
+                      <tr key={r.lineId}>
+                        <td className="p-2 font-mono">{r.date.slice(0, 10)}</td>
+                        <td className="p-2 font-mono">{r.entryNumber}</td>
+                        <td className="p-2">{r.memo}</td>
+                        <td className="p-2 font-mono text-emerald-700"><bdi dir="ltr">{fmtNum(r.debitBase)}</bdi></td>
+                        <td className="p-2 font-mono text-rose-700"><bdi dir="ltr">{fmtNum(r.creditBase)}</bdi></td>
+                        <td className="p-2 font-mono font-black"><bdi dir="ltr">{fmtNum(r.runningBalance)}</bdi></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 10. TAX SUMMARY (VAT & WHT) */}
+        {!loading && reportTab === "tax" && taxSummary && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs" dir="rtl">
+            <div className="p-4 rounded-xl border space-y-1">
+              <div className="text-slate-500 font-bold">ضريبة المخرجات المستحقة (Output VAT 214101)</div>
+              <div className="text-lg font-black text-rose-700"><bdi dir="ltr">{fmtNum(taxSummary.outputVat)} YER</bdi></div>
+            </div>
+            <div className="p-4 rounded-xl border space-y-1">
+              <div className="text-slate-500 font-bold">ضريبة المدخلات القابلة للخصم (Input VAT 114301)</div>
+              <div className="text-lg font-black text-emerald-700"><bdi dir="ltr">{fmtNum(taxSummary.inputVat)} YER</bdi></div>
+            </div>
+            <div className="p-4 rounded-xl border space-y-1">
+              <div className="text-slate-500 font-bold">صافي الضريبة واجبة السداد | ضريبة الاستقطاع (214201)</div>
+              <div className="text-lg font-black text-indigo-700"><bdi dir="ltr">{fmtNum(taxSummary.netVatPayable)} | WHT: {fmtNum(taxSummary.whtPayable)} YER</bdi></div>
+            </div>
+          </div>
+        )}
+
+        {/* 11. FINANCIAL RATIOS */}
+        {!loading && reportTab === "ratios" && ratios && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs" dir="rtl">
+            <div className="p-4 rounded-xl border"><div className="text-slate-500 font-bold">نسبة التداول (Current Ratio)</div><div className="text-lg font-black">{ratios.liquidity.currentRatio.toFixed(2)}x</div></div>
+            <div className="p-4 rounded-xl border"><div className="text-slate-500 font-bold">السيولة السريعة (Quick Ratio)</div><div className="text-lg font-black">{ratios.liquidity.quickRatio.toFixed(2)}x</div></div>
+            <div className="p-4 rounded-xl border"><div className="text-slate-500 font-bold">هامش الربح الإجمالي / الصافي</div><div className="text-lg font-black text-emerald-700">{ratios.profitability.grossMarginPct.toFixed(1)}% / {ratios.profitability.netMarginPct.toFixed(1)}%</div></div>
+            <div className="p-4 rounded-xl border"><div className="text-slate-500 font-bold">أيام التحصيل DSO / السداد DPO</div><div className="text-lg font-black">{ratios.efficiency.arDaysDso.toFixed(0)} / {ratios.efficiency.apDaysDpo.toFixed(0)} يوم</div></div>
+          </div>
+        )}
       </div>
+
+      {/* GL Account & Voucher Drill-Down Modal */}
+      {drilldownTitle && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" dir="rtl">
+          <div className="card-surface bg-white dark:bg-slate-900 rounded-2xl max-w-4xl w-full max-h-[85vh] flex flex-col shadow-2xl border">
+            <div className="p-4 border-b flex items-center justify-between">
+              <div className="flex items-center gap-2 font-extrabold text-sm">
+                <Eye className="w-4 h-4 text-emerald-600" />
+                <span>تحليل حركات الحساب (Drill-Down): {drilldownTitle}</span>
+              </div>
+              <button onClick={() => setDrilldownTitle(null)} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1 text-xs">
+              {drilldownLoading ? (
+                <div className="py-8 text-center text-slate-500">جاري تحميل حركات الأستاذ العام...</div>
+              ) : drilldownLines.length === 0 ? (
+                <div className="py-8 text-center text-slate-500">لا توجد قيود مرحلة ضمن النطاق المحدد.</div>
+              ) : (
+                <table className="w-full text-right border-collapse">
+                  <thead className="bg-slate-50 dark:bg-slate-800 border-b font-extrabold">
+                    <tr>
+                      <th className="p-2">التاريخ</th>
+                      <th className="p-2">رقم القيد</th>
+                      <th className="p-2">المرجع / المصدر</th>
+                      <th className="p-2">البيان</th>
+                      <th className="p-2">مدين (YER)</th>
+                      <th className="p-2">دائن (YER)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {drilldownLines.map((l) => (
+                      <tr key={l.lineId}>
+                        <td className="p-2 font-mono">{l.date.slice(0, 10)}</td>
+                        <td className="p-2 font-mono font-bold">{l.entryNumber}</td>
+                        <td className="p-2 font-mono text-[11px]">{l.reference || l.sourceType || "—"}</td>
+                        <td className="p-2">{l.narrationAr}</td>
+                        <td className="p-2 font-mono text-emerald-700 font-bold"><bdi dir="ltr">{fmtNum(l.debitBase)}</bdi></td>
+                        <td className="p-2 font-mono text-rose-700 font-bold"><bdi dir="ltr">{fmtNum(l.creditBase)}</bdi></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

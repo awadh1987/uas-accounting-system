@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { extractDocumentDraft } from "@/lib/ai/documentExtractionEngine";
-import { jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
@@ -14,9 +14,13 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     let mimeType = "text/plain";
     let textContent = "";
     let base64Content = "";
+    let jsonBody: Record<string, unknown> = {};
 
     const contentType = req.headers.get("content-type") || "";
     if (contentType.includes("multipart/form-data")) {
+      const auth = await authorizeApiAction({}, req, {});
+      if (!auth.ok) return auth.response;
+
       const formData = await req.formData();
       const file = formData.get("file") as File | null;
       const hintText = String(formData.get("text") || formData.get("notes") || "").trim();
@@ -36,11 +40,14 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         textContent = `${hintText}\n${textContent}`.trim();
       }
     } else {
-      const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-      fileName = String(body.fileName || "document.txt");
-      mimeType = String(body.mimeType || "text/plain");
-      textContent = String(body.textContent || body.text || body.ocrText || "");
-      base64Content = String(body.base64Content || "");
+      jsonBody = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+      const auth = await authorizeApiAction(jsonBody, req, {});
+      if (!auth.ok) return auth.response;
+
+      fileName = String(jsonBody.fileName || "document.txt");
+      mimeType = String(jsonBody.mimeType || "text/plain");
+      textContent = String(jsonBody.textContent || jsonBody.text || jsonBody.ocrText || "");
+      base64Content = String(jsonBody.base64Content || "");
     }
 
     const [settings, recentJournals, closedYears] = await Promise.all([

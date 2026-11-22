@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import {
   createHierarchicalAccount,
   getCoaTreeWithBalances,
@@ -10,7 +10,7 @@ import { ensure6GenerationCoaHierarchy } from "@/lib/accountingCoreEngine";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const projectId = searchParams.get("projectId") || undefined;
@@ -24,9 +24,9 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/accounting/coa error:", error);
     return jsonError("تعذر تحميل شجرة الحسابات", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, {
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر إنشاء الحساب في شجرة الحسابات";
     return jsonError(msg, 400);
   }
-}
+});
 
 async function handleCoaUpdate(req: NextRequest) {
   try {
@@ -160,11 +160,11 @@ async function handleCoaUpdate(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleCoaUpdate(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleCoaUpdate(req);
-}
+});
 

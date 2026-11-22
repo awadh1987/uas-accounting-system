@@ -928,7 +928,7 @@ export function GeneralLedgerTab({
               <div
                 key={je.id}
                 className={`rounded-2xl border p-4 space-y-2.5 text-xs ${
-                  je.status === "VOIDED"
+                  je.status === "VOIDED" || Boolean((je as { isReversed?: boolean }).isReversed)
                     ? "border-rose-200 bg-rose-50/30 opacity-75"
                     : "border-slate-200 dark:border-slate-700"
                 }`}
@@ -960,14 +960,14 @@ export function GeneralLedgerTab({
                   <div className="flex items-center gap-2">
                     <span
                       className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                        je.status === "POSTED"
+                        je.status === "POSTED" && !Boolean((je as { isReversed?: boolean }).isReversed)
                           ? "bg-emerald-100 text-emerald-800"
                           : "bg-rose-100 text-rose-800"
                       }`}
                     >
-                      {je.status}
+                      {Boolean((je as { isReversed?: boolean }).isReversed) ? "REVERSED" : je.status}
                     </span>
-                    {je.status === "POSTED" && canPost && !readOnly && (
+                    {je.status === "POSTED" && !Boolean((je as { isReversed?: boolean }).isReversed) && canPost && !readOnly && (
                       <>
                         <button
                           type="button"

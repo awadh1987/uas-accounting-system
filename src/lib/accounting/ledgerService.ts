@@ -16,6 +16,24 @@ import {
   resolveLineCostCenter,
 } from "@/lib/accountingCoreEngine";
 import { assertDateNotInClosedFiscalYear } from "@/lib/fiscalYearClosingEngine";
+import { assertDateInOpenAccountingPeriod } from "@/lib/accounting/periodEngine";
+import { computeDocumentTaxTx } from "@/lib/accounting/taxEngine";
+import { evaluateAndRouteApprovalTx } from "@/lib/approvalEngine";
+import { consumeStockLayersOutTx, recordStockLayerInTx } from "@/lib/inventoryGlBridge";
+import { convertToBaseQty } from "@/lib/multiUnitInventoryEngine";
+import {
+  assertNotInLockedPeriod,
+  DEFAULT_CONTROL_ACCOUNTS,
+  generateNextDocumentNumber,
+  parseAccountingSettings,
+  type ControlAccountsMap,
+  type DocumentSequenceKey,
+} from "@/lib/accountingSettings";
+import {
+  balanceDualCurrencyLines,
+  computeRealizedFxGainLoss,
+} from "@/lib/multiCurrencyEngine";
+import { dAdd, dDiv, dMul, dSub, round4Decimal, toDecimalNumber } from "@/lib/decimalMath";
 import { emitNotification } from "@/lib/notifications/notificationService";
 
 export type DbClient = Prisma.TransactionClient | typeof prisma;
@@ -25,6 +43,10 @@ export interface JournalLineInput {
   accountCode?: string;
   debit?: number;
   credit?: number;
+  foreignDebit?: number;
+  foreignCredit?: number;
+  baseDebit?: number;
+  baseCredit?: number;
   currency?: string;
   exchangeRate?: number;
   memo?: string;
@@ -57,6 +79,7 @@ export interface PostJournalEntryInput {
   lines: JournalLineInput[];
   attachments?: AttachmentInput[];
   allowLockedAdjustment?: boolean;
+  skipApprovalCheck?: boolean;
   tx?: Prisma.TransactionClient;
 }
 
@@ -67,17 +90,33 @@ export interface CustomAccountInput {
   code?: string;
 }
 
+export interface PostVendorBillItemInput {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  itemId?: string | null;
+  warehouseId?: string | null;
+  unitId?: string | null;
+  taxCodeId?: string | null;
+  whtCodeId?: string | null;
+}
+
 export interface PostVendorBillInput {
   vendorId: string;
   projectId: string;
   subProjectId?: string | null;
   purchaseOrderId?: string | null;
   acquisitionCycleId?: string | null;
-  items?: Array<{ description: string; quantity: number; unitPrice: number }>;
+  billType?: "BILL" | "CREDIT_NOTE" | "DEBIT_NOTE";
+  originalBillId?: string | null;
+  items?: PostVendorBillItemInput[];
   totalAmount: number;
   currency?: string;
   date?: Date | string;
   dueDate?: Date | string | null;
+  taxCodeId?: string | null;
+  whtCodeId?: string | null;
+  taxInclusive?: boolean;
   isInventory?: boolean;
   debitAccountId?: string | null;
   debitAccountCode?: string | null;
@@ -85,6 +124,7 @@ export interface PostVendorBillInput {
   notes?: string;
   costCenterId?: string | null;
   createdById?: string;
+  skipApprovalCheck?: boolean;
   gatewayProvider?: string;
   gatewayMerchantId?: string;
   gatewayEndpointUrl?: string;
@@ -96,6 +136,7 @@ export interface PostVendorBillInput {
 export interface PostVendorPaymentInput {
   vendorId: string;
   billId?: string | null;
+  allocations?: Array<{ billId: string; amount: number }>;
   projectId?: string | null;
   subProjectId?: string | null;
   acquisitionCycleId?: string | null;
@@ -108,6 +149,7 @@ export interface PostVendorPaymentInput {
   notes?: string;
   costCenterId?: string | null;
   createdById?: string;
+  skipApprovalCheck?: boolean;
   gatewayProvider?: string;
   gatewayMerchantId?: string;
   gatewayEndpointUrl?: string;
@@ -116,14 +158,34 @@ export interface PostVendorPaymentInput {
   tx?: Prisma.TransactionClient;
 }
 
+export interface PostSalesInvoiceItemInput {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  itemId?: string | null;
+  warehouseId?: string | null;
+  unitId?: string | null;
+  taxCodeId?: string | null;
+  whtCodeId?: string | null;
+}
+
 export interface PostSalesInvoiceInput {
   customerId: string;
   projectId: string;
   subProjectId?: string | null;
   harvestCycleId?: string | null;
+  invoiceType?: "INVOICE" | "CREDIT_NOTE" | "DEBIT_NOTE";
+  originalInvoiceId?: string | null;
+  items?: PostSalesInvoiceItemInput[];
   amount: number;
   currency?: string;
   date?: Date | string;
+  dueDate?: Date | string | null;
+  taxCodeId?: string | null;
+  whtCodeId?: string | null;
+  taxInclusive?: boolean;
+  overrideCreditLimit?: boolean;
+  creditPaidImmediate?: number;
   notes?: string;
   revenueAccountId?: string | null;
   revenueAccountCode?: string | null;
@@ -135,12 +197,14 @@ export interface PostSalesInvoiceInput {
   treasuryAccountId?: string | null;
   costCenterId?: string | null;
   createdById?: string;
+  skipApprovalCheck?: boolean;
   tx?: Prisma.TransactionClient;
 }
 
 export interface PostCustomerReceiptInput {
   customerId: string;
   invoiceId?: string | null;
+  allocations?: Array<{ invoiceId: string; amount: number }>;
   projectId?: string | null;
   subProjectId?: string | null;
   treasuryId: string;
@@ -150,6 +214,7 @@ export interface PostCustomerReceiptInput {
   notes?: string;
   costCenterId?: string | null;
   createdById?: string;
+  skipApprovalCheck?: boolean;
   gatewayProvider?: string;
   gatewayMerchantId?: string;
   gatewayEndpointUrl?: string;
@@ -165,16 +230,15 @@ export interface FinancialReportFilters {
   subProjectId?: string;
   costCenterId?: string;
   maxLevel?: number;
+  includeYearEndClosing?: boolean;
 }
 
 function toNum(v: Prisma.Decimal | number | string | null | undefined): number {
-  if (v === null || v === undefined) return 0;
-  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
-  return Number(v.toString()) || 0;
+  return toDecimalNumber(v, 0);
 }
 
 function round4(n: number): number {
-  return Math.round((n + Number.EPSILON) * 10000) / 10000;
+  return round4Decimal(n);
 }
 
 async function runAtomic<T>(
@@ -189,56 +253,143 @@ async function getExchangeRateToYER(client: DbClient, currency: string): Promise
   const code = (currency || "YER").toUpperCase();
   if (code === "YER") return 1;
   const row = await client.currencyRate.findUnique({ where: { currencyCode: code } });
-  if (row && row.rateToYER > 0) return row.rateToYER;
+  if (row && toNum(row.rateToYER) > 0) return toNum(row.rateToYER);
   if (code === "SAR") return 425;
   if (code === "USD") return 1620;
   return 1;
 }
 
+async function getControlAccountsTx(client: DbClient): Promise<ControlAccountsMap> {
+  try {
+    const settingsRow = await client.systemSettings.findUnique({ where: { id: "default" } });
+    return parseAccountingSettings(settingsRow).controlAccounts;
+  } catch {
+    return { ...DEFAULT_CONTROL_ACCOUNTS };
+  }
+}
+
+async function ensureControlAccountTx(
+  tx: Prisma.TransactionClient,
+  code: string,
+  meta: { nameAr: string; nameEn: string; type: AccountType; parentCode: string }
+): Promise<Account> {
+  const existing = await tx.account.findUnique({ where: { code } });
+  if (existing) return existing;
+  const parent = await tx.account.findUnique({ where: { code: meta.parentCode } });
+  if (parent) {
+    return createHierarchicalAccount({
+      code,
+      nameAr: meta.nameAr,
+      nameEn: meta.nameEn,
+      parentId: parent.id,
+      parentCode: parent.code,
+      type: meta.type,
+      tx,
+    });
+  }
+  return tx.account.create({
+    data: {
+      code,
+      nameAr: meta.nameAr,
+      nameEn: meta.nameEn,
+      level: 5,
+      generation: 5,
+      type: meta.type,
+      isPosting: true,
+      isPostable: true,
+    },
+  });
+}
+
+async function documentCodeExists(
+  client: DbClient,
+  model: "journalEntry" | "vendorBill" | "paymentVoucher" | "salesInvoice" | "receiptVoucher" | "purchaseOrder" | "goodsReceipt",
+  candidate: string
+): Promise<boolean> {
+  if (model === "journalEntry") {
+    return Boolean(await client.journalEntry.findUnique({ where: { entryNumber: candidate }, select: { id: true } }));
+  }
+  if (model === "vendorBill") {
+    return Boolean(await client.vendorBill.findUnique({ where: { billNumber: candidate }, select: { id: true } }));
+  }
+  if (model === "paymentVoucher") {
+    return Boolean(await client.paymentVoucher.findUnique({ where: { voucherNumber: candidate }, select: { id: true } }));
+  }
+  if (model === "salesInvoice") {
+    return Boolean(await client.salesInvoice.findUnique({ where: { invoiceNumber: candidate }, select: { id: true } }));
+  }
+  if (model === "receiptVoucher") {
+    return Boolean(await client.receiptVoucher.findUnique({ where: { voucherNumber: candidate }, select: { id: true } }));
+  }
+  if (model === "purchaseOrder") {
+    return Boolean(await client.purchaseOrder.findUnique({ where: { poNumber: candidate }, select: { id: true } }));
+  }
+  return Boolean(await client.goodsReceipt.findUnique({ where: { grnNumber: candidate }, select: { id: true } }));
+}
+
 async function nextSequenceCode(
   client: DbClient,
   model: "journalEntry" | "vendorBill" | "paymentVoucher" | "salesInvoice" | "receiptVoucher" | "purchaseOrder" | "goodsReceipt",
-  prefix: string
+  prefix: string,
+  docDate?: Date
 ): Promise<string> {
-  const year = new Date().getFullYear();
+  const year = (docDate || new Date()).getFullYear();
+
+  const seqKeyMap: Partial<Record<typeof model, DocumentSequenceKey>> = {
+    journalEntry: "JV",
+    vendorBill: "BILL",
+    paymentVoucher: "PV",
+    salesInvoice: "INV",
+    receiptVoucher: "RV",
+  };
+  const seqKey = seqKeyMap[model];
+
+  if (seqKey) {
+    // Acquire transactional write lock on SystemSettings singleton before reading sequence counter
+    await client.systemSettings.upsert({
+      where: { id: "default" },
+      update: { updatedAt: new Date() },
+      create: { id: "default" },
+    });
+    const settingsRow = await client.systemSettings.findUnique({ where: { id: "default" } });
+    let sequences = parseAccountingSettings(settingsRow).documentSequences;
+    let allocated = generateNextDocumentNumber(seqKey, sequences, year);
+
+    let attempts = 0;
+    while ((await documentCodeExists(client, model, allocated.documentNumber)) && attempts < 200) {
+      sequences = allocated.nextSequences;
+      allocated = generateNextDocumentNumber(seqKey, sequences, year);
+      attempts++;
+    }
+    if (await documentCodeExists(client, model, allocated.documentNumber)) {
+      const uniqueSuffix = crypto.randomUUID().slice(0, 6).toUpperCase();
+      allocated = {
+        ...allocated,
+        documentNumber: `${allocated.documentNumber}-${uniqueSuffix}`,
+      };
+    }
+
+    await client.systemSettings.update({
+      where: { id: "default" },
+      data: { documentSequencesJson: JSON.stringify(allocated.nextSequences) },
+    });
+
+    return allocated.documentNumber;
+  }
+
   let count = 0;
-  if (model === "journalEntry") count = await client.journalEntry.count();
-  else if (model === "vendorBill") count = await client.vendorBill.count();
-  else if (model === "paymentVoucher") count = await client.paymentVoucher.count();
-  else if (model === "salesInvoice") count = await client.salesInvoice.count();
-  else if (model === "receiptVoucher") count = await client.receiptVoucher.count();
-  else if (model === "purchaseOrder") count = await client.purchaseOrder.count();
+  if (model === "purchaseOrder") count = await client.purchaseOrder.count();
   else if (model === "goodsReceipt") count = await client.goodsReceipt.count();
 
-  const candidate = `${prefix}-${year}-${String(count + 1).padStart(4, "0")}`;
-  // Guarantee uniqueness even if records were previously voided/seeded with custom IDs
-  const suffix = Date.now().toString().slice(-4);
-  if (model === "journalEntry") {
-    const exists = await client.journalEntry.findUnique({ where: { entryNumber: candidate } });
-    return exists ? `${candidate}-${suffix}` : candidate;
+  let seq = count + 1;
+  let candidate = `${prefix}-${year}-${String(seq).padStart(5, "0")}`;
+  let guard = 0;
+  while ((await documentCodeExists(client, model, candidate)) && guard < 100) {
+    seq++;
+    candidate = `${prefix}-${year}-${String(seq).padStart(5, "0")}`;
+    guard++;
   }
-  if (model === "vendorBill") {
-    const exists = await client.vendorBill.findUnique({ where: { billNumber: candidate } });
-    return exists ? `${candidate}-${suffix}` : candidate;
-  }
-  if (model === "paymentVoucher") {
-    const exists = await client.paymentVoucher.findUnique({ where: { voucherNumber: candidate } });
-    return exists ? `${candidate}-${suffix}` : candidate;
-  }
-  if (model === "salesInvoice") {
-    const exists = await client.salesInvoice.findUnique({ where: { invoiceNumber: candidate } });
-    return exists ? `${candidate}-${suffix}` : candidate;
-  }
-  if (model === "receiptVoucher") {
-    const exists = await client.receiptVoucher.findUnique({ where: { voucherNumber: candidate } });
-    return exists ? `${candidate}-${suffix}` : candidate;
-  }
-  if (model === "purchaseOrder") {
-    const exists = await client.purchaseOrder.findUnique({ where: { poNumber: candidate } });
-    return exists ? `${candidate}-${suffix}` : candidate;
-  }
-  const exists = await client.goodsReceipt.findUnique({ where: { grnNumber: candidate } });
-  return exists ? `${candidate}-${suffix}` : candidate;
+  return candidate;
 }
 
 async function resolveActorId(client: DbClient, requestedUserId?: string): Promise<string> {
@@ -258,8 +409,8 @@ async function resolvePostingAccount(
   const account = line.accountId
     ? await client.account.findUnique({ where: { id: line.accountId } })
     : line.accountCode
-    ? await client.account.findUnique({ where: { code: line.accountCode } })
-    : null;
+      ? await client.account.findUnique({ where: { code: line.accountCode } })
+      : null;
 
   if (!account) {
     throw new Error(`ACCOUNT_NOT_FOUND:${line.accountCode || line.accountId || "unknown"}`);
@@ -485,9 +636,13 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
     }
 
     const createdById = await resolveActorId(tx, input.createdById);
-    const entryNumber = await nextSequenceCode(tx, "journalEntry", "JV");
     const entryDate = input.date ? new Date(input.date) : new Date();
+    const entryNumber = await nextSequenceCode(tx, "journalEntry", "JV", entryDate);
     const entryType = input.entryType || "NORMAL";
+
+    const settingsRow = await tx.systemSettings.findUnique({ where: { id: "default" } });
+    const parsedSettings = parseAccountingSettings(settingsRow);
+    const controlAccounts = parsedSettings.controlAccounts;
 
     if (
       !input.allowLockedAdjustment &&
@@ -495,6 +650,17 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
       entryType !== "OPENING"
     ) {
       await assertDateNotInClosedFiscalYear(tx, entryDate);
+      const lockCheck = assertNotInLockedPeriod(entryDate, parsedSettings.periodLockDate);
+      if (!lockCheck.ok) {
+        throw new Error(`PERIOD_LOCKED: ${lockCheck.error}`);
+      }
+      await assertDateInOpenAccountingPeriod(tx, entryDate, {
+        allowSoftCloseOverride: Boolean(input.allowLockedAdjustment),
+      });
+    } else if (entryType !== "YEAR_END_CLOSING" && entryType !== "OPENING") {
+      await assertDateInOpenAccountingPeriod(tx, entryDate, {
+        allowSoftCloseOverride: true,
+      });
     }
 
     let resolvedFiscalYearId = input.fiscalYearId ?? null;
@@ -508,6 +674,7 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
 
     let totalDebitBase = 0;
     let totalCreditBase = 0;
+    let hasNonYerCurrency = false;
 
     const preparedLines: Array<{
       accountId: string;
@@ -533,13 +700,21 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
       const account = await resolvePostingAccount(tx, line);
       const debit = round4(Number(line.debit) || 0);
       const credit = round4(Number(line.credit) || 0);
+      const explicitBaseDr = line.baseDebit !== undefined ? round4(Number(line.baseDebit) || 0) : undefined;
+      const explicitBaseCr = line.baseCredit !== undefined ? round4(Number(line.baseCredit) || 0) : undefined;
+      const hasBaseOnlyReval =
+        debit === 0 &&
+        credit === 0 &&
+        ((explicitBaseDr !== undefined && explicitBaseDr > 0) ||
+          (explicitBaseCr !== undefined && explicitBaseCr > 0));
+
       if (debit < 0 || credit < 0) {
         throw new Error("NEGATIVE_LINE_AMOUNT: Debit and Credit amounts cannot be negative.");
       }
-      if (debit === 0 && credit === 0) {
+      if (!hasBaseOnlyReval && debit === 0 && credit === 0) {
         throw new Error("ZERO_LINE_AMOUNT: Journal line cannot have both Debit and Credit equal to 0.");
       }
-      if (debit > 0 && credit > 0) {
+      if ((debit > 0 && credit > 0) || ((explicitBaseDr ?? 0) > 0 && (explicitBaseCr ?? 0) > 0)) {
         throw new Error("DUAL_SIDED_LINE: A single journal line cannot carry both Debit and Credit.");
       }
 
@@ -551,15 +726,25 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
       }
 
       const currency = (line.currency || "YER").toUpperCase();
+      if (currency !== "YER") hasNonYerCurrency = true;
       const rate =
-        line.exchangeRate && line.exchangeRate > 0
+        currency === "YER"
+          ? 1
+          : line.exchangeRate && line.exchangeRate > 0
           ? line.exchangeRate
           : await getExchangeRateToYER(tx, currency);
-      const debitBase = round4(debit * rate);
-      const creditBase = round4(credit * rate);
 
-      totalDebitBase = round4(totalDebitBase + debitBase);
-      totalCreditBase = round4(totalCreditBase + creditBase);
+      const foreignDebit =
+        line.foreignDebit !== undefined ? round4(Number(line.foreignDebit) || 0) : debit;
+      const foreignCredit =
+        line.foreignCredit !== undefined ? round4(Number(line.foreignCredit) || 0) : credit;
+      const debitBase =
+        explicitBaseDr !== undefined ? explicitBaseDr : dMul(debit, rate, 4);
+      const creditBase =
+        explicitBaseCr !== undefined ? explicitBaseCr : dMul(credit, rate, 4);
+
+      totalDebitBase = dAdd(totalDebitBase, debitBase, 4);
+      totalCreditBase = dAdd(totalCreditBase, creditBase, 4);
 
       preparedLines.push({
         accountId: account.id,
@@ -568,8 +753,8 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
         currency,
         currencyCode: currency,
         exchangeRate: rate,
-        foreignDebit: debit,
-        foreignCredit: credit,
+        foreignDebit,
+        foreignCredit,
         debitBase,
         creditBase,
         baseDebit: debitBase,
@@ -589,7 +774,59 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
       });
     }
 
-    if (Math.abs(totalDebitBase - totalCreditBase) > 0.005) {
+    const baseImbalance = dSub(totalDebitBase, totalCreditBase, 4);
+    if (
+      Math.abs(baseImbalance) > 0.0001 &&
+      Math.abs(baseImbalance) <= 1.0 &&
+      hasNonYerCurrency
+    ) {
+      const fxRoundingCode = controlAccounts.fxRoundingAccount || "532103";
+      const fxCheck = balanceDualCurrencyLines(
+        preparedLines.map((l) => ({
+          accountId: l.accountId,
+          currencyCode: l.currencyCode,
+          exchangeRate: l.exchangeRate,
+          foreignDebit: l.foreignDebit,
+          foreignCredit: l.foreignCredit,
+          baseDebit: l.baseDebit,
+          baseCredit: l.baseCredit,
+          memo: l.memo,
+        })),
+        fxRoundingCode
+      );
+      if (fxCheck.ok && fxCheck.lines.length > preparedLines.length) {
+        const roundingLine = fxCheck.lines[fxCheck.lines.length - 1];
+        const roundingAccount = await ensureControlAccountTx(tx, fxRoundingCode, {
+          nameAr: "فروق تقريب العملات الأجنبية",
+          nameEn: "FX Rounding Adjustment",
+          type: "EXPENSE",
+          parentCode: "532100",
+        });
+        preparedLines.push({
+          accountId: roundingAccount.id,
+          debit: roundingLine.foreignDebit,
+          credit: roundingLine.foreignCredit,
+          currency: "YER",
+          currencyCode: "YER",
+          exchangeRate: 1,
+          foreignDebit: roundingLine.foreignDebit,
+          foreignCredit: roundingLine.foreignCredit,
+          debitBase: roundingLine.baseDebit,
+          creditBase: roundingLine.baseCredit,
+          baseDebit: roundingLine.baseDebit,
+          baseCredit: roundingLine.baseCredit,
+          memo: roundingLine.memo || "فروق تقريب عملات أجنبية / FX rounding adjustment",
+          projectId: input.projectId ?? null,
+          subProjectId: input.subProjectId ?? null,
+          harvestCycleId: null,
+          costCenterId: input.costCenterId ?? null,
+        });
+        totalDebitBase = dAdd(totalDebitBase, roundingLine.baseDebit, 4);
+        totalCreditBase = dAdd(totalCreditBase, roundingLine.baseCredit, 4);
+      }
+    }
+
+    if (Math.abs(dSub(totalDebitBase, totalCreditBase, 4)) > 0.005) {
       throw new Error(
         `UNBALANCED_JOURNAL_ENTRY: Sum(Debits)=${totalDebitBase} !== Sum(Credits)=${totalCreditBase}`
       );
@@ -603,6 +840,7 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
         narrationAr: input.narrationAr,
         narrationEn: input.narrationEn || null,
         status: input.status || "POSTED",
+        documentStatus: input.status || "POSTED",
         sourceType: input.sourceType || "MANUAL",
         sourceId: input.sourceId || null,
         entryType,
@@ -613,14 +851,14 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
         lines: { create: preparedLines },
         ...(input.attachments && input.attachments.length > 0
           ? {
-              attachments: {
-                create: input.attachments.map((att) => ({
-                  fileName: att.fileName,
-                  fileUrl: att.fileUrl,
-                  fileType: att.fileType,
-                })),
-              },
-            }
+            attachments: {
+              create: input.attachments.map((att) => ({
+                fileName: att.fileName,
+                fileUrl: att.fileUrl,
+                fileType: att.fileType,
+              })),
+            },
+          }
           : {}),
       },
       include: {
@@ -629,48 +867,101 @@ export async function postJournalEntry(input: PostJournalEntryInput) {
       },
     });
 
+    // Unified Approval Gate for direct/manual GL journals
+    const documentDelegatedSources = new Set([
+      "REVERSAL",
+      "FX_REVALUATION",
+      "VENDOR_BILL",
+      "VENDOR_PAYMENT",
+      "SALES_INVOICE",
+      "CUSTOMER_RECEIPT",
+      "EXPENSE",
+      "WORKER_ACCRUAL",
+      "WORKER_PAYOUT",
+      "INVENTORY_MOVEMENT",
+      "BANK_GATEWAY_PAYOUT",
+      "BANK_GATEWAY_COLLECTION",
+      "YEAR_END_CLOSING",
+      "OPENING",
+    ]);
+    let finalEntry = entry;
+    if (
+      !input.skipApprovalCheck &&
+      entry.status === "POSTED" &&
+      entryType === "NORMAL" &&
+      !documentDelegatedSources.has(entry.sourceType || "")
+    ) {
+      const approval = await evaluateAndRouteApprovalTx(tx, {
+        module: "ACCOUNTING",
+        actionType: "GL_POSTING",
+        targetType: "JournalEntry",
+        targetId: entry.id,
+        documentNumber: entry.entryNumber,
+        summaryAr: entry.narrationAr,
+        summaryEn: entry.narrationEn || entry.narrationAr,
+        amountBase: totalDebitBase,
+        currencyCode: "YER",
+        afterSnapshot: {
+          entryNumber: entry.entryNumber,
+          totalDebitBase,
+          date: entryDate.toISOString().slice(0, 10),
+        },
+        requestedById: createdById,
+      });
+      if (approval.requiresApproval) {
+        finalEntry = await tx.journalEntry.findUniqueOrThrow({
+          where: { id: entry.id },
+          include: {
+            lines: { include: { account: true } },
+            attachments: true,
+          },
+        });
+      }
+    }
+
     await tx.auditLog.create({
       data: {
         userId: createdById,
-        action: entry.status === "POSTED" ? "POST" : "CREATE",
+        action: finalEntry.status === "POSTED" ? "POST" : "CREATE",
         entity: "JournalEntry",
-        entityId: entry.id,
+        entityId: finalEntry.id,
         details: {
-          entryNumber: entry.entryNumber,
+          entryNumber: finalEntry.entryNumber,
           totalDebitBase,
           totalCreditBase,
-          sourceType: entry.sourceType,
-          reference: entry.reference,
+          sourceType: finalEntry.sourceType,
+          reference: finalEntry.reference,
         },
       },
     });
 
-    if (entry.status === "POSTED") {
+    if (finalEntry.status === "POSTED") {
       await emitNotification(
         {
           eventType: "JOURNAL_POSTED",
           channel: "general",
           severity: "SUCCESS",
-          titleAr: `تم ترحيل قيد يومية (${entry.entryNumber})`,
-          titleEn: `Journal Entry Posted (${entry.entryNumber})`,
-          messageAr: `${entry.narrationAr} — الإجمالي: ${totalDebitBase.toLocaleString("en-US")} ريال`,
-          messageEn: `${entry.narrationEn || entry.narrationAr} — Total: ${totalDebitBase.toLocaleString("en-US")} YER`,
+          titleAr: `تم ترحيل قيد يومية (${finalEntry.entryNumber})`,
+          titleEn: `Journal Entry Posted (${finalEntry.entryNumber})`,
+          messageAr: `${finalEntry.narrationAr} — الإجمالي: ${totalDebitBase.toLocaleString("en-US")} ريال`,
+          messageEn: `${finalEntry.narrationEn || finalEntry.narrationAr} — Total: ${totalDebitBase.toLocaleString("en-US")} YER`,
           targetTab: "ledger",
           targetEntityType: "JournalEntry",
-          targetEntityId: entry.id,
+          targetEntityId: finalEntry.id,
           actorUserId: createdById,
-          metadata: { entryNumber: entry.entryNumber, totalDebitBase, sourceType: entry.sourceType },
+          metadata: { entryNumber: finalEntry.entryNumber, totalDebitBase, sourceType: finalEntry.sourceType },
         },
         tx
       );
     }
 
-    return entry;
+    return finalEntry;
   });
 }
 
 /**
- * Immutable reversal: posts a new offsetting entry (swapping DR/CR) and marks original as VOIDED.
+ * Immutable reversal: keeps original POSTED (marking isReversed=true) and posts an
+ * offsetting entry swapping DR/CR while preserving costCenterId, currencyCode, foreign* & base*.
  */
 export async function reverseJournalEntry(input: {
   journalEntryId: string;
@@ -684,7 +975,9 @@ export async function reverseJournalEntry(input: {
       include: { lines: true },
     });
     if (!original) throw new Error("JOURNAL_NOT_FOUND");
-    if (original.status === "VOIDED") throw new Error("JOURNAL_ALREADY_VOIDED");
+    if (original.status === "VOIDED" || original.isReversed) {
+      throw new Error("JOURNAL_ALREADY_VOIDED");
+    }
 
     const reversal = await postJournalEntry({
       tx,
@@ -695,6 +988,7 @@ export async function reverseJournalEntry(input: {
       sourceType: "REVERSAL",
       sourceId: original.id,
       projectId: original.projectId,
+      subProjectId: original.subProjectId,
       createdById: input.createdById,
       status: "POSTED",
       allowLockedAdjustment: true,
@@ -702,18 +996,28 @@ export async function reverseJournalEntry(input: {
         accountId: l.accountId,
         debit: toNum(l.credit),
         credit: toNum(l.debit),
-        currency: l.currency,
+        foreignDebit: toNum(l.foreignCredit),
+        foreignCredit: toNum(l.foreignDebit),
+        baseDebit: toNum(l.baseCredit) || toNum(l.creditBase),
+        baseCredit: toNum(l.baseDebit) || toNum(l.debitBase),
+        currency: l.currencyCode || l.currency,
         exchangeRate: toNum(l.exchangeRate),
         memo: `عكس: ${l.memo || original.entryNumber}`,
         projectId: l.projectId,
         subProjectId: l.subProjectId,
         harvestCycleId: l.harvestCycleId,
+        costCenterId: l.costCenterId,
       })),
     });
 
     await tx.journalEntry.update({
       where: { id: original.id },
-      data: { status: "VOIDED" },
+      data: {
+        status: "POSTED",
+        documentStatus: "POSTED",
+        isReversed: true,
+        reversedByEntryId: reversal.id,
+      },
     });
 
     const actorId = await resolveActorId(tx, input.createdById);
@@ -749,17 +1053,99 @@ export async function postVendorBill(input: PostVendorBillInput) {
 
     const computedFromItems =
       input.items && input.items.length > 0
-        ? input.items.reduce((sum, item) => sum + Number(item.quantity) * Number(item.unitPrice), 0)
+        ? input.items.reduce(
+            (sum, item) => dAdd(sum, dMul(Number(item.quantity), Number(item.unitPrice), 4), 4),
+            0
+          )
         : 0;
-    const totalAmount = round4(input.totalAmount > 0 ? input.totalAmount : computedFromItems);
-    if (totalAmount <= 0) throw new Error("INVALID_BILL_AMOUNT");
+    const rawAmount = round4(input.totalAmount > 0 ? input.totalAmount : computedFromItems);
+    if (rawAmount <= 0) throw new Error("INVALID_BILL_AMOUNT");
 
+    const billType = input.billType || "BILL";
     const currency = (input.currency || "YER").toUpperCase();
     const rate = await getExchangeRateToYER(tx, currency);
-    const billNumber = await nextSequenceCode(tx, "vendorBill", "BILL");
     const billDate = input.date ? new Date(input.date) : new Date();
+    const billNumber = await nextSequenceCode(tx, "vendorBill", "BILL", billDate);
+    const controlAccounts = await getControlAccountsTx(tx);
 
-    const defaultDebitCode = input.isInventory ? "113201" : "524101";
+    // Calculate line-level or document-level tax (VAT Input + WHT)
+    let netAmount = 0;
+    let taxAmount = 0;
+    let whtAmount = 0;
+    let grossAmount = 0;
+    const preparedItems: Array<{
+      itemId: string | null;
+      warehouseId: string | null;
+      taxCodeId: string | null;
+      description: string;
+      unitId: string | null;
+      quantity: number;
+      unitPrice: number;
+      netAmount: number;
+      taxAmount: number;
+      whtAmount: number;
+      totalAmount: number;
+    }> = [];
+
+    if (input.items && input.items.length > 0) {
+      for (const it of input.items) {
+        const lineBase = round4(dMul(Number(it.quantity) || 0, Number(it.unitPrice) || 0, 4));
+        const taxBreak = await computeDocumentTaxTx(tx, {
+          baseAmount: lineBase,
+          taxCodeId: it.taxCodeId ?? input.taxCodeId,
+          whtCodeId: it.whtCodeId ?? input.whtCodeId,
+          taxInclusive: input.taxInclusive,
+          asOfDate: billDate,
+        });
+        netAmount = dAdd(netAmount, taxBreak.netAmount, 4);
+        taxAmount = dAdd(taxAmount, taxBreak.taxAmount, 4);
+        whtAmount = dAdd(whtAmount, taxBreak.whtAmount, 4);
+        grossAmount = dAdd(grossAmount, taxBreak.grossAmount, 4);
+        preparedItems.push({
+          itemId: it.itemId ?? null,
+          warehouseId: it.warehouseId ?? null,
+          taxCodeId: it.taxCodeId ?? input.taxCodeId ?? null,
+          description: it.description || "صنف مشتريات",
+          unitId: it.unitId ?? null,
+          quantity: Number(it.quantity) || 0,
+          unitPrice: Number(it.unitPrice) || 0,
+          netAmount: taxBreak.netAmount,
+          taxAmount: taxBreak.taxAmount,
+          whtAmount: taxBreak.whtAmount,
+          totalAmount: taxBreak.grossAmount,
+        });
+      }
+    } else {
+      const docTax = await computeDocumentTaxTx(tx, {
+        baseAmount: rawAmount,
+        taxCodeId: input.taxCodeId,
+        whtCodeId: input.whtCodeId,
+        taxInclusive: input.taxInclusive,
+        asOfDate: billDate,
+      });
+      netAmount = docTax.netAmount;
+      taxAmount = docTax.taxAmount;
+      whtAmount = docTax.whtAmount;
+      grossAmount = docTax.grossAmount;
+    }
+
+    const totalAmount = round4(grossAmount);
+    const payableToVendor = round4(dSub(totalAmount, whtAmount, 4));
+
+    // Check if linked PO already posted GRN/IR inventory accrual
+    let hasPostedGrnAccrual = false;
+    if (input.purchaseOrderId && input.isInventory) {
+      const grnAccrued = await tx.goodsReceipt.count({
+        where: { purchaseOrderId: input.purchaseOrderId, journalEntryId: { not: null } },
+      });
+      hasPostedGrnAccrual = grnAccrued > 0;
+    }
+
+    const defaultDebitCode = input.isInventory
+      ? hasPostedGrnAccrual
+        ? controlAccounts.grnClearingAccount || "215101"
+        : controlAccounts.inventoryInputsAccount || controlAccounts.inventoryAssetAccount || "113201"
+      : controlAccounts.operatingExpenseAccount || "524101";
     const debitAccount = await resolveOrCreatePostingAccountTx(tx, {
       accountId: input.debitAccountId,
       accountCode: input.debitAccountCode,
@@ -769,44 +1155,104 @@ export async function postVendorBill(input: PostVendorBillInput) {
     });
 
     const costCenterId = input.costCenterId ?? project.costCenterId ?? vendor.costCenterId ?? null;
+    const isCreditNote = billType === "CREDIT_NOTE";
 
-    const je = await postJournalEntry({
+    const jeLines: JournalLineInput[] = [];
+    if (!isCreditNote) {
+      jeLines.push({
+        accountId: debitAccount.id,
+        debit: netAmount,
+        currency,
+        exchangeRate: rate,
+        memo: input.notes || `مشتريات (${billType}) من ${vendor.nameAr}`,
+        projectId: project.id,
+        subProjectId: input.subProjectId ?? null,
+      });
+      if (taxAmount > 0.005) {
+        jeLines.push({
+          accountCode: controlAccounts.taxReceivableAccount || "114301",
+          debit: taxAmount,
+          currency,
+          exchangeRate: rate,
+          memo: `ضريبة مدخلات - ${billNumber}`,
+          projectId: project.id,
+          subProjectId: input.subProjectId ?? null,
+        });
+      }
+      if (whtAmount > 0.005) {
+        jeLines.push({
+          accountCode: controlAccounts.whtPayableAccount || "214201",
+          credit: whtAmount,
+          currency,
+          exchangeRate: rate,
+          memo: `ضريبة استقطاع من المنبع - ${billNumber}`,
+          projectId: project.id,
+          subProjectId: input.subProjectId ?? null,
+        });
+      }
+      jeLines.push({
+        accountId: vendor.accountId,
+        credit: payableToVendor,
+        currency,
+        exchangeRate: rate,
+        memo: `ذمة دائنة - ${vendor.nameAr} (${billNumber})`,
+        projectId: project.id,
+        subProjectId: input.subProjectId ?? null,
+      });
+    } else {
+      // Purchase Credit Note: DR Vendor Payable, CR Expense/Inventory & Input VAT
+      jeLines.push({
+        accountId: vendor.accountId,
+        debit: payableToVendor,
+        currency,
+        exchangeRate: rate,
+        memo: `إشعار دائن مورد ${billNumber} - ${vendor.nameAr}`,
+        projectId: project.id,
+        subProjectId: input.subProjectId ?? null,
+      });
+      jeLines.push({
+        accountId: debitAccount.id,
+        credit: netAmount,
+        currency,
+        exchangeRate: rate,
+        memo: `عكس مشتريات (إشعار دائن) - ${billNumber}`,
+        projectId: project.id,
+        subProjectId: input.subProjectId ?? null,
+      });
+      if (taxAmount > 0.005) {
+        jeLines.push({
+          accountCode: controlAccounts.taxReceivableAccount || "114301",
+          credit: taxAmount,
+          currency,
+          exchangeRate: rate,
+          memo: `عكس ضريبة مدخلات - ${billNumber}`,
+          projectId: project.id,
+          subProjectId: input.subProjectId ?? null,
+        });
+      }
+    }
+
+    let je = await postJournalEntry({
       tx,
       date: billDate,
       costCenterId,
       reference: billNumber,
-      narrationAr: `فاتورة مورد ${billNumber} - ${vendor.nameAr} (${project.nameAr})`,
-      narrationEn: `Vendor Bill ${billNumber} - ${vendor.nameEn || vendor.nameAr}`,
+      narrationAr: `${isCreditNote ? "إشعار دائن مورد" : billType === "DEBIT_NOTE" ? "إشعار مدين مورد" : "فاتورة مورد"} ${billNumber} - ${vendor.nameAr} (${project.nameAr})`,
+      narrationEn: `Vendor ${billType} ${billNumber} - ${vendor.nameEn || vendor.nameAr}`,
       sourceType: "VENDOR_BILL",
       projectId: project.id,
       subProjectId: input.subProjectId ?? null,
       createdById: input.createdById,
       status: "POSTED",
-      lines: [
-        {
-          accountId: debitAccount.id,
-          debit: totalAmount,
-          currency,
-          exchangeRate: rate,
-          memo: input.notes || `مشتريات من ${vendor.nameAr}`,
-          projectId: project.id,
-          subProjectId: input.subProjectId ?? null,
-        },
-        {
-          accountId: vendor.accountId,
-          credit: totalAmount,
-          currency,
-          exchangeRate: rate,
-          memo: `ذمة دائنة - ${vendor.nameAr} (${billNumber})`,
-          projectId: project.id,
-          subProjectId: input.subProjectId ?? null,
-        },
-      ],
+      skipApprovalCheck: true,
+      lines: jeLines,
     });
 
     const bill = await tx.vendorBill.create({
       data: {
         billNumber,
+        billType,
+        originalBillId: input.originalBillId ?? null,
         vendorId: vendor.id,
         projectId: project.id,
         subProjectId: input.subProjectId ?? null,
@@ -814,19 +1260,81 @@ export async function postVendorBill(input: PostVendorBillInput) {
         acquisitionCycleId: input.acquisitionCycleId ?? null,
         date: billDate,
         dueDate: input.dueDate ? new Date(input.dueDate) : null,
-        status: "POSTED",
-        totalAmount,
-        paidAmount: 0,
-        balanceDue: totalAmount,
+        status: isCreditNote ? "PAID" : "POSTED",
+        subTotal: netAmount,
+        taxAmount,
+        whtAmount,
+        totalAmount: payableToVendor,
+        paidAmount: isCreditNote ? payableToVendor : 0,
+        balanceDue: isCreditNote ? 0 : payableToVendor,
         currency,
+        currencyCode: currency,
+        exchangeRate: rate,
+        foreignAmount: payableToVendor,
+        baseAmount: dMul(payableToVendor, rate, 4),
         isInventory: Boolean(input.isInventory),
         debitAccountId: debitAccount.id,
         costCenterId,
         journalEntryId: je.id,
         notes: input.notes || null,
+        ...(preparedItems.length > 0 ? { items: { create: preparedItems } } : {}),
       },
-      include: { vendor: true, project: true, subProject: true, purchaseOrder: true },
+      include: { vendor: true, project: true, subProject: true, purchaseOrder: true, items: true },
     });
+
+    // If inventory VendorBill has itemId lines and no prior GRN already received stock, book StockMovement + FIFO Lot
+    if (input.isInventory && !hasPostedGrnAccrual && !isCreditNote && preparedItems.length > 0) {
+      const defaultWh = await tx.warehouse.findFirst({ orderBy: { isDefault: "desc" } });
+      for (const it of preparedItems) {
+        if (!it.itemId) continue;
+        const targetWhId = it.warehouseId || defaultWh?.id;
+        if (!targetWhId) continue;
+        const itemRec = await tx.inventoryItem.findUnique({
+          where: { id: it.itemId },
+          include: { conversions: true },
+        });
+        if (!itemRec) continue;
+        let factor = 1;
+        if (it.unitId && it.unitId !== itemRec.baseUnitId) {
+          const conv = itemRec.conversions.find((c) => c.unitId === it.unitId);
+          if (conv && Number(conv.factorToBase) > 0) factor = Number(conv.factorToBase);
+        }
+        const qtyBase = convertToBaseQty(it.quantity, factor);
+        const unitCostBase = dMul(dDiv(it.netAmount, qtyBase || 1, 6), rate, 4);
+        await recordStockLayerInTx(tx, {
+          itemId: it.itemId,
+          warehouseId: targetWhId,
+          enteredQty: it.quantity,
+          enteredUnitId: it.unitId || itemRec.baseUnitId,
+          factorToBase: factor,
+          qtyBase,
+          unitCostBase,
+          movementType: "PURCHASE_IN",
+          referenceType: "BILL",
+          referenceId: bill.id,
+          projectId: project.id,
+          costCenterId,
+          date: billDate,
+          postGl: false,
+        });
+      }
+    }
+
+    if (isCreditNote && input.originalBillId) {
+      const origBill = await tx.vendorBill.findUnique({ where: { id: input.originalBillId } });
+      if (origBill && origBill.status !== "VOIDED") {
+        const nextPaid = dAdd(toNum(origBill.paidAmount), payableToVendor, 4);
+        const nextDue = Math.max(0, dSub(toNum(origBill.totalAmount), nextPaid, 4));
+        await tx.vendorBill.update({
+          where: { id: origBill.id },
+          data: {
+            paidAmount: nextPaid,
+            balanceDue: nextDue,
+            status: nextDue <= 0.005 ? "PAID" : "PARTIALLY_PAID",
+          },
+        });
+      }
+    }
 
     if (input.purchaseOrderId) {
       await tx.purchaseOrder.update({
@@ -835,18 +1343,52 @@ export async function postVendorBill(input: PostVendorBillInput) {
       });
     }
 
+    const approval = await evaluateAndRouteApprovalTx(tx, {
+      module: "PROCUREMENT",
+      actionType: "CREATE_AND_POST",
+      targetType: "VendorBill",
+      targetId: bill.id,
+      documentNumber: bill.billNumber,
+      summaryAr: `اعتماد فاتورة المورد ${bill.billNumber} - ${vendor.nameAr}`,
+      summaryEn: `Vendor Bill ${bill.billNumber} - ${vendor.nameEn || vendor.nameAr}`,
+      amountBase: dMul(payableToVendor, rate, 4),
+      currencyCode: currency,
+      afterSnapshot: { billNumber: bill.billNumber, totalAmount: payableToVendor, currency },
+      requestedById: input.createdById,
+      skipApprovalCheck: input.skipApprovalCheck,
+    });
+
+    if (approval.requiresApproval) {
+      je = await tx.journalEntry.update({
+        where: { id: je.id },
+        data: { status: "PENDING_APPROVAL", documentStatus: "PENDING_APPROVAL" },
+        include: { lines: { include: { account: true } }, attachments: true },
+      });
+      await tx.vendorBill.update({
+        where: { id: bill.id },
+        data: { status: "PENDING_APPROVAL", documentStatus: "PENDING_APPROVAL" },
+      });
+    }
+
     const actorId = await resolveActorId(tx, input.createdById);
     await tx.auditLog.create({
       data: {
         userId: actorId,
-        action: "POST",
+        action: approval.requiresApproval ? "CREATE" : "POST",
         entity: "VendorBill",
         entityId: bill.id,
-        details: { billNumber: bill.billNumber, totalAmount, currency, journalEntryNumber: je.entryNumber },
+        details: { billNumber: bill.billNumber, totalAmount: payableToVendor, taxAmount, whtAmount, currency, journalEntryNumber: je.entryNumber },
       },
     });
 
-    return { bill, journalEntry: je };
+    const finalBill = approval.requiresApproval
+      ? await tx.vendorBill.findUniqueOrThrow({
+          where: { id: bill.id },
+          include: { vendor: true, project: true, subProject: true, purchaseOrder: true, items: true },
+        })
+      : bill;
+
+    return { bill: finalBill, journalEntry: je, approvalRequest: approval.request };
   });
 }
 
@@ -869,72 +1411,163 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
 
     const currency = (input.currency || treasury.currency || "YER").toUpperCase();
     const rate = await getExchangeRateToYER(tx, currency);
-    const amountYER = round4(amount * rate);
-    const feeYER = round4(transferFee * rate);
-    const totalOut = round4(amount + transferFee);
-    const totalOutYER = round4(amountYER + feeYER);
-    const voucherNumber = await nextSequenceCode(tx, "paymentVoucher", "PV");
+    const amountYER = dMul(amount, rate, 4);
+    const feeYER = dMul(transferFee, rate, 4);
+    const totalOut = dAdd(amount, transferFee, 4);
+    const totalOutYER = dAdd(amountYER, feeYER, 4);
     const payDate = input.date ? new Date(input.date) : new Date();
+    const voucherNumber = await nextSequenceCode(tx, "paymentVoucher", "PV", payDate);
+    const controlAccounts = await getControlAccountsTx(tx);
 
     let projectId: string | null = input.projectId ?? null;
     let subProjectId: string | null = input.subProjectId ?? null;
     let acquisitionCycleId: string | null = input.acquisitionCycleId ?? null;
+    let linkedBillCurrency = currency;
+    let settledBillForeignAmt = amount;
+    let bookedBillRate = rate;
 
-    if (input.billId) {
-      const bill = await tx.vendorBill.findUnique({ where: { id: input.billId } });
-      if (!bill) throw new Error("BILL_NOT_FOUND");
-      projectId = projectId || bill.projectId;
-      subProjectId = subProjectId || bill.subProjectId;
-      acquisitionCycleId = acquisitionCycleId || bill.acquisitionCycleId;
+    const allocList =
+      input.allocations && input.allocations.length > 0
+        ? input.allocations.filter((a) => a.billId && Number(a.amount) > 0)
+        : input.billId
+        ? [{ billId: input.billId, amount }]
+        : [];
 
-      const billRate = await getExchangeRateToYER(tx, bill.currency);
-      const amountInBillCurr = round4(amountYER / billRate);
-      const nextPaid = round4(toNum(bill.paidAmount) + amountInBillCurr);
-      const nextDue = Math.max(0, round4(toNum(bill.totalAmount) - nextPaid));
+    if (allocList.length > 0) {
+      const totalAllocated = allocList.reduce((s, a) => dAdd(s, Number(a.amount), 4), 0);
+      if (totalAllocated > amount + 0.01) {
+        throw new Error(
+          `OVER_ALLOCATION: إجمالي التوزيع على الفواتير (${totalAllocated}) يتجاوز مبلغ سند الصرف (${amount}).`
+        );
+      }
 
-      await tx.vendorBill.update({
-        where: { id: bill.id },
-        data: {
-          paidAmount: nextPaid,
-          balanceDue: nextDue,
-          status: nextDue <= 0.005 ? "PAID" : "PARTIALLY_PAID",
-        },
-      });
+      let primaryProcessed = false;
+      for (const alloc of allocList) {
+        const bill = await tx.vendorBill.findUnique({ where: { id: alloc.billId } });
+        if (!bill) throw new Error(`BILL_NOT_FOUND:${alloc.billId}`);
+        projectId = projectId || bill.projectId;
+        subProjectId = subProjectId || bill.subProjectId;
+        acquisitionCycleId = acquisitionCycleId || bill.acquisitionCycleId;
+        const bCurr = (bill.currency || "YER").toUpperCase();
+        const currentBillSpotRate = await getExchangeRateToYER(tx, bCurr);
+        const allocBase = dMul(Number(alloc.amount), rate, 4);
+        const amountInBillCurr = currency === bCurr ? Number(alloc.amount) : dDiv(allocBase, currentBillSpotRate, 4);
+
+        if (!primaryProcessed) {
+          linkedBillCurrency = bCurr;
+          bookedBillRate = toNum(bill.exchangeRate) > 0 && bCurr !== "YER" ? toNum(bill.exchangeRate) : currentBillSpotRate;
+          if (bill.journalEntryId) {
+            const billApLine = await tx.journalEntryLine.findFirst({
+              where: { journalEntryId: bill.journalEntryId, accountId: vendor.accountId },
+              select: { exchangeRate: true },
+            });
+            if (billApLine && toNum(billApLine.exchangeRate) > 0) {
+              bookedBillRate = toNum(billApLine.exchangeRate);
+            }
+          }
+          settledBillForeignAmt = allocList.length === 1 ? amountInBillCurr : amount;
+          primaryProcessed = true;
+        }
+
+        const nextPaid = dAdd(bill.paidAmount, amountInBillCurr, 4);
+        const nextDue = Math.max(0, dSub(bill.totalAmount, nextPaid, 4));
+        await tx.vendorBill.update({
+          where: { id: bill.id },
+          data: {
+            paidAmount: nextPaid,
+            balanceDue: nextDue,
+            status: nextDue <= 0.005 ? "PAID" : "PARTIALLY_PAID",
+          },
+        });
+      }
     }
 
     const treasuryRate = await getExchangeRateToYER(tx, treasury.currency);
-    const totalOutInTreasuryCurr = round4(totalOutYER / treasuryRate);
+    const totalOutInTreasuryCurr = dDiv(totalOutYER, treasuryRate, 4);
     await tx.treasuryAccount.update({
       where: { id: treasury.id },
       data: {
-        balance: round4(toNum(treasury.balance) - totalOutInTreasuryCurr),
-        balanceYER: round4(treasury.balanceYER - totalOutYER),
+        balance: dSub(treasury.balance, totalOutInTreasuryCurr, 4),
+        balanceYER: dSub(treasury.balanceYER, totalOutYER, 4),
       },
     });
+
+    const apEffectiveSettlementRate =
+      settledBillForeignAmt > 0 ? dDiv(amountYER, settledBillForeignAmt, 6) : rate;
+    const realizedFx =
+      input.billId && linkedBillCurrency !== "YER" && Math.abs(apEffectiveSettlementRate - bookedBillRate) > 0.0001
+        ? computeRealizedFxGainLoss({
+            foreignAmount: settledBillForeignAmt,
+            bookedRate: bookedBillRate,
+            settlementRate: apEffectiveSettlementRate,
+            side: "PAYABLE",
+          })
+        : null;
+
+    const feeAccountCode = controlAccounts.bankFeeAccount || "531201";
+    const fxGainCode = controlAccounts.realizedFxGainAccount || "421101";
+    const fxLossCode = controlAccounts.realizedFxLossAccount || "532101";
+
+    let fxLine: JournalLineInput | null = null;
+    if (realizedFx && realizedFx.gainAmount > 0.005) {
+      const fxGainAcc = await ensureControlAccountTx(tx, fxGainCode, {
+        nameAr: "أرباح فروق عملة محققة",
+        nameEn: "Realized FX Gain",
+        type: "REVENUE",
+        parentCode: "421100",
+      });
+      fxLine = {
+        accountId: fxGainAcc.id,
+        credit: realizedFx.gainAmount,
+        currency: "YER",
+        exchangeRate: 1,
+        memo: `أرباح فروق عملة محققة لسند الصرف ${voucherNumber}`,
+        projectId,
+        subProjectId,
+      };
+    } else if (realizedFx && realizedFx.lossAmount > 0.005) {
+      const fxLossAcc = await ensureControlAccountTx(tx, fxLossCode, {
+        nameAr: "خسائر فروق عملة محققة",
+        nameEn: "Realized FX Loss",
+        type: "EXPENSE",
+        parentCode: "532100",
+      });
+      fxLine = {
+        accountId: fxLossAcc.id,
+        debit: realizedFx.lossAmount,
+        currency: "YER",
+        exchangeRate: 1,
+        memo: `خسائر فروق عملة محققة لسند الصرف ${voucherNumber}`,
+        projectId,
+        subProjectId,
+      };
+    }
 
     const lines: JournalLineInput[] = [
       {
         accountId: vendor.accountId,
-        debit: amount,
-        currency,
-        exchangeRate: rate,
+        debit: realizedFx ? settledBillForeignAmt : amount,
+        baseDebit: realizedFx ? realizedFx.bookedBase : undefined,
+        currency: realizedFx ? linkedBillCurrency : currency,
+        exchangeRate: realizedFx ? bookedBillRate : rate,
         memo: input.notes || `سداد للمورد ${vendor.nameAr}`,
         projectId,
         subProjectId,
       },
       ...(transferFee > 0
         ? [
-            {
-              accountCode: "531201",
-              debit: transferFee,
-              currency,
-              exchangeRate: rate,
-              memo: `رسوم تحويل سند الصرف ${voucherNumber}`,
-              projectId,
-              subProjectId,
-            },
-          ]
+          {
+            accountCode: feeAccountCode,
+            debit: transferFee,
+            currency,
+            exchangeRate: rate,
+            memo: `رسوم تحويل سند الصرف ${voucherNumber}`,
+            projectId,
+            subProjectId,
+          },
+        ]
         : []),
+      ...(fxLine ? [fxLine] : []),
       {
         accountId: treasury.accountId,
         credit: totalOut,
@@ -947,7 +1580,7 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
 
     const costCenterId = input.costCenterId ?? vendor.costCenterId ?? null;
 
-    const je = await postJournalEntry({
+    let je = await postJournalEntry({
       tx,
       date: payDate,
       costCenterId,
@@ -959,6 +1592,7 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
       subProjectId,
       createdById: input.createdById,
       status: "POSTED",
+      skipApprovalCheck: true,
       lines,
     });
 
@@ -971,11 +1605,16 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
         voucherNumber,
         date: payDate,
         vendorId: vendor.id,
-        billId: input.billId ?? null,
+        billId: input.billId ?? (allocList[0]?.billId ?? null),
+        allocationsJson: allocList.length > 0 ? JSON.stringify(allocList) : null,
         treasuryId: treasury.id,
         amount,
         transferFee,
         currency,
+        currencyCode: currency,
+        exchangeRate: rate,
+        foreignAmount: amount,
+        baseAmount: amountYER,
         referenceNumber: input.referenceNumber || null,
         notes: input.notes || null,
         projectId,
@@ -988,18 +1627,41 @@ export async function postVendorPayment(input: PostVendorPaymentInput) {
       include: { vendor: true, bill: true, treasury: true },
     });
 
+    const approval = await evaluateAndRouteApprovalTx(tx, {
+      module: "TREASURY",
+      actionType: "CREATE_AND_POST",
+      targetType: "PaymentVoucher",
+      targetId: voucher.id,
+      documentNumber: voucherNumber,
+      summaryAr: `اعتماد سند الصرف ${voucherNumber} للمورد ${vendor.nameAr}`,
+      summaryEn: `Payment Voucher ${voucherNumber} to ${vendor.nameEn || vendor.nameAr}`,
+      amountBase: amountYER,
+      currencyCode: currency,
+      afterSnapshot: { voucherNumber, amount, currency, amountYER },
+      requestedById: input.createdById,
+      skipApprovalCheck: input.skipApprovalCheck,
+    });
+
+    if (approval.requiresApproval) {
+      je = await tx.journalEntry.update({
+        where: { id: je.id },
+        data: { status: "PENDING_APPROVAL", documentStatus: "PENDING_APPROVAL" },
+        include: { lines: { include: { account: true } }, attachments: true },
+      });
+    }
+
     const actorId = await resolveActorId(tx, input.createdById);
     await tx.auditLog.create({
       data: {
         userId: actorId,
-        action: "POST",
+        action: approval.requiresApproval ? "CREATE" : "POST",
         entity: "PaymentVoucher",
         entityId: voucher.id,
         details: { voucherNumber, amount, currency, amountYER, treasuryId: treasury.id },
       },
     });
 
-    return { voucher, journalEntry: je };
+    return { voucher, journalEntry: je, approvalRequest: approval.request };
   });
 }
 
@@ -1021,67 +1683,322 @@ export async function postSalesInvoice(input: PostSalesInvoiceInput) {
       if (cycle?.isLocked) throw new Error("HARVEST_LOCKED");
     }
 
-    const totalAmount = round4(input.amount);
-    if (totalAmount <= 0) throw new Error("INVALID_INVOICE_AMOUNT");
+    const invoiceType = input.invoiceType || "INVOICE";
+    const isCreditNote = invoiceType === "CREDIT_NOTE";
+    const computedFromItems =
+      input.items && input.items.length > 0
+        ? input.items.reduce(
+            (sum, item) => dAdd(sum, dMul(Number(item.quantity), Number(item.unitPrice), 4), 4),
+            0
+          )
+        : 0;
+    const rawAmount = round4(input.amount > 0 ? input.amount : computedFromItems);
+    if (rawAmount <= 0) throw new Error("INVALID_INVOICE_AMOUNT");
 
     const currency = (input.currency || "YER").toUpperCase();
     const rate = await getExchangeRateToYER(tx, currency);
-    const invoiceNumber = await nextSequenceCode(tx, "salesInvoice", "INV");
     const invDate = input.date ? new Date(input.date) : new Date();
-    const defaultRevenueCode = mapProjectIdToSalesRevenueCode(project.id);
+    const controlAccounts = await getControlAccountsTx(tx);
+
+    // Line-level / doc-level tax computation (VAT Output & WHT)
+    let netAmount = 0;
+    let taxAmount = 0;
+    let whtAmount = 0;
+    let grossAmount = 0;
+    const preparedItems: Array<{
+      itemId: string | null;
+      warehouseId: string | null;
+      taxCodeId: string | null;
+      description: string;
+      unitId: string | null;
+      quantity: number;
+      unitPrice: number;
+      netAmount: number;
+      taxAmount: number;
+      whtAmount: number;
+      totalAmount: number;
+      costOfGoodsSold: number;
+    }> = [];
+
+    if (input.items && input.items.length > 0) {
+      for (const it of input.items) {
+        const lineBase = round4(dMul(Number(it.quantity) || 0, Number(it.unitPrice) || 0, 4));
+        const taxBreak = await computeDocumentTaxTx(tx, {
+          baseAmount: lineBase,
+          taxCodeId: it.taxCodeId ?? input.taxCodeId,
+          whtCodeId: it.whtCodeId ?? input.whtCodeId,
+          taxInclusive: input.taxInclusive,
+          asOfDate: invDate,
+        });
+        netAmount = dAdd(netAmount, taxBreak.netAmount, 4);
+        taxAmount = dAdd(taxAmount, taxBreak.taxAmount, 4);
+        whtAmount = dAdd(whtAmount, taxBreak.whtAmount, 4);
+        grossAmount = dAdd(grossAmount, taxBreak.grossAmount, 4);
+        preparedItems.push({
+          itemId: it.itemId ?? null,
+          warehouseId: it.warehouseId ?? null,
+          taxCodeId: it.taxCodeId ?? input.taxCodeId ?? null,
+          description: it.description || "صنف مبيعات",
+          unitId: it.unitId ?? null,
+          quantity: Number(it.quantity) || 0,
+          unitPrice: Number(it.unitPrice) || 0,
+          netAmount: taxBreak.netAmount,
+          taxAmount: taxBreak.taxAmount,
+          whtAmount: taxBreak.whtAmount,
+          totalAmount: taxBreak.grossAmount,
+          costOfGoodsSold: 0,
+        });
+      }
+    } else {
+      const docTax = await computeDocumentTaxTx(tx, {
+        baseAmount: rawAmount,
+        taxCodeId: input.taxCodeId,
+        whtCodeId: input.whtCodeId,
+        taxInclusive: input.taxInclusive,
+        asOfDate: invDate,
+      });
+      netAmount = docTax.netAmount;
+      taxAmount = docTax.taxAmount;
+      whtAmount = docTax.whtAmount;
+      grossAmount = docTax.grossAmount;
+    }
+
+    const totalAmount = round4(grossAmount);
+    const receivableFromCustomer = round4(dSub(totalAmount, whtAmount, 4));
+
+    // Step 2.3: Enforce Customer.creditLimit before issuing credit exposure
+    const creditLimit = toNum(customer.creditLimit);
+    if (!isCreditNote && creditLimit > 0 && !input.overrideCreditLimit) {
+      const openInvoices = await tx.salesInvoice.findMany({
+        where: {
+          customerId: customer.id,
+          balanceDue: { gt: 0 },
+          status: { not: "VOIDED" },
+          documentStatus: { not: "VOIDED" },
+          invoiceType: { not: "CREDIT_NOTE" },
+        },
+        select: { balanceDue: true, exchangeRate: true },
+      });
+      const existingArBase = openInvoices.reduce(
+        (s, inv) => dAdd(s, dMul(toNum(inv.balanceDue), toNum(inv.exchangeRate) || 1, 4), 4),
+        0
+      );
+      const immediatePaidBase = dMul(Math.max(0, Number(input.creditPaidImmediate) || 0), rate, 4);
+      const newArExposureBase = Math.max(0, dSub(dMul(receivableFromCustomer, rate, 4), immediatePaidBase, 4));
+      if (newArExposureBase > 0.005 && dAdd(existingArBase, newArExposureBase, 4) > creditLimit + 0.01) {
+        throw new Error(
+          `CREDIT_LIMIT_EXCEEDED: تجاوز العميل (${customer.nameAr}) حد الائتمان المسموح (${creditLimit.toLocaleString("en-US")}). الرصيد المفتوح + الفاتورة الجديدة = ${dAdd(existingArBase, newArExposureBase, 2).toLocaleString("en-US")}.`
+        );
+      }
+    }
+
+    const invoiceNumber = await nextSequenceCode(tx, "salesInvoice", "INV", invDate);
+    const defaultRevenueCode = isCreditNote
+      ? controlAccounts.salesReturnsAccount || "411401"
+      : mapProjectIdToSalesRevenueCode(project.id);
     const revenueAccount = await resolveOrCreatePostingAccountTx(tx, {
-      accountId: input.revenueAccountId,
-      accountCode: input.revenueAccountCode,
+      accountId: isCreditNote ? null : input.revenueAccountId,
+      accountCode: isCreditNote ? controlAccounts.salesReturnsAccount || "411401" : input.revenueAccountCode,
       customAccount: input.customAccount,
       fallbackDefaultCode: defaultRevenueCode,
       userId: input.createdById,
     });
 
     const costCenterId = input.costCenterId ?? project.costCenterId ?? customer.costCenterId ?? null;
+    const invLines: JournalLineInput[] = [];
 
-    const je = await postJournalEntry({
+    if (!isCreditNote) {
+      invLines.push({
+        accountId: customer.accountId,
+        debit: receivableFromCustomer,
+        currency,
+        exchangeRate: rate,
+        memo: `ذمة مدينة - ${customer.nameAr}`,
+        projectId: project.id,
+        subProjectId: input.subProjectId ?? null,
+        harvestCycleId: input.harvestCycleId ?? null,
+      });
+      if (whtAmount > 0.005) {
+        invLines.push({
+          accountCode: controlAccounts.taxReceivableAccount || "114301",
+          debit: whtAmount,
+          currency,
+          exchangeRate: rate,
+          memo: `ضريبة مستقطعة من العميل - ${invoiceNumber}`,
+          projectId: project.id,
+          subProjectId: input.subProjectId ?? null,
+          harvestCycleId: input.harvestCycleId ?? null,
+        });
+      }
+      invLines.push({
+        accountId: revenueAccount.id,
+        credit: netAmount,
+        currency,
+        exchangeRate: rate,
+        memo: input.notes || `إيراد مبيعات ${project.nameAr}`,
+        projectId: project.id,
+        subProjectId: input.subProjectId ?? null,
+        harvestCycleId: input.harvestCycleId ?? null,
+      });
+      if (taxAmount > 0.005) {
+        invLines.push({
+          accountCode: controlAccounts.taxPayableAccount || "214101",
+          credit: taxAmount,
+          currency,
+          exchangeRate: rate,
+          memo: `ضريبة مخرجات مبيعات - ${invoiceNumber}`,
+          projectId: project.id,
+          subProjectId: input.subProjectId ?? null,
+          harvestCycleId: input.harvestCycleId ?? null,
+        });
+      }
+    } else {
+      // Sales Credit Note: DR Sales Returns (411401) + DR VAT Payable, CR Customer AR
+      invLines.push({
+        accountId: revenueAccount.id,
+        debit: netAmount,
+        currency,
+        exchangeRate: rate,
+        memo: input.notes || `مردودات / إشعار دائن مبيعات ${invoiceNumber}`,
+        projectId: project.id,
+        subProjectId: input.subProjectId ?? null,
+        harvestCycleId: input.harvestCycleId ?? null,
+      });
+      if (taxAmount > 0.005) {
+        invLines.push({
+          accountCode: controlAccounts.taxPayableAccount || "214101",
+          debit: taxAmount,
+          currency,
+          exchangeRate: rate,
+          memo: `عكس ضريبة مخرجات - ${invoiceNumber}`,
+          projectId: project.id,
+          subProjectId: input.subProjectId ?? null,
+          harvestCycleId: input.harvestCycleId ?? null,
+        });
+      }
+      invLines.push({
+        accountId: customer.accountId,
+        credit: receivableFromCustomer,
+        currency,
+        exchangeRate: rate,
+        memo: `تخفيض ذمة عميل (إشعار دائن) - ${customer.nameAr}`,
+        projectId: project.id,
+        subProjectId: input.subProjectId ?? null,
+        harvestCycleId: input.harvestCycleId ?? null,
+      });
+    }
+
+    let je = await postJournalEntry({
       tx,
       date: invDate,
       costCenterId,
       reference: invoiceNumber,
-      narrationAr: `فاتورة مبيعات ${invoiceNumber} للعميل ${customer.nameAr} (${project.nameAr})`,
-      narrationEn: `Sales Invoice ${invoiceNumber} - ${customer.nameEn || customer.nameAr}`,
+      narrationAr: `${isCreditNote ? "إشعار دائن مبيعات" : invoiceType === "DEBIT_NOTE" ? "إشعار مدين مبيعات" : "فاتورة مبيعات"} ${invoiceNumber} للعميل ${customer.nameAr} (${project.nameAr})`,
+      narrationEn: `Sales ${invoiceType} ${invoiceNumber} - ${customer.nameEn || customer.nameAr}`,
       sourceType: "SALES_INVOICE",
       projectId: project.id,
       subProjectId: input.subProjectId ?? null,
       createdById: input.createdById,
       status: "POSTED",
-      lines: [
-        {
-          accountId: customer.accountId,
-          debit: totalAmount,
-          currency,
-          exchangeRate: rate,
-          memo: `ذمة مدينة - ${customer.nameAr}`,
-          projectId: project.id,
-          subProjectId: input.subProjectId ?? null,
-          harvestCycleId: input.harvestCycleId ?? null,
-        },
-        {
-          accountId: revenueAccount.id,
-          credit: totalAmount,
-          currency,
-          exchangeRate: rate,
-          memo: input.notes || `إيراد مبيعات ${project.nameAr}`,
-          projectId: project.id,
-          subProjectId: input.subProjectId ?? null,
-          harvestCycleId: input.harvestCycleId ?? null,
-        },
-      ],
+      skipApprovalCheck: true,
+      lines: invLines,
     });
 
+    // Step 2.1: Inventory Stock Deduction (FIFO/WAC) & DR COGS / CR Inventory GL
+    let cogsJournalEntryId: string | null = null;
+    if (!isCreditNote && preparedItems.some((it) => Boolean(it.itemId))) {
+      const defaultWh = await tx.warehouse.findFirst({ orderBy: { isDefault: "desc" } });
+      const cogsGlLines: JournalLineInput[] = [];
+
+      for (const it of preparedItems) {
+        if (!it.itemId) continue;
+        const itemRec = await tx.inventoryItem.findUnique({
+          where: { id: it.itemId },
+          include: { conversions: true },
+        });
+        if (!itemRec || itemRec.itemType === "SERVICE") continue;
+        const targetWhId = it.warehouseId || itemRec.defaultWarehouseId || defaultWh?.id;
+        if (!targetWhId) continue;
+
+        let factor = 1;
+        if (it.unitId && it.unitId !== itemRec.baseUnitId) {
+          const conv = itemRec.conversions.find((c) => c.unitId === it.unitId);
+          if (conv && Number(conv.factorToBase) > 0) factor = Number(conv.factorToBase);
+        }
+        const qtyBase = convertToBaseQty(it.quantity, factor);
+        const consumed = await consumeStockLayersOutTx(tx, {
+          itemId: itemRec.id,
+          warehouseId: targetWhId,
+          enteredQty: it.quantity,
+          enteredUnitId: it.unitId || itemRec.baseUnitId,
+          factorToBase: factor,
+          qtyBase,
+          movementType: "SALE_OUT",
+          referenceType: "INVOICE",
+          referenceId: invoiceNumber,
+          projectId: project.id,
+          costCenterId,
+          date: invDate,
+          postGl: false,
+        });
+        it.costOfGoodsSold = consumed.totalCost;
+
+        if (consumed.totalCost > 0.005) {
+          cogsGlLines.push({
+            ...(itemRec.cogsAccountId
+              ? { accountId: itemRec.cogsAccountId }
+              : { accountCode: controlAccounts.cogsInventoryAccount || controlAccounts.cogsAccount || "512201" }),
+            debit: consumed.totalCost,
+            projectId: project.id,
+            subProjectId: input.subProjectId ?? null,
+            memo: `تكلفة مبيعات ${itemRec.nameAr} (${invoiceNumber})`,
+          });
+          cogsGlLines.push({
+            ...(itemRec.inventoryAccountId
+              ? { accountId: itemRec.inventoryAccountId }
+              : {
+                  accountCode:
+                    itemRec.itemType === "CONSUMABLE"
+                      ? controlAccounts.inventoryInputsAccount || "113201"
+                      : controlAccounts.inventoryAssetAccount || "113101",
+                }),
+            credit: consumed.totalCost,
+            projectId: project.id,
+            subProjectId: input.subProjectId ?? null,
+            memo: `تخفيض مخزون ${itemRec.nameAr} (${invoiceNumber})`,
+          });
+        }
+      }
+
+      if (cogsGlLines.length >= 2) {
+        const cogsJe = await postJournalEntry({
+          tx,
+          date: invDate,
+          costCenterId,
+          reference: `COGS-${invoiceNumber}`,
+          narrationAr: `تكلفة مبيعات المخزون - ${invoiceNumber}`,
+          narrationEn: `Inventory COGS - ${invoiceNumber}`,
+          sourceType: "SALES_INVOICE",
+          projectId: project.id,
+          subProjectId: input.subProjectId ?? null,
+          createdById: input.createdById,
+          status: "POSTED",
+          skipApprovalCheck: true,
+          lines: cogsGlLines,
+        });
+        cogsJournalEntryId = cogsJe.id;
+      }
+    }
+
     const qrVerificationHash = computeQrVerificationCode(
-      `INV:${invoiceNumber}|CUST:${customer.nameAr}|AMT:${totalAmount}`
+      `INV:${invoiceNumber}|CUST:${customer.nameAr}|AMT:${receivableFromCustomer}`
     );
 
     const invoice = await tx.salesInvoice.create({
       data: {
         invoiceNumber,
+        invoiceType,
+        originalInvoiceId: input.originalInvoiceId ?? null,
         sequenceNumber: input.sequenceNumber ?? null,
         dailyBatchLabel: input.dailyBatchLabel ?? null,
         salesOfficerId: input.salesOfficerId ?? null,
@@ -1093,20 +2010,86 @@ export async function postSalesInvoice(input: PostSalesInvoiceInput) {
         subProjectId: input.subProjectId ?? null,
         harvestCycleId: input.harvestCycleId ?? null,
         date: invDate,
-        totalAmount,
-        paidAmount: 0,
-        balanceDue: totalAmount,
-        status: "POSTED",
+        dueDate: input.dueDate ? new Date(input.dueDate) : invDate,
+        subTotal: netAmount,
+        taxAmount,
+        whtAmount,
+        totalAmount: receivableFromCustomer,
+        paidAmount: isCreditNote ? receivableFromCustomer : 0,
+        balanceDue: isCreditNote ? 0 : receivableFromCustomer,
+        status: isCreditNote ? "PAID" : "POSTED",
         currency,
+        currencyCode: currency,
+        exchangeRate: rate,
+        foreignAmount: receivableFromCustomer,
+        baseAmount: dMul(receivableFromCustomer, rate, 4),
         notes: input.notes || null,
         costCenterId,
         journalEntryId: je.id,
+        cogsJournalEntryId,
         qrVerificationHash,
+        ...(preparedItems.length > 0 ? { items: { create: preparedItems } } : {}),
       },
-      include: { customer: true, project: true, harvestCycle: true },
+      include: { customer: true, project: true, harvestCycle: true, items: true },
     });
 
-    return { invoice, journalEntry: je };
+    if (isCreditNote && input.originalInvoiceId) {
+      const origInv = await tx.salesInvoice.findUnique({ where: { id: input.originalInvoiceId } });
+      if (origInv && origInv.status !== "VOIDED") {
+        const nextPaid = dAdd(toNum(origInv.paidAmount), receivableFromCustomer, 4);
+        const nextDue = Math.max(0, dSub(toNum(origInv.totalAmount), nextPaid, 4));
+        await tx.salesInvoice.update({
+          where: { id: origInv.id },
+          data: {
+            paidAmount: nextPaid,
+            balanceDue: nextDue,
+            status: nextDue <= 0.005 ? "PAID" : "PARTIALLY_PAID",
+          },
+        });
+      }
+    }
+
+    const approval = await evaluateAndRouteApprovalTx(tx, {
+      module: "SALES",
+      actionType: "CREATE_AND_POST",
+      targetType: "SalesInvoice",
+      targetId: invoice.id,
+      documentNumber: invoice.invoiceNumber,
+      summaryAr: `اعتماد فاتورة مبيعات ${invoice.invoiceNumber} - ${customer.nameAr}`,
+      summaryEn: `Sales Invoice ${invoice.invoiceNumber} - ${customer.nameEn || customer.nameAr}`,
+      amountBase: dMul(receivableFromCustomer, rate, 4),
+      currencyCode: currency,
+      afterSnapshot: { invoiceNumber: invoice.invoiceNumber, totalAmount: receivableFromCustomer, currency },
+      requestedById: input.createdById,
+      skipApprovalCheck: input.skipApprovalCheck,
+    });
+
+    if (approval.requiresApproval) {
+      je = await tx.journalEntry.update({
+        where: { id: je.id },
+        data: { status: "PENDING_APPROVAL", documentStatus: "PENDING_APPROVAL" },
+        include: { lines: { include: { account: true } }, attachments: true },
+      });
+      if (cogsJournalEntryId) {
+        await tx.journalEntry.update({
+          where: { id: cogsJournalEntryId },
+          data: { status: "PENDING_APPROVAL", documentStatus: "PENDING_APPROVAL" },
+        });
+      }
+      await tx.salesInvoice.update({
+        where: { id: invoice.id },
+        data: { status: "PENDING_APPROVAL", documentStatus: "PENDING_APPROVAL" },
+      });
+    }
+
+    const finalInvoice = approval.requiresApproval
+      ? await tx.salesInvoice.findUniqueOrThrow({
+          where: { id: invoice.id },
+          include: { customer: true, project: true, harvestCycle: true, items: true },
+        })
+      : invoice;
+
+    return { invoice: finalInvoice, journalEntry: je, cogsJournalEntryId, approvalRequest: approval.request };
   });
 }
 
@@ -1128,49 +2111,139 @@ export async function postCustomerReceipt(input: PostCustomerReceiptInput) {
 
     const currency = (input.currency || treasury.currency || "YER").toUpperCase();
     const rate = await getExchangeRateToYER(tx, currency);
-    const amountYER = round4(amount * rate);
-    const voucherNumber = await nextSequenceCode(tx, "receiptVoucher", "RV");
+    const amountYER = dMul(amount, rate, 4);
     const rcpDate = input.date ? new Date(input.date) : new Date();
+    const voucherNumber = await nextSequenceCode(tx, "receiptVoucher", "RV", rcpDate);
+    const controlAccounts = await getControlAccountsTx(tx);
 
     let projectId: string | null = input.projectId ?? null;
     let subProjectId: string | null = input.subProjectId ?? null;
     let harvestCycleId: string | null = null;
+    let linkedInvCurrency = currency;
+    let settledInvForeignAmt = amount;
+    let bookedInvRate = rate;
 
-    if (input.invoiceId) {
-      const inv = await tx.salesInvoice.findUnique({ where: { id: input.invoiceId } });
-      if (!inv) throw new Error("INVOICE_NOT_FOUND");
-      projectId = projectId || inv.projectId;
-      subProjectId = subProjectId || inv.subProjectId;
-      harvestCycleId = inv.harvestCycleId;
+    const allocList =
+      input.allocations && input.allocations.length > 0
+        ? input.allocations.filter((a) => a.invoiceId && Number(a.amount) > 0)
+        : input.invoiceId
+        ? [{ invoiceId: input.invoiceId, amount }]
+        : [];
 
-      const invRate = await getExchangeRateToYER(tx, inv.currency);
-      const amountInInvCurr = round4(amountYER / invRate);
-      const nextPaid = round4(toNum(inv.paidAmount) + amountInInvCurr);
-      const nextDue = Math.max(0, round4(toNum(inv.totalAmount) - nextPaid));
+    if (allocList.length > 0) {
+      const totalAllocated = allocList.reduce((s, a) => dAdd(s, Number(a.amount), 4), 0);
+      if (totalAllocated > amount + 0.01) {
+        throw new Error(
+          `OVER_ALLOCATION: إجمالي التوزيع على الفواتير (${totalAllocated}) يتجاوز مبلغ سند القبض (${amount}).`
+        );
+      }
 
-      await tx.salesInvoice.update({
-        where: { id: inv.id },
-        data: {
-          paidAmount: nextPaid,
-          balanceDue: nextDue,
-          status: nextDue <= 0.005 ? "PAID" : "PARTIALLY_PAID",
-        },
-      });
+      let primaryProcessed = false;
+      for (const alloc of allocList) {
+        const inv = await tx.salesInvoice.findUnique({ where: { id: alloc.invoiceId } });
+        if (!inv) throw new Error(`INVOICE_NOT_FOUND:${alloc.invoiceId}`);
+        projectId = projectId || inv.projectId;
+        subProjectId = subProjectId || inv.subProjectId;
+        harvestCycleId = harvestCycleId || inv.harvestCycleId;
+        const iCurr = (inv.currency || "YER").toUpperCase();
+        const currentInvSpotRate = await getExchangeRateToYER(tx, iCurr);
+        const allocBase = dMul(Number(alloc.amount), rate, 4);
+        const amountInInvCurr = currency === iCurr ? Number(alloc.amount) : dDiv(allocBase, currentInvSpotRate, 4);
+
+        if (!primaryProcessed) {
+          linkedInvCurrency = iCurr;
+          bookedInvRate = toNum(inv.exchangeRate) > 0 && iCurr !== "YER" ? toNum(inv.exchangeRate) : currentInvSpotRate;
+          if (inv.journalEntryId) {
+            const invArLine = await tx.journalEntryLine.findFirst({
+              where: { journalEntryId: inv.journalEntryId, accountId: customer.accountId },
+              select: { exchangeRate: true },
+            });
+            if (invArLine && toNum(invArLine.exchangeRate) > 0) {
+              bookedInvRate = toNum(invArLine.exchangeRate);
+            }
+          }
+          settledInvForeignAmt = allocList.length === 1 ? amountInInvCurr : amount;
+          primaryProcessed = true;
+        }
+
+        const nextPaid = dAdd(inv.paidAmount, amountInInvCurr, 4);
+        const nextDue = Math.max(0, dSub(inv.totalAmount, nextPaid, 4));
+        await tx.salesInvoice.update({
+          where: { id: inv.id },
+          data: {
+            paidAmount: nextPaid,
+            balanceDue: nextDue,
+            status: nextDue <= 0.005 ? "PAID" : "PARTIALLY_PAID",
+          },
+        });
+      }
     }
 
     const treasuryRate = await getExchangeRateToYER(tx, treasury.currency);
-    const amountInTreasuryCurr = round4(amountYER / treasuryRate);
+    const amountInTreasuryCurr = dDiv(amountYER, treasuryRate, 4);
     await tx.treasuryAccount.update({
       where: { id: treasury.id },
       data: {
-        balance: round4(toNum(treasury.balance) + amountInTreasuryCurr),
-        balanceYER: round4(treasury.balanceYER + amountYER),
+        balance: dAdd(treasury.balance, amountInTreasuryCurr, 4),
+        balanceYER: dAdd(treasury.balanceYER, amountYER, 4),
       },
     });
 
+    const arEffectiveSettlementRate =
+      settledInvForeignAmt > 0 ? dDiv(amountYER, settledInvForeignAmt, 6) : rate;
+    const realizedFx =
+      input.invoiceId && linkedInvCurrency !== "YER" && Math.abs(arEffectiveSettlementRate - bookedInvRate) > 0.0001
+        ? computeRealizedFxGainLoss({
+            foreignAmount: settledInvForeignAmt,
+            bookedRate: bookedInvRate,
+            settlementRate: arEffectiveSettlementRate,
+            side: "RECEIVABLE",
+          })
+        : null;
+
+    const fxGainCode = controlAccounts.realizedFxGainAccount || "421101";
+    const fxLossCode = controlAccounts.realizedFxLossAccount || "532101";
+
+    let fxLine: JournalLineInput | null = null;
+    if (realizedFx && realizedFx.gainAmount > 0.005) {
+      const fxGainAcc = await ensureControlAccountTx(tx, fxGainCode, {
+        nameAr: "أرباح فروق عملة محققة",
+        nameEn: "Realized FX Gain",
+        type: "REVENUE",
+        parentCode: "421100",
+      });
+      fxLine = {
+        accountId: fxGainAcc.id,
+        credit: realizedFx.gainAmount,
+        currency: "YER",
+        exchangeRate: 1,
+        memo: `أرباح فروق عملة محققة لسند القبض ${voucherNumber}`,
+        projectId,
+        subProjectId,
+        harvestCycleId,
+      };
+    } else if (realizedFx && realizedFx.lossAmount > 0.005) {
+      const fxLossAcc = await ensureControlAccountTx(tx, fxLossCode, {
+        nameAr: "خسائر فروق عملة محققة",
+        nameEn: "Realized FX Loss",
+        type: "EXPENSE",
+        parentCode: "532100",
+      });
+      fxLine = {
+        accountId: fxLossAcc.id,
+        debit: realizedFx.lossAmount,
+        currency: "YER",
+        exchangeRate: 1,
+        memo: `خسائر فروق عملة محققة لسند القبض ${voucherNumber}`,
+        projectId,
+        subProjectId,
+        harvestCycleId,
+      };
+    }
+
     const costCenterId = input.costCenterId ?? customer.costCenterId ?? null;
 
-    const je = await postJournalEntry({
+    let je = await postJournalEntry({
       tx,
       date: rcpDate,
       costCenterId,
@@ -1182,6 +2255,7 @@ export async function postCustomerReceipt(input: PostCustomerReceiptInput) {
       subProjectId,
       createdById: input.createdById,
       status: "POSTED",
+      skipApprovalCheck: true,
       lines: [
         {
           accountId: treasury.accountId,
@@ -1193,11 +2267,13 @@ export async function postCustomerReceipt(input: PostCustomerReceiptInput) {
           subProjectId,
           harvestCycleId,
         },
+        ...(fxLine ? [fxLine] : []),
         {
           accountId: customer.accountId,
-          credit: amount,
-          currency,
-          exchangeRate: rate,
+          credit: realizedFx ? settledInvForeignAmt : amount,
+          baseCredit: realizedFx ? realizedFx.bookedBase : undefined,
+          currency: realizedFx ? linkedInvCurrency : currency,
+          exchangeRate: realizedFx ? bookedInvRate : rate,
           memo: input.notes || `تحصيل من العميل ${customer.nameAr}`,
           projectId,
           subProjectId,
@@ -1215,11 +2291,16 @@ export async function postCustomerReceipt(input: PostCustomerReceiptInput) {
         voucherNumber,
         date: rcpDate,
         customerId: customer.id,
-        invoiceId: input.invoiceId ?? null,
+        invoiceId: input.invoiceId ?? (allocList[0]?.invoiceId ?? null),
+        allocationsJson: allocList.length > 0 ? JSON.stringify(allocList) : null,
         treasuryId: treasury.id,
         subProjectId,
         amount,
         currency,
+        currencyCode: currency,
+        exchangeRate: rate,
+        foreignAmount: amount,
+        baseAmount: amountYER,
         notes: input.notes || null,
         costCenterId,
         journalEntryId: je.id,
@@ -1228,7 +2309,30 @@ export async function postCustomerReceipt(input: PostCustomerReceiptInput) {
       include: { customer: true, invoice: true, treasury: true },
     });
 
-    return { receipt, journalEntry: je };
+    const approval = await evaluateAndRouteApprovalTx(tx, {
+      module: "TREASURY",
+      actionType: "CREATE_AND_POST",
+      targetType: "ReceiptVoucher",
+      targetId: receipt.id,
+      documentNumber: voucherNumber,
+      summaryAr: `اعتماد سند القبض ${voucherNumber} من ${customer.nameAr}`,
+      summaryEn: `Receipt Voucher ${voucherNumber} from ${customer.nameEn || customer.nameAr}`,
+      amountBase: amountYER,
+      currencyCode: currency,
+      afterSnapshot: { voucherNumber, amount, currency, amountYER },
+      requestedById: input.createdById,
+      skipApprovalCheck: input.skipApprovalCheck,
+    });
+
+    if (approval.requiresApproval) {
+      je = await tx.journalEntry.update({
+        where: { id: je.id },
+        data: { status: "PENDING_APPROVAL", documentStatus: "PENDING_APPROVAL" },
+        include: { lines: { include: { account: true } }, attachments: true },
+      });
+    }
+
+    return { receipt, journalEntry: je, approvalRequest: approval.request };
   });
 }
 
@@ -1250,10 +2354,24 @@ export async function postOperatingExpenseJournalTx(
     expenseAccountCode?: string | null;
     customAccount?: CustomAccountInput | null;
     treasuryAccountId?: string | null;
+    taxCodeId?: string | null;
+    whtCodeId?: string | null;
+    taxInclusive?: boolean;
+    skipApprovalCheck?: boolean;
     createdById?: string;
   }
 ) {
   if (input.totalAmount <= 0) return null;
+  const controlAccounts = await getControlAccountsTx(tx);
+  const expDate = new Date(`${input.date}T10:00:00Z`);
+  const taxBreak = await computeDocumentTaxTx(tx, {
+    baseAmount: input.totalAmount,
+    taxCodeId: input.taxCodeId,
+    whtCodeId: input.whtCodeId,
+    taxInclusive: input.taxInclusive,
+    asOfDate: expDate,
+  });
+
   const defaultExpCode = mapExpenseCategoryToCoaCode(input.category);
   const debitAccount = await resolveOrCreatePostingAccountTx(tx, {
     accountId: input.expenseAccountId,
@@ -1263,22 +2381,63 @@ export async function postOperatingExpenseJournalTx(
     userId: input.createdById,
   });
 
-  let creditAccountId: string | undefined;
-  if (input.treasuryAccountId) {
-    const t = await tx.treasuryAccount.findUnique({ where: { id: input.treasuryAccountId } });
-    if (t?.accountId) creditAccountId = t.accountId;
-  }
-  if (!creditAccountId) {
-    const defaultTreasury = await tx.treasuryAccount.findUnique({ where: { id: "t1" } });
-    creditAccountId = defaultTreasury?.accountId;
-  }
+  const targetTreasury = input.treasuryAccountId
+    ? await tx.treasuryAccount.findUnique({ where: { id: input.treasuryAccountId } })
+    : (await tx.treasuryAccount.findUnique({ where: { id: "t1" } })) ||
+      (await tx.treasuryAccount.findFirst({ where: { isDefaultPayments: true, isActive: true } }));
 
+  const creditAccountId = targetTreasury?.accountId;
   const expProject = await tx.project.findUnique({ where: { id: input.projectId }, select: { costCenterId: true } });
 
-  return postJournalEntry({
+  const expLines: JournalLineInput[] = [
+    {
+      accountId: debitAccount.id,
+      debit: taxBreak.netAmount,
+      projectId: input.projectId,
+      subProjectId: input.subProjectId ?? null,
+      harvestCycleId: input.harvestCycleId ?? null,
+      memo: input.subType,
+    },
+    ...(taxBreak.taxAmount > 0.005
+      ? [
+          {
+            accountCode: taxBreak.purchaseTaxAccountCode || controlAccounts.taxReceivableAccount || "114301",
+            debit: taxBreak.taxAmount,
+            projectId: input.projectId,
+            subProjectId: input.subProjectId ?? null,
+            harvestCycleId: input.harvestCycleId ?? null,
+            memo: `ضريبة مدخلات مصروف - ${input.subType}`,
+          },
+        ]
+      : []),
+    ...(taxBreak.whtAmount > 0.005
+      ? [
+          {
+            accountCode: taxBreak.whtAccountCode || controlAccounts.whtPayableAccount || "214201",
+            credit: taxBreak.whtAmount,
+            projectId: input.projectId,
+            subProjectId: input.subProjectId ?? null,
+            harvestCycleId: input.harvestCycleId ?? null,
+            memo: `ضريبة استقطاع مصروف - ${input.subType}`,
+          },
+        ]
+      : []),
+    {
+      ...(creditAccountId
+        ? { accountId: creditAccountId }
+        : { accountCode: controlAccounts.cashAccount || "111101" }),
+      credit: taxBreak.payableAfterWht,
+      projectId: input.projectId,
+      subProjectId: input.subProjectId ?? null,
+      harvestCycleId: input.harvestCycleId ?? null,
+      memo: `صرف نقدي - ${input.subType}`,
+    },
+  ];
+
+  let je = await postJournalEntry({
     tx,
     costCenterId: expProject?.costCenterId ?? null,
-    date: new Date(`${input.date}T10:00:00Z`),
+    date: expDate,
     reference: `EXP-${input.expenseId.slice(-6).toUpperCase()}`,
     narrationAr: `مصروف تشغيلي (${input.category}): ${input.subType}`,
     narrationEn: `Operating Expense (${input.category})`,
@@ -1287,25 +2446,59 @@ export async function postOperatingExpenseJournalTx(
     projectId: input.projectId,
     subProjectId: input.subProjectId ?? null,
     createdById: input.createdById,
-    lines: [
-      {
-        accountId: debitAccount.id,
-        debit: input.totalAmount,
-        projectId: input.projectId,
-        subProjectId: input.subProjectId ?? null,
-        harvestCycleId: input.harvestCycleId ?? null,
-        memo: input.subType,
-      },
-      {
-        ...(creditAccountId ? { accountId: creditAccountId } : { accountCode: "111101" }),
-        credit: input.totalAmount,
-        projectId: input.projectId,
-        subProjectId: input.subProjectId ?? null,
-        harvestCycleId: input.harvestCycleId ?? null,
-        memo: `صرف نقدي - ${input.subType}`,
-      },
-    ],
+    skipApprovalCheck: true,
+    lines: expLines,
   });
+
+  if (taxBreak.taxAmount > 0 || taxBreak.whtAmount > 0 || input.taxCodeId) {
+    await tx.operatingExpense.updateMany({
+      where: { id: input.expenseId },
+      data: {
+        taxCodeId: input.taxCodeId ?? null,
+        netAmount: taxBreak.netAmount,
+        taxAmount: taxBreak.taxAmount,
+        whtAmount: taxBreak.whtAmount,
+        totalAmount: taxBreak.grossAmount,
+      },
+    });
+  }
+
+  if (targetTreasury) {
+    const trRate = await getExchangeRateToYER(tx, targetTreasury.currency);
+    const amountInTrCurr = dDiv(taxBreak.payableAfterWht, trRate, 4);
+    await tx.treasuryAccount.update({
+      where: { id: targetTreasury.id },
+      data: {
+        balance: dSub(targetTreasury.balance, amountInTrCurr, 4),
+        balanceYER: dSub(targetTreasury.balanceYER, taxBreak.payableAfterWht, 4),
+      },
+    });
+  }
+
+  const approval = await evaluateAndRouteApprovalTx(tx, {
+    module: "EXPENSES",
+    actionType: "CREATE_AND_POST",
+    targetType: "OperatingExpense",
+    targetId: input.expenseId,
+    documentNumber: `EXP-${input.expenseId.slice(-6).toUpperCase()}`,
+    summaryAr: `اعتماد مصروف تشغيلي (${input.category}): ${input.subType}`,
+    summaryEn: `Operating Expense (${input.category}): ${input.subType}`,
+    amountBase: taxBreak.grossAmount,
+    currencyCode: "YER",
+    afterSnapshot: { category: input.category, subType: input.subType, totalAmount: taxBreak.grossAmount },
+    requestedById: input.createdById,
+    skipApprovalCheck: input.skipApprovalCheck,
+  });
+
+  if (approval.requiresApproval) {
+    je = await tx.journalEntry.update({
+      where: { id: je.id },
+      data: { status: "PENDING_APPROVAL", documentStatus: "PENDING_APPROVAL" },
+      include: { lines: { include: { account: true } }, attachments: true },
+    });
+  }
+
+  return je;
 }
 
 /**
@@ -1327,16 +2520,19 @@ export async function postWorkerWageJournalTx(
     expenseAccountId?: string | null;
     expenseAccountCode?: string | null;
     customAccount?: CustomAccountInput | null;
+    treasuryAccountId?: string | null;
     costCenterId?: string | null;
+    skipApprovalCheck?: boolean;
   }
 ) {
   if (input.totalWage <= 0) return null;
 
+  const controlAccounts = await getControlAccountsTx(tx);
   const expenseAccount = await resolveOrCreatePostingAccountTx(tx, {
     accountId: input.expenseAccountId,
     accountCode: input.expenseAccountCode,
     customAccount: input.customAccount,
-    fallbackDefaultCode: "511101",
+    fallbackDefaultCode: controlAccounts.directLaborAccount || controlAccounts.cogsAccount || "511101",
     userId: input.createdById,
   });
 
@@ -1344,7 +2540,7 @@ export async function postWorkerWageJournalTx(
   const wageWorkerAcc = await tx.account.findUnique({ where: { id: input.workerAccountId }, select: { defaultCostCenterId: true } });
   const wageCostCenterId = input.costCenterId ?? wageProject?.costCenterId ?? wageWorkerAcc?.defaultCostCenterId ?? null;
 
-  const accrual = await postJournalEntry({
+  let accrual = await postJournalEntry({
     tx,
     costCenterId: wageCostCenterId,
     date: new Date(`${input.date}T10:00:00Z`),
@@ -1356,6 +2552,7 @@ export async function postWorkerWageJournalTx(
     projectId: input.projectId,
     subProjectId: input.subProjectId ?? null,
     createdById: input.createdById,
+    skipApprovalCheck: true,
     lines: [
       {
         accountId: expenseAccount.id,
@@ -1378,6 +2575,11 @@ export async function postWorkerWageJournalTx(
   });
 
   if (input.creditAmount > 0) {
+    const payoutTreasury = input.treasuryAccountId
+      ? await tx.treasuryAccount.findUnique({ where: { id: input.treasuryAccountId } })
+      : (await tx.treasuryAccount.findUnique({ where: { id: "t1" } })) ||
+        (await tx.treasuryAccount.findFirst({ where: { isDefaultPayments: true, isActive: true } }));
+
     await postJournalEntry({
       tx,
       costCenterId: wageCostCenterId,
@@ -1390,6 +2592,7 @@ export async function postWorkerWageJournalTx(
       projectId: input.projectId,
       subProjectId: input.subProjectId ?? null,
       createdById: input.createdById,
+      skipApprovalCheck: true,
       lines: [
         {
           accountId: input.workerAccountId,
@@ -1400,7 +2603,9 @@ export async function postWorkerWageJournalTx(
           memo: `تسوية مستحقات ${input.workerName}`,
         },
         {
-          accountCode: "111101",
+          ...(payoutTreasury?.accountId
+            ? { accountId: payoutTreasury.accountId }
+            : { accountCode: controlAccounts.cashAccount || "111101" }),
           credit: input.creditAmount,
           projectId: input.projectId,
           subProjectId: input.subProjectId ?? null,
@@ -1408,6 +2613,44 @@ export async function postWorkerWageJournalTx(
           memo: `صرف نقدي للعامل ${input.workerName}`,
         },
       ],
+    });
+
+    if (payoutTreasury) {
+      const trRate = await getExchangeRateToYER(tx, payoutTreasury.currency);
+      const amountInTrCurr = dDiv(input.creditAmount, trRate, 4);
+      await tx.treasuryAccount.update({
+        where: { id: payoutTreasury.id },
+        data: {
+          balance: dSub(payoutTreasury.balance, amountInTrCurr, 4),
+          balanceYER: dSub(payoutTreasury.balanceYER, input.creditAmount, 4),
+        },
+      });
+    }
+  }
+
+  const approval = await evaluateAndRouteApprovalTx(tx, {
+    module: "WORKERS",
+    actionType: "CREATE_AND_POST",
+    targetType: "WorkerWageEntry",
+    targetId: input.wageEntryId,
+    documentNumber: `WRK-${input.wageEntryId.slice(-6).toUpperCase()}`,
+    summaryAr: `اعتماد أجر العامل ${input.workerName}`,
+    summaryEn: `Worker Wage: ${input.workerName}`,
+    amountBase: input.totalWage,
+    currencyCode: "YER",
+    afterSnapshot: { workerName: input.workerName, totalWage: input.totalWage, creditAmount: input.creditAmount },
+    requestedById: input.createdById,
+    skipApprovalCheck: input.skipApprovalCheck,
+  });
+
+  if (approval.requiresApproval) {
+    await tx.journalEntry.updateMany({
+      where: { sourceId: input.wageEntryId, status: "POSTED" },
+      data: { status: "PENDING_APPROVAL", documentStatus: "PENDING_APPROVAL" },
+    });
+    accrual = await tx.journalEntry.findUniqueOrThrow({
+      where: { id: accrual.id },
+      include: { lines: { include: { account: true } }, attachments: true },
     });
   }
 
@@ -1864,6 +3107,7 @@ function buildPostedLineWhere(filters: FinancialReportFilters): Prisma.JournalEn
     journalEntry: {
       status: "POSTED",
       documentStatus: "POSTED",
+      ...(!filters.includeYearEndClosing ? { entryType: { not: "YEAR_END_CLOSING" } } : {}),
       ...(filters.fromDate || filters.toDate ? { date: dateFilter } : {}),
     },
   };
@@ -1956,7 +3200,7 @@ export async function generateFinancialReports(filters: FinancialReportFilters =
         .reduce((s, l) => s + toNum(l.debitBase) - toNum(l.creditBase), 0)
     );
     const actualCost = round4(cogs + opex);
-    const budget = round4(toNum(proj.budgetTotal) || proj.estimatedValue);
+    const budget = round4(toNum(proj.budgetTotal) || toNum(proj.estimatedValue));
     const variance = round4(budget - actualCost);
     const utilizationPct = budget > 0 ? round4((actualCost / budget) * 100) : 0;
 
@@ -2025,17 +3269,62 @@ export async function generateFinancialReports(filters: FinancialReportFilters =
       })
   );
 
-  // Balance Sheet
-  const assetAccounts = postingRows.filter((n) => n.type === "ASSET" && n.balance !== 0);
-  const liabilityAccounts = postingRows.filter((n) => n.type === "LIABILITY" && n.balance !== 0);
-  const equityAccounts = postingRows.filter((n) => n.type === "EQUITY" && n.balance !== 0);
+  // Balance Sheet: cumulative up to toDate (ignores fromDate), anchored at latest YEAR_END_ROLLOVER OPENING entry <= toDate
+  let asOfEnd: Date | undefined;
+  if (filters.toDate) {
+    asOfEnd = new Date(filters.toDate);
+    if (typeof filters.toDate === "string" && filters.toDate.length <= 10) {
+      asOfEnd.setUTCHours(23, 59, 59, 999);
+    }
+  }
+  const latestOpeningEntry = await prisma.journalEntry.findFirst({
+    where: {
+      status: "POSTED",
+      documentStatus: "POSTED",
+      entryType: "OPENING",
+      ...(asOfEnd ? { date: { lte: asOfEnd } } : {}),
+    },
+    orderBy: { date: "desc" },
+    select: { date: true },
+  });
 
-  const totalAssets = round4(assetAccounts.reduce((s, a) => s + a.balance, 0));
-  const totalLiabilities = round4(liabilityAccounts.reduce((s, a) => s + a.balance, 0));
-  const contributedEquity = round4(equityAccounts.reduce((s, a) => s + a.balance, 0));
-  const totalEquity = round4(contributedEquity + netProfit);
-  const liabilitiesPlusEquity = round4(totalLiabilities + totalEquity);
-  const isBalanceSheetBalanced = Math.abs(totalAssets - liabilitiesPlusEquity) <= 0.005;
+  const bsFromDate = latestOpeningEntry?.date ?? undefined;
+  const sameAsReportRange =
+    !filters.fromDate &&
+    ((!bsFromDate && !filters.fromDate) ||
+      (bsFromDate && filters.fromDate && new Date(filters.fromDate).getTime() === bsFromDate.getTime()));
+  const bsFlat = sameAsReportRange
+    ? flat
+    : (
+        await getCoaTreeWithBalances({
+          ...filters,
+          fromDate: bsFromDate,
+          includeYearEndClosing: false,
+        })
+      ).flat;
+  const bsPostingRows = bsFlat.filter((n) => n.isPosting);
+  const bsRevenue = round4(
+    bsPostingRows
+      .filter((n) => n.type === "REVENUE")
+      .reduce((s, a) => dAdd(s, a.balance), 0)
+  );
+  const bsExpenses = round4(
+    bsPostingRows
+      .filter((n) => n.type === "EXPENSE")
+      .reduce((s, a) => dAdd(s, a.balance), 0)
+  );
+  const bsNetProfit = round4(dSub(bsRevenue, bsExpenses));
+
+  const assetAccounts = bsPostingRows.filter((n) => n.type === "ASSET" && Math.abs(n.balance) > 0.0001);
+  const liabilityAccounts = bsPostingRows.filter((n) => n.type === "LIABILITY" && Math.abs(n.balance) > 0.0001);
+  const equityAccounts = bsPostingRows.filter((n) => n.type === "EQUITY" && Math.abs(n.balance) > 0.0001);
+
+  const totalAssets = round4(assetAccounts.reduce((s, a) => dAdd(s, a.balance), 0));
+  const totalLiabilities = round4(liabilityAccounts.reduce((s, a) => dAdd(s, a.balance), 0));
+  const contributedEquity = round4(equityAccounts.reduce((s, a) => dAdd(s, a.balance), 0));
+  const totalEquity = round4(dAdd(contributedEquity, bsNetProfit));
+  const liabilitiesPlusEquity = round4(dAdd(totalLiabilities, totalEquity));
+  const isBalanceSheetBalanced = Math.abs(dSub(totalAssets, liabilitiesPlusEquity)) <= 0.005;
 
   return {
     filters: {
@@ -2071,7 +3360,7 @@ export async function generateFinancialReports(filters: FinancialReportFilters =
       assetLines: assetAccounts,
       liabilityLines: liabilityAccounts,
       equityLines: equityAccounts,
-      currentYearNetProfit: netProfit,
+      currentYearNetProfit: bsNetProfit,
       totalAssets,
       totalLiabilities,
       contributedEquity,
@@ -2238,7 +3527,7 @@ export async function createTreasuryAccount(input: CreateTreasuryAccountInput) {
             memo: `رصيد افتتاحي - ${nameAr}`,
           },
           {
-            accountCode: "311101",
+            accountCode: (await getControlAccountsTx(tx)).capitalAccount || "311101",
             credit: openingBalance,
             currency,
             exchangeRate: rate,
@@ -2323,10 +3612,10 @@ export async function updateTreasuryAccount(input: UpdateTreasuryAccountInput) {
         ...(input.type ? { type: input.type } : {}),
         ...(input.nameAr !== undefined || input.nameEn !== undefined
           ? {
-              name: `${nextNameAr} (${nextNameEn})`,
-              nameAr: nextNameAr,
-              nameEn: nextNameEn,
-            }
+            name: `${nextNameAr} (${nextNameEn})`,
+            nameAr: nextNameAr,
+            nameEn: nextNameEn,
+          }
           : {}),
         ...(input.providerNameAr !== undefined ? { providerNameAr: input.providerNameAr.trim() } : {}),
         ...(input.providerNameEn !== undefined ? { providerNameEn: input.providerNameEn.trim() } : {}),
@@ -2419,37 +3708,39 @@ export async function transferBetweenTreasuries(input: TreasuryTransferInput) {
         : await getExchangeRateToYER(tx, from.currency);
     const toRate = await getExchangeRateToYER(tx, to.currency);
 
+    const fromFeePct = toNum(from.transferFeePercent);
     const feeInFromCurr =
       input.feeAmount !== undefined
         ? Math.max(0, round4(Number(input.feeAmount) || 0))
-        : input.applyDefaultFee && from.transferFeePercent > 0
-        ? round4((amount * from.transferFeePercent) / 100)
-        : 0;
+        : input.applyDefaultFee && fromFeePct > 0
+          ? round4(dMul(amount, fromFeePct) / 100)
+          : 0;
 
-    const transferYER = round4(amount * fromRate);
-    const feeYER = round4(feeInFromCurr * fromRate);
-    const totalOutFrom = round4(amount + feeInFromCurr);
-    const totalOutYER = round4(transferYER + feeYER);
-    const creditedToAmount = round4(transferYER / toRate);
+    const transferYER = round4(dMul(amount, fromRate));
+    const feeYER = round4(dMul(feeInFromCurr, fromRate));
+    const totalOutFrom = round4(dAdd(amount, feeInFromCurr));
+    const totalOutYER = round4(dAdd(transferYER, feeYER));
+    const creditedToAmount = round4(dDiv(transferYER, toRate));
     // Use effective rate on destination FX leg so DebitBase === transferYER without rounding drift
     const toEffectiveRate = creditedToAmount > 0 ? transferYER / creditedToAmount : toRate;
 
     await tx.treasuryAccount.update({
       where: { id: from.id },
       data: {
-        balance: round4(toNum(from.balance) - totalOutFrom),
-        balanceYER: round4(from.balanceYER - totalOutYER),
+        balance: round4(dSub(toNum(from.balance), totalOutFrom)),
+        balanceYER: round4(dSub(toNum(from.balanceYER), totalOutYER)),
       },
     });
 
     await tx.treasuryAccount.update({
       where: { id: to.id },
       data: {
-        balance: round4(toNum(to.balance) + creditedToAmount),
-        balanceYER: round4(to.balanceYER + transferYER),
+        balance: round4(dAdd(toNum(to.balance), creditedToAmount)),
+        balanceYER: round4(dAdd(toNum(to.balanceYER), transferYER)),
       },
     });
 
+    const controlAccounts = await getControlAccountsTx(tx);
     const lines: JournalLineInput[] = [
       {
         accountId: to.accountId,
@@ -2460,14 +3751,14 @@ export async function transferBetweenTreasuries(input: TreasuryTransferInput) {
       },
       ...(feeInFromCurr > 0
         ? [
-            {
-              accountCode: "531201",
-              debit: feeInFromCurr,
-              currency: from.currency,
-              exchangeRate: fromRate,
-              memo: `رسوم تحويل بين الخزائن (${from.nameAr} -> ${to.nameAr})`,
-            },
-          ]
+          {
+            accountCode: controlAccounts.bankFeeAccount || "531201",
+            debit: feeInFromCurr,
+            currency: from.currency,
+            exchangeRate: fromRate,
+            memo: `رسوم تحويل بين الخزائن (${from.nameAr} -> ${to.nameAr})`,
+          },
+        ]
         : []),
       {
         accountId: from.accountId,
@@ -2580,9 +3871,9 @@ export async function getTreasuryLedgerAndReconcile(treasuryId: string) {
       type: treasury.type,
       currency: treasury.currency,
       balance: toNum(treasury.balance),
-      balanceYER: treasury.balanceYER,
+      balanceYER: toNum(treasury.balanceYER),
       glBookBalanceYER,
-      varianceYER: round4(treasury.balanceYER - glBookBalanceYER),
+      varianceYER: round4(dSub(toNum(treasury.balanceYER), glBookBalanceYER)),
     },
     entries: lines.map((l) => ({
       lineId: l.id,
@@ -2796,9 +4087,50 @@ export async function updateJournalEntry(input: {
       include: { lines: true },
     });
     if (!existing) throw new Error("JOURNAL_NOT_FOUND");
-    if (existing.status === "VOIDED") throw new Error("JOURNAL_ALREADY_VOIDED");
+    if (existing.status === "VOIDED" || existing.documentStatus === "VOIDED") {
+      throw new Error("JOURNAL_ALREADY_VOIDED");
+    }
+
+    const isPosted =
+      existing.status === "POSTED" ||
+      (existing.status !== "DRAFT" &&
+        existing.status !== "RETURNED_FOR_EDIT" &&
+        existing.documentStatus === "POSTED");
+    const nextDate = input.date ? new Date(input.date) : existing.date;
+    const dateActuallyChanged =
+      input.date !== undefined &&
+      nextDate.toISOString().slice(0, 10) !== existing.date.toISOString().slice(0, 10);
+
+    if (isPosted) {
+      if (input.lines !== undefined) {
+        throw new Error(
+          "POSTED_JOURNAL_IMMUTABLE: Cannot modify lines, accounts, or amounts of a POSTED journal entry in-place. Reverse the entry or use a controlled amendment."
+        );
+      }
+      if (dateActuallyChanged) {
+        throw new Error(
+          "POSTED_JOURNAL_IMMUTABLE: Cannot modify the posting date of a POSTED journal entry in-place. Reverse and re-post instead."
+        );
+      }
+    }
 
     if (!input.allowLockedAdjustment) {
+      const settingsRow = await tx.systemSettings.findUnique({ where: { id: "default" } });
+      const settings = parseAccountingSettings(settingsRow);
+      const existingLockCheck = assertNotInLockedPeriod(existing.date, settings.periodLockDate);
+      if (!existingLockCheck.ok) {
+        throw new Error(existingLockCheck.error || "PERIOD_LOCKED");
+      }
+      const nextLockCheck = assertNotInLockedPeriod(nextDate, settings.periodLockDate);
+      if (!nextLockCheck.ok) {
+        throw new Error(nextLockCheck.error || "PERIOD_LOCKED");
+      }
+
+      await assertDateNotInClosedFiscalYear(tx, existing.date);
+      if (dateActuallyChanged) {
+        await assertDateNotInClosedFiscalYear(tx, nextDate);
+      }
+
       for (const oldLine of existing.lines) {
         if (oldLine.harvestCycleId) {
           const cycle = await tx.harvestCycle.findUnique({ where: { id: oldLine.harvestCycleId } });
@@ -2809,7 +4141,6 @@ export async function updateJournalEntry(input: {
       }
     }
 
-    const nextDate = input.date ? new Date(input.date) : existing.date;
     const nextNarrationAr = input.narrationAr?.trim() || existing.narrationAr;
     const nextNarrationEn =
       input.narrationEn !== undefined ? input.narrationEn?.trim() || null : existing.narrationEn;
@@ -2830,13 +4161,19 @@ export async function updateJournalEntry(input: {
         debit: number;
         credit: number;
         currency: string;
+        currencyCode: string;
         exchangeRate: number;
+        foreignDebit: number;
+        foreignCredit: number;
         debitBase: number;
         creditBase: number;
+        baseDebit: number;
+        baseCredit: number;
         memo: string;
         projectId: string | null;
         subProjectId: string | null;
         harvestCycleId: string | null;
+        costCenterId: string | null;
       }> = [];
 
       for (const line of input.lines) {
@@ -2864,18 +4201,30 @@ export async function updateJournalEntry(input: {
         totalDebitBase = round4(totalDebitBase + debitBase);
         totalCreditBase = round4(totalCreditBase + creditBase);
 
+        const resolvedCostCenterId = resolveLineCostCenter({
+          line: line.costCenterId,
+          entry: existing.lines.find((l) => l.costCenterId)?.costCenterId ?? null,
+          accountDefault: account.defaultCostCenterId,
+        });
+
         preparedLines.push({
           accountId: account.id,
           debit,
           credit,
           currency,
+          currencyCode: currency,
           exchangeRate: rate,
+          foreignDebit: debit,
+          foreignCredit: credit,
           debitBase,
           creditBase,
+          baseDebit: debitBase,
+          baseCredit: creditBase,
           memo: line.memo || nextNarrationAr,
           projectId: line.projectId !== undefined ? line.projectId : nextProjectId,
           subProjectId: line.subProjectId !== undefined ? line.subProjectId : nextSubProjectId,
           harvestCycleId: line.harvestCycleId ?? null,
+          costCenterId: resolvedCostCenterId ?? null,
         });
       }
 
@@ -2916,13 +4265,29 @@ export async function updateJournalEntry(input: {
         date: existing.date.toISOString(),
         reference: existing.reference,
         narrationAr: existing.narrationAr,
-        lineCount: existing.lines.length,
+        lines: existing.lines.map((l) => ({
+          accountId: l.accountId,
+          debit: Number(l.debit),
+          credit: Number(l.credit),
+          debitBase: Number(l.debitBase),
+          creditBase: Number(l.creditBase),
+          currency: l.currency,
+          costCenterId: l.costCenterId,
+        })),
       },
       after: {
         date: updated.date.toISOString(),
         reference: updated.reference,
         narrationAr: updated.narrationAr,
-        lineCount: updated.lines.length,
+        lines: updated.lines.map((l) => ({
+          accountId: l.accountId,
+          debit: Number(l.debit),
+          credit: Number(l.credit),
+          debitBase: Number(l.debitBase),
+          creditBase: Number(l.creditBase),
+          currency: l.currency,
+          costCenterId: l.costCenterId,
+        })),
       },
     });
 
@@ -2971,37 +4336,60 @@ export async function updateOperatingExpenseAtomic(input: {
 
     const nextCategory = input.category?.trim() || existing.category;
     const nextSubType = input.subType?.trim() || existing.subType;
-    const nextQty = input.quantity !== undefined ? Number(input.quantity) : existing.quantity;
+    const nextQty = input.quantity !== undefined ? Number(input.quantity) : toNum(existing.quantity);
     const nextUnitPrice =
-      input.unitPrice !== undefined ? Number(input.unitPrice) : existing.unitPrice;
+      input.unitPrice !== undefined ? Number(input.unitPrice) : toNum(existing.unitPrice);
     const nextTotal = computeOperatingExpenseTotal(nextQty, nextUnitPrice);
     const nextDate = input.date?.trim() || existing.expenseDate;
     const nextNotes = input.notes !== undefined ? input.notes.trim() : existing.notes;
 
     const directionChanged = Boolean(
       input.expenseAccountId ||
-        input.expenseAccountCode ||
-        input.customAccount ||
-        input.treasuryAccountId
+      input.expenseAccountCode ||
+      input.customAccount ||
+      input.treasuryAccountId
     );
 
     const financialChanged =
-      Math.abs(nextTotal - existing.totalAmount) > 0.005 ||
+      Math.abs(nextTotal - toNum(existing.totalAmount)) > 0.005 ||
       nextCategory !== existing.category ||
       nextProjectId !== existing.projectId ||
       nextSubProjectId !== existing.subProjectId ||
       nextCycle?.id !== existing.harvestCycleId ||
+      nextDate !== existing.expenseDate ||
       directionChanged;
 
     let nextJournalEntryId = existing.journalEntryId;
     if (financialChanged) {
       if (existing.journalEntryId) {
-        await reverseJournalEntry({
-          tx,
-          journalEntryId: existing.journalEntryId,
-          createdById: input.createdById,
-          reason: `تعديل مصروف تشغيلي (${existing.subType})`,
-        }).catch(() => null);
+        const oldJe = await tx.journalEntry.findUnique({
+          where: { id: existing.journalEntryId },
+          include: { lines: true },
+        });
+        if (oldJe && oldJe.status !== "VOIDED" && !oldJe.isReversed) {
+          for (const line of oldJe.lines) {
+            const crBase = toNum(line.baseCredit) || toNum(line.creditBase) || toNum(line.credit);
+            if (crBase > 0.005) {
+              const tr = await tx.treasuryAccount.findUnique({ where: { accountId: line.accountId } });
+              if (tr) {
+                const trRate = await getExchangeRateToYER(tx, tr.currency);
+                await tx.treasuryAccount.update({
+                  where: { id: tr.id },
+                  data: {
+                    balance: round4(dAdd(toNum(tr.balance), dDiv(crBase, trRate))),
+                    balanceYER: round4(dAdd(toNum(tr.balanceYER), crBase)),
+                  },
+                });
+              }
+            }
+          }
+          await reverseJournalEntry({
+            tx,
+            journalEntryId: existing.journalEntryId,
+            createdById: input.createdById,
+            reason: `تعديل مصروف تشغيلي (${existing.subType})`,
+          });
+        }
       }
       const je = await postOperatingExpenseJournalTx(tx, {
         expenseId: existing.id,
@@ -3019,11 +4407,6 @@ export async function updateOperatingExpenseAtomic(input: {
         createdById: input.createdById,
       });
       nextJournalEntryId = je?.id ?? null;
-    } else if (existing.journalEntryId && nextDate !== existing.expenseDate) {
-      await tx.journalEntry.update({
-        where: { id: existing.journalEntryId },
-        data: { date: new Date(`${nextDate}T10:00:00Z`) },
-      });
     }
 
     const updated = await tx.operatingExpense.update({
@@ -3107,11 +4490,11 @@ export async function updateWorkerWageAtomic(input: {
 
     const nextName = input.name?.trim() || existing.workerName;
     const nextDailyWage =
-      input.dailyWage !== undefined ? Number(input.dailyWage) : existing.dailyWage;
+      input.dailyWage !== undefined ? Number(input.dailyWage) : toNum(existing.dailyWage);
     const nextDays =
-      input.daysWorked !== undefined ? Number(input.daysWorked) : existing.daysWorked;
+      input.daysWorked !== undefined ? Number(input.daysWorked) : toNum(existing.daysWorked);
     const nextCredit =
-      input.creditAmount !== undefined ? Number(input.creditAmount) : existing.creditAmount;
+      input.creditAmount !== undefined ? Number(input.creditAmount) : toNum(existing.creditAmount);
     const { totalWage: nextTotal, debitBalance: nextDebit } = computeWorkerWageTotals(
       nextDailyWage,
       nextDays,
@@ -3126,26 +4509,45 @@ export async function updateWorkerWageAtomic(input: {
     });
 
     const financialChanged =
-      Math.abs(nextTotal - existing.totalWage) > 0.005 ||
-      Math.abs(nextCredit - existing.creditAmount) > 0.005 ||
+      Math.abs(nextTotal - toNum(existing.totalWage)) > 0.005 ||
+      Math.abs(nextCredit - toNum(existing.creditAmount)) > 0.005 ||
       nextName !== existing.workerName ||
       nextProjectId !== existing.projectId ||
       nextSubProjectId !== existing.subProjectId ||
-      nextCycle?.id !== existing.harvestCycleId;
+      nextCycle?.id !== existing.harvestCycleId ||
+      nextDate !== existing.workDate;
 
     let nextJournalEntryId = existing.journalEntryId;
     if (financialChanged) {
       const linkedEntries = await tx.journalEntry.findMany({
-        where: { sourceId: existing.id, status: { not: "VOIDED" } },
-        select: { id: true },
+        where: { sourceId: existing.id, status: { not: "VOIDED" }, isReversed: false },
+        include: { lines: true },
       });
       for (const je of linkedEntries) {
+        if (je.sourceType === "WORKER_PAYOUT") {
+          for (const line of je.lines) {
+            const crBase = toNum(line.baseCredit) || toNum(line.creditBase) || toNum(line.credit);
+            if (crBase > 0.005) {
+              const tr = await tx.treasuryAccount.findUnique({ where: { accountId: line.accountId } });
+              if (tr) {
+                const trRate = await getExchangeRateToYER(tx, tr.currency);
+                await tx.treasuryAccount.update({
+                  where: { id: tr.id },
+                  data: {
+                    balance: round4(dAdd(toNum(tr.balance), dDiv(crBase, trRate))),
+                    balanceYER: round4(dAdd(toNum(tr.balanceYER), crBase)),
+                  },
+                });
+              }
+            }
+          }
+        }
         await reverseJournalEntry({
           tx,
           journalEntryId: je.id,
           createdById: input.createdById,
           reason: `تعديل سجل أجر العامل (${existing.workerName})`,
-        }).catch(() => null);
+        });
       }
       if (worker.accountId) {
         const newAccrual = await postWorkerWageJournalTx(tx, {
@@ -3165,11 +4567,6 @@ export async function updateWorkerWageAtomic(input: {
         });
         nextJournalEntryId = newAccrual?.id ?? null;
       }
-    } else if (nextDate !== existing.workDate) {
-      await tx.journalEntry.updateMany({
-        where: { sourceId: existing.id, status: { not: "VOIDED" } },
-        data: { date: new Date(`${nextDate}T10:00:00Z`) },
-      });
     }
 
     const updated = await tx.workerWageEntry.update({
@@ -3264,8 +4661,8 @@ export async function updateSaleTransactionAtomic(input: {
     const nextPhone = input.phone?.trim() || existing.customerPhone;
     const nextBundles =
       input.bundles !== undefined ? Math.max(0, Math.round(Number(input.bundles) || 0)) : existing.bundlesCount;
-    const nextPrice = input.price !== undefined ? Number(input.price) : existing.unitPrice;
-    const nextCredit = input.credit !== undefined ? Number(input.credit) : existing.creditPaid;
+    const nextPrice = input.price !== undefined ? Number(input.price) : toNum(existing.unitPrice);
+    const nextCredit = input.credit !== undefined ? Number(input.credit) : toNum(existing.creditPaid);
     const { totalAmount: nextTotal, debitReceivable: nextDebit } = computeSaleTotals(
       nextBundles,
       nextPrice,
@@ -3289,22 +4686,29 @@ export async function updateSaleTransactionAtomic(input: {
     });
 
     const financialChanged =
-      Math.abs(nextTotal - existing.totalAmount) > 0.005 ||
-      Math.abs(nextCredit - existing.creditPaid) > 0.005 ||
+      Math.abs(nextTotal - toNum(existing.totalAmount)) > 0.005 ||
+      Math.abs(nextCredit - toNum(existing.creditPaid)) > 0.005 ||
       nextCustomerName !== existing.customerName ||
       nextProjectId !== existing.projectId ||
       nextSubProjectId !== existing.subProjectId ||
-      nextCycle?.id !== existing.harvestCycleId;
+      nextCycle?.id !== existing.harvestCycleId ||
+      nextDate !== existing.saleDate;
 
     let nextJournalEntryId = existing.journalEntryId;
     if (financialChanged) {
       if (existing.journalEntryId) {
-        await reverseJournalEntry({
-          tx,
-          journalEntryId: existing.journalEntryId,
-          createdById: input.createdById,
-          reason: `تعديل عملية بيع (${existing.customerName})`,
-        }).catch(() => null);
+        const oldJe = await tx.journalEntry.findUnique({
+          where: { id: existing.journalEntryId },
+          select: { status: true, isReversed: true },
+        });
+        if (oldJe && oldJe.status !== "VOIDED" && !oldJe.isReversed) {
+          await reverseJournalEntry({
+            tx,
+            journalEntryId: existing.journalEntryId,
+            createdById: input.createdById,
+            reason: `تعديل عملية بيع (${existing.customerName})`,
+          });
+        }
       }
 
       if (nextTotal > 0) {
@@ -3346,11 +4750,6 @@ export async function updateSaleTransactionAtomic(input: {
       } else {
         nextJournalEntryId = null;
       }
-    } else if (existing.journalEntryId && nextDate !== existing.saleDate) {
-      await tx.journalEntry.update({
-        where: { id: existing.journalEntryId },
-        data: { date: new Date(`${nextDate}T10:00:00Z`) },
-      });
     }
 
     const updated = await tx.saleTransaction.update({

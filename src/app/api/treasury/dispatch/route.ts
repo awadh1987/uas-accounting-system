@@ -1,35 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { withIdempotency } from "@/lib/idempotencyGuard";
+import { authorizeApiAction, forbiddenError } from "@/lib/apiHelpers";
+import { hasGranularPermission } from "@/lib/permissions";
 import { executeBankOrWalletPayout } from "@/lib/treasury/bankWalletGateway";
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (guardedReq) => {
     try {
-      const body = await guardedReq.json();
-      const userId = guardedReq.headers.get("x-uas-user-id") || body?.actor?.userId || "admin";
-      const userName = guardedReq.headers.get("x-uas-user-name") || body?.actor?.userName || "Admin User";
-      const userRole = guardedReq.headers.get("x-uas-role") || body?.actor?.role || "SUPER_ADMIN";
+      const body = (await guardedReq.json()) as Record<string, unknown>;
+      const auth = await authorizeApiAction(body, guardedReq, {
+        moduleId: "treasury",
+        action: "treasury",
+      });
+      if (!auth.ok) return auth.response;
+
+      if (!hasGranularPermission(auth.actor.user || auth.actor.userRole, "treasury.execute_gateway")) {
+        return forbiddenError("⛔ ليس لديك صلاحية تنفيذ التحويلات البنكية الآلية");
+      }
 
       const idempotencyKey =
         guardedReq.headers.get("x-idempotency-key") ||
-        body.idempotencyKey ||
+        (body.idempotencyKey ? String(body.idempotencyKey) : "") ||
         `DSP-KEY-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
       const result = await executeBankOrWalletPayout({
-        treasuryAccountId: body.treasuryAccountId,
-        sourceVoucherType: body.sourceVoucherType || "PAYMENT_VOUCHER",
-        sourceVoucherId: body.sourceVoucherId || "MANUAL",
-        beneficiaryName: body.beneficiaryName,
-        beneficiaryAccountOrPhone: body.beneficiaryAccountOrPhone,
+        treasuryAccountId: String(body.treasuryAccountId || ""),
+        sourceVoucherType: String(body.sourceVoucherType || "PAYMENT_VOUCHER") as any,
+        sourceVoucherId: String(body.sourceVoucherId || "MANUAL"),
+        beneficiaryName: String(body.beneficiaryName || ""),
+        beneficiaryAccountOrPhone: String(body.beneficiaryAccountOrPhone || ""),
         amount: Number(body.amount),
-        currencyCode: body.currencyCode || "YER",
+        currencyCode: String(body.currencyCode || "YER"),
         exchangeRate: Number(body.exchangeRate) || 1,
-        costCenterId: body.costCenterId || null,
+        costCenterId: body.costCenterId ? String(body.costCenterId) : null,
         idempotencyKey,
         actor: {
-          userId,
-          userName,
-          role: userRole,
+          userId: auth.actor.userId!,
+          userName: auth.actor.userDisplay,
+          role: auth.actor.userRole,
         },
       });
 
@@ -58,4 +67,4 @@ export async function POST(req: NextRequest) {
       );
     }
   });
-}
+});

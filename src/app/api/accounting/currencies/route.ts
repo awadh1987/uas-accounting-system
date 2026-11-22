@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { DEFAULT_CURRENCIES } from "@/lib/multiCurrencyEngine";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import { appendAuditLogTx } from "@/lib/serverBootstrap";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +41,7 @@ async function ensureDefaultCurrenciesSeeded() {
   }
 }
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     await ensureSqliteDatabaseReady();
     await ensureDefaultCurrenciesSeeded();
@@ -86,15 +86,20 @@ export async function GET() {
     console.error("GET /api/accounting/currencies error:", error);
     return jsonError("تعذر تحميل العملات / Failed to load currencies", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     await ensureDefaultCurrenciesSeeded();
 
     const body = (await req.json()) as Record<string, unknown>;
-    const actor = extractActor(body, req);
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "ledger",
+      action: "edit",
+    });
+    if (!auth.ok) return auth.response;
+    const actor = auth.actor;
     const code = String(body.code || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
     const nameAr = String(body.nameAr || code).trim();
     const nameEn = String(body.nameEn || nameAr || code).trim();
@@ -161,7 +166,7 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/accounting/currencies error:", error);
     return jsonError("تعذر حفظ العملة / Failed to save currency", 500);
   }
-}
+});
 
 export async function PUT(req: NextRequest) {
   return POST(req);

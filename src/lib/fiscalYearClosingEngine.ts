@@ -212,9 +212,9 @@ async function resolveClosingSpotRate(tx: Db, currencyCode: string, asOfDate: Da
     where: { currencyCode: cur, rateDate: { lte: asOfDate } },
     orderBy: { rateDate: "desc" },
   });
-  if (er && er.midRate > 0) return er.midRate;
+  if (er && Number(er.midRate) > 0) return Number(er.midRate);
   const cr = await tx.currencyRate.findUnique({ where: { currencyCode: cur } });
-  if (cr && cr.rateToYER > 0) return cr.rateToYER;
+  if (cr && Number(cr.rateToYER) > 0) return Number(cr.rateToYER);
   return null;
 }
 
@@ -385,7 +385,10 @@ export async function runFiscalYearPrecheck(
 
   const stockBalances = await client.stockBalance.findMany({ where: { qtyOnHandBase: { gt: 0 } } });
   const totalInventoryValuationBase = round4(
-    stockBalances.reduce((sum, sb) => sum + sb.qtyOnHandBase * sb.avgUnitCostBase, 0)
+    stockBalances.reduce(
+      (sum, sb) => sum + Number(sb.qtyOnHandBase) * Number(sb.avgUnitCostBase),
+      0
+    )
   );
 
   const nextFy = computeNextFiscalYearDates(fy.endDate);

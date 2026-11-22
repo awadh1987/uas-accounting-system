@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
+import { resolveVerifiedActor } from "@/lib/apiHelpers";
 import { getMachineHwid } from "./hwid";
 
 /** True when the HTTP request comes from the machine that runs the server (desktop app). */
@@ -35,6 +36,18 @@ export async function requireSuperAdmin(
   req: NextRequest,
   body: Record<string, unknown> = {}
 ): Promise<{ ok: true; actor: SuperAdminActor } | { ok: false }> {
+  const verified = await resolveVerifiedActor(body, req);
+  if (verified.authenticated && verified.userId && verified.userRole === "SUPER_ADMIN") {
+    return {
+      ok: true,
+      actor: {
+        userId: verified.userId,
+        userDisplay: verified.userDisplay,
+        userRole: verified.userRole,
+      },
+    };
+  }
+
   const bodyActor = (body.actor as { userId?: unknown } | undefined) || {};
   const userId = String(req.headers.get("x-uas-user-id") || bodyActor.userId || "").trim();
   if (!userId) return { ok: false };

@@ -5,8 +5,15 @@ export interface ControlAccountsMap {
   salesAccount: string;
   salesReturnsAccount: string;
   cogsAccount: string;
+  directLaborAccount?: string;
+  operatingExpenseAccount?: string;
+  bankFeeAccount?: string;
+  capitalAccount?: string;
   inventoryAssetAccount: string;
+  inventoryInputsAccount?: string;
   inventoryShrinkageAccount: string;
+  cogsInventoryAccount?: string;
+  grnClearingAccount?: string;
   realizedFxGainAccount: string;
   realizedFxLossAccount: string;
   unrealizedFxGainAccount: string;
@@ -14,6 +21,7 @@ export interface ControlAccountsMap {
   fxRoundingAccount: string;
   taxPayableAccount: string;
   taxReceivableAccount: string;
+  whtPayableAccount?: string;
   retainedEarningsAccount: string;
 }
 
@@ -37,6 +45,9 @@ export interface AccountingSettingsConfig {
   fiscalYearEnd: string;
   periodLockDate: string | null;
   requireApprovalWorkflow: boolean;
+  enforceThreeWayMatch: boolean;
+  threeWayTolerancePct: number;
+  threeWayToleranceAmount: number;
   costingMethod: "WEIGHTED_AVERAGE" | "FIFO";
   negativeStockPolicy: "BLOCK" | "WARN";
   printLayout: "A4" | "80MM" | string;
@@ -49,17 +60,25 @@ export const DEFAULT_CONTROL_ACCOUNTS: ControlAccountsMap = {
   arAccount: "112101",
   apAccount: "211101",
   salesAccount: "411101",
-  salesReturnsAccount: "411201",
+  salesReturnsAccount: "411401",
   cogsAccount: "511101",
+  cogsInventoryAccount: "512201",
+  directLaborAccount: "511101",
+  operatingExpenseAccount: "524101",
+  bankFeeAccount: "531201",
+  capitalAccount: "311101",
   inventoryAssetAccount: "113101",
-  inventoryShrinkageAccount: "512101",
+  inventoryInputsAccount: "113201",
+  inventoryShrinkageAccount: "512301",
+  grnClearingAccount: "215101",
   realizedFxGainAccount: "421101",
-  realizedFxLossAccount: "521101",
+  realizedFxLossAccount: "532101",
   unrealizedFxGainAccount: "421102",
-  unrealizedFxLossAccount: "521102",
-  fxRoundingAccount: "521103",
-  taxPayableAccount: "212101",
-  taxReceivableAccount: "114101",
+  unrealizedFxLossAccount: "532102",
+  fxRoundingAccount: "532103",
+  taxPayableAccount: "214101",
+  taxReceivableAccount: "114301",
+  whtPayableAccount: "214201",
   retainedEarningsAccount: "312101",
 };
 
@@ -82,6 +101,9 @@ export const DEFAULT_ACCOUNTING_SETTINGS: AccountingSettingsConfig = {
   fiscalYearEnd: "2026-12-31",
   periodLockDate: null,
   requireApprovalWorkflow: false,
+  enforceThreeWayMatch: true,
+  threeWayTolerancePct: 0,
+  threeWayToleranceAmount: 0.01,
   costingMethod: "WEIGHTED_AVERAGE",
   negativeStockPolicy: "BLOCK",
   printLayout: "A4",
@@ -99,6 +121,9 @@ export function parseAccountingSettings(row: {
   fiscalYearEnd?: string | null;
   periodLockDate?: string | null;
   requireApprovalWorkflow?: boolean | null;
+  enforceThreeWayMatch?: boolean | null;
+  threeWayTolerancePct?: unknown;
+  threeWayToleranceAmount?: unknown;
   costingMethod?: string | null;
   negativeStockPolicy?: string | null;
   printLayout?: string | null;
@@ -147,6 +172,15 @@ export function parseAccountingSettings(row: {
     fiscalYearEnd: row.fiscalYearEnd || "2026-12-31",
     periodLockDate: row.periodLockDate || null,
     requireApprovalWorkflow: Boolean(row.requireApprovalWorkflow),
+    enforceThreeWayMatch:
+      row.enforceThreeWayMatch !== undefined && row.enforceThreeWayMatch !== null
+        ? Boolean(row.enforceThreeWayMatch)
+        : true,
+    threeWayTolerancePct: Math.max(0, Number(row.threeWayTolerancePct) || 0),
+    threeWayToleranceAmount:
+      row.threeWayToleranceAmount !== undefined && row.threeWayToleranceAmount !== null
+        ? Math.max(0, Number(row.threeWayToleranceAmount) || 0)
+        : 0.01,
     costingMethod: row.costingMethod === "FIFO" ? "FIFO" : "WEIGHTED_AVERAGE",
     negativeStockPolicy: row.negativeStockPolicy === "WARN" ? "WARN" : "BLOCK",
     printLayout: row.printLayout || "A4",

@@ -4,8 +4,10 @@ import {
   fetchBootstrapState,
   getApiBaseUrl,
   getOrCreateClientDeviceId,
+  getStoredSessionToken,
   getStoredTenantId,
   isAndroidLocalIsolatedMode,
+  SESSION_TOKEN_STORAGE_KEY,
 } from "@/lib/apiClient";
 import {
   getOfflineQueue,
@@ -49,6 +51,7 @@ function dispatchDeviceRevoked(detail?: unknown): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.removeItem("uas_user");
+    window.localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
     window.dispatchEvent(new CustomEvent("uas:device-revoked", { detail }));
   } catch {
     // Ignore storage error
@@ -87,12 +90,14 @@ export async function performManualSyncNow(currentUser: UasUser): Promise<Client
   }
 
   const base = getApiBaseUrl();
+  const sessionToken = getStoredSessionToken();
   const commonHeaders: Record<string, string> = {
     "Content-Type": "application/json",
     "x-uas-device-id": deviceId,
     "x-uas-user-id": currentUser.id,
     "x-uas-role": String(currentUser.role),
     "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+    ...(sessionToken ? { "x-uas-session-token": sessionToken } : {}),
   };
   if (tenantId && tenantId !== "default") {
     commonHeaders["x-uas-tenant-id"] = tenantId;

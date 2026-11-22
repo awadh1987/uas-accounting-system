@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import {
   postCustomerReceipt,
   postJournalEntry,
@@ -10,7 +10,7 @@ import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withTenantRoute(async function GET() {
   try {
     const receipts = await prisma.receiptVoucher.findMany({
       include: {
@@ -31,9 +31,9 @@ export async function GET() {
     console.error("GET /api/sales/receipts error:", error);
     return jsonError("تعذر تحميل سندات القبض", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, {
@@ -56,9 +56,16 @@ export async function POST(req: NextRequest) {
       return jsonError("يرجى تحديد العميل والخزينة وإدخال مبلغ صحيح", 400);
     }
 
+    const allocations = Array.isArray(body.allocations)
+      ? (body.allocations as Array<Record<string, unknown>>)
+          .filter((a) => a.invoiceId && Number(a.amount) > 0)
+          .map((a) => ({ invoiceId: String(a.invoiceId).trim(), amount: Number(a.amount) }))
+      : undefined;
+
     const result = await postCustomerReceipt({
       customerId,
       invoiceId,
+      allocations,
       subProjectId,
       treasuryId,
       amount,
@@ -73,7 +80,7 @@ export async function POST(req: NextRequest) {
     const msg = error instanceof Error ? error.message : "تعذر إصدار سند القبض";
     return jsonError(msg, 400);
   }
-}
+});
 
 async function handleReceiptUpdate(req: NextRequest) {
   try {
@@ -114,6 +121,7 @@ async function handleReceiptUpdate(req: NextRequest) {
       body.notes !== undefined ? (body.notes ? String(body.notes).trim() : null) : existing.notes;
 
     const financialChanged =
+      dateChanged ||
       Math.abs(nextAmount - Number(existing.amount)) > 0.005 ||
       nextTreasuryId !== existing.treasuryId ||
       nextSubProjectId !== existing.subProjectId;
@@ -126,7 +134,7 @@ async function handleReceiptUpdate(req: NextRequest) {
         const rcpRate =
           existing.currency === "YER"
             ? 1
-            : rateRow?.rateToYER || (existing.currency === "SAR" ? 425 : 1620);
+            : Number(rateRow?.rateToYER) || (existing.currency === "SAR" ? 425 : 1620);
         const oldYER = Number(existing.amount) * rcpRate;
         const oldTrRateRow = await tx.currencyRate.findUnique({
           where: { currencyCode: existing.treasury.currency },
@@ -134,13 +142,13 @@ async function handleReceiptUpdate(req: NextRequest) {
         const oldTrRate =
           existing.treasury.currency === "YER"
             ? 1
-            : oldTrRateRow?.rateToYER || (existing.treasury.currency === "SAR" ? 425 : 1620);
+            : Number(oldTrRateRow?.rateToYER) || (existing.treasury.currency === "SAR" ? 425 : 1620);
 
         await tx.treasuryAccount.update({
           where: { id: existing.treasuryId },
           data: {
             balance: Number(existing.treasury.balance) - oldYER / oldTrRate,
-            balanceYER: existing.treasury.balanceYER - oldYER,
+            balanceYER: Number(existing.treasury.balanceYER) - oldYER,
           },
         });
 
@@ -152,14 +160,14 @@ async function handleReceiptUpdate(req: NextRequest) {
         const nextTrRate =
           nextTreasury.currency === "YER"
             ? 1
-            : nextTrRateRow?.rateToYER || (nextTreasury.currency === "SAR" ? 425 : 1620);
+            : Number(nextTrRateRow?.rateToYER) || (nextTreasury.currency === "SAR" ? 425 : 1620);
         const newYER = nextAmount * rcpRate;
 
         await tx.treasuryAccount.update({
           where: { id: nextTreasury.id },
           data: {
             balance: Number(nextTreasury.balance) + newYER / nextTrRate,
-            balanceYER: nextTreasury.balanceYER + newYER,
+            balanceYER: Number(nextTreasury.balanceYER) + newYER,
           },
         });
 
@@ -170,7 +178,7 @@ async function handleReceiptUpdate(req: NextRequest) {
           const invRate =
             existing.invoice.currency === "YER"
               ? 1
-              : invRateRow?.rateToYER || (existing.invoice.currency === "SAR" ? 425 : 1620);
+              : Number(invRateRow?.rateToYER) || (existing.invoice.currency === "SAR" ? 425 : 1620);
           const deltaInInv = ((nextAmount - Number(existing.amount)) * rcpRate) / invRate;
           const nextPaid = Math.max(0, Number(existing.invoice.paidAmount) + deltaInInv);
           const nextDue = Math.max(0, Number(existing.invoice.totalAmount) - nextPaid);
@@ -185,12 +193,18 @@ async function handleReceiptUpdate(req: NextRequest) {
         }
 
         if (existing.journalEntryId) {
-          await reverseJournalEntry({
-            tx,
-            journalEntryId: existing.journalEntryId,
-            createdById: auth.actor.userId ?? undefined,
-            reason: `تعديل سند القبض ${existing.voucherNumber}`,
+          const existingJe = await tx.journalEntry.findUnique({
+            where: { id: existing.journalEntryId },
+            select: { status: true, isReversed: true },
           });
+          if (existingJe && existingJe.status !== "VOIDED" && !existingJe.isReversed) {
+            await reverseJournalEntry({
+              tx,
+              journalEntryId: existing.journalEntryId,
+              createdById: auth.actor.userId ?? undefined,
+              reason: `تعديل سند القبض ${existing.voucherNumber}`,
+            });
+          }
         }
 
         const newJe = await postJournalEntry({
@@ -228,11 +242,6 @@ async function handleReceiptUpdate(req: NextRequest) {
           ],
         });
         nextJournalEntryId = newJe.id;
-      } else if (existing.journalEntryId && dateChanged) {
-        await tx.journalEntry.update({
-          where: { id: existing.journalEntryId },
-          data: { date: nextDate },
-        });
       }
 
       const receipt = await tx.receiptVoucher.update({
@@ -275,11 +284,11 @@ async function handleReceiptUpdate(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleReceiptUpdate(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleReceiptUpdate(req);
-}
+});
 

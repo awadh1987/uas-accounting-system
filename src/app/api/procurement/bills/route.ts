@@ -1,26 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import {
   postJournalEntry,
   postVendorBill,
   recordAuditDiffTx,
   reverseJournalEntry,
 } from "@/lib/accounting/ledgerService";
+import { parseAccountingSettings } from "@/lib/accountingSettings";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import { withIdempotency } from "@/lib/idempotencyGuard";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const projectId = searchParams.get("projectId");
     const vendorId = searchParams.get("vendorId");
+    const includeVoided = searchParams.get("includeVoided") === "true";
 
     const bills = await prisma.vendorBill.findMany({
       where: {
         ...(projectId && projectId !== "ALL" ? { projectId } : {}),
         ...(vendorId && vendorId !== "ALL" ? { vendorId } : {}),
+        ...(includeVoided
+          ? {}
+          : { status: { not: "VOIDED" }, documentStatus: { not: "VOIDED" } }),
       },
       include: {
         vendor: { select: { id: true, code: true, nameAr: true, nameEn: true, phone: true } },
@@ -79,9 +84,9 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/procurement/bills error:", error);
     return jsonError("تعذر تحميل فواتير الموردين", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (r) => {
     try {
       const body = (await r.json()) as Record<string, unknown>;
@@ -98,11 +103,30 @@ export async function POST(req: NextRequest) {
       const subProjectId = body.subProjectId ? String(body.subProjectId).trim() : null;
       const purchaseOrderId = body.purchaseOrderId ? String(body.purchaseOrderId).trim() : null;
       const acquisitionCycleId = body.acquisitionCycleId ? String(body.acquisitionCycleId).trim() : null;
-      const totalAmount = Number(body.totalAmount) || 0;
+      const billTypeRaw = String(body.billType || "BILL").toUpperCase();
+      const billType =
+        billTypeRaw === "CREDIT_NOTE" || billTypeRaw === "DEBIT_NOTE" ? billTypeRaw : "BILL";
+      const originalBillId = body.originalBillId ? String(body.originalBillId).trim() : null;
+      const rawItems = Array.isArray(body.items) ? (body.items as Array<Record<string, unknown>>) : undefined;
+      const parsedItems = rawItems?.map((it) => ({
+        description: String(it.description || "صنف مشتريات").trim(),
+        quantity: Number(it.quantity) || 1,
+        unitPrice: Number(it.unitPrice) || 0,
+        itemId: it.itemId ? String(it.itemId).trim() : null,
+        warehouseId: it.warehouseId ? String(it.warehouseId).trim() : null,
+        unitId: it.unitId ? String(it.unitId).trim() : null,
+        taxCodeId: it.taxCodeId ? String(it.taxCodeId).trim() : null,
+        whtCodeId: it.whtCodeId ? String(it.whtCodeId).trim() : null,
+      }));
+      const itemsTotal = parsedItems?.reduce((s, it) => s + it.quantity * it.unitPrice, 0) ?? 0;
+      const totalAmount = Number(body.totalAmount) || itemsTotal;
       const currency = String(body.currency || "YER").toUpperCase();
       const isInventory = Boolean(body.isInventory);
       const debitAccountCode = body.debitAccountCode ? String(body.debitAccountCode).trim() : undefined;
       const debitAccountId = body.debitAccountId ? String(body.debitAccountId).trim() : undefined;
+      const taxCodeId = body.taxCodeId ? String(body.taxCodeId).trim() : null;
+      const whtCodeId = body.whtCodeId ? String(body.whtCodeId).trim() : null;
+      const taxInclusive = Boolean(body.taxInclusive);
       const customAccount =
         body.customAccount && typeof body.customAccount === "object"
           ? (body.customAccount as { nameAr: string; nameEn?: string; parentCode: string; code?: string })
@@ -113,16 +137,63 @@ export async function POST(req: NextRequest) {
         return jsonError("يرجى تحديد المورد والمشروع وإدخال مبلغ الفاتورة", 400);
       }
 
+      // Step 2.3: Configurable 3-Way Matching Enforcement (PO vs GRN vs Bill)
+      if (purchaseOrderId && billType === "BILL") {
+        const [po, settingsRow] = await Promise.all([
+          prisma.purchaseOrder.findUnique({
+            where: { id: purchaseOrderId },
+            include: { goodsReceipts: true },
+          }),
+          prisma.systemSettings.findUnique({ where: { id: "default" } }),
+        ]);
+        if (!po) return jsonError("أمر الشراء المرتبط غير موجود", 404);
+
+        const settings = parseAccountingSettings(settingsRow);
+        const canOverride =
+          Boolean(body.overrideThreeWayMatch) &&
+          (actor.userRole === "SUPER_ADMIN" || actor.userRole === "CHIEF_ACCOUNTANT");
+
+        if (settings.enforceThreeWayMatch && !canOverride) {
+          if (po.goodsReceipts.length === 0) {
+            return jsonError(
+              `THREE_WAY_MATCH_GRN_REQUIRED: لا يمكن اعتماد فاتورة لأمر الشراء (${po.poNumber}) قبل تسجيل سند استلام مخزني (GRN).`,
+              400
+            );
+          }
+          const poTotal = Number(po.grandTotal);
+          const grnTotal = po.goodsReceipts.reduce((s, g) => s + Number(g.receivedTotal), 0);
+          const allowedTolerance = Math.max(
+            settings.threeWayToleranceAmount,
+            (poTotal * settings.threeWayTolerancePct) / 100
+          );
+          if (
+            Math.abs(totalAmount - grnTotal) > allowedTolerance ||
+            Math.abs(totalAmount - poTotal) > allowedTolerance
+          ) {
+            return jsonError(
+              `THREE_WAY_MATCH_VARIANCE_EXCEEDED: مبلغ الفاتورة (${totalAmount}) يتجاوز تفاوت المطابقة الثلاثية المسموح (${allowedTolerance.toFixed(2)}) مع أمر الشراء (${poTotal}) والاستلام (${grnTotal}).`,
+              400
+            );
+          }
+        }
+      }
+
       const result = await postVendorBill({
         vendorId,
         projectId,
         subProjectId,
         purchaseOrderId,
         acquisitionCycleId,
+        billType,
+        originalBillId,
+        items: parsedItems,
         totalAmount,
         currency,
         date: body.date ? String(body.date) : new Date(),
         dueDate: body.dueDate ? String(body.dueDate) : null,
+        taxCodeId,
+        whtCodeId,
+        taxInclusive,
         isInventory,
         debitAccountCode,
         debitAccountId,
@@ -133,7 +204,7 @@ export async function POST(req: NextRequest) {
       });
 
       return NextResponse.json(
-        { bill: result.bill, journalEntry: result.journalEntry },
+        { bill: result.bill, journalEntry: result.journalEntry, approvalRequest: result.approvalRequest },
         { status: 201 }
       );
     } catch (error) {
@@ -141,7 +212,7 @@ export async function POST(req: NextRequest) {
       return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
     }
   });
-}
+});
 
 async function handleBillUpdate(req: NextRequest) {
   try {
@@ -188,6 +259,7 @@ async function handleBillUpdate(req: NextRequest) {
     const nextCurrency = body.currency ? String(body.currency).toUpperCase() : existing.currency;
 
     const financialChanged =
+      dateChanged ||
       Math.abs(nextTotal - Number(existing.totalAmount)) > 0.005 ||
       nextProjectId !== existing.projectId ||
       nextSubProjectId !== existing.subProjectId ||
@@ -215,7 +287,7 @@ async function handleBillUpdate(req: NextRequest) {
         if (!debitAccId) throw new Error("DEBIT_ACCOUNT_NOT_FOUND");
 
         const rateRow = await tx.currencyRate.findUnique({ where: { currencyCode: nextCurrency } });
-        const rate = nextCurrency === "YER" ? 1 : rateRow?.rateToYER || (nextCurrency === "SAR" ? 425 : 1620);
+        const rate = nextCurrency === "YER" ? 1 : Number(rateRow?.rateToYER) || (nextCurrency === "SAR" ? 425 : 1620);
 
         const newJe = await postJournalEntry({
           tx,
@@ -250,11 +322,6 @@ async function handleBillUpdate(req: NextRequest) {
           ],
         });
         nextJournalEntryId = newJe.id;
-      } else if (existing.journalEntryId && dateChanged) {
-        await tx.journalEntry.update({
-          where: { id: existing.journalEntryId },
-          data: { date: nextDate },
-        });
       }
 
       const paid = Number(existing.paidAmount);
@@ -311,15 +378,15 @@ async function handleBillUpdate(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleBillUpdate(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleBillUpdate(req);
-}
+});
 
-export async function DELETE(req: NextRequest) {
+export const DELETE = withTenantRoute(async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     let id = searchParams.get("id");
@@ -341,26 +408,34 @@ export async function DELETE(req: NextRequest) {
 
     const existing = await prisma.vendorBill.findUnique({
       where: { id },
-      include: { paymentVouchers: true },
+      include: {
+        paymentVouchers: {
+          where: { documentStatus: { not: "VOIDED" } },
+        },
+      },
     });
     if (!existing) return jsonError("فاتورة المورد غير موجودة", 404);
+    if (existing.status === "VOIDED" || existing.documentStatus === "VOIDED") {
+      return jsonError("فاتورة المورد ملغاة مسبقاً", 400);
+    }
 
     if (Number(existing.paidAmount) > 0 || existing.paymentVouchers.length > 0) {
-      return jsonError("لا يمكن حذف فاتورة تم سدادها أو سداد جزء منها. يرجى إلغاء سندات الصرف المرتبطة أولاً.", 400);
+      return jsonError("لا يمكن إلغاء فاتورة تم سدادها أو سداد جزء منها. يرجى إلغاء سندات الصرف المرتبطة أولاً.", 400);
     }
 
     await prisma.$transaction(async (tx) => {
       if (existing.journalEntryId) {
-        try {
+        const existingJe = await tx.journalEntry.findUnique({
+          where: { id: existing.journalEntryId },
+          select: { status: true, isReversed: true },
+        });
+        if (existingJe && existingJe.status !== "VOIDED" && !existingJe.isReversed) {
           await reverseJournalEntry({
             journalEntryId: existing.journalEntryId,
-            reason: `إلغاء فاتورة مورد محذوفة: ${existing.billNumber}`,
+            reason: `إلغاء وعكس فاتورة مورد: ${existing.billNumber}`,
             createdById: auth.actor.userId ?? undefined,
             tx,
           });
-        } catch {
-          await tx.journalEntryLine.deleteMany({ where: { journalEntryId: existing.journalEntryId } });
-          await tx.journalEntry.delete({ where: { id: existing.journalEntryId } });
         }
       }
 
@@ -373,18 +448,35 @@ export async function DELETE(req: NextRequest) {
           billNumber: existing.billNumber,
           vendorId: existing.vendorId,
           totalAmount: Number(existing.totalAmount),
+          status: existing.status,
           date: existing.date.toISOString().slice(0, 10),
         },
-        after: null,
+        after: {
+          status: "VOIDED",
+          documentStatus: "VOIDED",
+          balanceDue: 0,
+        },
       });
 
-      await tx.vendorBill.delete({ where: { id } });
+      await tx.vendorBill.update({
+        where: { id },
+        data: {
+          status: "VOIDED",
+          documentStatus: "VOIDED",
+          balanceDue: 0,
+        },
+      });
     });
 
-    return NextResponse.json({ success: true, deletedId: id, billNumber: existing.billNumber });
+    return NextResponse.json({
+      success: true,
+      voided: true,
+      deletedId: id,
+      billNumber: existing.billNumber,
+    });
   } catch (error) {
-    const msg = error instanceof Error ? error.message : "تعذر حذف فاتورة المورد";
+    const msg = error instanceof Error ? error.message : "تعذر إلغاء فاتورة المورد";
     return jsonError(msg, 400);
   }
-}
+});
 

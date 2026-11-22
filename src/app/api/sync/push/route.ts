@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withTenantRoute } from "@/lib/prisma";
-import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
+import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import { pushClientMutations, type ClientSyncMutationInput } from "@/lib/sync/syncEngine";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
@@ -8,7 +8,9 @@ export const dynamic = "force-dynamic";
 
 export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, { action: "create" });
     if (!auth.ok) return auth.response;

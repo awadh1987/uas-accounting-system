@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import {
   reverseJournalEntry,
   updateWorkerWageAtomic,
@@ -57,21 +57,21 @@ async function handleWorkerByIdUpdate(
   }
 }
 
-export async function PATCH(
+export const PATCH = withTenantRoute(async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   return handleWorkerByIdUpdate(req, context);
-}
+});
 
-export async function PUT(
+export const PUT = withTenantRoute(async function PUT(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   return handleWorkerByIdUpdate(req, context);
-}
+});
 
-export async function DELETE(
+export const DELETE = withTenantRoute(async function DELETE(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
@@ -96,20 +96,97 @@ export async function DELETE(
       if (await isHarvestLockedTx(tx, rec.projectId, rec.harvestName)) {
         return { status: "LOCKED" as const };
       }
-      if (rec.journalEntryId) {
-        await reverseJournalEntry({
-          journalEntryId: rec.journalEntryId,
-          createdById: actor.userId ?? undefined,
-          reason: `حذف سجل أجر عامل (${rec.workerName})`,
-          tx,
-        }).catch(() => null);
+
+      const resolveTreasuryRate = async (currency: string) => {
+        const c = (currency || "YER").toUpperCase();
+        if (c === "YER") return 1;
+        const r = await tx.currencyRate.findUnique({ where: { currencyCode: c } });
+        return Number(r?.rateToYER) || (c === "SAR" ? 425 : c === "USD" ? 1620 : 1);
+      };
+
+      const reversedJeIds = new Set<string>();
+      const reverseIfPosted = async (
+        journalEntryId: string,
+        reason: string,
+        restorePayoutTreasury = false
+      ) => {
+        if (!journalEntryId || reversedJeIds.has(journalEntryId)) return;
+        const je = await tx.journalEntry.findUnique({
+          where: { id: journalEntryId },
+          include: { lines: true },
+        });
+        if (je && je.status !== "VOIDED" && !je.isReversed) {
+          if (restorePayoutTreasury && je.sourceType === "WORKER_PAYOUT") {
+            for (const line of je.lines) {
+              const crBase = Number(line.baseCredit || line.creditBase || line.credit || 0);
+              if (crBase > 0.005) {
+                const tr = await tx.treasuryAccount.findUnique({
+                  where: { accountId: line.accountId },
+                });
+                if (tr) {
+                  const trRate = await resolveTreasuryRate(tr.currency);
+                  await tx.treasuryAccount.update({
+                    where: { id: tr.id },
+                    data: {
+                      balance: Number(tr.balance) + crBase / trRate,
+                      balanceYER: Number(tr.balanceYER) + crBase,
+                    },
+                  });
+                }
+              }
+            }
+          }
+          await reverseJournalEntry({
+            journalEntryId,
+            createdById: actor.userId ?? undefined,
+            reason,
+            tx,
+          });
+        }
+        reversedJeIds.add(journalEntryId);
+      };
+
+      // 1. Reverse and remove any linked installment payout vouchers + restore treasury
+      const linkedInstallments = await tx.installmentVoucher.findMany({
+        where: { workerWageEntryId: rec.id },
+      });
+      for (const inst of linkedInstallments) {
+        const instAmt = Number(inst.amountYER);
+        if (inst.journalEntryId) {
+          await reverseIfPosted(inst.journalEntryId, `عكس سند صرف أجر عامل: ${inst.voucherNo}`);
+        }
+        const tr = await tx.treasuryAccount.findUnique({ where: { id: inst.treasuryAccountId } });
+        if (tr) {
+          const trRate = await resolveTreasuryRate(tr.currency);
+          await tx.treasuryAccount.update({
+            where: { id: tr.id },
+            data: {
+              balance: Number(tr.balance) + instAmt / trRate,
+              balanceYER: Number(tr.balanceYER) + instAmt,
+            },
+          });
+        }
+        await tx.installmentVoucher.delete({ where: { id: inst.id } });
       }
+
+      // 2. Reverse accrual + initial payout journal entries (primary + all sourceId entries)
+      if (rec.journalEntryId) {
+        await reverseIfPosted(rec.journalEntryId, `عكس سجل أجر عامل (${rec.workerName})`, true);
+      }
+      const linkedJes = await tx.journalEntry.findMany({
+        where: { sourceId: rec.id, status: "POSTED", isReversed: false },
+        select: { id: true },
+      });
+      for (const je of linkedJes) {
+        await reverseIfPosted(je.id, `عكس قيد أجر/صرف عامل (${rec.workerName})`, true);
+      }
+
       await tx.workerWageEntry.delete({ where: { id } });
       await appendAuditLogTx(tx, {
         ...actor,
-        actionType: "حذف سجل عامل",
+        actionType: "عكس وحذف سجل عامل",
         entityReference: id,
-        details: `${rec.workerName} - ${rec.totalWage.toLocaleString("en-US")} ريال`,
+        details: `${rec.workerName} - ${Number(rec.totalWage).toLocaleString("en-US")} ريال`,
       });
       return { status: "OK" as const };
     });
@@ -121,6 +198,7 @@ export async function DELETE(
     return NextResponse.json({ state });
   } catch (error) {
     console.error("DELETE /api/workers/[id] error:", error);
-    return jsonError("تعذر حذف سجل العامل", 500);
+    const msg = error instanceof Error ? error.message : "تعذر عكس وحذف سجل العامل";
+    return jsonError(msg, 400);
   }
-}
+});

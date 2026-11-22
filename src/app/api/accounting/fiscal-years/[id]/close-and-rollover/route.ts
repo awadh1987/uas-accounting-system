@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import { executeFiscalYearCloseAndRollover } from "@/lib/fiscalYearClosingEngine";
@@ -6,7 +7,7 @@ import { withIdempotency } from "@/lib/idempotencyGuard";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(
+export const POST = withTenantRoute(async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
@@ -42,4 +43,4 @@ export async function POST(
       return jsonError(msg, status);
     }
   });
-}
+});

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import {
   generateAcquisitionBill,
   postOwnerBatchPayment,
@@ -10,7 +10,7 @@ import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const projectId = searchParams.get("projectId");
@@ -105,9 +105,9 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/projects/acquisitions error:", error);
     return jsonError("تعذر تحميل دورات الاستحواذ وعقود الملاك", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const action = String(body.action || "CREATE_CYCLE").trim();
@@ -280,7 +280,7 @@ export async function POST(req: NextRequest) {
         : "تعذر تنفيذ عملية استحواذ المشروع";
     return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
   }
-}
+});
 
 async function handleUpdateCycle(req: NextRequest) {
   try {
@@ -376,10 +376,10 @@ async function handleUpdateCycle(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleUpdateCycle(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleUpdateCycle(req);
-}
+});

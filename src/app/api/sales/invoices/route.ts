@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, withTenantRoute } from "@/lib/prisma";
 import {
   postJournalEntry,
   postSalesInvoice,
@@ -11,7 +11,7 @@ import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const projectId = searchParams.get("projectId");
@@ -37,9 +37,9 @@ export async function GET(req: NextRequest) {
     console.error("GET /api/sales/invoices error:", error);
     return jsonError("تعذر تحميل فواتير المبيعات", 500);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, {
@@ -54,7 +54,23 @@ export async function POST(req: NextRequest) {
     const projectId = String(body.projectId || "").trim();
     const subProjectId = body.subProjectId ? String(body.subProjectId).trim() : null;
     const harvestCycleId = body.harvestCycleId ? String(body.harvestCycleId).trim() : null;
-    const amount = Number(body.amount) || 0;
+    const invTypeRaw = String(body.invoiceType || "INVOICE").toUpperCase();
+    const invoiceType =
+      invTypeRaw === "CREDIT_NOTE" || invTypeRaw === "DEBIT_NOTE" ? invTypeRaw : "INVOICE";
+    const originalInvoiceId = body.originalInvoiceId ? String(body.originalInvoiceId).trim() : null;
+    const rawItems = Array.isArray(body.items) ? (body.items as Array<Record<string, unknown>>) : undefined;
+    const parsedItems = rawItems?.map((it) => ({
+      description: String(it.description || "صنف مبيعات").trim(),
+      quantity: Number(it.quantity) || 1,
+      unitPrice: Number(it.unitPrice) || 0,
+      itemId: it.itemId ? String(it.itemId).trim() : null,
+      warehouseId: it.warehouseId ? String(it.warehouseId).trim() : null,
+      unitId: it.unitId ? String(it.unitId).trim() : null,
+      taxCodeId: it.taxCodeId ? String(it.taxCodeId).trim() : null,
+      whtCodeId: it.whtCodeId ? String(it.whtCodeId).trim() : null,
+    }));
+    const itemsTotal = parsedItems?.reduce((s, it) => s + it.quantity * it.unitPrice, 0) ?? 0;
+    const amount = Number(body.amount) || itemsTotal;
     const currency = String(body.currency || "YER").toUpperCase();
     const notes = body.notes ? String(body.notes).trim() : undefined;
 
@@ -73,15 +89,26 @@ export async function POST(req: NextRequest) {
     const dailyBatchLabel = body.dailyBatchLabel ? String(body.dailyBatchLabel).trim() : undefined;
     const salesOfficerId = body.salesOfficerId ? String(body.salesOfficerId).trim() : undefined;
     const salesOfficerTitle = body.salesOfficerTitle ? String(body.salesOfficerTitle).trim() : undefined;
+    const overrideCreditLimit =
+      Boolean(body.overrideCreditLimit) &&
+      (actor.userRole === "SUPER_ADMIN" || actor.userRole === "CHIEF_ACCOUNTANT");
 
     const result = await postSalesInvoice({
       customerId,
       projectId,
       subProjectId,
       harvestCycleId,
+      invoiceType,
+      originalInvoiceId,
+      items: parsedItems,
       amount,
       currency,
       date: body.date ? String(body.date) : new Date(),
+      dueDate: body.dueDate ? String(body.dueDate) : null,
+      taxCodeId: body.taxCodeId ? String(body.taxCodeId).trim() : null,
+      whtCodeId: body.whtCodeId ? String(body.whtCodeId).trim() : null,
+      taxInclusive: Boolean(body.taxInclusive),
+      overrideCreditLimit,
       notes,
       revenueAccountId,
       revenueAccountCode,
@@ -100,7 +127,7 @@ export async function POST(req: NextRequest) {
     if (msg.includes("HARVEST_LOCKED")) return lockedError();
     return jsonError(msg, 400);
   }
-}
+});
 
 async function handleInvoiceUpdate(req: NextRequest) {
   try {
@@ -154,6 +181,7 @@ async function handleInvoiceUpdate(req: NextRequest) {
     }
 
     const financialChanged =
+      dateChanged ||
       Math.abs(nextAmount - Number(existing.totalAmount)) > 0.005 ||
       nextProjectId !== existing.projectId ||
       nextSubProjectId !== existing.subProjectId ||
@@ -173,7 +201,7 @@ async function handleInvoiceUpdate(req: NextRequest) {
         const rate =
           existing.currency === "YER"
             ? 1
-            : rateRow?.rateToYER || (existing.currency === "SAR" ? 425 : 1620);
+            : Number(rateRow?.rateToYER) || (existing.currency === "SAR" ? 425 : 1620);
 
         const newJe = await postJournalEntry({
           tx,
@@ -210,11 +238,6 @@ async function handleInvoiceUpdate(req: NextRequest) {
           ],
         });
         nextJournalEntryId = newJe.id;
-      } else if (existing.journalEntryId && dateChanged) {
-        await tx.journalEntry.update({
-          where: { id: existing.journalEntryId },
-          data: { date: nextDate },
-        });
       }
 
       const paid = Number(existing.paidAmount);
@@ -263,11 +286,11 @@ async function handleInvoiceUpdate(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleInvoiceUpdate(req);
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
   return handleInvoiceUpdate(req);
-}
+});
 

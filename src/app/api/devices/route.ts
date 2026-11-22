@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withTenantRoute } from "@/lib/prisma";
-import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
+import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import { listTenantDevices, registerOrHeartbeatDevice } from "@/lib/devices/deviceService";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, forbiddenError, jsonError, resolveVerifiedActor } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
-export const GET = withTenantRoute(async function GET() {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
+    const auth = await authorizeApiAction({}, req, { moduleId: "system" });
+    if (!auth.ok) return auth.response;
+
     const data = await listTenantDevices();
     return NextResponse.json({
       success: true,
@@ -22,9 +27,17 @@ export const GET = withTenantRoute(async function GET() {
 
 export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-    const actor = extractActor(body, req);
+    const actor = await resolveVerifiedActor(body, req);
+    if (actor.spoofAttempt) {
+      return jsonError("⛔ رفض أمني: عدم تطابق الصلاحية", 403);
+    }
+    if (actor.tenantMismatch) {
+      return forbiddenError("⛔ رفض أمني: الرمز غير مصرح لهذه المنشأة / Cross-tenant session denied");
+    }
     const deviceId =
       (typeof body.deviceId === "string" ? body.deviceId : "") ||
       req.headers.get("x-uas-device-id") ||
@@ -81,8 +94,8 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
           result.device.status === "REVOKED"
             ? "DEVICE_REVOKED"
             : result.device.status === "SUSPENDED"
-            ? "DEVICE_LOCKED"
-            : undefined,
+              ? "DEVICE_LOCKED"
+              : undefined,
         clearCredentials: result.device.status === "REVOKED",
         ...result,
       },

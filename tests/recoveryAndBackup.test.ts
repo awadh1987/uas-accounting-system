@@ -17,7 +17,7 @@ import {
   type UasSignedLicense,
 } from "../src/lib/licensing/licenseSchema";
 import { verifyLicenseSignature } from "../src/lib/licensing/verifier";
-import { hashPassword } from "../src/lib/serverBootstrap";
+import { hashPassword, isLegacySha256Hash, verifyPassword } from "../src/lib/serverBootstrap";
 import { execFileSync } from "node:child_process";
 
 // Test Ed25519 Keypair for test licenses
@@ -88,11 +88,21 @@ describe("SUPER_ADMIN Password Recovery & Cryptographic Verification", () => {
     );
   });
 
-  it("hashes password with SHA-256 matching serverBootstrap", () => {
+  it("hashes password with salted scrypt and supports legacy SHA-256 verification", () => {
     const pass = "AdminPass2026!";
-    const hash = hashPassword(pass);
-    const expected = crypto.createHash("sha256").update(pass).digest("hex");
-    assert.equal(hash, expected);
+    const hash1 = hashPassword(pass);
+    const hash2 = hashPassword(pass);
+    assert.ok(hash1.startsWith("scrypt$"));
+    assert.notEqual(hash1, hash2, "Random salts must produce unique hashes");
+    assert.equal(verifyPassword(pass, hash1), true);
+    assert.equal(verifyPassword(pass, hash2), true);
+    assert.equal(verifyPassword("WrongPass!", hash1), false);
+
+    // Backward compatibility for legacy unsalted SHA-256 hashes
+    const legacySha256 = crypto.createHash("sha256").update(pass).digest("hex");
+    assert.equal(isLegacySha256Hash(legacySha256), true);
+    assert.equal(verifyPassword(pass, legacySha256), true);
+    assert.equal(verifyPassword("WrongPass!", legacySha256), false);
   });
 });
 
@@ -265,7 +275,9 @@ describe("Local CLI Admin Password Reset Script (scripts/reset-admin-password.mj
       };
 
       assert.equal(row.username, "admin");
-      assert.equal(row.passwordHash, hashPassword(newPass));
+      assert.ok(row.passwordHash.startsWith("scrypt$"));
+      assert.equal(verifyPassword(newPass, row.passwordHash), true);
+      assert.equal(verifyPassword("WrongPass!", row.passwordHash), false);
       assert.equal(row.active, 1);
       assert.equal(row.isActive, 1);
       assert.equal(row.mustChangePassword, 0);

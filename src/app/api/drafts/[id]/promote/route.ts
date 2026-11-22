@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
-import { extractActor, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import { promoteWorkspaceDraft } from "@/lib/workspaceDraftsEngine";
 import { withIdempotency } from "@/lib/idempotencyGuard";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(
+export const POST = withTenantRoute(async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
@@ -20,10 +21,13 @@ export async function POST(
       } catch {
         body = {};
       }
-      const actor = extractActor(body, r);
+      const auth = await authorizeApiAction(body, r, { action: "post" });
+      if (!auth.ok) return auth.response;
+      const actor = auth.actor;
+
       const promoted = await promoteWorkspaceDraft(id, {
-        userId: actor.userId || "u1",
-        userName: actor.userDisplay || "مستخدم النظام",
+        userId: actor.userId!,
+        userName: actor.userDisplay,
         userRole: actor.userRole,
       });
       return NextResponse.json({ success: true, ...promoted }, { status: 200 });
@@ -33,4 +37,4 @@ export async function POST(
       return jsonError(msg, status);
     }
   });
-}
+});

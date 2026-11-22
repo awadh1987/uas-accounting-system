@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import { createPrismaSeatStore } from "@/lib/licensing/prismaSeatStore";
 import { releaseKeySeat, verifyKeyRequest } from "@/lib/licensing/licenseAuthority";
@@ -48,7 +49,7 @@ function timingSafeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ha, hb);
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
     const ip = (req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "local").split(",")[0].trim();
     if (rateLimited(ip)) {
@@ -121,4 +122,4 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withTenantRoute } from "@/lib/prisma";
+import { authorizeApiAction } from "@/lib/apiHelpers";
 import {
   getRuntimeConfig,
   saveRuntimeConfig,
@@ -36,7 +37,13 @@ export const GET = withTenantRoute(async function GET() {
 
 export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body = (await req.json()) as Record<string, unknown>;
+    const auth = await authorizeApiAction(body, req, {
+      moduleId: "system",
+      action: "edit",
+    });
+    if (!auth.ok) return auth.response;
+
     const targetMode = body.mode as RuntimeMode;
 
     if (!["local", "lan", "cloud"].includes(targetMode)) {
