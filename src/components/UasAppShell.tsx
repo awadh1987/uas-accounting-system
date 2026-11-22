@@ -256,11 +256,9 @@ export function UasAppShell() {
     }
   }, []);
 
-  useEffect(() => {
-    if (viewMode === "erp" && currentUser && licenseStatus && !licenseStatus.is_valid) {
-      setLicenseModalOpen(true);
-    }
-  }, [viewMode, currentUser, licenseStatus]);
+  const isLicenseModalOpen =
+    licenseModalOpen ||
+    (viewMode === "erp" && Boolean(currentUser) && Boolean(licenseStatus && !licenseStatus.is_valid));
 
   useEffect(() => {
     if (!toastMsg) return;
@@ -1956,7 +1954,7 @@ export function UasAppShell() {
       )}
 
       <LicenseActivationModal
-        open={licenseModalOpen}
+        open={isLicenseModalOpen}
         statusData={licenseStatus}
         lang={lang}
         currentUser={currentUser}
