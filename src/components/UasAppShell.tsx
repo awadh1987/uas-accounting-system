@@ -229,9 +229,6 @@ export function UasAppShell() {
         const offlineStatus = (await buildOfflineClientLicenseStatus()) as LicenseStatusData;
         if (offlineStatus.is_valid || !base) {
           setLicenseStatus(offlineStatus);
-          if (!offlineStatus.is_valid) {
-            setLicenseModalOpen(true);
-          }
           return;
         }
       } catch {
@@ -246,9 +243,6 @@ export function UasAppShell() {
           ? { ...res.data, active_mode: getStoredRuntimeMode() }
           : res.data;
         setLicenseStatus(merged);
-        if (!merged.is_valid) {
-          setLicenseModalOpen(true);
-        }
         return;
       }
     } catch {
@@ -257,13 +251,16 @@ export function UasAppShell() {
     try {
       const offlineStatus = (await buildOfflineClientLicenseStatus()) as LicenseStatusData;
       setLicenseStatus(offlineStatus);
-      if (!offlineStatus.is_valid) {
-        setLicenseModalOpen(true);
-      }
     } catch {
       // ignore
     }
   }, []);
+
+  useEffect(() => {
+    if (viewMode === "erp" && currentUser && licenseStatus && !licenseStatus.is_valid) {
+      setLicenseModalOpen(true);
+    }
+  }, [viewMode, currentUser, licenseStatus]);
 
   useEffect(() => {
     if (!toastMsg) return;
