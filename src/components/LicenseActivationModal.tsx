@@ -35,6 +35,7 @@ import {
   resolveApiBaseUrl,
   safeFetchJson,
   setStoredRuntimeMode,
+  setStoredTenantId,
 } from "@/lib/apiClient";
 import {
   activateOfflineClientLicense,
@@ -89,6 +90,8 @@ export interface LicenseStatusData {
   server_lan_ips: string[];
   lan_url: string;
   cloud_url?: string;
+  tenant_slug?: string | null;
+  tenant_url?: string | null;
 }
 
 interface LicenseActivationModalProps {
@@ -132,14 +135,22 @@ export function LicenseActivationModal({
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // Derived default values (avoids synchronous setState inside useEffect)
+  const PLACEHOLDER_COMPANY_NAMES = new Set([
+    "اسم المنشأة",
+    "Enterprise Name",
+    "النظام المحاسبي الموحد",
+    "النظام المحاسبي الموحد (Default)",
+    "النظام المحاسبي الموحد (UAS Enterprise)",
+    "شركة الجبري الزراعية للتنمية والاستثمار | UAS",
+    "Unified Accounting System",
+    "UAS Enterprise",
+  ]);
   const defaultCompanyCandidate =
     statusData?.company_name ||
     (enterpriseProfile?.isConfigured ? enterpriseProfile.legalNameAr : "") ||
     "";
   const defaultCompanyName =
-    defaultCompanyCandidate &&
-    defaultCompanyCandidate !== "اسم المنشأة" &&
-    defaultCompanyCandidate !== "Enterprise Name"
+    defaultCompanyCandidate && !PLACEHOLDER_COMPANY_NAMES.has(defaultCompanyCandidate.trim())
       ? defaultCompanyCandidate
       : "";
   const companyNameInput = companyNameDraft ?? defaultCompanyName;
@@ -289,6 +300,9 @@ export function LicenseActivationModal({
     const onAndroid = isNativeAndroid();
 
     try {
+      let resolvedTenantUrl: string | null = null;
+      let resolvedTenantSlug: string | null = null;
+
       // 1. Android APK online UASKEY-... flow: verify against Cloud/LAN server (defaults to https://qat.world)
       //    and persist verified license + seat binding into localStorage immediately.
       if (onAndroid && payload.activationKey) {
@@ -304,6 +318,8 @@ export function LicenseActivationModal({
         if (!onlineRes.success) {
           throw new Error(onlineRes.error);
         }
+        resolvedTenantSlug = onlineRes.tenantSlug || onlineRes.license.tenant_slug || null;
+        resolvedTenantUrl = onlineRes.tenantUrl || onlineRes.license.tenant_url || null;
       } else if (onAndroid && payload.licenseFileContent) {
         // 2. Android APK `.uas` file flow: verify Ed25519 signature, expiry & company_name client-side
         //    and persist directly to localStorage; optionally sync seat registration in the background.
@@ -317,7 +333,9 @@ export function LicenseActivationModal({
         if (!offlineRes.success) {
           throw new Error(offlineRes.error);
         }
-        const syncBase = resolveApiBaseUrl({ preferCloudFallback: true });
+        resolvedTenantSlug = offlineRes.tenantSlug || offlineRes.license.tenant_slug || null;
+        resolvedTenantUrl = offlineRes.tenantUrl || offlineRes.license.tenant_url || null;
+        const syncBase = resolvedTenantUrl || resolveApiBaseUrl({ preferCloudFallback: true });
         void syncOfflineSeatInBackground(offlineRes.license, {
           companyName: effectiveCompany || offlineRes.license.company_name,
           userEmail: effectiveEmail || undefined,
@@ -332,7 +350,15 @@ export function LicenseActivationModal({
         if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
         if (currentUser?.role) headers["x-uas-role"] = String(currentUser.role);
 
-        const res = await safeFetchJson<{ success?: boolean; error?: string }>(
+        const res = await safeFetchJson<{
+          success?: boolean;
+          error?: string;
+          tenant_slug?: string | null;
+          tenantSlug?: string | null;
+          tenant_url?: string | null;
+          tenantUrl?: string | null;
+          license?: { tenant_slug?: string; tenant_url?: string };
+        }>(
           `${base}/api/licensing/activate`,
           {
             method: "POST",
@@ -368,10 +394,27 @@ export function LicenseActivationModal({
           if (!fallbackRes.success) {
             throw new Error(fallbackRes.error);
           }
+          resolvedTenantSlug = fallbackRes.tenantSlug || fallbackRes.license.tenant_slug || null;
+          resolvedTenantUrl = fallbackRes.tenantUrl || fallbackRes.license.tenant_url || null;
         } else if (!res.ok || !res.data?.success) {
           throw new Error(
             res.data?.error || (isAr ? "فشل تفعيل الترخيص" : "Failed to activate license")
           );
+        } else {
+          resolvedTenantSlug =
+            res.data.tenantSlug || res.data.tenant_slug || res.data.license?.tenant_slug || null;
+          resolvedTenantUrl =
+            res.data.tenantUrl || res.data.tenant_url || res.data.license?.tenant_url || null;
+        }
+      }
+
+      if (resolvedTenantSlug) {
+        setStoredTenantId(resolvedTenantSlug);
+      }
+      if (resolvedTenantUrl) {
+        setCloudUrlInput(resolvedTenantUrl);
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem("uas_cloud_server_url", resolvedTenantUrl);
         }
       }
 

@@ -54,12 +54,20 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     }
   }
 
+  const effectiveSlug =
+    meta?.slug && meta.slug !== "default" ? meta.slug : tenantId === "default" ? null : tenantId;
+  const effectiveTenantUrl =
+    meta?.tenantUrl || (effectiveSlug ? `https://${effectiveSlug}.qat.world` : null);
+
   return NextResponse.json({
     request_code: requestCode,
     hwid,
     active_mode: runtimeConfig.mode,
     tenant_id: tenantId,
-    tenant_slug: meta?.slug && meta.slug !== "default" ? meta.slug : tenantId === "default" ? null : tenantId,
+    tenant_slug: effectiveSlug,
+    tenantSlug: effectiveSlug,
+    tenant_url: effectiveTenantUrl,
+    tenantUrl: effectiveTenantUrl,
     license_status: guardResult.status,
     code: guardResult.code || null,
     is_valid: guardResult.allowed,
@@ -73,7 +81,8 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     per_user_devices: seatPolicy?.companyLocked ? seatPolicy.perUserDevices : null,
     seats,
     license_id: license?.license_id || null,
-    allowed_modes: license?.allowed_modes || ["local", "lan", "cloud"],
+    allowed_modes: license?.allowed_modes || meta?.allowedModes || ["local", "lan", "cloud"],
+    allowedModes: license?.allowed_modes || meta?.allowedModes || ["local", "lan", "cloud"],
     max_branches: license?.max_branches || 1,
     max_lan_seats: license?.max_lan_seats || 1,
     active_seats: guardResult.activeSeatsCount || 1,
@@ -82,6 +91,6 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     remaining_days: remainingDays,
     server_lan_ips: lanIps,
     lan_url: lanUrl,
-    cloud_url: runtimeConfig.cloudUrl,
+    cloud_url: effectiveTenantUrl || runtimeConfig.cloudUrl,
   });
 });

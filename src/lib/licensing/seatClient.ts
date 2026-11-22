@@ -410,6 +410,12 @@ export function saveOfflineClientLicense(
 // Offline / Capacitor activation, seat bind & release
 // ---------------------------------------------------------------------------
 
+function decodeBase64FlexibleUtf8(raw: string): string {
+  const normalized = raw.replace(/-/g, "+").replace(/_/g, "/");
+  const padLen = (4 - (normalized.length % 4)) % 4;
+  return decodeBase64Utf8(normalized + "=".repeat(padLen));
+}
+
 export interface OfflineActivationInput {
   licenseFileContent?: string | Record<string, unknown>;
   activationKey?: string;
@@ -420,6 +426,7 @@ export interface OfflineActivationInput {
   platform?: SeatPlatform | string;
   hwid?: string;
   deviceName?: string;
+  mode?: "local" | "lan" | "cloud";
 }
 
 export interface OfflineClientOptions {
@@ -435,6 +442,17 @@ export type OfflineActivationResult =
       success: true;
       license: UasSignedLicense;
       company_lock: "ADOPTED" | "MATCHED" | "NOT_REQUIRED";
+      tenant_slug?: string | null;
+      tenantSlug?: string | null;
+      tenant_url?: string | null;
+      tenantUrl?: string | null;
+      allowed_modes?: ("local" | "lan" | "cloud")[];
+      allowedModes?: ("local" | "lan" | "cloud")[];
+      syncMetadata?: {
+        tenantSlug: string | null;
+        tenantUrl: string | null;
+        allowedModes: ("local" | "lan" | "cloud")[];
+      };
       seat?: {
         user_email: string;
         platform: SeatPlatform;
@@ -458,20 +476,27 @@ export async function activateOfflineClientLicense(
   const seatStore = opts.seatStore ?? new LocalStorageSeatStore(storage);
   const profileRepo = opts.profileRepo ?? new LocalStorageProfileStore(storage);
   const now = opts.now ?? new Date();
+  const hadPriorLicense = Boolean(loadOfflineClientLicense(storage));
 
   let licenseObj: UasSignedLicense | null = null;
   try {
     if (input.licenseFileContent) {
-      const parsed =
-        typeof input.licenseFileContent === "string"
-          ? JSON.parse(input.licenseFileContent)
-          : input.licenseFileContent;
-      licenseObj = validateLicenseStructure(parsed);
+      const content = input.licenseFileContent;
+      if (typeof content === "string") {
+        const trimmed = content.trim();
+        licenseObj = /^UASKEY-/i.test(trimmed)
+          ? validateLicenseStructure(JSON.parse(decodeBase64FlexibleUtf8(trimmed.replace(/^UASKEY-/i, "").trim())))
+          : validateLicenseStructure(JSON.parse(trimmed));
+      } else {
+        licenseObj = validateLicenseStructure(content);
+      }
     } else if (input.activationKey) {
       const key = input.activationKey.trim();
-      if (key.startsWith("UASKEY-")) {
-        const decoded = decodeBase64Utf8(key.slice(7));
+      if (/^UASKEY-/i.test(key)) {
+        const decoded = decodeBase64FlexibleUtf8(key.replace(/^UASKEY-/i, "").trim());
         licenseObj = validateLicenseStructure(JSON.parse(decoded));
+      } else if (key.startsWith("{")) {
+        licenseObj = validateLicenseStructure(JSON.parse(key));
       }
     }
   } catch {
@@ -507,6 +532,15 @@ export async function activateOfflineClientLicense(
     };
   }
 
+  if (input.mode && !licenseObj.allowed_modes.includes(input.mode)) {
+    return {
+      success: false,
+      status: 403,
+      code: "MODE_NOT_ALLOWED",
+      error: `وضع التشغيل (${input.mode}) غير مصرح به في هذا الترخيص / Mode (${input.mode}) is not allowed by license.`,
+    };
+  }
+
   const platform = normalizePlatform(String(input.platform ?? detectClientPlatform()));
   if (!platform) {
     return {
@@ -525,6 +559,14 @@ export async function activateOfflineClientLicense(
       code: "HWID_MISMATCH",
       error: "الترخيص مرتبط بجهاز كمبيوتر آخر / Hardware fingerprint mismatch",
     };
+  }
+
+  if (!hadPriorLicense && !opts.profileRepo && licenseObj.company_name) {
+    await profileRepo.adopt({
+      legalNameAr: licenseObj.name_ar || licenseObj.company_name.trim(),
+      legalNameEn: licenseObj.name_en || licenseObj.company_name.trim(),
+      isConfigured: true,
+    });
   }
 
   const confirmCompanyName = (input.confirmCompanyName ?? input.company_name ?? "").trim();
@@ -553,6 +595,27 @@ export async function activateOfflineClientLicense(
 
   saveOfflineClientLicense(licenseObj, storage);
 
+  const tenantSlug = licenseObj.tenant_slug || null;
+  const tenantUrl = licenseObj.tenant_url || (tenantSlug ? `https://${tenantSlug}.qat.world` : null);
+  try {
+    if (tenantSlug) {
+      storage.setItem("uas_tenant_id", tenantSlug);
+    }
+    if (tenantUrl) {
+      storage.setItem("uas_cloud_server_url", tenantUrl);
+    }
+    const storedMode = (storage.getItem("uas_runtime_mode") || "").trim().toLowerCase();
+    if (
+      storedMode &&
+      (storedMode === "local" || storedMode === "lan" || storedMode === "cloud") &&
+      !licenseObj.allowed_modes.includes(storedMode)
+    ) {
+      storage.setItem("uas_runtime_mode", licenseObj.allowed_modes[0]);
+    }
+  } catch {
+    // Ignore storage quota errors
+  }
+
   const usage = isCompanyLockedPayload(licenseObj)
     ? await getSeatUsage(seatStore, licenseObj.license_id, seatPolicyFromLicense(licenseObj))
     : undefined;
@@ -561,6 +624,17 @@ export async function activateOfflineClientLicense(
     success: true,
     license: licenseObj,
     company_lock: policyResult.companyLock,
+    tenant_slug: tenantSlug,
+    tenantSlug,
+    tenant_url: tenantUrl,
+    tenantUrl,
+    allowed_modes: licenseObj.allowed_modes,
+    allowedModes: licenseObj.allowed_modes,
+    syncMetadata: {
+      tenantSlug,
+      tenantUrl,
+      allowedModes: licenseObj.allowed_modes,
+    },
     seat: policyResult.seat
       ? {
           user_email: policyResult.seat.binding.userEmail,

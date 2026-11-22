@@ -7,7 +7,7 @@ import { EMBEDDED_SQLITE_MIGRATION_SQL } from "@/lib/sqliteInitSql";
 import { hashPassword } from "@/lib/serverBootstrap";
 import { ensureSqliteAdditiveSchema, isSqliteRuntime, resolveSqliteFilePath } from "@/lib/sqliteBootstrap";
 import { normalizeTenantId } from "./tenantContext";
-import { ensureTenantRegistered, getTenantMetadata } from "./tenantRegistry";
+import { ensureTenantRegistered, findTenantBySlug, getTenantMetadata } from "./tenantRegistry";
 
 export interface TenantInitOptions {
   adminUsername?: string;
@@ -34,24 +34,66 @@ export function isPostgresRuntime(): boolean {
 }
 
 /**
+ * Resolves the isolated PostgreSQL database name for a tenant.
+ * - 'default' -> 'uas_qat_prod'
+ * - 'yasser-albukli' -> 'uas_yasser_albukli'
+ */
+export function resolveTenantPostgresDbName(rawTenantId?: string | null): string {
+  const tenantId = normalizeTenantId(rawTenantId);
+  if (tenantId === "default") return "uas_qat_prod";
+  const clean = tenantId.replace(/^uas_/, "");
+  return `uas_${clean}`;
+}
+
+/**
+ * Resolves the isolated SQLite database file path (`data/tenants/<slug>.db`).
+ */
+export function resolveTenantSqliteFilePath(rawTenantId?: string | null): string {
+  const tenantId = normalizeTenantId(rawTenantId);
+  const envDataDir = (process.env.UAS_DATA_DIR || process.env.DATA_DIR || "").trim();
+  let root = process.cwd();
+  const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (normalizedRoot.endsWith("/.next/standalone")) {
+    root = path.resolve(/*turbopackIgnore: true*/ root, "..", "..");
+  }
+  const dataDir = envDataDir
+    ? path.resolve(/*turbopackIgnore: true*/ envDataDir)
+    : path.join(/*turbopackIgnore: true*/ root, "data");
+
+  const meta = getTenantMetadata(tenantId) || findTenantBySlug(rawTenantId);
+  const slugOrId =
+    meta?.slug && meta.slug !== "default"
+      ? meta.slug.trim().toLowerCase()
+      : tenantId.replace(/_/g, "-");
+
+  let targetPath: string;
+  if (meta?.sqliteDbPath && !envDataDir) {
+    targetPath = path.isAbsolute(meta.sqliteDbPath)
+      ? meta.sqliteDbPath
+      : path.resolve(/*turbopackIgnore: true*/ root, meta.sqliteDbPath);
+  } else {
+    targetPath = path.join(/*turbopackIgnore: true*/ dataDir, "tenants", `${slugOrId}.db`);
+  }
+
+  const parent = path.dirname(targetPath);
+  if (!fs.existsSync(/*turbopackIgnore: true*/ parent)) {
+    fs.mkdirSync(/*turbopackIgnore: true*/ parent, { recursive: true });
+  }
+  return targetPath;
+}
+
+/**
  * Resolves the isolated database file path or schema identifier for a tenant.
  */
 export function resolveTenantDbFilePath(rawTenantId?: string | null): string | null {
   const tenantId = normalizeTenantId(rawTenantId);
   if (!isSqliteRuntime()) return null;
 
-  const baseDbPath = resolveSqliteFilePath();
   if (tenantId === "default") {
-    return baseDbPath;
+    return resolveSqliteFilePath();
   }
 
-  const baseDir = baseDbPath ? path.dirname(baseDbPath) : process.cwd();
-  const tenantsDir = path.join(baseDir, "tenants");
-  if (!fs.existsSync(tenantsDir)) {
-    fs.mkdirSync(tenantsDir, { recursive: true });
-  }
-
-  return path.join(tenantsDir, `uas_tenant_${tenantId}.db`);
+  return resolveTenantSqliteFilePath(rawTenantId);
 }
 
 /**
@@ -65,10 +107,26 @@ export function resolveTenantSchemaName(rawTenantId?: string | null): string {
   return tenantId.startsWith("tenant_") ? tenantId : `tenant_${tenantId}`;
 }
 
+function replacePostgresDatabaseName(rawUrl: string, dbName: string, schemaName = "public"): string {
+  try {
+    const url = new URL(rawUrl);
+    url.pathname = `/${dbName}`;
+    url.searchParams.set("schema", schemaName);
+    return url.toString();
+  } catch {
+    const [beforeQuery, query] = rawUrl.split("?");
+    const baseNoDb = beforeQuery.replace(/\/[^/]*$/, "");
+    const params = new URLSearchParams(query || "");
+    params.set("schema", schemaName);
+    return `${baseNoDb}/${dbName}?${params.toString()}`;
+  }
+}
+
 /**
  * Resolves connection URL for a tenant.
- * - SQLite: returns file:<path-to-tenant-db>
- * - PostgreSQL: returns base URL with ?schema=tenant_<slug>
+ * - SQLite: returns file:<path-to-data/tenants/<slug>.db>
+ * - PostgreSQL: routes registered isolated-DB tenants to `/${meta.postgresDb}?schema=public`,
+ *   or falls back to `?schema=tenant_<slug>` for legacy schema-isolated tenants.
  */
 export function resolveTenantDatabaseUrl(
   rawTenantId?: string | null,
@@ -88,14 +146,20 @@ export function resolveTenantDatabaseUrl(
     if (tenantId === "default") {
       return rawBaseUrl;
     }
-    const tenantPath = resolveTenantDbFilePath(tenantId);
-    if (!tenantPath) return rawBaseUrl;
+    const tenantPath = resolveTenantSqliteFilePath(rawTenantId || tenantId);
     return `file:${tenantPath.replace(/\\/g, "/")}`;
   }
 
   // PostgreSQL runtime:
   if (tenantId === "default") {
     return rawBaseUrl;
+  }
+
+  if (!overrideBaseUrl) {
+    const meta = getTenantMetadata(tenantId) || findTenantBySlug(rawTenantId);
+    if (meta?.postgresDb) {
+      return replacePostgresDatabaseName(rawBaseUrl, meta.postgresDb, "public");
+    }
   }
 
   const schemaName = resolveTenantSchemaName(tenantId);
@@ -540,6 +604,26 @@ export async function provisionPostgresTenantSchema(
   let columnsRemapped = 0;
   let fksProvisioned = 0;
 
+  if (schemaName === "public") {
+    if (Array.isArray(publicRows) && publicRows.length > 0) {
+      return {
+        tablesProvisioned: [],
+        enumsProvisioned: [],
+        columnsRemapped: 0,
+        fksProvisioned: 0,
+        clonedFromPublic: false,
+      };
+    }
+    const fallback = await executePostgresFallbackDdl(client, "public");
+    return {
+      tablesProvisioned: fallback.tablesProvisioned,
+      enumsProvisioned: fallback.enumsProvisioned,
+      columnsRemapped: 0,
+      fksProvisioned: fallback.fksProvisioned,
+      clonedFromPublic: false,
+    };
+  }
+
   if (Array.isArray(publicRows) && publicRows.length > 0) {
     // Clone each table from public into tenant schema
     for (const row of publicRows) {
@@ -659,7 +743,7 @@ async function initializeTenantDatabase(
       // Default tenant continues using existing public schema without alteration
       return;
     }
-    const schemaName = resolveTenantSchemaName(tenantId);
+    const schemaName = meta.postgresDb ? "public" : resolveTenantSchemaName(tenantId);
     await provisionPostgresTenantSchema(client, schemaName);
 
     const requiredCoreTables = [
@@ -695,6 +779,7 @@ async function initializeTenantDatabase(
     where: { id: "default" },
     update: {
       legalNameAr: profileNameAr,
+      ...(meta.nameEn ? { legalNameEn: profileNameEn } : {}),
       ...(profileSlug ? { tenantSlug: profileSlug } : {}),
     },
     create: {
@@ -831,7 +916,11 @@ async function initializeTenantDatabase(
   const adminUsername = (options?.adminUsername || "system_owner").trim() || "system_owner";
   const adminEmail = (
     options?.adminEmail ||
-    (tenantId === "default" ? "admin@uas-ye.com" : `admin@${tenantId}.uas`)
+    (tenantId === "default"
+      ? "admin@uas-ye.com"
+      : meta.slug && meta.slug !== "default"
+        ? `admin@${meta.slug}.qat.world`
+        : `admin@${tenantId}.uas`)
   )
     .trim()
     .toLowerCase();
@@ -946,6 +1035,27 @@ async function initializeTenantDatabase(
   }
 }
 
+async function ensurePostgresDatabaseExists(baseDbUrl: string, dbName: string): Promise<void> {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(dbName)) {
+    throw new Error(`Invalid PostgreSQL database identifier: "${dbName}"`);
+  }
+  const adminClient = new PrismaClient({
+    datasources: { db: { url: baseDbUrl } },
+    log: ["error"],
+  });
+  try {
+    const rows = await adminClient.$queryRawUnsafe<Array<{ datname: string }>>(
+      `SELECT datname FROM pg_database WHERE datname = $1;`,
+      dbName
+    );
+    if (!Array.isArray(rows) || rows.length === 0) {
+      await adminClient.$executeRawUnsafe(`CREATE DATABASE "${dbName}";`);
+    }
+  } finally {
+    await adminClient.$disconnect().catch(() => {});
+  }
+}
+
 /**
  * Retrieves or initializes an isolated PrismaClient for the given tenant ID.
  * Never caches an uninitialized client or marks a URL ready if initialization fails.
@@ -977,6 +1087,11 @@ export async function getTenantPrisma(
   }
 
   const initPromise = (async (): Promise<PrismaClient> => {
+    const meta = getTenantMetadata(tenantId) || findTenantBySlug(rawTenantId);
+    if (isPostgresRuntime() && tenantId !== "default" && meta?.postgresDb) {
+      await ensurePostgresDatabaseExists(cleanEnvDatabaseUrl(process.env.DATABASE_URL), meta.postgresDb);
+    }
+
     const client = new PrismaClient({
       datasources: {
         db: {

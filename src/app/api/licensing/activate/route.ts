@@ -28,15 +28,42 @@ import {
   getActiveTenantId,
   getTenantMetadata,
   getTenantPrisma,
+  isPostgresRuntime,
   listExistingSlugs,
   normalizeTenantId,
+  resolveTenantPostgresDbName,
   runWithTenant,
 } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
+const SYSTEM_PLACEHOLDER_NAMES = new Set([
+  "اسم المنشأة",
+  "Enterprise Name",
+  "النظام المحاسبي الموحد",
+  "النظام المحاسبي الموحد (Default)",
+  "النظام المحاسبي الموحد (UAS Enterprise)",
+  "شركة الجبري الزراعية للتنمية والاستثمار | UAS",
+  "Unified Accounting System",
+  "UAS Enterprise",
+]);
+
+function isSystemPlaceholderName(name: string | null | undefined): boolean {
+  const clean = String(name || "").trim();
+  return !clean || SYSTEM_PLACEHOLDER_NAMES.has(clean);
+}
+
 function decodeUasKeyToken(rawKey: string): UasSignedLicense | null {
   const key = rawKey.trim();
+  if (!key) return null;
+  if (key.startsWith("{")) {
+    try {
+      const parsed = validateLicenseStructure(JSON.parse(key));
+      if (parsed) return parsed;
+    } catch {
+      return null;
+    }
+  }
   if (!/^UASKEY-/i.test(key)) return null;
   const b64 = key.replace(/^UASKEY-/i, "").trim();
   for (const encoding of ["base64", "base64url"] as const) {
@@ -73,10 +100,13 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       platform = normalizePlatform(String(formData.get("platform") || "windows")) || "windows";
       customHwid = String(formData.get("hwid") || formData.get("deviceId") || "").trim();
       deviceName = String(formData.get("deviceName") || formData.get("device_name") || "").trim();
-      const file = formData.get("licenseFile") as File | null;
+      const file = (formData.get("licenseFile") ||
+        formData.get("file") ||
+        formData.get("uasFile") ||
+        formData.get("license")) as File | null;
       if (file) {
         const text = await file.text();
-        licenseObj = validateLicenseStructure(JSON.parse(text));
+        licenseObj = decodeUasKeyToken(text) || validateLicenseStructure(JSON.parse(text));
       }
     } else {
       const body = (await req.json()) as Record<string, unknown>;
@@ -91,7 +121,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
           typeof body.licenseFileContent === "string"
             ? body.licenseFileContent
             : JSON.stringify(body.licenseFileContent);
-        licenseObj = validateLicenseStructure(JSON.parse(text));
+        licenseObj = decodeUasKeyToken(text) || validateLicenseStructure(JSON.parse(text));
       } else if (body.activationKey) {
         const key = String(body.activationKey).trim();
         licenseObj = decodeUasKeyToken(key);
@@ -107,13 +137,16 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
                 ? envActivationUrl
                 : "https://qat.world";
             const seatHwid = customHwid || getMachineHwid();
+            const effectiveConfirm = isSystemPlaceholderName(confirmCompanyName) ? "" : confirmCompanyName;
             const res = await fetch(`${serverBase}/api/licensing/verify-key`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 key,
-                company_name: confirmCompanyName || licenseObj?.company_name || "",
-                user_email: userEmail,
+                company_name: effectiveConfirm || licenseObj?.company_name || "",
+                user_email:
+                  userEmail ||
+                  (licenseObj?.tenant_slug ? `admin@${licenseObj.tenant_slug}.qat.world` : "admin@uas-ye.com"),
                 platform,
                 hwid: seatHwid,
                 device_name: deviceName || undefined,
@@ -208,14 +241,35 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       const existingBySlug = findTenantBySlug(licenseObj.tenant_slug);
       const resolvedSlug = existingBySlug?.slug || licenseObj.tenant_slug.trim().toLowerCase();
       const resolvedId = existingBySlug?.tenantId || normalizeTenantId(resolvedSlug);
+      const resolvedPgDb =
+        existingBySlug?.postgresDb ||
+        (isPostgresRuntime() && !existingBySlug?.schemaOrDb?.startsWith("tenant_")
+          ? resolveTenantPostgresDbName(resolvedId)
+          : undefined);
       const meta = ensureTenantRegistered(resolvedId, companyForTenant || resolvedSlug, {
         slug: resolvedSlug,
         nameAr: licenseObj.name_ar || companyForTenant || resolvedSlug,
         nameEn: licenseObj.name_en || companyForTenant || resolvedSlug,
         licenseId: licenseObj.license_id,
+        postgresDb: resolvedPgDb,
+        sqliteDbPath: existingBySlug?.sqliteDbPath || `data/tenants/${resolvedSlug}.db`,
+        allowedModes: licenseObj.allowed_modes,
+        maxSeats: licenseObj.max_users,
       });
       await getTenantPrisma(meta.tenantId);
       targetTenantId = meta.tenantId;
+      tenantSlug = meta.slug;
+      tenantUrl = meta.tenantUrl || buildTenantWorkspaceUrl(meta.slug);
+    } else if (activeTenantId !== "default") {
+      const resolvedSlug = licenseObj.tenant_slug || activeSlug;
+      const meta = ensureTenantRegistered(activeTenantId, companyForTenant || resolvedSlug, {
+        slug: resolvedSlug,
+        nameAr: licenseObj.name_ar || companyForTenant || resolvedSlug,
+        nameEn: licenseObj.name_en || companyForTenant || resolvedSlug,
+        licenseId: licenseObj.license_id,
+        allowedModes: licenseObj.allowed_modes,
+        maxSeats: licenseObj.max_users,
+      });
       tenantSlug = meta.slug;
       tenantUrl = meta.tenantUrl || buildTenantWorkspaceUrl(meta.slug);
     } else if (companyForTenant && activeTenantId === "default") {
@@ -223,11 +277,16 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         const resolvedSlug = generateTenantSlug(licenseObj.name_en || companyForTenant, {
           existingSlugs: listExistingSlugs(),
         }).slug;
+        const resolvedPgDb = isPostgresRuntime() ? resolveTenantPostgresDbName(resolvedSlug) : undefined;
         const meta = ensureTenantRegistered(normalizeTenantId(resolvedSlug), companyForTenant, {
           slug: resolvedSlug,
           nameAr: licenseObj.name_ar || companyForTenant,
           nameEn: licenseObj.name_en || companyForTenant,
           licenseId: licenseObj.license_id,
+          postgresDb: resolvedPgDb,
+          sqliteDbPath: `data/tenants/${resolvedSlug}.db`,
+          allowedModes: licenseObj.allowed_modes,
+          maxSeats: licenseObj.max_users,
         });
         await getTenantPrisma(meta.tenantId);
         tenantSlug = meta.slug;
@@ -252,11 +311,45 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       const priorProfile = await prisma.enterpriseProfile.findUnique({ where: { id: "default" } });
       const priorLicenseState = await prisma.licenseState.findUnique({ where: { id: "active" } });
 
+      // Align EnterpriseProfile on first activation so placeholder/auto-seeded tenant names never cause false COMPANY_MISMATCH
+      const isFirstActivation =
+        !priorLicenseLookup.license && (!priorLicenseState || !priorLicenseState.licenseId);
+      const effectiveConfirmCompanyName = isSystemPlaceholderName(confirmCompanyName) ? "" : confirmCompanyName;
+
+      if (isFirstActivation && licenseObj.company_name) {
+        const alignedAr = licenseObj.name_ar || licenseObj.company_name.trim();
+        const alignedEn = licenseObj.name_en || licenseObj.company_name.trim();
+        const isAutoSeededTenantName =
+          !priorProfile ||
+          isSystemPlaceholderName(priorProfile.legalNameAr) ||
+          priorProfile.legalNameAr.startsWith("منشأة ") ||
+          (licenseObj.tenant_slug && normalizeTenantId(licenseObj.tenant_slug) === targetTenantId);
+
+        if (isAutoSeededTenantName) {
+          await prisma.enterpriseProfile.upsert({
+            where: { id: "default" },
+            update: {
+              legalNameAr: alignedAr,
+              legalNameEn: alignedEn,
+              isConfigured: true,
+              ...(tenantSlug ? { tenantSlug } : {}),
+            },
+            create: {
+              id: "default",
+              legalNameAr: alignedAr,
+              legalNameEn: alignedEn,
+              tenantSlug: tenantSlug || null,
+              isConfigured: true,
+            },
+          });
+        }
+      }
+
       // 1. Company-name lock (EnterpriseProfile) + activating user's seat
       const policy = await enforceActivationPolicy(
         {
           license: licenseObj,
-          confirmCompanyName,
+          confirmCompanyName: effectiveConfirmCompanyName,
           userEmail,
           platform,
           hwid: seatHwid,
@@ -269,6 +362,20 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
           { success: false, code: policy.code, error: policy.error },
           { status: policy.status }
         );
+      }
+
+      if (tenantSlug || licenseObj.name_ar || licenseObj.name_en) {
+        await prisma.enterpriseProfile
+          .updateMany({
+            where: { id: "default" },
+            data: {
+              ...(tenantSlug ? { tenantSlug } : {}),
+              ...(licenseObj.name_ar ? { legalNameAr: licenseObj.name_ar } : {}),
+              ...(licenseObj.name_en ? { legalNameEn: licenseObj.name_en } : {}),
+              isConfigured: true,
+            },
+          })
+          .catch(() => {});
       }
 
       // 2. Persist license file into persistent writable directory (`data/licenses/<tenantSlug>/license.uas`)
@@ -353,6 +460,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         throw dbErr;
       }
 
+      const activeMeta = getTenantMetadata(targetTenantId);
       return NextResponse.json({
         success: true,
         license_status: "ACTIVE",
@@ -362,8 +470,23 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         saved_path: savedPath,
         license: licenseObj,
         tenant_id: targetTenantId,
+        tenantId: targetTenantId,
         tenant_slug: tenantSlug,
+        tenantSlug,
         tenant_url: tenantUrl,
+        tenantUrl,
+        allowed_modes: licenseObj.allowed_modes,
+        allowedModes: licenseObj.allowed_modes,
+        syncMetadata: {
+          tenantId: targetTenantId,
+          tenantSlug,
+          tenantUrl,
+          allowedModes: licenseObj.allowed_modes,
+          postgresDb: activeMeta?.postgresDb || null,
+          sqliteDbPath: activeMeta?.sqliteDbPath || (tenantSlug ? `data/tenants/${tenantSlug}.db` : null),
+          maxUsers: licenseObj.max_users ?? 7,
+          perUserDevices: licenseObj.per_user_devices ?? { windows: 1, android: 1 },
+        },
         company_lock: policy.companyLock,
         seat: policy.seat
           ? {

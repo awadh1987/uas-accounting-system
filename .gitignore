@@ -12,11 +12,8 @@ ios/App/Pods/
 *.tsbuildinfo
 next-env.d.ts
 
-
-
 android/keystore/
 android/keystore.properties
-
 # Build and distribution artifacts
 *.apk
 *.exe
@@ -25,7 +22,6 @@ public/downloads/*.exe
 out/downloads/*.apk
 out/downloads/*.exe
 !public/downloads/.gitkeep
-
 # Cryptographic licensing private keys & release bundles
 /keys/
 /release/
@@ -34,5 +30,9 @@ license.uas
 tenants_registry.json
 prisma/tenants/
 /tenants/
-
 public/downloads/version.json
+# Runtime tenant databases, backups, and issued license artifacts
+backups/
+data/tenants/
+data/licenses/
+.env.production

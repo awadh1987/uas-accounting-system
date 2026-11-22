@@ -11,6 +11,9 @@ export interface TenantMetadata {
   nameEn?: string;
   tenantUrl?: string;
   licenseId?: string;
+  postgresDb?: string;
+  sqliteDbPath?: string;
+  allowedModes?: ("local" | "lan" | "cloud")[];
   schemaOrDb: string;
   status: "ACTIVE" | "SUSPENDED" | "ARCHIVED";
   createdAt: string;
@@ -72,7 +75,15 @@ export function getDynamicDataDirectory(): string {
     }
   }
 
-  return typeof process !== "undefined" && typeof process.cwd === "function" ? process.cwd() : ".";
+  if (typeof process !== "undefined" && typeof process.cwd === "function") {
+    const cwd = process.cwd();
+    const normalized = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (normalized.endsWith("/.next/standalone")) {
+      return path.resolve(/*turbopackIgnore: true*/ cwd, "..", "..");
+    }
+    return cwd;
+  }
+  return ".";
 }
 
 /**
@@ -110,8 +121,9 @@ function loadRegistryFromDisk(): void {
       if (Array.isArray(list)) {
         inMemoryRegistry.clear();
         for (const item of list) {
-          if (item && item.tenantId) {
-            inMemoryRegistry.set(item.tenantId, item);
+          if (item && (item.tenantId || item.slug)) {
+            const key = normalizeTenantId(item.slug || item.tenantId);
+            inMemoryRegistry.set(key, item);
           }
         }
       }
@@ -144,7 +156,19 @@ function saveRegistryToDisk(): void {
       fs.mkdirSync(/*turbopackIgnore: true*/ dir, { recursive: true });
     }
     const list = Array.from(inMemoryRegistry.values());
-    fs.writeFileSync(/*turbopackIgnore: true*/ filePath, JSON.stringify(list, null, 2), "utf8");
+    const serialized = JSON.stringify(list, null, 2);
+    fs.writeFileSync(/*turbopackIgnore: true*/ filePath, serialized, "utf8");
+    try {
+      const standaloneDir = path.join(/*turbopackIgnore: true*/ path.dirname(filePath), ".next", "standalone");
+      if (fs.existsSync(/*turbopackIgnore: true*/ standaloneDir)) {
+        const standalonePath = path.join(/*turbopackIgnore: true*/ standaloneDir, path.basename(filePath));
+        if (path.resolve(standalonePath) !== path.resolve(filePath)) {
+          fs.writeFileSync(/*turbopackIgnore: true*/ standalonePath, serialized, "utf8");
+        }
+      }
+    } catch {
+      // Non-fatal standalone registry mirror notice
+    }
     try {
       lastLoadedMtimeMs = fs.statSync(/*turbopackIgnore: true*/ filePath).mtimeMs;
     } catch {
@@ -254,6 +278,9 @@ export function registerTenant(params: {
   nameEn?: string;
   tenantUrl?: string;
   licenseId?: string;
+  postgresDb?: string;
+  sqliteDbPath?: string;
+  allowedModes?: ("local" | "lan" | "cloud")[];
   maxSeats?: number;
   schemaOrDb?: string;
 }): TenantMetadata {
@@ -279,6 +306,28 @@ export function registerTenant(params: {
     existing?.tenantUrl ||
     buildTenantWorkspaceUrl(resolvedSlug);
 
+  const isLegacySchemaTenant =
+    Boolean(existing?.schemaOrDb?.startsWith("tenant_")) &&
+    !existing?.postgresDb &&
+    !params.postgresDb;
+
+  const resolvedPostgresDb =
+    normId === "default"
+      ? undefined
+      : params.postgresDb ??
+        existing?.postgresDb ??
+        (isPostgresRuntimeUrl() && !isLegacySchemaTenant
+          ? `uas_${normId.replace(/^uas_/, "")}`
+          : undefined);
+
+  const resolvedSqliteDbPath =
+    normId === "default"
+      ? undefined
+      : params.sqliteDbPath ?? existing?.sqliteDbPath ?? `data/tenants/${resolvedSlug}.db`;
+
+  const resolvedAllowedModes =
+    params.allowedModes ?? existing?.allowedModes ?? (normId === "default" ? undefined : ["local", "lan", "cloud"]);
+
   const meta: TenantMetadata = {
     tenantId: normId,
     slug: resolvedSlug,
@@ -287,7 +336,10 @@ export function registerTenant(params: {
     nameEn: params.nameEn ?? existing?.nameEn ?? (params.companyName.trim() || normId),
     tenantUrl: resolvedUrl,
     licenseId: params.licenseId ?? existing?.licenseId,
-    schemaOrDb: params.schemaOrDb || resolveSchemaOrDbIdentifier(normId),
+    ...(resolvedPostgresDb ? { postgresDb: resolvedPostgresDb } : {}),
+    ...(resolvedSqliteDbPath ? { sqliteDbPath: resolvedSqliteDbPath } : {}),
+    ...(resolvedAllowedModes ? { allowedModes: resolvedAllowedModes } : {}),
+    schemaOrDb: params.schemaOrDb || resolvedPostgresDb || resolveSchemaOrDbIdentifier(normId),
     status: existing?.status || "ACTIVE",
     createdAt: existing?.createdAt || now,
     updatedAt: now,
@@ -302,7 +354,16 @@ export function registerTenant(params: {
 export function ensureTenantRegistered(
   rawTenantId?: string | null,
   companyName?: string,
-  extra?: { slug?: string; nameAr?: string; nameEn?: string; licenseId?: string; maxSeats?: number }
+  extra?: {
+    slug?: string;
+    nameAr?: string;
+    nameEn?: string;
+    licenseId?: string;
+    postgresDb?: string;
+    sqliteDbPath?: string;
+    allowedModes?: ("local" | "lan" | "cloud")[];
+    maxSeats?: number;
+  }
 ): TenantMetadata {
   ensureRegistryInitialized();
   const normId = normalizeTenantId(rawTenantId);
@@ -330,14 +391,32 @@ export function ensureTenantRegistered(
       existing.licenseId = extra.licenseId;
       changed = true;
     }
+    if (extra?.postgresDb && extra.postgresDb !== existing.postgresDb) {
+      existing.postgresDb = extra.postgresDb;
+      existing.schemaOrDb = extra.postgresDb;
+      changed = true;
+    }
+    if (extra?.sqliteDbPath && extra.sqliteDbPath !== existing.sqliteDbPath) {
+      existing.sqliteDbPath = extra.sqliteDbPath;
+      changed = true;
+    } else if (!existing.sqliteDbPath && normId !== "default" && existing.slug) {
+      existing.sqliteDbPath = `data/tenants/${existing.slug}.db`;
+      changed = true;
+    }
+    if (extra?.allowedModes && JSON.stringify(extra.allowedModes) !== JSON.stringify(existing.allowedModes)) {
+      existing.allowedModes = extra.allowedModes;
+      changed = true;
+    }
     if (typeof extra?.maxSeats === "number" && extra.maxSeats > 0 && extra.maxSeats !== existing.maxSeats) {
       existing.maxSeats = extra.maxSeats;
       changed = true;
     }
-    const expectedSchemaOrDb = resolveSchemaOrDbIdentifier(normId);
-    if (existing.schemaOrDb !== expectedSchemaOrDb) {
-      existing.schemaOrDb = expectedSchemaOrDb;
-      changed = true;
+    if (!existing.postgresDb) {
+      const expectedSchemaOrDb = resolveSchemaOrDbIdentifier(normId);
+      if (existing.schemaOrDb !== expectedSchemaOrDb) {
+        existing.schemaOrDb = expectedSchemaOrDb;
+        changed = true;
+      }
     }
     if (changed) {
       existing.updatedAt = new Date().toISOString();
@@ -353,6 +432,9 @@ export function ensureTenantRegistered(
     nameAr: extra?.nameAr,
     nameEn: extra?.nameEn,
     licenseId: extra?.licenseId,
+    postgresDb: extra?.postgresDb,
+    sqliteDbPath: extra?.sqliteDbPath,
+    allowedModes: extra?.allowedModes,
     maxSeats: extra?.maxSeats,
   });
 }

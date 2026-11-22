@@ -23,6 +23,17 @@ export type LockedField = "legalNameAr" | "legalNameEn";
 export const PLACEHOLDER_NAME_AR = "اسم المنشأة";
 export const PLACEHOLDER_NAME_EN = "Enterprise Name";
 
+const SEED_PLACEHOLDER_NAMES = new Set([
+  PLACEHOLDER_NAME_AR,
+  PLACEHOLDER_NAME_EN,
+  "النظام المحاسبي الموحد",
+  "النظام المحاسبي الموحد (Default)",
+  "النظام المحاسبي الموحد (UAS Enterprise)",
+  "شركة الجبري الزراعية للتنمية والاستثمار | UAS",
+  "Unified Accounting System",
+  "UAS Enterprise",
+]);
+
 export function companyMismatchMessage(licenseCompany: string): string {
   return `اسم المنشأة لا يطابق الترخيص المعتمد / Company name mismatch: License belongs to '${licenseCompany}'.`;
 }
@@ -35,7 +46,7 @@ export function hasArabicScript(text: string): boolean {
 
 function isPlaceholder(value: string | null | undefined, placeholder: string): boolean {
   const v = String(value ?? "").trim();
-  return v.length === 0 || v === placeholder;
+  return v.length === 0 || v === placeholder || SEED_PLACEHOLDER_NAMES.has(v);
 }
 
 /** Fresh install (never configured) or both names still empty / default placeholders. */

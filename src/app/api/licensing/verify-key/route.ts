@@ -9,8 +9,10 @@ import {
   findTenantBySlug,
   generateTenantSlug,
   getTenantPrisma,
+  isPostgresRuntime,
   listExistingSlugs,
   normalizeTenantId,
+  resolveTenantPostgresDbName,
 } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
@@ -89,6 +91,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         name_ar?: string;
         name_en?: string;
         max_users?: number;
+        allowed_modes?: ("local" | "lan" | "cloud")[];
       };
       const companyName = (lic.company_name || lic.customer_name || "").trim();
       if (companyName) {
@@ -101,16 +104,26 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
               existingSlugs: listExistingSlugs(),
             }).slug;
           const tenantId = existingBySlug?.tenantId || normalizeTenantId(derivedSlug);
+          const resolvedPgDb =
+            existingBySlug?.postgresDb ||
+            (isPostgresRuntime() && !existingBySlug?.schemaOrDb?.startsWith("tenant_")
+              ? resolveTenantPostgresDbName(tenantId)
+              : undefined);
           const meta = ensureTenantRegistered(tenantId, companyName, {
             slug: derivedSlug,
             nameAr: lic.name_ar || companyName,
             nameEn: lic.name_en || companyName,
             licenseId: lic.license_id,
+            postgresDb: resolvedPgDb,
+            sqliteDbPath: existingBySlug?.sqliteDbPath || `data/tenants/${derivedSlug}.db`,
+            allowedModes: lic.allowed_modes,
+            maxSeats: lic.max_users,
           });
           await getTenantPrisma(meta.tenantId);
           out.body.tenant_slug = meta.slug;
           out.body.tenant_url = meta.tenantUrl;
           out.body.tenant_id = meta.tenantId;
+          out.body.allowed_modes = lic.allowed_modes;
         } catch (provErr) {
           console.warn("[Licensing verify-key] Non-fatal tenant DB provisioning notice:", provErr);
         }

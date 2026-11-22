@@ -202,10 +202,12 @@ export function getLicenseCandidatePaths(explicitTenantId?: string | null): stri
     const seen = new Set<string>();
     const tenantPaths: string[] = [];
     for (const key of keys) {
-      const p = path.join(/*turbopackIgnore: true*/ dataDir, "licenses", key, "license.uas");
-      if (!seen.has(p)) {
-        seen.add(p);
-        tenantPaths.push(p);
+      for (const fileName of ["license.uas", `${key}.uas`]) {
+        const p = path.join(/*turbopackIgnore: true*/ dataDir, "licenses", key, fileName);
+        if (!seen.has(p)) {
+          seen.add(p);
+          tenantPaths.push(p);
+        }
       }
     }
     return tenantPaths;
@@ -256,6 +258,18 @@ export function saveInstalledLicense(
     fs.mkdirSync(/*turbopackIgnore: true*/ dir, { recursive: true });
   }
 
-  fs.writeFileSync(/*turbopackIgnore: true*/ targetPath, JSON.stringify(license, null, 2), "utf8");
+  const serialized = JSON.stringify(license, null, 2);
+  fs.writeFileSync(/*turbopackIgnore: true*/ targetPath, serialized, "utf8");
+
+  const effectiveTenantId = normalizeTenantId(explicitTenantId ?? getActiveTenantId());
+  if (effectiveTenantId !== "default") {
+    const [primaryKey] = resolveTenantLicenseKeys(effectiveTenantId);
+    if (primaryKey && primaryKey !== "default") {
+      const slugNamedPath = path.join(/*turbopackIgnore: true*/ dir, `${primaryKey}.uas`);
+      if (path.resolve(slugNamedPath) !== path.resolve(targetPath)) {
+        fs.writeFileSync(/*turbopackIgnore: true*/ slugNamedPath, serialized, "utf8");
+      }
+    }
+  }
   return targetPath;
 }
