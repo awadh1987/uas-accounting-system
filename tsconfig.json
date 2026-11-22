@@ -47,6 +47,9 @@
     "ios",
     "out",
     "dist",
-    "release"
+    "release",
+    "tests",
+    ".capacitor-api-backup",
+    ".capacitor-apk-stash"
   ]
 }

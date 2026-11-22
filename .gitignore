@@ -22,6 +22,8 @@ public/downloads/*.exe
 out/downloads/*.apk
 out/downloads/*.exe
 !public/downloads/.gitkeep
+.capacitor-api-backup/
+.capacitor-apk-stash/
 # Cryptographic licensing private keys & release bundles
 /keys/
 /release/

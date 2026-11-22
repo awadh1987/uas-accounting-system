@@ -14,6 +14,8 @@ const publicDownloadsDir = path.join(rootDir, "public", "downloads");
 const androidAssetsPublicDir = path.join(rootDir, "android", "app", "src", "main", "assets", "public");
 
 /**
+ * Safely moves a file or directory, preferring an atomic rename and falling
+ * back to recursive copy + remove when cross-device or Windows locks apply.
  * @param {string} src
  * @param {string} dest
  * @returns {boolean}
@@ -21,55 +23,100 @@ const androidAssetsPublicDir = path.join(rootDir, "android", "app", "src", "main
 function movePathSafe(src, dest) {
   if (!fs.existsSync(src)) return false;
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.cpSync(src, dest, { recursive: true });
-  fs.rmSync(src, { recursive: true, force: true });
+  try {
+    fs.renameSync(src, dest);
+  } catch {
+    fs.cpSync(src, dest, { recursive: true });
+    if (!fs.existsSync(dest)) {
+      throw new Error(`Failed to copy ${src} to ${dest}`);
+    }
+    fs.rmSync(src, { recursive: true, force: true });
+  }
   return true;
 }
 
+/** @type {Array<{ name: string, src: string, dest: string }>} */
+const stashedApks = [];
 let movedApi = false;
 let movedProxy = false;
-/** @type {Array<{ name: string, src: string, dest: string }>} */
-let stashedApks = [];
+let isCleaningUp = false;
 
 /**
- * Temporarily stash any .apk files from public/downloads to avoid bundling them into static export.
+ * Temporarily stash any .apk / .exe files from public/downloads to avoid bundling them into static export.
  */
 function stashPublicApks() {
-  if (!fs.existsSync(publicDownloadsDir)) return [];
-  const list = [];
+  if (!fs.existsSync(publicDownloadsDir)) return;
   fs.mkdirSync(apkStashDir, { recursive: true });
   for (const entry of fs.readdirSync(publicDownloadsDir, { withFileTypes: true })) {
     if (entry.isFile() && (entry.name.toLowerCase().endsWith(".apk") || entry.name.toLowerCase().endsWith(".exe"))) {
       const src = path.join(publicDownloadsDir, entry.name);
       const dest = path.join(apkStashDir, entry.name);
-      fs.cpSync(src, dest);
-      fs.rmSync(src, { force: true });
-      list.push({ name: entry.name, src, dest });
+      stashedApks.push({ name: entry.name, src, dest });
+      movePathSafe(src, dest);
       console.log(`[stash-apk] Temporarily stashed ${entry.name} out of public/downloads during Capacitor build.`);
     }
   }
-  return list;
 }
 
 /**
- * Restore stashed APKs back to public/downloads.
- * @param {Array<{ name: string, src: string, dest: string }>} items
+ * Restore all stashed files back to public/downloads (including any left in apkStashDir on disk).
  */
-function restorePublicApks(items) {
-  for (const item of items) {
+function restorePublicApks() {
+  const restoredNames = new Set();
+
+  for (const item of stashedApks) {
     if (fs.existsSync(item.dest)) {
-      fs.mkdirSync(path.dirname(item.src), { recursive: true });
-      fs.cpSync(item.dest, item.src);
+      movePathSafe(item.dest, item.src);
+      restoredNames.add(item.name);
       console.log(`[restore-apk] Restored ${item.name} to public/downloads.`);
     }
   }
+  stashedApks.length = 0;
+
   if (fs.existsSync(apkStashDir)) {
-    fs.rmSync(apkStashDir, { recursive: true, force: true });
+    for (const entry of fs.readdirSync(apkStashDir, { withFileTypes: true })) {
+      if (entry.isFile() || entry.isDirectory()) {
+        const dest = path.join(apkStashDir, entry.name);
+        const target = path.join(publicDownloadsDir, entry.name);
+        movePathSafe(dest, target);
+        if (!restoredNames.has(entry.name)) {
+          console.log(`[restore-apk] Restored ${entry.name} to public/downloads.`);
+        }
+      }
+    }
+    if (fs.readdirSync(apkStashDir).length === 0) {
+      fs.rmSync(apkStashDir, { recursive: true, force: true });
+    }
   }
 }
 
 /**
- * Recursively removes any .apk files from a directory to prevent APK bloating.
+ * Restores any temporarily moved API routes, proxy file, and stashed downloads.
+ * Safe to invoke multiple times (idempotent).
+ */
+function restoreWorkspace() {
+  if (isCleaningUp) return;
+  isCleaningUp = true;
+  try {
+    if ((movedApi || !fs.existsSync(apiDir)) && fs.existsSync(backupApiDir)) {
+      movePathSafe(backupApiDir, apiDir);
+      movedApi = false;
+    }
+    if ((movedProxy || !fs.existsSync(proxyFile)) && fs.existsSync(backupProxyFile)) {
+      movePathSafe(backupProxyFile, proxyFile);
+      movedProxy = false;
+    }
+    if (fs.existsSync(backupDir) && fs.readdirSync(backupDir).length === 0) {
+      fs.rmSync(backupDir, { recursive: true, force: true });
+    }
+    restorePublicApks();
+  } finally {
+    isCleaningUp = false;
+  }
+}
+
+/**
+ * Recursively removes any .apk or .exe files from a directory to prevent APK bloating.
  * @param {string} dir
  */
 function cleanApkFiles(dir) {
@@ -78,7 +125,7 @@ function cleanApkFiles(dir) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       cleanApkFiles(full);
-    } else if ((entry.name.toLowerCase().endsWith(".apk") || entry.name.toLowerCase().endsWith(".exe"))) {
+    } else if (entry.name.toLowerCase().endsWith(".apk") || entry.name.toLowerCase().endsWith(".exe")) {
       console.log(`[clean-apk] Removing stale APK file: ${full}`);
       fs.rmSync(full, { force: true });
     }
@@ -115,9 +162,30 @@ function stripSourcemapsAndDownloads(outDir) {
   }
 }
 
+function handleTerminationSignal(signal) {
+  console.error(`\n[build-mobile] Received ${signal}; restoring stashed files before exit...`);
+  restoreWorkspace();
+  process.exit(1);
+}
+
+process.on("SIGINT", handleTerminationSignal);
+process.on("SIGTERM", handleTerminationSignal);
+process.on("SIGHUP", handleTerminationSignal);
+process.on("uncaughtException", (err) => {
+  console.error("[build-mobile] Uncaught exception; restoring stashed files:", err);
+  restoreWorkspace();
+  process.exit(1);
+});
+process.on("exit", () => {
+  restoreWorkspace();
+});
+
 try {
-  // Stash public downloads APKs so next export doesn't copy large APKs into out/
-  stashedApks = stashPublicApks();
+  // Recover any leftover stashed/backed-up files from a previously interrupted run
+  restoreWorkspace();
+
+  // Stash public downloads APKs/EXEs so next export doesn't copy large binaries into out/
+  stashPublicApks();
 
   // Exclude/clean stale APK files from public/, out/ and android assets before building
   cleanApkFiles(path.join(rootDir, "public"));
@@ -146,21 +214,11 @@ try {
   stripSourcemapsAndDownloads(path.join(rootDir, "out"));
   cleanApkFiles(androidAssetsPublicDir);
 } finally {
-  if (movedApi && fs.existsSync(backupApiDir)) {
-    movePathSafe(backupApiDir, apiDir);
-  }
-  if (movedProxy && fs.existsSync(backupProxyFile)) {
-    movePathSafe(backupProxyFile, proxyFile);
-  }
-  if (fs.existsSync(backupDir)) {
-    fs.rmSync(backupDir, { recursive: true, force: true });
-  }
+  restoreWorkspace();
   // Remove static-export .next artifacts so `next start` does not boot without API routes
   if (fs.existsSync(nextCacheDir)) {
     fs.rmSync(nextCacheDir, { recursive: true, force: true });
   }
-  // Restore stashed APKs to public/downloads for direct web serving
-  restorePublicApks(stashedApks);
 }
 
 if (fs.existsSync(path.join(rootDir, "android")) || fs.existsSync(path.join(rootDir, "ios"))) {
@@ -168,4 +226,3 @@ if (fs.existsSync(path.join(rootDir, "android")) || fs.existsSync(path.join(root
   execSync("npx cap sync", { stdio: "inherit" });
   cleanApkFiles(androidAssetsPublicDir);
 }
-
