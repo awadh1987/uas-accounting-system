@@ -9,9 +9,11 @@
  */
 import {
   canonicalizeLicensePayload,
+  extractUasKeyToken,
   isCompanyLockedPayload,
   parseHwidTargets,
   validateLicenseStructure,
+  type LicenseAdminCredentials,
   type SeatPlatform,
   type UasSignedLicense,
 } from "./licenseSchema";
@@ -437,6 +439,33 @@ export interface OfflineClientOptions {
   now?: Date;
 }
 
+export interface OfflineAutoLoginUser {
+  id: string;
+  username: string;
+  name: string;
+  fullName: string;
+  displayName: string;
+  phone: string;
+  email: string;
+  role: "SUPER_ADMIN";
+  department: string;
+  active: boolean;
+  isActive: boolean;
+  archivedAt: null;
+  avatarChar: string;
+  avatarColor: string;
+  preferredLang: "ar" | "en";
+  preferredCurrency: "YER" | "SAR" | "USD";
+  preferredTheme: "emerald" | "slate" | "amber";
+  defaultModule: string;
+  lastLoginAt: string;
+  useCustomPermissions: boolean;
+  customAllowedGroups: string[];
+  customPermissionsJson: Record<string, boolean>;
+  mustChangePassword: boolean;
+  assignedProjects: string[];
+}
+
 export type OfflineActivationResult =
   | {
       success: true;
@@ -453,6 +482,9 @@ export type OfflineActivationResult =
         tenantUrl: string | null;
         allowedModes: ("local" | "lan" | "cloud")[];
       };
+      auto_login?: boolean;
+      user?: OfflineAutoLoginUser | null;
+      admin_credentials?: LicenseAdminCredentials | null;
       seat?: {
         user_email: string;
         platform: SeatPlatform;
@@ -467,6 +499,151 @@ export type OfflineActivationResult =
       code: string;
       error: string;
     };
+
+function tryOfflineAutoLogin(
+  storage: KeyValueStorage,
+  licenseObj: UasSignedLicense,
+  hadPriorLicense: boolean
+): {
+  auto_login: boolean;
+  user?: OfflineAutoLoginUser;
+  admin_credentials?: LicenseAdminCredentials;
+} {
+  const cred = licenseObj.admin_credentials;
+  if (!cred) return { auto_login: false };
+
+  const credEmail = cred.email.trim().toLowerCase();
+  const credUsername = cred.username.trim();
+  const nowIso = new Date().toISOString();
+
+  let passwords: Record<string, string> = {};
+  try {
+    const rawPw = storage.getItem("uas_offline_db_passwords");
+    if (rawPw) {
+      const parsed = JSON.parse(rawPw);
+      if (parsed && typeof parsed === "object") passwords = parsed as Record<string, string>;
+    }
+  } catch {
+    passwords = {};
+  }
+
+  let matchedUserRecord: Record<string, unknown> | null = null;
+  let parsedState: Record<string, unknown> | null = null;
+  try {
+    const rawState = storage.getItem("uas_offline_db_state");
+    if (rawState) {
+      const st = JSON.parse(rawState);
+      if (st && typeof st === "object" && Array.isArray((st as { users?: unknown[] }).users)) {
+        parsedState = st as Record<string, unknown>;
+        const users = (st as { users: Array<Record<string, unknown>> }).users;
+        matchedUserRecord =
+          users.find(
+            (u) =>
+              String(u.email || "").trim().toLowerCase() === credEmail ||
+              String(u.username || "").trim().toLowerCase() === credUsername.toLowerCase()
+          ) ?? null;
+
+        if (!matchedUserRecord && !hadPriorLicense) {
+          const defaultU1 = users.find(
+            (u) =>
+              String(u.id || "") === "u1" &&
+              String(u.email || "").trim().toLowerCase() === "admin@uas-ye.com"
+          );
+          if (defaultU1) {
+            defaultU1.email = credEmail;
+            defaultU1.username = credUsername;
+            defaultU1.fullName = `مدير النظام العام / ${licenseObj.company_name || licenseObj.customer_name}`;
+            matchedUserRecord = defaultU1;
+          }
+        }
+      }
+    }
+  } catch {
+    parsedState = null;
+  }
+
+  const lookupEmail = matchedUserRecord
+    ? String(matchedUserRecord.email || credEmail).trim().toLowerCase()
+    : credEmail;
+  const existingStoredPass = passwords[lookupEmail] ?? passwords[credEmail];
+  if (typeof existingStoredPass === "string" && existingStoredPass !== cred.password) {
+    return { auto_login: false };
+  }
+
+  if (
+    matchedUserRecord &&
+    (matchedUserRecord.archivedAt ||
+      matchedUserRecord.active === false ||
+      matchedUserRecord.isActive === false)
+  ) {
+    return { auto_login: false };
+  }
+
+  passwords[lookupEmail] = cred.password;
+  try {
+    storage.setItem("uas_offline_db_passwords", JSON.stringify(passwords));
+  } catch {
+    // ignore storage errors
+  }
+
+  if (matchedUserRecord && parsedState) {
+    matchedUserRecord.lastLoginAt = nowIso;
+    try {
+      storage.setItem("uas_offline_db_state", JSON.stringify(parsedState));
+    } catch {
+      // ignore storage errors
+    }
+  }
+
+  const companyLabel = (licenseObj.name_ar || licenseObj.company_name || licenseObj.customer_name || "").trim();
+  const autoUser: OfflineAutoLoginUser = {
+    id: String(matchedUserRecord?.id || "u1"),
+    username: String(matchedUserRecord?.username || credUsername),
+    name: String(matchedUserRecord?.name || "مدير النظام العام"),
+    fullName: String(matchedUserRecord?.fullName || `مدير النظام العام / ${companyLabel}`),
+    displayName: String(matchedUserRecord?.displayName || ""),
+    phone: String(matchedUserRecord?.phone || ""),
+    email: lookupEmail,
+    role: "SUPER_ADMIN",
+    department: String(matchedUserRecord?.department || "الإدارة العليا وتقنية المعلومات"),
+    active: true,
+    isActive: true,
+    archivedAt: null,
+    avatarChar: String(matchedUserRecord?.avatarChar || "م"),
+    avatarColor: String(matchedUserRecord?.avatarColor || "#059669"),
+    preferredLang: (matchedUserRecord?.preferredLang === "en" ? "en" : "ar"),
+    preferredCurrency:
+      matchedUserRecord?.preferredCurrency === "SAR" || matchedUserRecord?.preferredCurrency === "USD"
+        ? matchedUserRecord.preferredCurrency
+        : "YER",
+    preferredTheme:
+      matchedUserRecord?.preferredTheme === "slate" || matchedUserRecord?.preferredTheme === "amber"
+        ? matchedUserRecord.preferredTheme
+        : "emerald",
+    defaultModule: String(matchedUserRecord?.defaultModule || "dashboard"),
+    lastLoginAt: nowIso,
+    useCustomPermissions: false,
+    customAllowedGroups: [],
+    customPermissionsJson: {},
+    mustChangePassword: false,
+    assignedProjects: Array.isArray(matchedUserRecord?.assignedProjects)
+      ? (matchedUserRecord.assignedProjects as string[])
+      : [],
+  };
+
+  try {
+    storage.setItem("uas_user", autoUser.id);
+    storage.setItem("uas_view_mode", "erp");
+  } catch {
+    // ignore storage errors
+  }
+
+  return {
+    auto_login: true,
+    user: autoUser,
+    admin_credentials: cred,
+  };
+}
 
 export async function activateOfflineClientLicense(
   input: OfflineActivationInput,
@@ -484,16 +661,22 @@ export async function activateOfflineClientLicense(
       const content = input.licenseFileContent;
       if (typeof content === "string") {
         const trimmed = content.trim();
-        licenseObj = /^UASKEY-/i.test(trimmed)
-          ? validateLicenseStructure(JSON.parse(decodeBase64FlexibleUtf8(trimmed.replace(/^UASKEY-/i, "").trim())))
-          : validateLicenseStructure(JSON.parse(trimmed));
+        if (trimmed.startsWith("{")) {
+          licenseObj = validateLicenseStructure(JSON.parse(trimmed));
+        } else {
+          const token = extractUasKeyToken(trimmed);
+          if (token) {
+            licenseObj = validateLicenseStructure(JSON.parse(decodeBase64FlexibleUtf8(token.slice(7).trim())));
+          }
+        }
       } else {
         licenseObj = validateLicenseStructure(content);
       }
     } else if (input.activationKey) {
       const key = input.activationKey.trim();
-      if (/^UASKEY-/i.test(key)) {
-        const decoded = decodeBase64FlexibleUtf8(key.replace(/^UASKEY-/i, "").trim());
+      const token = extractUasKeyToken(key);
+      if (token) {
+        const decoded = decodeBase64FlexibleUtf8(token.slice(7).trim());
         licenseObj = validateLicenseStructure(JSON.parse(decoded));
       } else if (key.startsWith("{")) {
         licenseObj = validateLicenseStructure(JSON.parse(key));
@@ -620,6 +803,8 @@ export async function activateOfflineClientLicense(
     ? await getSeatUsage(seatStore, licenseObj.license_id, seatPolicyFromLicense(licenseObj))
     : undefined;
 
+  const autoLogin = tryOfflineAutoLogin(storage, licenseObj, hadPriorLicense);
+
   return {
     success: true,
     license: licenseObj,
@@ -635,6 +820,13 @@ export async function activateOfflineClientLicense(
       tenantUrl,
       allowedModes: licenseObj.allowed_modes,
     },
+    auto_login: autoLogin.auto_login,
+    ...(autoLogin.auto_login
+      ? {
+          user: autoLogin.user,
+          admin_credentials: autoLogin.admin_credentials,
+        }
+      : {}),
     seat: policyResult.seat
       ? {
           user_email: policyResult.seat.binding.userEmail,
@@ -892,7 +1084,8 @@ export async function activateOnlineKeyOnClient(
   opts: OfflineClientOptions & { fetchImpl?: typeof fetch } = {}
 ): Promise<OfflineActivationResult & { verifiedOnline?: boolean; resolvedServerUrl?: string }> {
   const storage = opts.storage ?? getDefaultStorage() ?? createMemoryStorage();
-  const key = input.activationKey.trim();
+  const rawKeyInput = input.activationKey.trim();
+  const key = extractUasKeyToken(rawKeyInput) ?? rawKeyInput;
   const platform = normalizePlatform(String(input.platform ?? detectClientPlatform())) ?? "android";
   const hwid = (input.hwid?.trim() || getClientDeviceHwid(storage)).toUpperCase();
   const confirmCompanyName = (input.confirmCompanyName ?? "").trim();
@@ -912,9 +1105,9 @@ export async function activateOnlineKeyOnClient(
 
   // Extract company_name from UASKEY-... payload if caller left it blank
   let decodedCompany = confirmCompanyName;
-  if (!decodedCompany && key.startsWith("UASKEY-")) {
+  if (!decodedCompany && /^UASKEY-/i.test(key)) {
     try {
-      const parsed = validateLicenseStructure(JSON.parse(decodeBase64Utf8(key.slice(7))));
+      const parsed = validateLicenseStructure(JSON.parse(decodeBase64FlexibleUtf8(key.slice(7))));
       if (parsed?.company_name) decodedCompany = parsed.company_name;
     } catch {
       // ignore

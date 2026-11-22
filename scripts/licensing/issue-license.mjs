@@ -891,6 +891,44 @@ if (params.preview) {
   process.exit(0);
 }
 
+const shouldProvision = Boolean(explicitSlug || params.provision) && !params["no-provision"];
+let provisionCreds = null;
+if (shouldProvision) {
+  const adminEmail = (
+    typeof params["admin-email"] === "string" && params["admin-email"].trim()
+      ? params["admin-email"].trim()
+      : `admin@${tenantSlug}.qat.world`
+  ).toLowerCase();
+  const adminUsername =
+    typeof params["admin-username"] === "string" && params["admin-username"].trim()
+      ? params["admin-username"].trim()
+      : "admin";
+  const adminPassword =
+    typeof params["admin-password"] === "string" && params["admin-password"].length > 0
+      ? params["admin-password"]
+      : generateStrongPassword(tenantSlug);
+  if (adminPassword.length < 6) {
+    fail("--admin-password must be at least 6 characters.");
+  }
+  const adminName =
+    typeof params["admin-name"] === "string" && params["admin-name"].trim()
+      ? params["admin-name"].trim()
+      : "مدير النظام العام";
+
+  provisionCreds = {
+    adminEmail,
+    adminUsername,
+    adminPassword,
+    adminName,
+    admin_credentials: {
+      email: adminEmail,
+      username: adminUsername,
+      password: adminPassword,
+      tenant_url: tenantUrl,
+    },
+  };
+}
+
 const payload = {
   license_id: licenseId,
   customer_name: companyName,
@@ -899,6 +937,7 @@ const payload = {
   name_en: nameEn,
   tenant_slug: tenantSlug,
   tenant_url: tenantUrl,
+  ...(provisionCreds ? { admin_credentials: provisionCreds.admin_credentials } : {}),
   hwid,
   allowed_modes: [...new Set(allowed_modes)].sort(),
   max_branches: maxBranches,
@@ -912,6 +951,16 @@ const payload = {
 // Canonicalize deterministically — MUST mirror canonicalizeLicensePayload() (v2/v3) in
 // src/lib/licensing/licenseSchema.ts (alphabetical keys, nested per_user_devices sorted).
 const sortedPayload = {
+  ...(provisionCreds
+    ? {
+        admin_credentials: {
+          email: provisionCreds.admin_credentials.email,
+          password: provisionCreds.admin_credentials.password,
+          tenant_url: provisionCreds.admin_credentials.tenant_url,
+          username: provisionCreds.admin_credentials.username,
+        },
+      }
+    : {}),
   allowed_modes: [...payload.allowed_modes].sort(),
   company_name: payload.company_name.trim(),
   customer_name: payload.customer_name.trim(),
@@ -951,41 +1000,37 @@ if (!fs.existsSync(outDir)) {
 
 fs.writeFileSync(outPath, JSON.stringify(signedLicense, null, 2), "utf8");
 
-// Compact Base64 activation key (full token, also saved next to the license file)
+// Compact Base64 activation key (full token on Line 1, plus structured summary when provisioned)
 const activationToken = `UASKEY-${Buffer.from(JSON.stringify(signedLicense)).toString("base64")}`;
+const keyFileContents = provisionCreds
+  ? [
+      activationToken,
+      "",
+      "-------------------------------------------------------",
+      `Company Name    : ${companyName}`,
+      `Workspace URL   : ${tenantUrl}`,
+      `License ID      : ${licenseId}`,
+      `Admin Email     : ${provisionCreds.adminEmail}`,
+      `Admin Username  : ${provisionCreds.adminUsername}`,
+      `Admin Password  : ${provisionCreds.adminPassword}`,
+      "-------------------------------------------------------",
+      "",
+    ].join("\n")
+  : `${activationToken}\n`;
+
 const keyPath = outPath.replace(/\.[^./\\]+$/, "") + ".uaskey.txt";
-fs.writeFileSync(keyPath, activationToken + "\n", "utf8");
+fs.writeFileSync(keyPath, keyFileContents, "utf8");
 
 // ---------------------------------------------------------------------------
 // Automatic Dual-Storage Provisioning (PostgreSQL + SQLite + Registry)
 // Triggered automatically whenever --slug <slug> or --provision is passed.
 // ---------------------------------------------------------------------------
-const shouldProvision = Boolean(explicitSlug || params.provision) && !params["no-provision"];
 let provisionSummary = null;
 
-if (shouldProvision) {
+if (shouldProvision && provisionCreds) {
   loadEnvFromDisk();
 
-  const adminEmail = (
-    typeof params["admin-email"] === "string" && params["admin-email"].trim()
-      ? params["admin-email"].trim()
-      : `admin@${tenantSlug}.qat.world`
-  ).toLowerCase();
-  const adminUsername =
-    typeof params["admin-username"] === "string" && params["admin-username"].trim()
-      ? params["admin-username"].trim()
-      : "admin";
-  const adminPassword =
-    typeof params["admin-password"] === "string" && params["admin-password"].length > 0
-      ? params["admin-password"]
-      : generateStrongPassword(tenantSlug);
-  if (adminPassword.length < 6) {
-    fail("--admin-password must be at least 6 characters.");
-  }
-  const adminName =
-    typeof params["admin-name"] === "string" && params["admin-name"].trim()
-      ? params["admin-name"].trim()
-      : "مدير النظام العام";
+  const { adminEmail, adminUsername, adminPassword, adminName } = provisionCreds;
 
   const adminPasswordHash = hashPassword(adminPassword);
   const coaNodes = loadCoaNodes();
@@ -1035,7 +1080,7 @@ if (shouldProvision) {
   const slugKeyFile = path.join(tenantLicDir, `${tenantSlug}.uaskey.txt`);
   fs.writeFileSync(canonicalLicFile, JSON.stringify(signedLicense, null, 2), "utf8");
   fs.writeFileSync(slugLicFile, JSON.stringify(signedLicense, null, 2), "utf8");
-  fs.writeFileSync(slugKeyFile, activationToken + "\n", "utf8");
+  fs.writeFileSync(slugKeyFile, keyFileContents, "utf8");
 
   const standaloneDir = path.join(projectRoot, ".next", "standalone");
   const standaloneTenantLicDir = path.join(standaloneDir, "data", "licenses", tenantSlug);
@@ -1043,7 +1088,7 @@ if (shouldProvision) {
     fs.mkdirSync(standaloneTenantLicDir, { recursive: true });
     fs.writeFileSync(path.join(standaloneTenantLicDir, "license.uas"), JSON.stringify(signedLicense, null, 2), "utf8");
     fs.writeFileSync(path.join(standaloneTenantLicDir, `${tenantSlug}.uas`), JSON.stringify(signedLicense, null, 2), "utf8");
-    fs.writeFileSync(path.join(standaloneTenantLicDir, `${tenantSlug}.uaskey.txt`), activationToken + "\n", "utf8");
+    fs.writeFileSync(path.join(standaloneTenantLicDir, `${tenantSlug}.uaskey.txt`), keyFileContents, "utf8");
   }
 
   // D. Upsert tenants_registry.json & .next/standalone/tenants_registry.json

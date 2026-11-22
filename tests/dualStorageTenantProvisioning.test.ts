@@ -23,9 +23,13 @@ import {
   activateOfflineClientLicense,
   canonicalizeLicensePayload,
   createMemoryStorage,
+  extractUasKeyToken,
+  validateLicenseStructure,
   type UasSignedLicense,
 } from "../src/lib/licensing";
-import { verifyLicenseSignature } from "../src/lib/licensing/verifier";
+import { decodeLicenseInput, verifyLicenseSignature } from "../src/lib/licensing/verifier";
+import { verifySessionToken } from "../src/lib/authSession";
+import { hashPassword, verifyPassword } from "../src/lib/serverBootstrap";
 import { evaluateCompanyLock } from "../src/lib/licensing/companyLock";
 import { POST as licensingActivatePOST } from "../src/app/api/licensing/activate/route";
 
@@ -234,6 +238,210 @@ describe("Dual-Storage Tenant Provisioning, Routing & Cross-Mode Activation", ()
         assert.equal(profile?.legalNameEn, "Alignment Test Trading");
         assert.equal(profile?.tenantSlug, slug);
       });
+
+      assert.equal(body.auto_login, false);
+      assert.equal(body.user, undefined);
+      assert.equal(res.headers.get("set-cookie"), null);
+    } finally {
+      if (prevDataDir === undefined) delete process.env.UAS_DATA_DIR;
+      else process.env.UAS_DATA_DIR = prevDataDir;
+      unregisterTenant(tid);
+      await resetTenantClientsForTests();
+      const dbPath = resolveTenantSqliteFilePath(slug);
+      for (const f of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`, `${dbPath}-journal`]) {
+        if (fs.existsSync(f)) {
+          try { fs.unlinkSync(f); } catch {}
+        }
+      }
+      fs.rmSync(path.dirname(tmpDataDir), { recursive: true, force: true });
+    }
+  });
+
+  it("signs/verifies admin_credentials inside .uas, extracts UASKEY-... from multi-line .uaskey.txt, and auto-logs in on activation with safe fallback", async () => {
+    const tmpDataDir = path.join(fs.mkdtempSync("/tmp/uas-autologin-"), "data");
+    const prevDataDir = process.env.UAS_DATA_DIR;
+    const slug = `autologin-${Date.now().toString().slice(-5)}`;
+    const tid = normalizeTenantId(slug);
+    const privPath = path.join(process.cwd(), "keys", "uas-license-private.pem");
+    assert.equal(fs.existsSync(privPath), true);
+    const privateKey = crypto.createPrivateKey(fs.readFileSync(privPath, "utf8"));
+
+    try {
+      process.env.UAS_DATA_DIR = tmpDataDir;
+      const adminEmail = `admin@${slug}.qat.world`;
+      const adminPassword = "Uas@AutoLogin#2026!";
+
+      const licPayload = {
+        license_id: `UAS-AUTO-${Date.now()}`,
+        customer_name: "وكالة الدخول التلقائي",
+        company_name: "وكالة الدخول التلقائي",
+        name_ar: "وكالة الدخول التلقائي",
+        name_en: "AutoLogin Trading Co",
+        tenant_slug: slug,
+        tenant_url: `https://${slug}.qat.world`,
+        admin_credentials: {
+          email: adminEmail,
+          username: "admin",
+          password: adminPassword,
+          tenant_url: `https://${slug}.qat.world`,
+        },
+        hwid: "*",
+        allowed_modes: ["local" as const, "lan" as const, "cloud" as const],
+        max_branches: 3,
+        max_lan_seats: 10,
+        max_users: 7,
+        per_user_devices: { windows: 1, android: 1 },
+        issued_at: new Date(Date.now() - 60_000).toISOString(),
+        expires_at: new Date(Date.now() + 86400_000 * 30).toISOString(),
+      };
+
+      const signature = crypto
+        .sign(null, Buffer.from(canonicalizeLicensePayload(licPayload), "utf8"), privateKey)
+        .toString("base64");
+      const signedLic: UasSignedLicense = { ...licPayload, signature };
+
+      // 1. Signature & structure verification (plus tamper check)
+      const validated = validateLicenseStructure(JSON.parse(JSON.stringify(signedLic)));
+      assert.ok(validated?.admin_credentials);
+      assert.equal(verifyLicenseSignature(validated!), true);
+      assert.equal(
+        verifyLicenseSignature({
+          ...validated!,
+          admin_credentials: { ...validated!.admin_credentials!, password: "TamperedPassword!" },
+        }),
+        false
+      );
+
+      // 2. Multi-line .uaskey.txt parsing strips trailing summary lines cleanly
+      const token = `UASKEY-${Buffer.from(JSON.stringify(signedLic)).toString("base64")}`;
+      const multiLineKeyTxt = [
+        token,
+        "",
+        "-------------------------------------------------------",
+        "Company Name    : وكالة الدخول التلقائي",
+        `Workspace URL   : https://${slug}.qat.world`,
+        `Admin Email     : ${adminEmail}`,
+        "Admin Username  : admin",
+        `Admin Password  : ${adminPassword}`,
+        "-------------------------------------------------------",
+      ].join("\n");
+      assert.equal(extractUasKeyToken(multiLineKeyTxt), token);
+      const decodedFromTxt = decodeLicenseInput(multiLineKeyTxt);
+      assert.ok(decodedFromTxt);
+      assert.equal(decodedFromTxt.admin_credentials?.email, adminEmail);
+      assert.equal(verifyLicenseSignature(decodedFromTxt), true);
+
+      // 3. Provision tenant DB with matching admin user & activate via multi-line .uaskey.txt
+      ensureTenantRegistered(tid, "وكالة الدخول التلقائي", {
+        slug,
+        nameAr: "وكالة الدخول التلقائي",
+        nameEn: "AutoLogin Trading Co",
+      });
+      await runWithTenant(tid, async () => {
+        await prisma.user.upsert({
+          where: { email: adminEmail },
+          update: {
+            username: "admin",
+            passwordHash: hashPassword(adminPassword),
+            role: "SUPER_ADMIN",
+            active: true,
+            isActive: true,
+          },
+          create: {
+            username: "admin",
+            name: "مدير النظام العام",
+            fullName: "مدير النظام العام / وكالة الدخول التلقائي",
+            email: adminEmail,
+            passwordHash: hashPassword(adminPassword),
+            role: "SUPER_ADMIN",
+            active: true,
+            isActive: true,
+          },
+        });
+      });
+
+      const actReq = new NextRequest(`https://${slug}.qat.world/api/licensing/activate`, {
+        method: "POST",
+        headers: { host: `${slug}.qat.world`, "content-type": "application/json" },
+        body: JSON.stringify({
+          activationKey: multiLineKeyTxt,
+          platform: "windows",
+        }),
+      });
+      const actRes = await licensingActivatePOST(actReq);
+      assert.equal(actRes.status, 200);
+      const actBody = await actRes.json();
+      assert.equal(actBody.success, true);
+      assert.equal(actBody.auto_login, true);
+      assert.equal(actBody.user?.email, adminEmail);
+      assert.equal(actBody.admin_credentials?.email, adminEmail);
+      assert.ok(actBody.session_token);
+      const verifiedTok = verifySessionToken(actBody.session_token);
+      assert.ok(verifiedTok);
+      assert.equal(verifiedTok.tid, tid);
+      assert.ok(actRes.headers.get("set-cookie")?.includes("uas_session="));
+
+      // 4. If admin changed password later, activation still succeeds and falls back gracefully (auto_login: false)
+      await runWithTenant(tid, async () => {
+        await prisma.user.update({
+          where: { email: adminEmail },
+          data: { passwordHash: hashPassword("NewChangedPass#999") },
+        });
+      });
+
+      const reActReq = new NextRequest(`https://${slug}.qat.world/api/licensing/activate`, {
+        method: "POST",
+        headers: { host: `${slug}.qat.world`, "content-type": "application/json" },
+        body: JSON.stringify({
+          licenseFileContent: JSON.stringify(signedLic),
+          platform: "windows",
+        }),
+      });
+      const reActRes = await licensingActivatePOST(reActReq);
+      assert.equal(reActRes.status, 200);
+      const reActBody = await reActRes.json();
+      assert.equal(reActBody.success, true);
+      assert.equal(reActBody.auto_login, false);
+      assert.equal(reActBody.user, undefined);
+      assert.equal(reActRes.headers.get("set-cookie"), null);
+      await runWithTenant(tid, async () => {
+        const userRow = await prisma.user.findUnique({ where: { email: adminEmail } });
+        assert.equal(verifyPassword("NewChangedPass#999", userRow?.passwordHash), true);
+      });
+
+      // 5. Offline client auto-login and changed-password fallback
+      const offlineStorage = createMemoryStorage();
+      const offOk = await activateOfflineClientLicense(
+        {
+          activationKey: multiLineKeyTxt,
+          platform: "android",
+        },
+        { storage: offlineStorage }
+      );
+      assert.equal(offOk.success, true);
+      if (offOk.success) {
+        assert.equal(offOk.auto_login, true);
+        assert.equal(offOk.user?.email, adminEmail);
+        assert.equal(offlineStorage.getItem("uas_user"), offOk.user?.id);
+      }
+
+      // Simulate user changing offline password -> auto_login falls back to false cleanly
+      offlineStorage.setItem(
+        "uas_offline_db_passwords",
+        JSON.stringify({ [adminEmail]: "OfflineNewPass!77" })
+      );
+      const offFallback = await activateOfflineClientLicense(
+        {
+          licenseFileContent: JSON.stringify(signedLic),
+          platform: "android",
+        },
+        { storage: offlineStorage }
+      );
+      assert.equal(offFallback.success, true);
+      if (offFallback.success) {
+        assert.equal(offFallback.auto_login, false);
+        assert.equal(offFallback.user, undefined);
+      }
     } finally {
       if (prevDataDir === undefined) delete process.env.UAS_DATA_DIR;
       else process.env.UAS_DATA_DIR = prevDataDir;

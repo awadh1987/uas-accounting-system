@@ -5,12 +5,44 @@ import { getActiveTenantId, normalizeTenantId } from "@/lib/tenant/tenantContext
 import { getTenantMetadata } from "@/lib/tenant/tenantRegistry";
 import {
   canonicalizeLicensePayload,
+  extractUasKeyToken,
   getLicenseSeatPolicy,
   validateLicenseStructure,
   type LicenseSeatPolicy,
   type RuntimeMode,
   type UasSignedLicense,
 } from "./licenseSchema";
+
+export { extractUasKeyToken };
+
+/**
+ * Decodes either a raw `.uas` JSON string or a single/multi-line `UASKEY-...` token
+ * (including `.uaskey.txt` files containing trailing summary metadata).
+ */
+export function decodeLicenseInput(rawInput: string): UasSignedLicense | null {
+  const trimmed = String(rawInput || "").trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("{")) {
+    try {
+      return validateLicenseStructure(JSON.parse(trimmed));
+    } catch {
+      return null;
+    }
+  }
+  const token = extractUasKeyToken(trimmed);
+  if (!token) return null;
+  const b64 = token.slice(7).trim();
+  for (const encoding of ["base64", "base64url"] as const) {
+    try {
+      const decoded = Buffer.from(b64, encoding).toString("utf8");
+      const parsed = validateLicenseStructure(JSON.parse(decoded));
+      if (parsed) return parsed;
+    } catch {
+      // Try next encoding
+    }
+  }
+  return null;
+}
 import { UAS_LICENSE_PUBLIC_KEY } from "./publicKey";
 import { getMachineHwid, matchHwidOrRequestCode } from "./hwid";
 

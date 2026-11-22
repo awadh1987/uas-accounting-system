@@ -1,5 +1,6 @@
 import {
   companyNamesMatch,
+  extractUasKeyToken,
   isCompanyLockedPayload,
   isWildcardHwid,
   validateLicenseStructure,
@@ -42,19 +43,24 @@ function parseSignedKey(
   rawKey: unknown,
   publicKeyPem?: string
 ): { license: UasSignedLicense } | VerifyKeyResponse {
-  const key = typeof rawKey === "string" ? rawKey.trim() : "";
-  if (!key) {
+  const raw = typeof rawKey === "string" ? rawKey.trim() : "";
+  if (!raw) {
     return fail(400, "INVALID_KEY", "مفتاح التفعيل مطلوب. / Activation key is required.");
   }
-  if (!key.startsWith("UASKEY-")) {
+  const key = extractUasKeyToken(raw);
+  if (!key) {
     return fail(404, "KEY_NOT_FOUND", "مفتاح التفعيل غير معروف. / Unknown activation key.");
   }
 
   let license: UasSignedLicense | null = null;
-  try {
-    license = validateLicenseStructure(JSON.parse(Buffer.from(key.slice(7), "base64").toString("utf8")));
-  } catch {
-    license = null;
+  const b64 = key.slice(7);
+  for (const encoding of ["base64", "base64url"] as const) {
+    try {
+      license = validateLicenseStructure(JSON.parse(Buffer.from(b64, encoding).toString("utf8")));
+      if (license) break;
+    } catch {
+      // Try next encoding
+    }
   }
   if (!license) {
     return fail(400, "INVALID_KEY", "مفتاح التفعيل تالف أو غير صالح. / Malformed activation key.");

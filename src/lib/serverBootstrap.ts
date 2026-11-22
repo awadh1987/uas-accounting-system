@@ -15,6 +15,23 @@ import type {
   WorkerWageEntry,
 } from "@prisma/client";
 import { formatAuditTimestamp, type CurrencyCode } from "@/lib/formulas";
+import { issueSessionToken } from "@/lib/authSession";
+import {
+  canApprove,
+  canCreate,
+  canDeleteVoid,
+  canEdit,
+  canEditDate,
+  canLockPeriod,
+  canManageLandingCms,
+  canManageTreasury,
+  canManageUsers,
+  canPostLedger,
+  getAccessibleGroups,
+  getAccessibleTabs,
+  isReadOnly,
+  normalizeRole,
+} from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import type {
@@ -28,6 +45,7 @@ import type {
   UasSaleTransaction,
   UasSystemSettings,
   UasTreasuryAccount,
+  UasUser,
   UasWorkerWage,
 } from "@/types/uas";
 
@@ -702,5 +720,146 @@ export async function getBootstrapState(): Promise<UasBootstrapState> {
     expenses: mapExpenses(expenses),
     workers: mapWorkers(workers),
     sales: mapSales(sales),
+  };
+}
+
+export async function authenticateAndBuildSessionTx(
+  user: {
+    id: string;
+    username: string;
+    name: string;
+    fullName: string;
+    displayName: string | null;
+    phone: string | null;
+    email: string;
+    passwordHash: string;
+    role: string;
+    department: string;
+    active: boolean;
+    isActive: boolean;
+    avatarChar: string;
+    avatarUrl: string | null;
+    avatarColor: string | null;
+    preferredLang: string | null;
+    preferredCurrency: string | null;
+    preferredTheme: string | null;
+    defaultModule: string | null;
+    useCustomPermissions: boolean;
+    customAllowedGroups: string;
+    customPermissionsJson: string;
+    mustChangePassword: boolean;
+    passwordUpdatedAt: Date | null;
+    assignedProjects: string;
+  },
+  activeTenantId: string,
+  opts: { plainPassword?: string; auditAction?: string; auditDetailsPrefix?: string; now?: Date } = {}
+) {
+  const now = opts.now ?? new Date();
+  const shouldUpgradeHash = Boolean(opts.plainPassword && isLegacySha256Hash(user.passwordHash));
+  const userDisplay = `${user.displayName || user.name} (${normalizeRole(user.role)})`;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: { id: user.id },
+      data: {
+        lastLoginAt: now,
+        ...(shouldUpgradeHash && opts.plainPassword
+          ? { passwordHash: hashPassword(opts.plainPassword), passwordUpdatedAt: now }
+          : {}),
+      },
+    });
+
+    await appendAuditLogTx(tx, {
+      userId: user.id,
+      userDisplay,
+      userRole: user.role,
+      actionType: opts.auditAction || "تسجيل دخول",
+      entityReference: user.id,
+      details: `${opts.auditDetailsPrefix || "تم تسجيل الدخول بنجاح بحساب"} ${user.displayName || user.name}`,
+    });
+  });
+
+  let customAllowedGroups: string[] = [];
+  try {
+    if (user.customAllowedGroups) {
+      const parsed = JSON.parse(user.customAllowedGroups);
+      if (Array.isArray(parsed)) customAllowedGroups = parsed.map(String);
+    }
+  } catch {
+    customAllowedGroups = [];
+  }
+
+  let customPermissionsJson: Record<string, boolean> = {};
+  try {
+    if (user.customPermissionsJson) {
+      const parsed = JSON.parse(user.customPermissionsJson);
+      if (parsed && typeof parsed === "object") customPermissionsJson = parsed;
+    }
+  } catch {
+    customPermissionsJson = {};
+  }
+
+  const uasUser: UasUser = {
+    id: user.id,
+    username: user.username,
+    name: user.name,
+    fullName: user.fullName,
+    displayName: user.displayName ?? "",
+    phone: user.phone ?? "",
+    email: user.email,
+    role: user.role as UasUser["role"],
+    department: user.department,
+    active: user.active && (user.isActive ?? true),
+    isActive: user.isActive ?? user.active,
+    avatarChar: user.avatarChar,
+    avatarUrl: user.avatarUrl ?? "",
+    avatarColor: user.avatarColor ?? "#059669",
+    preferredLang: (user.preferredLang ?? "ar") as UasUser["preferredLang"],
+    preferredCurrency: (user.preferredCurrency ?? "YER") as UasUser["preferredCurrency"],
+    preferredTheme: (user.preferredTheme ?? "emerald") as UasUser["preferredTheme"],
+    defaultModule: user.defaultModule ?? "",
+    lastLoginAt: now.toISOString(),
+    useCustomPermissions: Boolean(user.useCustomPermissions),
+    customAllowedGroups,
+    customPermissionsJson,
+    mustChangePassword: Boolean(user.mustChangePassword),
+    passwordUpdatedAt: user.passwordUpdatedAt ? user.passwordUpdatedAt.toISOString() : null,
+    assignedProjects: parseAssignedProjects(user.assignedProjects),
+  };
+
+  const normalizedUserRole = normalizeRole(user.role);
+  const sessionToken = issueSessionToken({
+    userId: user.id,
+    userRole: normalizedUserRole,
+    tenantId: activeTenantId,
+    userDisplay: `${user.displayName || user.name} (${normalizedUserRole})`,
+  });
+
+  return {
+    user: uasUser,
+    sessionToken,
+    preferences: {
+      preferredLang: uasUser.preferredLang,
+      preferredCurrency: uasUser.preferredCurrency,
+      preferredTheme: uasUser.preferredTheme,
+      defaultModule: uasUser.defaultModule,
+    },
+    mustChangePassword: uasUser.mustChangePassword,
+    tenantId: activeTenantId,
+    permissions: {
+      allowedGroups: getAccessibleGroups(uasUser),
+      accessibleTabs: getAccessibleTabs(uasUser),
+      canCreate: canCreate(uasUser),
+      canEdit: canEdit(uasUser),
+      canEditDate: canEditDate(uasUser),
+      canDeleteVoid: canDeleteVoid(uasUser),
+      canApprove: canApprove(uasUser),
+      canPostLedger: canPostLedger(uasUser),
+      canManageTreasury: canManageTreasury(uasUser),
+      canManageLandingCms: canManageLandingCms(uasUser),
+      canLockPeriod: canLockPeriod(uasUser),
+      canManageUsers: canManageUsers(uasUser),
+      isReadOnly: isReadOnly(uasUser),
+    },
   };
 }

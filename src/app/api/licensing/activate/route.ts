@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import {
+  extractUasKeyToken,
   validateLicenseStructure,
   type SeatPlatform,
   type UasSignedLicense,
@@ -14,6 +15,8 @@ import {
   saveInstalledLicense,
   verifyLicense,
 } from "@/lib/licensing/verifier";
+import { attachSessionCookie } from "@/lib/authSession";
+import { authenticateAndBuildSessionTx, hashPassword, verifyPassword } from "@/lib/serverBootstrap";
 import { getMachineHwid } from "@/lib/licensing/hwid";
 import { getRuntimeConfig } from "@/lib/runtimeMode";
 import { createPrismaSeatStore } from "@/lib/licensing/prismaSeatStore";
@@ -54,18 +57,19 @@ function isSystemPlaceholderName(name: string | null | undefined): boolean {
 }
 
 function decodeUasKeyToken(rawKey: string): UasSignedLicense | null {
-  const key = rawKey.trim();
-  if (!key) return null;
-  if (key.startsWith("{")) {
+  const raw = rawKey.trim();
+  if (!raw) return null;
+  if (raw.startsWith("{")) {
     try {
-      const parsed = validateLicenseStructure(JSON.parse(key));
+      const parsed = validateLicenseStructure(JSON.parse(raw));
       if (parsed) return parsed;
     } catch {
       return null;
     }
   }
-  if (!/^UASKEY-/i.test(key)) return null;
-  const b64 = key.replace(/^UASKEY-/i, "").trim();
+  const key = extractUasKeyToken(raw);
+  if (!key) return null;
+  const b64 = key.slice(7).trim();
   for (const encoding of ["base64", "base64url"] as const) {
     try {
       const decoded = Buffer.from(b64, encoding).toString("utf8");
@@ -123,7 +127,9 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
             : JSON.stringify(body.licenseFileContent);
         licenseObj = decodeUasKeyToken(text) || validateLicenseStructure(JSON.parse(text));
       } else if (body.activationKey) {
-        const key = String(body.activationKey).trim();
+        const rawKeyInput = String(body.activationKey).trim();
+        const extractedKey = extractUasKeyToken(rawKeyInput);
+        const key = extractedKey || rawKeyInput;
         licenseObj = decodeUasKeyToken(key);
 
         // Query online activation server only for non-UASKEY keys or when explicitly configured/requested.
@@ -256,7 +262,16 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         allowedModes: licenseObj.allowed_modes,
         maxSeats: licenseObj.max_users,
       });
-      await getTenantPrisma(meta.tenantId);
+      await getTenantPrisma(
+        meta.tenantId,
+        licenseObj.admin_credentials
+          ? {
+              adminEmail: licenseObj.admin_credentials.email,
+              adminUsername: licenseObj.admin_credentials.username,
+              adminPassword: licenseObj.admin_credentials.password,
+            }
+          : undefined
+      );
       targetTenantId = meta.tenantId;
       tenantSlug = meta.slug;
       tenantUrl = meta.tenantUrl || buildTenantWorkspaceUrl(meta.slug);
@@ -288,7 +303,16 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
           allowedModes: licenseObj.allowed_modes,
           maxSeats: licenseObj.max_users,
         });
-        await getTenantPrisma(meta.tenantId);
+        await getTenantPrisma(
+        meta.tenantId,
+        licenseObj.admin_credentials
+          ? {
+              adminEmail: licenseObj.admin_credentials.email,
+              adminUsername: licenseObj.admin_credentials.username,
+              adminPassword: licenseObj.admin_credentials.password,
+            }
+          : undefined
+      );
         tenantSlug = meta.slug;
         tenantUrl = meta.tenantUrl || buildTenantWorkspaceUrl(meta.slug);
       } catch (tenantErr) {
@@ -461,7 +485,92 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       }
 
       const activeMeta = getTenantMetadata(targetTenantId);
-      return NextResponse.json({
+
+      // 4. Optional Auto-Login when verified license embeds admin_credentials
+      let autoLoginPayload: Awaited<ReturnType<typeof authenticateAndBuildSessionTx>> | null = null;
+      if (licenseObj.admin_credentials) {
+        try {
+          const cred = licenseObj.admin_credentials;
+          const credEmail = cred.email.trim().toLowerCase();
+          const credUsername = cred.username.trim();
+          let matchedUser = await prisma.user.findFirst({
+            where: {
+              OR: [
+                { email: credEmail },
+                { username: credUsername },
+                { username: credUsername.toLowerCase() },
+              ],
+            },
+          });
+
+          // If activating on a fresh unconfigured DB that only holds the unconfigured default u1 (admin@uas-ye.com),
+          // align u1 to the licensed tenant admin credentials on first activation only.
+          if (!matchedUser && isFirstActivation) {
+            const totalUsers = await prisma.user.count();
+            if (totalUsers === 0) {
+              matchedUser = await prisma.user.create({
+                data: {
+                  id: "u1",
+                  username: credUsername,
+                  name: "مدير النظام العام",
+                  fullName: `مدير النظام العام / ${licenseObj.company_name || licenseObj.customer_name}`,
+                  displayName: "مدير النظام",
+                  phone: "",
+                  email: credEmail,
+                  passwordHash: hashPassword(cred.password),
+                  role: "SUPER_ADMIN",
+                  department: "الإدارة العليا",
+                  active: true,
+                  isActive: true,
+                  avatarChar: "م",
+                  avatarColor: "#059669",
+                  preferredLang: "ar",
+                  preferredCurrency: "YER",
+                  preferredTheme: "emerald",
+                  assignedProjects: "[]",
+                },
+              });
+            } else if (totalUsers === 1) {
+              const defaultU1 = await prisma.user.findFirst({
+                where: { email: "admin@uas-ye.com", passwordUpdatedAt: null },
+              });
+              if (defaultU1) {
+                matchedUser = await prisma.user.update({
+                  where: { id: defaultU1.id },
+                  data: {
+                    username: credUsername,
+                    email: credEmail,
+                    fullName: `مدير النظام العام / ${licenseObj.company_name || licenseObj.customer_name}`,
+                    passwordHash: hashPassword(cred.password),
+                    role: "SUPER_ADMIN",
+                    active: true,
+                    isActive: true,
+                    archivedAt: null,
+                  },
+                });
+              }
+            }
+          }
+
+          if (
+            matchedUser &&
+            matchedUser.active !== false &&
+            matchedUser.isActive !== false &&
+            verifyPassword(cred.password, matchedUser.passwordHash)
+          ) {
+            autoLoginPayload = await authenticateAndBuildSessionTx(matchedUser, targetTenantId, {
+              plainPassword: cred.password,
+              auditAction: "تفعيل وترخيص مع دخول تلقائي",
+              auditDetailsPrefix: "تم تفعيل الترخيص وتسجيل الدخول التلقائي بحساب",
+            });
+          }
+        } catch (autoLoginErr) {
+          console.warn("[Licensing Activation] Non-fatal auto-login notice:", autoLoginErr);
+          autoLoginPayload = null;
+        }
+      }
+
+      const response = NextResponse.json({
         success: true,
         license_status: "ACTIVE",
         is_valid: true,
@@ -496,7 +605,23 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
               status: policy.seat.status,
             }
           : null,
+        auto_login: Boolean(autoLoginPayload),
+        ...(autoLoginPayload
+          ? {
+              user: autoLoginPayload.user,
+              session_token: autoLoginPayload.sessionToken,
+              sessionToken: autoLoginPayload.sessionToken,
+              preferences: autoLoginPayload.preferences,
+              permissions: autoLoginPayload.permissions,
+              mustChangePassword: autoLoginPayload.mustChangePassword,
+              admin_credentials: licenseObj.admin_credentials,
+            }
+          : {}),
       });
+      if (autoLoginPayload?.sessionToken) {
+        attachSessionCookie(response, autoLoginPayload.sessionToken);
+      }
+      return response;
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Unknown error";

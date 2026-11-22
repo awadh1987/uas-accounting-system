@@ -137,22 +137,32 @@ export function createCleanOfflineCompanyState(): UasBootstrapState {
 export function loadOfflineAndroidState(storage?: OfflineStorageLike | null): UasBootstrapState {
   const s = storage ?? getDefaultStorage();
   if (!s) return createCleanOfflineCompanyState();
+  const applyInstalledCreds = (st: UasBootstrapState): UasBootstrapState => {
+    const lic = loadOfflineClientLicense(s);
+    const cred = lic?.admin_credentials;
+    if (cred && st.users.length === 1 && st.users[0]?.email === DEFAULT_LOCAL_ADMIN_EMAIL) {
+      st.users[0].email = cred.email.trim().toLowerCase();
+      st.users[0].username = cred.username.trim();
+      st.users[0].fullName = `مدير النظام العام / ${lic.company_name || lic.customer_name}`;
+    }
+    return st;
+  };
   try {
     const raw = s.getItem(OFFLINE_DB_STATE_KEY);
     if (!raw) {
-      const clean = createCleanOfflineCompanyState();
+      const clean = applyInstalledCreds(createCleanOfflineCompanyState());
       s.setItem(OFFLINE_DB_STATE_KEY, JSON.stringify(clean));
       return clean;
     }
     const parsed = JSON.parse(raw) as UasBootstrapState;
     if (!parsed || !Array.isArray(parsed.users) || parsed.users.length === 0) {
-      const clean = createCleanOfflineCompanyState();
+      const clean = applyInstalledCreds(createCleanOfflineCompanyState());
       s.setItem(OFFLINE_DB_STATE_KEY, JSON.stringify(clean));
       return clean;
     }
     return parsed;
   } catch {
-    const clean = createCleanOfflineCompanyState();
+    const clean = applyInstalledCreds(createCleanOfflineCompanyState());
     try {
       s.setItem(OFFLINE_DB_STATE_KEY, JSON.stringify(clean));
     } catch {
@@ -192,20 +202,28 @@ function writeCollection<T>(key: string, rows: T[], storage?: OfflineStorageLike
 
 function readPasswordMap(storage?: OfflineStorageLike | null): Record<string, string> {
   const s = storage ?? getDefaultStorage();
-  if (!s) return { [DEFAULT_LOCAL_ADMIN_EMAIL]: DEFAULT_LOCAL_ADMIN_PASSWORD };
+  const buildDefaultMap = (): Record<string, string> => {
+    const base: Record<string, string> = { [DEFAULT_LOCAL_ADMIN_EMAIL]: DEFAULT_LOCAL_ADMIN_PASSWORD };
+    const cred = s ? loadOfflineClientLicense(s)?.admin_credentials : undefined;
+    if (cred?.email && cred?.password) {
+      base[cred.email.trim().toLowerCase()] = cred.password;
+    }
+    return base;
+  };
+  if (!s) return buildDefaultMap();
   try {
     const raw = s.getItem(OFFLINE_DB_PASSWORDS_KEY);
     if (!raw) {
-      const initial = { [DEFAULT_LOCAL_ADMIN_EMAIL]: DEFAULT_LOCAL_ADMIN_PASSWORD };
+      const initial = buildDefaultMap();
       s.setItem(OFFLINE_DB_PASSWORDS_KEY, JSON.stringify(initial));
       return initial;
     }
     const parsed = JSON.parse(raw) as Record<string, string>;
     return parsed && typeof parsed === "object"
       ? parsed
-      : { [DEFAULT_LOCAL_ADMIN_EMAIL]: DEFAULT_LOCAL_ADMIN_PASSWORD };
+      : buildDefaultMap();
   } catch {
-    return { [DEFAULT_LOCAL_ADMIN_EMAIL]: DEFAULT_LOCAL_ADMIN_PASSWORD };
+    return buildDefaultMap();
   }
 }
 

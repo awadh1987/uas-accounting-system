@@ -35,12 +35,14 @@ import {
   resolveApiBaseUrl,
   safeFetchJson,
   setStoredRuntimeMode,
+  setStoredSessionToken,
   setStoredTenantId,
 } from "@/lib/apiClient";
 import {
   activateOfflineClientLicense,
   activateOnlineKeyOnClient,
   detectClientPlatform,
+  extractUasKeyToken,
   getClientDeviceHwid,
   getOfflineClientSeatUsage,
   releaseOfflineClientSeat,
@@ -102,6 +104,7 @@ interface LicenseActivationModalProps {
   enterpriseProfile?: UasEnterpriseProfile | null;
   onClose?: () => void;
   onRefreshStatus: () => void;
+  onAutoLogin?: (user: UasUser, sessionToken?: string | null) => void;
   onToast: (msg: string) => void;
 }
 
@@ -122,6 +125,7 @@ export function LicenseActivationModal({
   enterpriseProfile,
   onClose,
   onRefreshStatus,
+  onAutoLogin,
   onToast,
 }: LicenseActivationModalProps) {
   const isAr = lang === "ar";
@@ -302,13 +306,22 @@ export function LicenseActivationModal({
     try {
       let resolvedTenantUrl: string | null = null;
       let resolvedTenantSlug: string | null = null;
+      let autoLoginUser: UasUser | null = null;
+      let autoSessionToken: string | null = null;
+
+      const normalizedPayload = payload.activationKey
+        ? {
+            ...payload,
+            activationKey: extractUasKeyToken(payload.activationKey) ?? payload.activationKey.trim(),
+          }
+        : payload;
 
       // 1. Android APK online UASKEY-... flow: verify against Cloud/LAN server (defaults to https://qat.world)
       //    and persist verified license + seat binding into localStorage immediately.
-      if (onAndroid && payload.activationKey) {
+      if (onAndroid && normalizedPayload.activationKey) {
         const targetServer = resolveApiBaseUrl({ preferCloudFallback: true });
         const onlineRes = await activateOnlineKeyOnClient({
-          activationKey: payload.activationKey,
+          activationKey: normalizedPayload.activationKey,
           confirmCompanyName: effectiveCompany || undefined,
           userEmail: effectiveEmail || undefined,
           platform,
@@ -320,11 +333,36 @@ export function LicenseActivationModal({
         }
         resolvedTenantSlug = onlineRes.tenantSlug || onlineRes.license.tenant_slug || null;
         resolvedTenantUrl = onlineRes.tenantUrl || onlineRes.license.tenant_url || null;
-      } else if (onAndroid && payload.licenseFileContent) {
+        if (onlineRes.auto_login && onlineRes.user) {
+          autoLoginUser = onlineRes.user as UasUser;
+        }
+        // In Cloud/LAN mode on Android, exchange embedded admin_credentials for a real server session token (non-fatal if password changed)
+        const cred = onlineRes.license.admin_credentials;
+        if (cred && getStoredRuntimeMode() !== "local") {
+          const authBase = (resolvedTenantUrl || targetServer || "").replace(/\/+$/, "");
+          if (authBase) {
+            const loginRes = await safeFetchJson<{ user?: UasUser; sessionToken?: string }>(
+              `${authBase}/api/auth/login`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ identifier: cred.email, password: cred.password }),
+              }
+            );
+            if (loginRes.ok && loginRes.data?.user) {
+              autoLoginUser = loginRes.data.user;
+              autoSessionToken = loginRes.data.sessionToken || null;
+            } else if (loginRes.status === 401 || loginRes.status === 403) {
+              // Admin password was already changed on the server; fall back gracefully to manual login
+              autoLoginUser = null;
+            }
+          }
+        }
+      } else if (onAndroid && normalizedPayload.licenseFileContent) {
         // 2. Android APK `.uas` file flow: verify Ed25519 signature, expiry & company_name client-side
         //    and persist directly to localStorage; optionally sync seat registration in the background.
         const offlineRes = await activateOfflineClientLicense({
-          licenseFileContent: payload.licenseFileContent,
+          licenseFileContent: normalizedPayload.licenseFileContent,
           confirmCompanyName: effectiveCompany || undefined,
           userEmail: effectiveEmail || undefined,
           platform,
@@ -335,6 +373,9 @@ export function LicenseActivationModal({
         }
         resolvedTenantSlug = offlineRes.tenantSlug || offlineRes.license.tenant_slug || null;
         resolvedTenantUrl = offlineRes.tenantUrl || offlineRes.license.tenant_url || null;
+        if (offlineRes.auto_login && offlineRes.user) {
+          autoLoginUser = offlineRes.user as UasUser;
+        }
         const syncBase = resolvedTenantUrl || resolveApiBaseUrl({ preferCloudFallback: true });
         void syncOfflineSeatInBackground(offlineRes.license, {
           companyName: effectiveCompany || offlineRes.license.company_name,
@@ -357,6 +398,10 @@ export function LicenseActivationModal({
           tenantSlug?: string | null;
           tenant_url?: string | null;
           tenantUrl?: string | null;
+          auto_login?: boolean;
+          user?: UasUser;
+          session_token?: string;
+          sessionToken?: string;
           license?: { tenant_slug?: string; tenant_url?: string };
         }>(
           `${base}/api/licensing/activate`,
@@ -364,7 +409,7 @@ export function LicenseActivationModal({
             method: "POST",
             headers,
             body: JSON.stringify({
-              ...payload,
+              ...normalizedPayload,
               companyName: effectiveCompany || undefined,
               userEmail: effectiveEmail || undefined,
               platform,
@@ -375,9 +420,9 @@ export function LicenseActivationModal({
 
         if (res.isHtmlFallback || res.status === 0) {
           // Static export or unreachable local API -> run client-side WebCrypto verification
-          const fallbackRes = payload.activationKey
+          const fallbackRes = normalizedPayload.activationKey
             ? await activateOnlineKeyOnClient({
-                activationKey: payload.activationKey,
+                activationKey: normalizedPayload.activationKey,
                 confirmCompanyName: effectiveCompany || undefined,
                 userEmail: effectiveEmail || undefined,
                 platform,
@@ -385,7 +430,7 @@ export function LicenseActivationModal({
                 serverBaseUrl: resolveApiBaseUrl({ preferCloudFallback: true }),
               })
             : await activateOfflineClientLicense({
-                ...payload,
+                ...normalizedPayload,
                 confirmCompanyName: effectiveCompany || undefined,
                 userEmail: effectiveEmail || undefined,
                 platform,
@@ -396,6 +441,9 @@ export function LicenseActivationModal({
           }
           resolvedTenantSlug = fallbackRes.tenantSlug || fallbackRes.license.tenant_slug || null;
           resolvedTenantUrl = fallbackRes.tenantUrl || fallbackRes.license.tenant_url || null;
+          if (fallbackRes.auto_login && fallbackRes.user) {
+            autoLoginUser = fallbackRes.user as UasUser;
+          }
         } else if (!res.ok || !res.data?.success) {
           throw new Error(
             res.data?.error || (isAr ? "فشل تفعيل الترخيص" : "Failed to activate license")
@@ -405,6 +453,10 @@ export function LicenseActivationModal({
             res.data.tenantSlug || res.data.tenant_slug || res.data.license?.tenant_slug || null;
           resolvedTenantUrl =
             res.data.tenantUrl || res.data.tenant_url || res.data.license?.tenant_url || null;
+          if (res.data.auto_login && res.data.user) {
+            autoLoginUser = res.data.user;
+            autoSessionToken = res.data.session_token || res.data.sessionToken || null;
+          }
         }
       }
 
@@ -417,16 +469,35 @@ export function LicenseActivationModal({
           window.localStorage.setItem("uas_cloud_server_url", resolvedTenantUrl);
         }
       }
+      if (autoSessionToken) {
+        setStoredSessionToken(autoSessionToken);
+      }
 
       setSuccessMsg(
         isAr
-          ? "تم تفعيل الترخيص بنجاح وتوثيقه مشفراً مع قفل اسم المنشأة ومقعد المستخدم!"
+          ? autoLoginUser
+            ? "تم تفعيل الترخيص وتسجيل الدخول تلقائياً إلى مساحة المنشأة!"
+            : "تم تفعيل الترخيص بنجاح وتوثيقه مشفراً مع قفل اسم المنشأة ومقعد المستخدم!"
+          : autoLoginUser
+          ? "License activated and signed in automatically!"
           : "License activated, company lock verified, and device seat bound!"
       );
-      onToast(isAr ? "تم تفعيل المنظومة بنجاح" : "System activated successfully");
+      onToast(
+        isAr
+          ? autoLoginUser
+            ? "تم تفعيل المنظومة وتسجيل الدخول تلقائياً"
+            : "تم تفعيل المنظومة بنجاح"
+          : autoLoginUser
+          ? "System activated and signed in automatically"
+          : "System activated successfully"
+      );
       if (payload.activationKey) setSerialKey("");
       onRefreshStatus();
       await fetchSeatDetails();
+
+      if (autoLoginUser && onAutoLogin) {
+        onAutoLogin(autoLoginUser, autoSessionToken);
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "";
       setErrorMsg(message || (isAr ? "فشل التفعيل" : "Activation failed"));

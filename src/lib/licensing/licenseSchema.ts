@@ -13,6 +13,13 @@ export interface PerUserDevices {
 export const DEFAULT_MAX_USERS = 7;
 export const DEFAULT_PER_USER_DEVICES: PerUserDevices = { windows: 1, android: 1 };
 
+export interface LicenseAdminCredentials {
+  email: string;
+  username: string;
+  password: string;
+  tenant_url: string;
+}
+
 export interface UasLicensePayload {
   license_id: string;
   customer_name: string;
@@ -44,6 +51,24 @@ export interface UasLicensePayload {
   tenant_url?: string;
   name_ar?: string;
   name_en?: string;
+  /**
+   * Optional initial tenant administrator credentials embedded on tenant issuance
+   * for seamless auto-login upon first activation.
+   */
+  admin_credentials?: LicenseAdminCredentials;
+}
+
+/**
+ * Extracts a `UASKEY-...` activation token from raw text (including multi-line
+ * `.uaskey.txt` files containing summary metadata after Line 1).
+ */
+export function extractUasKeyToken(rawInput: string): string | null {
+  if (typeof rawInput !== "string") return null;
+  const trimmed = rawInput.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/UASKEY-[A-Za-z0-9+/=_-]+/i);
+  if (!match) return null;
+  return `UASKEY-${match[0].slice(7)}`;
 }
 
 export interface UasSignedLicense extends UasLicensePayload {
@@ -154,6 +179,16 @@ export function canonicalizeLicensePayload(payload: UasLicensePayload): string {
   // v2 / v3: company-locked multi-seat payload. Keys are emitted in exact alphabetical order.
   const { wildcard, targets } = parseHwidTargets(payload.hwid);
   const sorted: Record<string, unknown> = {
+    ...(payload.admin_credentials
+      ? {
+          admin_credentials: {
+            email: payload.admin_credentials.email.trim().toLowerCase(),
+            password: payload.admin_credentials.password,
+            tenant_url: payload.admin_credentials.tenant_url.trim().toLowerCase(),
+            username: payload.admin_credentials.username.trim(),
+          },
+        }
+      : {}),
     allowed_modes: base.allowed_modes,
     company_name: (payload.company_name || "").trim(),
     customer_name: base.customer_name,
@@ -251,6 +286,33 @@ export function validateLicenseStructure(obj: unknown): UasSignedLicense | null 
     if (typeof item.name_en === "string" && item.name_en.trim()) {
       result.name_en = item.name_en.trim();
     }
+  }
+
+  // Optional initial tenant admin credentials (signed when present)
+  if (item.admin_credentials !== undefined) {
+    if (!item.admin_credentials || typeof item.admin_credentials !== "object") return null;
+    const ac = item.admin_credentials as Record<string, unknown>;
+    if (
+      typeof ac.email !== "string" ||
+      !ac.email.trim() ||
+      typeof ac.username !== "string" ||
+      !ac.username.trim() ||
+      typeof ac.password !== "string" ||
+      !ac.password
+    ) {
+      return null;
+    }
+    const resolvedTenantUrl =
+      typeof ac.tenant_url === "string" && ac.tenant_url.trim()
+        ? ac.tenant_url.trim().toLowerCase()
+        : result.tenant_url || "";
+    if (!resolvedTenantUrl) return null;
+    result.admin_credentials = {
+      email: ac.email.trim().toLowerCase(),
+      username: ac.username.trim(),
+      password: ac.password,
+      tenant_url: resolvedTenantUrl,
+    };
   }
 
   return result;

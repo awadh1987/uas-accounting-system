@@ -42,6 +42,7 @@ import {
   isNativeAndroid,
   resolveApiBaseUrl,
   safeFetchJson,
+  setStoredSessionToken,
   setStoredTenantId,
 } from "@/lib/apiClient";
 import { resolveEffectiveTab, resolveGroupForTab } from "@/lib/erpNavigation";
@@ -1963,6 +1964,15 @@ export function UasAppShell() {
         onRefreshStatus={() => {
           checkLicensingStatus();
           refreshFromServer();
+        }}
+        onAutoLogin={(autoUser, token) => {
+          if (token) {
+            setStoredSessionToken(token);
+          }
+          handleLoginUser(autoUser);
+          setLicenseModalOpen(false);
+          void checkLicensingStatus();
+          void refreshFromServer();
         }}
         onToast={showToast}
       />
