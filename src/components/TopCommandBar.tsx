@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  SlidersHorizontal,
   Smartphone,
   User,
   UserCheck,
@@ -131,7 +132,9 @@ export function TopCommandBar({
   const roleMeta = getRoleMeta(currentUser);
   const readOnly = isReadOnly(currentUser);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [utilitiesOpen, setUtilitiesOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
+  const utilitiesRef = useRef<HTMLDivElement | null>(null);
 
   const localizedModuleBadge = useMemo(() => {
     const map: Record<string, { ar: string; en: string }> = {
@@ -151,23 +154,49 @@ export function TopCommandBar({
     };
     const item = map[activeTab];
     if (item) return isAr ? item.ar : item.en;
-    return activeSub ? (isAr ? activeSub.labelAr : activeSub.labelEn) : (isAr ? activeGroup.labelAr : activeGroup.labelEn);
+    return activeSub
+      ? isAr
+        ? activeSub.labelAr
+        : activeSub.labelEn
+      : isAr
+      ? activeGroup.labelAr
+      : activeGroup.labelEn;
   }, [activeTab, activeSub, activeGroup, isAr]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (dropdownRef.current && !dropdownRef.current.contains(target)) {
         setProfileOpen(false);
+      }
+      if (utilitiesRef.current && !utilitiesRef.current.contains(target)) {
+        setUtilitiesOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setProfileOpen(false);
+        setUtilitiesOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, []);
 
+  const utilityBadgeCount =
+    pendingApprovalsCount + draftsCount + offlineQueueCount + pendingConflictsCount;
+
   return (
-    <header className="card-surface sticky top-0 z-20 h-[60px] px-3 sm:px-5 border-b border-slate-200 dark:border-slate-700/80 flex items-center justify-between gap-2 no-print">
+    <header
+      data-testid="top-command-bar"
+      className="card-surface sticky top-0 z-20 h-[60px] px-3 sm:px-4 lg:px-5 border-b border-slate-200 dark:border-slate-700/80 flex items-center justify-between gap-2 sm:gap-3 no-print"
+    >
       {/* Leading: Sidebar Collapse + Mobile Drawer + Dynamic Breadcrumb */}
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-center gap-2 min-w-0 flex-1">
         {/* Mobile / Simulator Hamburger */}
         <button
           type="button"
@@ -196,12 +225,18 @@ export function TopCommandBar({
           </button>
         )}
 
-        {/* Main Navigation Brand Logo & Title */}
+        {/* Main Navigation Brand Logo & Title (visible when sidebar is collapsed or on mobile) */}
         <div className="flex items-center gap-2 shrink-0">
-          <div className={mobileSimulatorActive || sidebarCollapsed ? "flex items-center gap-2" : "md:hidden flex items-center"}>
+          <div
+            className={
+              mobileSimulatorActive || sidebarCollapsed
+                ? "flex items-center gap-2"
+                : "md:hidden flex items-center"
+            }
+          >
             <DualLogoBadge profile={enterpriseProfile} logoText={logoText} size="sm" iconOnly />
             {sidebarCollapsed && !mobileSimulatorActive && (
-              <span className="hidden md:inline-flex items-center font-black text-xs tracking-tight text-slate-900 dark:text-white truncate max-w-[160px]">
+              <span className="hidden md:inline-flex items-center font-black text-xs tracking-tight text-slate-900 dark:text-white truncate max-w-[150px]">
                 {isAr
                   ? enterpriseProfile?.legalNameAr?.trim() || "النظام المحاسبي الموحد"
                   : enterpriseProfile?.legalNameEn?.trim() || "UAS Accounting System"}
@@ -210,35 +245,35 @@ export function TopCommandBar({
           </div>
         </div>
 
-        {/* Dynamic Breadcrumb Trail + Localized Module Badge */}
-        <nav aria-label="Breadcrumb" className="hidden sm:flex items-center gap-1.5 text-xs min-w-0">
-          <span className="font-extrabold truncate max-w-[150px] lg:max-w-[200px]">
+        {/* Dynamic Breadcrumb Trail (truncates cleanly without crowding right-side controls) */}
+        <nav aria-label="Breadcrumb" className="hidden sm:flex items-center gap-1.5 text-xs min-w-0 flex-1">
+          <span className="font-extrabold truncate max-w-[130px] lg:max-w-[170px] 2xl:max-w-[210px]">
             <bdi dir="auto">{breadcrumb.groupLabel}</bdi>
           </span>
           {breadcrumb.subLabel && (
             <>
-              <span className="text-slate-400">/</span>
-              <span className="font-bold text-emerald-600 dark:text-emerald-400 truncate max-w-[160px]">
+              <span className="text-slate-400 shrink-0">/</span>
+              <span className="font-bold text-emerald-600 dark:text-emerald-400 truncate max-w-[130px] lg:max-w-[170px]">
                 <bdi dir="auto">{breadcrumb.subLabel}</bdi>
               </span>
             </>
           )}
-          <span className="hidden lg:inline-block px-2.5 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200/50 dark:border-emerald-800/40 text-[10px] font-bold text-emerald-800 dark:text-emerald-300">
+          <span className="hidden 2xl:inline-block shrink-0 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200/50 dark:border-emerald-800/40 text-[10px] font-bold text-emerald-800 dark:text-emerald-300">
             <bdi dir="auto">{localizedModuleBadge}</bdi>
           </span>
         </nav>
       </div>
 
-      {/* Center / Trailing Controls */}
-      <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar">
-        {/* Global Project Filter Pill (Clean, uncluttered) */}
+      {/* Trailing: Primary Controls + Workspace Utilities Popover + User Session Menu */}
+      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        {/* Global Project Filter Pill (Desktop >= xl) */}
         {!mobileSimulatorActive && (
-          <div className="hidden xl:flex items-center gap-1.5 shrink-0">
+          <div className="hidden xl:flex items-center shrink-0">
             <select
               aria-label={dict.activeProjectLbl}
               value={selectedProjectId}
               onChange={(e) => onProjectChange(e.target.value)}
-              className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 px-2.5 py-1.5 text-[11px] font-bold focus:outline-none max-w-[175px]"
+              className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 px-2.5 py-1.5 text-[11px] font-bold focus:outline-none max-w-[140px] 2xl:max-w-[175px] truncate"
             >
               <option value="ALL">{dict.allProjects}</option>
               {projects.map((p) => (
@@ -249,6 +284,23 @@ export function TopCommandBar({
             </select>
           </div>
         )}
+
+        {/* Ctrl+K Quick Search Trigger */}
+        <button
+          type="button"
+          data-testid="topbar-search-btn"
+          onClick={onOpenSearch}
+          title="Ctrl+K / ⌘K"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-800/70 hover:border-emerald-500 text-xs text-slate-700 dark:text-slate-200 transition shrink-0"
+        >
+          <Search className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+          <span className="hidden sm:inline text-[11px] font-bold">
+            {isAr ? "بحث" : "Search"}
+          </span>
+          <kbd className="hidden 2xl:inline-block px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[10px] font-mono">
+            Ctrl+K
+          </kbd>
+        </button>
 
         {/* AI Copilot Quick Launch Button */}
         <button
@@ -266,89 +318,11 @@ export function TopCommandBar({
           }
           className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-emerald-500/50 bg-emerald-50/70 dark:bg-emerald-950/30 hover:bg-emerald-100/80 text-emerald-800 dark:text-emerald-300 text-xs font-extrabold transition shrink-0"
         >
-          <Bot className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-          <span className="hidden xl:inline text-[11px]">
+          <Bot className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <span className="hidden lg:inline text-[11px]">
             {isAr ? "المساعد الذكي" : "AI Copilot"}
           </span>
         </button>
-
-        {/* Pending Approvals Counter Badge */}
-        {onOpenApprovalsCenter && (
-          <button
-            type="button"
-            onClick={onOpenApprovalsCenter}
-            title={isAr ? "مركز الاعتمادات والمراجعة" : "Approvals & Amendments Center"}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-indigo-400/70 bg-indigo-50/70 dark:bg-indigo-950/30 hover:bg-indigo-100/80 text-indigo-800 dark:text-indigo-200 text-xs font-extrabold transition shrink-0"
-          >
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span className="hidden lg:inline text-[11px]">
-              {isAr ? "بانتظار الاعتماد" : "Approvals"}
-            </span>
-            <span className="px-1.5 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] font-black tabular-nums leading-none">
-              {pendingApprovalsCount}
-            </span>
-          </button>
-        )}
-
-        {/* Shared Drafts Center Counter Badge */}
-        {onOpenDraftsCenter && (
-          <button
-            type="button"
-            onClick={onOpenDraftsCenter}
-            title={isAr ? "مركز المسودات المشتركة" : "Shared Drafts Center"}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-amber-400/70 bg-amber-50/70 dark:bg-amber-950/30 hover:bg-amber-100/80 text-amber-800 dark:text-amber-200 text-xs font-extrabold transition shrink-0"
-          >
-            <FileClock className="w-3.5 h-3.5" />
-            <span className="hidden lg:inline text-[11px]">
-              {isAr ? "المسودات" : "Drafts"}
-            </span>
-            <span className="px-1.5 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-black tabular-nums leading-none">
-              {draftsCount}
-            </span>
-          </button>
-        )}
-
-        {/* Ctrl+K Quick Search Trigger */}
-        <button
-          type="button"
-          onClick={onOpenSearch}
-          title="Ctrl+K / ⌘K"
-          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-800/70 hover:border-emerald-500 text-xs text-slate-700 dark:text-slate-200 transition shrink-0"
-        >
-          <Search className="w-3.5 h-3.5 text-emerald-600" />
-          <span className="inline text-[11px] font-bold">
-            {isAr ? "بحث..." : "Search..."}
-          </span>
-          <kbd className="hidden md:inline-block px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[10px] font-mono">
-            Ctrl+K
-          </kbd>
-        </button>
-
-        {/* Currency Switcher */}
-        <select
-          aria-label="Currency"
-          value={currency}
-          onChange={(e) => onCurrencyChange(e.target.value as CurrencyCode)}
-          className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-2 py-1.5 text-[11px] font-extrabold shrink-0"
-        >
-          <option value="YER">YER</option>
-          <option value="SAR">SAR</option>
-          <option value="USD">USD</option>
-        </select>
-
-        {/* Theme Switcher */}
-        {!mobileSimulatorActive && (
-          <select
-            aria-label="Theme"
-            value={theme}
-            onChange={(e) => onThemeChange(e.target.value as ThemeName)}
-            className="hidden sm:block rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-2 py-1.5 text-[11px] font-bold shrink-0"
-          >
-            <option value="emerald">🌿 Emerald</option>
-            <option value="royal">🏛️ Royal</option>
-            <option value="dark">🌙 Dark</option>
-          </select>
-        )}
 
         {/* Notification Center Bell */}
         {onOpenNotifications && (
@@ -359,7 +333,7 @@ export function TopCommandBar({
             title={isAr ? "مركز الإشعارات والتنبيهات" : "Notification Center"}
             className="relative inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-800/70 hover:border-emerald-500 text-xs font-bold transition shrink-0"
           >
-            <Bell className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <Bell className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
             {unreadNotificationsCount > 0 && (
               <span className="px-1.5 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-black tabular-nums leading-none">
                 {unreadNotificationsCount}
@@ -368,60 +342,210 @@ export function TopCommandBar({
           </button>
         )}
 
-        {/* Offline / Transport Mode & Sync Now Pill */}
-        <div className="flex items-center rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shrink-0">
+        {/* Workspace Utilities & Status Menu (Approvals, Drafts, Sync/Offline, Currency, Theme, Lang) */}
+        <div className="relative shrink-0" ref={utilitiesRef}>
           <button
             type="button"
-            onClick={onToggleOffline}
-            title={transportBadge || (offlineMode ? dict.offlineBadge : dict.onlineBadge)}
-            className={`px-2 py-1.5 text-[11px] font-bold inline-flex items-center gap-1 ${
-              offlineMode
-                ? "bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
-                : "text-emerald-700 dark:text-emerald-300"
+            data-testid="topbar-utilities-btn"
+            aria-expanded={utilitiesOpen}
+            aria-haspopup="menu"
+            onClick={() => {
+              setProfileOpen(false);
+              setUtilitiesOpen((prev) => !prev);
+            }}
+            title={isAr ? "الأدوات، الحالة، الاعتمادات والمزامنة" : "Workspace Utilities, Status & Sync"}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-[11px] font-extrabold transition ${
+              offlineMode || pendingConflictsCount > 0
+                ? "border-amber-400/70 bg-amber-50/80 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300"
+                : "border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-800/70 hover:border-emerald-500 text-slate-700 dark:text-slate-200"
             }`}
           >
-            {offlineMode ? <WifiOff className="w-3.5 h-3.5" /> : <Wifi className="w-3.5 h-3.5" />}
+            {offlineMode ? (
+              <WifiOff className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+            ) : (
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+            )}
             <span className="hidden lg:inline">
-              {transportBadge || (offlineMode ? (isAr ? "أوفلاين" : "Offline") : isAr ? "متصل" : "Online")}
+              {offlineMode ? (isAr ? "أوفلاين" : "Offline") : isAr ? "الأدوات" : "Workspace"}
             </span>
-          </button>
-          <button
-            type="button"
-            data-testid="topbar-sync-now-btn"
-            onClick={onSyncQueue}
-            title={isAr ? "مزامنة الآن (Sync Now)" : "Sync Now"}
-            className="px-2 py-1.5 text-[11px] font-extrabold bg-indigo-50/80 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 inline-flex items-center gap-1 border-s border-slate-200 dark:border-slate-700"
-          >
-            <RefreshCw className="w-3 h-3" />
-            <span className="hidden xl:inline">{isAr ? "مزامنة الآن" : "Sync Now"}</span>
-            <span className="tabular-nums">{offlineQueueCount}</span>
-            {pendingConflictsCount > 0 && (
-              <span className="px-1 rounded bg-rose-600 text-white text-[9px] font-black">
-                !{pendingConflictsCount}
+            {utilityBadgeCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] font-black tabular-nums leading-none">
+                {utilityBadgeCount}
               </span>
             )}
+            <SlidersHorizontal className="w-3.5 h-3.5 text-slate-400 shrink-0" />
           </button>
-        </div>
 
-        {/* Language Toggle */}
-        <button
-          type="button"
-          onClick={onToggleLanguage}
-          className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-[11px] font-extrabold hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center gap-1 shrink-0"
-        >
-          <Globe2 className="w-3.5 h-3.5" />
-          <span>{isAr ? "EN" : "عربي"}</span>
-        </button>
+          {utilitiesOpen && (
+            <div
+              data-testid="topbar-utilities-popover"
+              role="menu"
+              className={`absolute ${
+                isAr ? "left-0" : "right-0"
+              } mt-2 w-80 max-w-[92vw] rounded-2xl card-surface shadow-2xl border border-slate-200 dark:border-slate-700 p-3 z-50 space-y-3`}
+            >
+              {/* Status & Sync Section */}
+              <div className="space-y-1.5">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 px-1">
+                  {isAr ? "حالة الاتصال والمزامنة" : "Connectivity & Sync"}
+                </div>
+                <div className="flex items-center rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={onToggleOffline}
+                    title={transportBadge || (offlineMode ? dict.offlineBadge : dict.onlineBadge)}
+                    className={`flex-1 px-2.5 py-2 text-[11px] font-bold inline-flex items-center justify-center gap-1.5 ${
+                      offlineMode
+                        ? "bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                        : "text-emerald-700 dark:text-emerald-300"
+                    }`}
+                  >
+                    {offlineMode ? <WifiOff className="w-3.5 h-3.5" /> : <Wifi className="w-3.5 h-3.5" />}
+                    <span>
+                      {transportBadge || (offlineMode ? (isAr ? "أوفلاين" : "Offline") : isAr ? "متصل" : "Online")}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="topbar-sync-now-btn"
+                    onClick={onSyncQueue}
+                    title={isAr ? "مزامنة الآن (Sync Now)" : "Sync Now"}
+                    className="flex-1 px-2.5 py-2 text-[11px] font-extrabold bg-indigo-50/80 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 inline-flex items-center justify-center gap-1.5 border-s border-slate-200 dark:border-slate-700"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>{isAr ? "مزامنة الآن" : "Sync Now"}</span>
+                    <span className="tabular-nums font-black">{offlineQueueCount}</span>
+                    {pendingConflictsCount > 0 && (
+                      <span className="px-1 rounded bg-rose-600 text-white text-[9px] font-black">
+                        !{pendingConflictsCount}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Workflows: Approvals & Shared Drafts */}
+              {(onOpenApprovalsCenter || onOpenDraftsCenter) && (
+                <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 px-1">
+                    {isAr ? "الاعتمادات والمسودات" : "Approvals & Drafts"}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {onOpenApprovalsCenter && (
+                      <button
+                        type="button"
+                        data-testid="topbar-approvals-btn"
+                        onClick={() => {
+                          setUtilitiesOpen(false);
+                          onOpenApprovalsCenter();
+                        }}
+                        className="px-2.5 py-2 rounded-xl border border-indigo-400/50 bg-indigo-50/60 dark:bg-indigo-950/30 hover:bg-indigo-100/80 text-indigo-800 dark:text-indigo-200 text-[11px] font-extrabold flex items-center justify-between gap-1 transition"
+                      >
+                        <span className="inline-flex items-center gap-1.5 truncate">
+                          <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">{isAr ? "الاعتمادات" : "Approvals"}</span>
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] font-black tabular-nums leading-none">
+                          {pendingApprovalsCount}
+                        </span>
+                      </button>
+                    )}
+
+                    {onOpenDraftsCenter && (
+                      <button
+                        type="button"
+                        data-testid="topbar-drafts-btn"
+                        onClick={() => {
+                          setUtilitiesOpen(false);
+                          onOpenDraftsCenter();
+                        }}
+                        className="px-2.5 py-2 rounded-xl border border-amber-400/50 bg-amber-50/60 dark:bg-amber-950/30 hover:bg-amber-100/80 text-amber-800 dark:text-amber-200 text-[11px] font-extrabold flex items-center justify-between gap-1 transition"
+                      >
+                        <span className="inline-flex items-center gap-1.5 truncate">
+                          <FileClock className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">{isAr ? "المسودات" : "Drafts"}</span>
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-black tabular-nums leading-none">
+                          {draftsCount}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Display Controls: Currency, Theme, Language, Mobile Frame */}
+              <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 px-1">
+                  {isAr ? "العملة والمظهر واللغة" : "Currency, Theme & Language"}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    aria-label="Currency"
+                    value={currency}
+                    onChange={(e) => onCurrencyChange(e.target.value as CurrencyCode)}
+                    className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-2.5 py-1.5 text-[11px] font-extrabold"
+                  >
+                    <option value="YER">YER</option>
+                    <option value="SAR">SAR</option>
+                    <option value="USD">USD</option>
+                  </select>
+
+                  <select
+                    aria-label="Theme"
+                    value={theme}
+                    onChange={(e) => onThemeChange(e.target.value as ThemeName)}
+                    className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-2.5 py-1.5 text-[11px] font-bold"
+                  >
+                    <option value="emerald">🌿 Emerald</option>
+                    <option value="royal">🏛️ Royal</option>
+                    <option value="dark">🌙 Dark</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    data-testid="topbar-lang-toggle-btn"
+                    onClick={onToggleLanguage}
+                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-[11px] font-extrabold hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center justify-center gap-1.5"
+                  >
+                    <Globe2 className="w-3.5 h-3.5" />
+                    <span>{isAr ? "English (LTR)" : "العربية (RTL)"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUtilitiesOpen(false);
+                      onToggleMobileSim();
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-[11px] font-bold hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center justify-center gap-1.5"
+                  >
+                    <Smartphone className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>{mobileSimulatorActive ? (isAr ? "سطح المكتب" : "Desktop") : isAr ? "عرض الجوال" : "Mobile View"}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* User Profile Dropdown */}
         <div className="relative shrink-0" ref={dropdownRef}>
           <button
             type="button"
-            onClick={() => setProfileOpen((prev) => !prev)}
+            data-testid="topbar-user-menu-btn"
+            aria-expanded={profileOpen}
+            aria-haspopup="menu"
+            onClick={() => {
+              setUtilitiesOpen(false);
+              setProfileOpen((prev) => !prev);
+            }}
             className="flex items-center gap-2 px-2 py-1 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
           >
             <SvgAvatar char={currentUser.avatarChar} size={28} />
-            <div className="hidden md:block text-start leading-tight max-w-[125px]">
+            <div className="hidden md:block text-start leading-tight max-w-[115px]">
               <div className="text-[11px] font-extrabold truncate">
                 {currentUser.displayName || currentUser.name}
               </div>
@@ -429,11 +553,12 @@ export function TopCommandBar({
                 {isAr ? roleMeta.labelAr : roleMeta.shortEn}
               </div>
             </div>
-            <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+            <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
           </button>
 
           {profileOpen && (
             <div
+              role="menu"
               className={`absolute ${
                 isAr ? "left-0" : "right-0"
               } mt-2 w-64 rounded-2xl card-surface shadow-2xl border border-slate-200 dark:border-slate-700 p-2 z-50 space-y-1`}
@@ -480,22 +605,8 @@ export function TopCommandBar({
                 </div>
               </button>
 
-              {onLogout && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setProfileOpen(false);
-                    onLogout();
-                  }}
-                  className="w-full px-3 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-transparent hover:border-rose-200 dark:hover:border-rose-800/60 transition"
-                >
-                  <LogOut className="w-4 h-4 shrink-0" />
-                  <span>{isAr ? "تسجيل الخروج" : "Logout"}</span>
-                </button>
-              )}
-
-              {/* Project Filter inside dropdown for narrow viewports */}
-              <div className="xl:hidden px-2 py-1.5 space-y-1.5 border-b border-slate-100 dark:border-slate-800">
+              {/* Project Filter inside dropdown for narrow viewports (< xl) */}
+              <div className="xl:hidden px-2 py-1.5 space-y-1.5 border-y border-slate-100 dark:border-slate-800">
                 <select
                   value={selectedProjectId}
                   onChange={(e) => onProjectChange(e.target.value)}
@@ -539,26 +650,6 @@ export function TopCommandBar({
                 type="button"
                 onClick={() => {
                   setProfileOpen(false);
-                  onToggleMobileSim();
-                }}
-                className="w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
-              >
-                <Smartphone className="w-4 h-4 text-emerald-600" />
-                <span>
-                  {mobileSimulatorActive
-                    ? isAr
-                      ? "العودة لعرض سطح المكتب"
-                      : "Exit Mobile Frame"
-                    : isAr
-                    ? "محاكي الجوال (412px)"
-                    : "Mobile Frame (412px)"}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileOpen(false);
                   onOpenLogin();
                 }}
                 className="w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
@@ -578,6 +669,20 @@ export function TopCommandBar({
                 <Home className="w-4 h-4 text-slate-500" />
                 <span>{isAr ? "الصفحة الرئيسية العامة" : "Public Landing Page"}</span>
               </button>
+
+              {onLogout && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileOpen(false);
+                    onLogout();
+                  }}
+                  className="w-full px-3 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-transparent hover:border-rose-200 dark:hover:border-rose-800/60 transition"
+                >
+                  <LogOut className="w-4 h-4 shrink-0" />
+                  <span>{isAr ? "تسجيل الخروج" : "Logout"}</span>
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -585,4 +690,3 @@ export function TopCommandBar({
     </header>
   );
 }
-

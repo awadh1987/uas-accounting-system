@@ -76,6 +76,7 @@ import { performManualSyncNow, startAutoSyncController } from "@/lib/sync/client
 import { resolveTransportTarget } from "@/lib/transportResolver";
 import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
 import { resolveEffectiveBrandInfo } from "@/lib/branding";
+import { setActivePrintEnterpriseProfile } from "@/lib/print/uasDocumentPrinter";
 import {
   ensureNotificationChannelsAndPermission,
   flushQueuedNotifications,
@@ -557,6 +558,7 @@ export function UasAppShell() {
 
   // Sync strictly English-only browser tab <title> and dynamic tenant/UAS favicon & apple-touch-icon
   useEffect(() => {
+    setActivePrintEnterpriseProfile(state.enterpriseProfile);
     if (typeof document === "undefined" || typeof window === "undefined") return;
     const hostSlug = extractSubdomainSlugFromHost(window.location.host);
     const effectiveSlug = hostSlug || state.enterpriseProfile?.tenantSlug || null;
@@ -1449,6 +1451,7 @@ export function UasAppShell() {
                 <GeneralLedgerTab
                   projects={scopedProjects}
                   currentUser={currentUser}
+                  enterpriseProfile={state.enterpriseProfile}
                   exchangeRates={state.exchangeRates}
                   selectedProjectId={selectedProjectId}
                   selectedSubProjectId={selectedSubProjectId}
@@ -1576,6 +1579,7 @@ export function UasAppShell() {
                   allWorkers={state.workers}
                   treasuryAccounts={state.treasuryAccounts}
                   currentUser={currentUser}
+                  enterpriseProfile={state.enterpriseProfile}
                   readOnly={userReadOnly}
                   canEditRecords={canEdit(currentUser, "workers")}
                   canEditDate={userCanEditDate}
@@ -1622,6 +1626,7 @@ export function UasAppShell() {
                   sales={filteredSales}
                   treasuryAccounts={state.treasuryAccounts}
                   currentUser={currentUser}
+                  enterpriseProfile={state.enterpriseProfile}
                   readOnly={userReadOnly}
                   canEditRecords={canEdit(currentUser, "sales")}
                   canEditDate={userCanEditDate}
@@ -1663,6 +1668,7 @@ export function UasAppShell() {
                   sales={filteredSales}
                   allSales={state.sales}
                   currentUser={currentUser}
+                  enterpriseProfile={state.enterpriseProfile}
                   readOnly={userReadOnly}
                   canEditRecords={canEdit(currentUser, "customers")}
                   onOpenSaleVoucher={openSaleVoucher}

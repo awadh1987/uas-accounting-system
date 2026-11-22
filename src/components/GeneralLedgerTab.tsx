@@ -3,12 +3,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { FiscalYearClosingModal } from "@/components/FiscalYearClosingModal";
-import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
+import {
+  printUasDocument,
+  resolveLetterheadFromProfile,
+} from "@/lib/print/uasDocumentPrinter";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
 import { useFormDraft } from "@/hooks/useFormDraft";
 import { BookOpen, CheckCircle2, Pencil, Plus, RotateCcw, Search, Trash2, AlertTriangle } from "lucide-react";
 import { fmtNum } from "@/lib/formulas";
-import type { UasProject, UasUser } from "@/types/uas";
+import type { UasEnterpriseProfile, UasProject, UasUser } from "@/types/uas";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { EmptyState } from "@/components/EmptyState";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
@@ -74,6 +77,7 @@ interface DraftLine {
 interface GeneralLedgerTabProps {
   projects: UasProject[];
   currentUser: UasUser;
+  enterpriseProfile?: UasEnterpriseProfile | null;
   exchangeRates: Record<string, number>;
   selectedProjectId: string;
   selectedSubProjectId?: string;
@@ -86,6 +90,7 @@ interface GeneralLedgerTabProps {
 export function GeneralLedgerTab({
   projects,
   currentUser,
+  enterpriseProfile,
   exchangeRates,
   selectedProjectId,
   selectedSubProjectId = "ALL",
@@ -442,6 +447,7 @@ export function GeneralLedgerTab({
                   currency: "YER",
                   status: "POSTED",
                   format: "A4_LANDSCAPE",
+                  letterhead: resolveLetterheadFromProfile(enterpriseProfile),
                   printedBy: currentUser.name,
                   summaryCards: [
                     { labelAr: "عدد القيود", labelEn: "Entries", value: String(summary.count), tone: "neutral" },

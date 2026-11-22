@@ -5,6 +5,7 @@ import { Edit3, Plus, Users } from "lucide-react";
 import { fmtNum } from "@/lib/formulas";
 import {
   printUasDocument,
+  resolveLetterheadFromProfile,
   type PrintKeyValue,
   type PrintSummaryCard,
   type PrintTableColumn,
@@ -14,7 +15,7 @@ import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
 import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
-import type { UasProject, UasSaleTransaction, UasUser } from "@/types/uas";
+import type { UasEnterpriseProfile, UasProject, UasSaleTransaction, UasUser } from "@/types/uas";
 
 interface CustomerMasterItem {
   id: string;
@@ -42,6 +43,7 @@ interface CustomersTabProps {
   sales: UasSaleTransaction[];
   allSales: UasSaleTransaction[];
   currentUser?: UasUser;
+  enterpriseProfile?: UasEnterpriseProfile | null;
   readOnly?: boolean;
   canEditRecords?: boolean;
   onOpenSaleVoucher: (s: UasSaleTransaction) => void;
@@ -55,8 +57,9 @@ export function buildCustomerStatementPrintSpec(params: {
   projects: UasProject[];
   includeSaleDetails: boolean;
   documentDate?: string;
+  enterpriseProfile?: UasEnterpriseProfile | null;
 }): UasPrintDocumentSpec {
-  const { selectedCustomer, visibleRows, projects, includeSaleDetails, documentDate } = params;
+  const { selectedCustomer, visibleRows, projects, includeSaleDetails, documentDate, enterpriseProfile } = params;
   const totSales = visibleRows.reduce((s, r) => s + Number(r.total || 0), 0);
   const totPaid = visibleRows.reduce((s, r) => s + Number(r.credit || 0), 0);
   const totDue = visibleRows.reduce((s, r) => s + Number(r.debit || 0), 0);
@@ -100,25 +103,25 @@ export function buildCustomerStatementPrintSpec(params: {
 
   const columns: PrintTableColumn[] = includeSaleDetails
     ? [
-        { key: "date", labelAr: "التاريخ", labelEn: "Date" },
-        { key: "voucherNo", labelAr: "السند", labelEn: "Voucher" },
-        { key: "customer", labelAr: "العميل", labelEn: "Customer" },
-        { key: "harvest", labelAr: "المشروع / القطفة", labelEn: "Project / Harvest" },
-        { key: "grade", labelAr: "الصنف / النوع", labelEn: "Grade / Item" },
-        { key: "bundles", labelAr: "الكمية / الحزم", labelEn: "Qty / Units", numeric: true },
-        { key: "price", labelAr: "سعر الوحدة", labelEn: "Unit Price", numeric: true },
-        { key: "total", labelAr: "الإجمالي", labelEn: "Total", numeric: true },
-        { key: "credit", labelAr: "المدفوع", labelEn: "Paid", numeric: true },
-        { key: "debit", labelAr: "المتبقي", labelEn: "Balance", numeric: true },
-      ]
+      { key: "date", labelAr: "التاريخ", labelEn: "Date" },
+      { key: "voucherNo", labelAr: "السند", labelEn: "Voucher" },
+      { key: "customer", labelAr: "العميل", labelEn: "Customer" },
+      { key: "harvest", labelAr: "المشروع / القطفة", labelEn: "Project / Harvest" },
+      { key: "grade", labelAr: "الصنف / النوع", labelEn: "Grade / Item" },
+      { key: "bundles", labelAr: "الكمية / الحزم", labelEn: "Qty / Units", numeric: true },
+      { key: "price", labelAr: "سعر الوحدة", labelEn: "Unit Price", numeric: true },
+      { key: "total", labelAr: "الإجمالي", labelEn: "Total", numeric: true },
+      { key: "credit", labelAr: "المدفوع", labelEn: "Paid", numeric: true },
+      { key: "debit", labelAr: "المتبقي", labelEn: "Balance", numeric: true },
+    ]
     : [
-        { key: "date", labelAr: "التاريخ", labelEn: "Date" },
-        { key: "voucherNo", labelAr: "السند / المرجع", labelEn: "Voucher / Ref" },
-        { key: "customer", labelAr: "العميل", labelEn: "Customer" },
-        { key: "total", labelAr: "إجمالي الفاتورة", labelEn: "Total Billed", numeric: true },
-        { key: "credit", labelAr: "المدفوع (سداد)", labelEn: "Paid (Receipt)", numeric: true },
-        { key: "debit", labelAr: "الرصيد المستحق", labelEn: "Balance Due", numeric: true },
-      ];
+      { key: "date", labelAr: "التاريخ", labelEn: "Date" },
+      { key: "voucherNo", labelAr: "السند / المرجع", labelEn: "Voucher / Ref" },
+      { key: "customer", labelAr: "العميل", labelEn: "Customer" },
+      { key: "total", labelAr: "إجمالي الفاتورة", labelEn: "Total Billed", numeric: true },
+      { key: "credit", labelAr: "المدفوع (سداد)", labelEn: "Paid (Receipt)", numeric: true },
+      { key: "debit", labelAr: "الرصيد المستحق", labelEn: "Balance Due", numeric: true },
+    ];
 
   const rows = visibleRows.map((r) => {
     if (includeSaleDetails) {
@@ -149,18 +152,18 @@ export function buildCustomerStatementPrintSpec(params: {
 
   const totalsRow = includeSaleDetails
     ? {
-        date: "الإجمالي / Total",
-        bundles: fmtNum(totBundles),
-        total: fmtNum(totSales),
-        credit: fmtNum(totPaid),
-        debit: fmtNum(totDue),
-      }
+      date: "الإجمالي / Total",
+      bundles: fmtNum(totBundles),
+      total: fmtNum(totSales),
+      credit: fmtNum(totPaid),
+      debit: fmtNum(totDue),
+    }
     : {
-        date: "الإجمالي / Total",
-        total: fmtNum(totSales),
-        credit: fmtNum(totPaid),
-        debit: fmtNum(totDue),
-      };
+      date: "الإجمالي / Total",
+      total: fmtNum(totSales),
+      credit: fmtNum(totPaid),
+      debit: fmtNum(totDue),
+    };
 
   return {
     titleAr: "كشف حساب وفواتير العملاء",
@@ -169,6 +172,7 @@ export function buildCustomerStatementPrintSpec(params: {
     currency: "YER",
     status: "POSTED",
     format: includeSaleDetails ? "A4_LANDSCAPE" : "A4_PORTRAIT",
+    letterhead: resolveLetterheadFromProfile(enterpriseProfile),
     metadata,
     summaryCards,
     tables: [
@@ -192,6 +196,7 @@ export function CustomersTab({
   sales,
   allSales,
   currentUser,
+  enterpriseProfile,
   readOnly = false,
   canEditRecords = true,
   onOpenSaleVoucher,
@@ -481,11 +486,10 @@ export function CustomersTab({
             <button
               type="button"
               onClick={() => setShowArchived((v) => !v)}
-              className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
-                showArchived
-                  ? "bg-amber-100 border-amber-300 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-200"
-                  : "border-slate-300 text-slate-600 dark:text-slate-300"
-              }`}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-colors ${showArchived
+                ? "bg-amber-100 border-amber-300 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-200"
+                : "border-slate-300 text-slate-600 dark:text-slate-300"
+                }`}
             >
               {showArchived ? "إخفاء المؤرشفين" : "إظهار المؤرشفين"}
             </button>
@@ -529,6 +533,7 @@ export function CustomersTab({
                   visibleRows,
                   projects,
                   includeSaleDetails,
+                  enterpriseProfile,
                 });
                 void printUasDocument(spec);
               }}
@@ -550,145 +555,144 @@ export function CustomersTab({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
             {visibleCustomers.map((cName) => {
-                const master = customers.find((m) => m.nameAr === cName || m.name === cName);
-                const rows = allSales.filter((s) => s.customer === cName);
-                const isArchived = master ? master.isActive === false || Boolean(master.archivedAt) : false;
+              const master = customers.find((m) => m.nameAr === cName || m.name === cName);
+              const rows = allSales.filter((s) => s.customer === cName);
+              const isArchived = master ? master.isActive === false || Boolean(master.archivedAt) : false;
 
-                if (!showArchived && isArchived) return null;
+              if (!showArchived && isArchived) return null;
 
-                const phone = master?.phone || rows[0]?.phone || "—";
-                const code = master?.code || "CUST-000";
-                const glAccountCode = master?.account?.code || "112190xxx";
-                const creditLimit = master?.creditLimit || 0;
-                const costCenterBadge = master?.costCenter?.nameAr || (master?.costCenterId ? "مركز تكلفة" : null);
+              const phone = master?.phone || rows[0]?.phone || "—";
+              const code = master?.code || "CUST-000";
+              const glAccountCode = master?.account?.code || "112190xxx";
+              const creditLimit = master?.creditLimit || 0;
+              const costCenterBadge = master?.costCenter?.nameAr || (master?.costCenterId ? "مركز تكلفة" : null);
 
-                const bundles = rows.reduce((a, b) => a + Number(b.bundles || 0), 0);
-                const total = master ? master.totalInvoiced : rows.reduce((a, b) => a + Number(b.total || 0), 0);
-                const credit = master ? master.totalCollected : rows.reduce((a, b) => a + Number(b.credit || 0), 0);
-                const debit = master ? master.totalReceivable : rows.reduce((a, b) => a + Number(b.debit || 0), 0);
+              const bundles = rows.reduce((a, b) => a + Number(b.bundles || 0), 0);
+              const total = master ? master.totalInvoiced : rows.reduce((a, b) => a + Number(b.total || 0), 0);
+              const credit = master ? master.totalCollected : rows.reduce((a, b) => a + Number(b.credit || 0), 0);
+              const debit = master ? master.totalReceivable : rows.reduce((a, b) => a + Number(b.debit || 0), 0);
 
-                return (
-                  <div
-                    key={cName}
-                    className={`p-4 rounded-2xl border text-xs space-y-3 transition shadow-sm ${
-                      isArchived
-                        ? "border-amber-300 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20"
-                        : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+              return (
+                <div
+                  key={cName}
+                  className={`p-4 rounded-2xl border text-xs space-y-3 transition shadow-sm ${isArchived
+                    ? "border-amber-300 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20"
+                    : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
                     }`}
-                  >
-                    {/* Top: Code + COA + CostCenter + Actions */}
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="font-mono text-[10px] font-black px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                          {code}
+                >
+                  {/* Top: Code + COA + CostCenter + Actions */}
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-mono text-[10px] font-black px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                        {code}
+                      </span>
+                      <span className="font-mono text-[10px] font-black px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-300/40">
+                        COA {glAccountCode}
+                      </span>
+                      {costCenterBadge && (
+                        <span className="font-bold text-[10px] px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50">
+                          {costCenterBadge}
                         </span>
-                        <span className="font-mono text-[10px] font-black px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-300/40">
-                          COA {glAccountCode}
+                      )}
+                      {isArchived && (
+                        <span className="px-2 py-0.5 rounded-md bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-100 text-[10px] font-black">
+                          مؤرشف
                         </span>
-                        {costCenterBadge && (
-                          <span className="font-bold text-[10px] px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50">
-                            {costCenterBadge}
-                          </span>
-                        )}
-                        {isArchived && (
-                          <span className="px-2 py-0.5 rounded-md bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-100 text-[10px] font-black">
-                            مؤرشف
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Actions: Edit / Archive / Delete */}
-                      {!readOnly && canEditRecords && master && (
-                        <div className="flex items-center gap-2 no-print">
-                          <button
-                            type="button"
-                            onClick={() => openEditDrawer(master)}
-                            className="text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 font-bold inline-flex items-center gap-0.5"
-                            title="تعديل بيانات العميل"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                            <span>تعديل</span>
-                          </button>
-                          {isArchived ? (
-                            <button
-                              type="button"
-                              onClick={() => handleRestoreCustomer(master)}
-                              className="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 font-bold"
-                              title="استعادة العميل"
-                            >
-                              استعادة
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleArchiveCustomer(master)}
-                              className="text-amber-600 hover:text-amber-700 dark:text-amber-400 font-bold"
-                              title="أرشفة العميل"
-                            >
-                              أرشفة
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteCustomer(master)}
-                            className="text-rose-600 hover:text-rose-700 dark:text-rose-400 font-bold"
-                            title="حذف العميل"
-                          >
-                            حذف
-                          </button>
-                        </div>
                       )}
                     </div>
 
-                    {/* Middle: Customer Name, Phone, Credit Limit */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <h4 className="font-black text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                          <Users className="w-4 h-4 text-emerald-600" />
-                          <bdi dir="auto">{cName}</bdi>
-                        </h4>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          <span>هاتف: {phone}</span>
-                          {rows.length > 0 && <span> • العمليات: {rows.length}</span>}
-                        </p>
-                      </div>
-                      <div className="text-end">
-                        <div className="text-[10px] text-slate-500">الحد الائتماني</div>
-                        <div className="font-extrabold text-xs text-slate-700 dark:text-slate-300">
-                          {fmtNum(creditLimit)} YER
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Bottom: Financial Metrics */}
-                    <div className="grid grid-cols-3 gap-2 pt-2.5 border-t border-slate-100 dark:border-slate-800 text-xs">
-                      <div className="bg-slate-50 dark:bg-slate-800/50 p-2 rounded-xl text-center">
-                        <div className="text-[10px] text-slate-500">إجمالي الفواتير</div>
-                        <div className="font-black text-slate-900 dark:text-slate-100 text-xs mt-0.5">
-                          {fmtNum(total)} ريال
-                        </div>
-                        {bundles > 0 && (
-                          <div className="text-[9px] text-slate-400 mt-0.5">
-                            {fmtNum(bundles)} وحدة قياس
-                          </div>
+                    {/* Actions: Edit / Archive / Delete */}
+                    {!readOnly && canEditRecords && master && (
+                      <div className="flex items-center gap-2 no-print">
+                        <button
+                          type="button"
+                          onClick={() => openEditDrawer(master)}
+                          className="text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 font-bold inline-flex items-center gap-0.5"
+                          title="تعديل بيانات العميل"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>تعديل</span>
+                        </button>
+                        {isArchived ? (
+                          <button
+                            type="button"
+                            onClick={() => handleRestoreCustomer(master)}
+                            className="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 font-bold"
+                            title="استعادة العميل"
+                          >
+                            استعادة
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleArchiveCustomer(master)}
+                            className="text-amber-600 hover:text-amber-700 dark:text-amber-400 font-bold"
+                            title="أرشفة العميل"
+                          >
+                            أرشفة
+                          </button>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCustomer(master)}
+                          className="text-rose-600 hover:text-rose-700 dark:text-rose-400 font-bold"
+                          title="حذف العميل"
+                        >
+                          حذف
+                        </button>
                       </div>
-                      <div className="bg-emerald-50 dark:bg-emerald-950/30 p-2 rounded-xl text-center">
-                        <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-bold">دائن (مسدد)</div>
-                        <div className="font-black text-emerald-700 dark:text-emerald-400 text-xs mt-0.5">
-                          {fmtNum(credit)} ريال
-                        </div>
-                      </div>
-                      <div className="bg-rose-50 dark:bg-rose-950/30 p-2 rounded-xl text-center">
-                        <div className="text-[10px] text-rose-700 dark:text-rose-400 font-bold">مدين (متبقي)</div>
-                        <div className="font-black text-rose-700 dark:text-rose-400 text-xs mt-0.5">
-                          {fmtNum(debit)} ريال
-                        </div>
+                    )}
+                  </div>
+
+                  {/* Middle: Customer Name, Phone, Credit Limit */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <h4 className="font-black text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                        <Users className="w-4 h-4 text-emerald-600" />
+                        <bdi dir="auto">{cName}</bdi>
+                      </h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        <span>هاتف: {phone}</span>
+                        {rows.length > 0 && <span> • العمليات: {rows.length}</span>}
+                      </p>
+                    </div>
+                    <div className="text-end">
+                      <div className="text-[10px] text-slate-500">الحد الائتماني</div>
+                      <div className="font-extrabold text-xs text-slate-700 dark:text-slate-300">
+                        {fmtNum(creditLimit)} YER
                       </div>
                     </div>
                   </div>
-                );
-              })}
+
+                  {/* Bottom: Financial Metrics */}
+                  <div className="grid grid-cols-3 gap-2 pt-2.5 border-t border-slate-100 dark:border-slate-800 text-xs">
+                    <div className="bg-slate-50 dark:bg-slate-800/50 p-2 rounded-xl text-center">
+                      <div className="text-[10px] text-slate-500">إجمالي الفواتير</div>
+                      <div className="font-black text-slate-900 dark:text-slate-100 text-xs mt-0.5">
+                        {fmtNum(total)} ريال
+                      </div>
+                      {bundles > 0 && (
+                        <div className="text-[9px] text-slate-400 mt-0.5">
+                          {fmtNum(bundles)} وحدة قياس
+                        </div>
+                      )}
+                    </div>
+                    <div className="bg-emerald-50 dark:bg-emerald-950/30 p-2 rounded-xl text-center">
+                      <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-bold">دائن (مسدد)</div>
+                      <div className="font-black text-emerald-700 dark:text-emerald-400 text-xs mt-0.5">
+                        {fmtNum(credit)} ريال
+                      </div>
+                    </div>
+                    <div className="bg-rose-50 dark:bg-rose-950/30 p-2 rounded-xl text-center">
+                      <div className="text-[10px] text-rose-700 dark:text-rose-400 font-bold">مدين (متبقي)</div>
+                      <div className="font-black text-rose-700 dark:text-rose-400 text-xs mt-0.5">
+                        {fmtNum(debit)} ريال
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 

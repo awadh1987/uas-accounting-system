@@ -18,11 +18,12 @@ import type {
 } from "./uasAgentTools";
 import type { AgentReasoningStep, ReasoningTier } from "./offlineAgentEngine";
 import type { TabId, UasEnterpriseProfile, UasUser } from "@/types/uas";
-import type {
-  PrintKeyValue,
-  PrintSummaryCard,
-  PrintTableSection,
-  UasPrintDocumentSpec,
+import {
+  resolveLetterheadFromProfile,
+  type PrintKeyValue,
+  type PrintSummaryCard,
+  type PrintTableSection,
+  type UasPrintDocumentSpec,
 } from "@/lib/print/uasDocumentPrinter";
 
 export interface CopilotChatMessage {
@@ -473,21 +474,7 @@ export function buildCopilotConversationPrintSpec(params: {
     rows: tableRows,
   };
 
-  const letterhead = enterpriseProfile
-    ? {
-        companyNameAr: enterpriseProfile.legalNameAr || "منظومة UAS المحاسبية",
-        companyNameEn: enterpriseProfile.legalNameEn || "UAS Accounting System",
-        crNumber: enterpriseProfile.commercialReg || undefined,
-        taxNumber: enterpriseProfile.taxNumber || undefined,
-        phone: enterpriseProfile.contactPhone || enterpriseProfile.phone || undefined,
-        address: enterpriseProfile.address || undefined,
-        slogan: "نظام إدارة الموارد وتخطيط المنشآت الزراعية والتجارية الذكي",
-      }
-    : {
-        companyNameAr: "منظومة UAS المحاسبية والمالية الذكية",
-        companyNameEn: "UAS Smart ERP & Accounting System",
-        slogan: "المساعد الذكي • رقابة محاسبية وإسناد قرار فوري",
-      };
+  const letterhead = resolveLetterheadFromProfile(enterpriseProfile);
 
   return {
     titleAr: "سجل محادثة المساعد المحاسبي الذكي",

@@ -5,8 +5,11 @@ import { Pencil, Plus, Printer, Send } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { computeWorkerWageTotals, fmtNum } from "@/lib/formulas";
-import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
-import type { UasProject, UasTreasuryAccount, UasUser, UasWorkerWage } from "@/types/uas";
+import {
+  printUasDocument,
+  resolveLetterheadFromProfile,
+} from "@/lib/print/uasDocumentPrinter";
+import type { UasEnterpriseProfile, UasProject, UasTreasuryAccount, UasUser, UasWorkerWage } from "@/types/uas";
 import { BankPayoutModal, type PayoutInitialData } from "@/components/BankPayoutModal";
 import {
   AccountingDirectionSelector,
@@ -54,6 +57,7 @@ interface WorkersTabProps {
   allWorkers: UasWorkerWage[];
   treasuryAccounts?: UasTreasuryAccount[];
   currentUser?: UasUser;
+  enterpriseProfile?: UasEnterpriseProfile | null;
   readOnly?: boolean;
   canEditRecords?: boolean;
   canEditDate?: boolean;
@@ -72,6 +76,7 @@ export function WorkersTab({
   allWorkers,
   treasuryAccounts = [],
   currentUser,
+  enterpriseProfile,
   readOnly = false,
   canEditRecords = false,
   canEditDate = false,
@@ -487,22 +492,20 @@ export function WorkersTab({
           <button
             type="button"
             onClick={() => setSubView("wages")}
-            className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${
-              subView === "wages"
-                ? "accent-bg shadow-sm"
-                : "text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
-            }`}
+            className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${subView === "wages"
+              ? "accent-bg shadow-sm"
+              : "text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              }`}
           >
             سجلات واستحقاقات الأجور ({workers.length})
           </button>
           <button
             type="button"
             onClick={() => setSubView("directory")}
-            className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${
-              subView === "directory"
-                ? "accent-bg shadow-sm"
-                : "text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
-            }`}
+            className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${subView === "directory"
+              ? "accent-bg shadow-sm"
+              : "text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              }`}
           >
             دليل العمال وحسابات الذمم (2112xx) ({masterWorkers.length})
           </button>
@@ -523,11 +526,10 @@ export function WorkersTab({
             <button
               type="button"
               onClick={() => setShowArchivedWorkers((p) => !p)}
-              className={`px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${
-                showArchivedWorkers
-                  ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700"
-                  : "bg-slate-200/50 dark:bg-slate-700/50 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600"
-              }`}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${showArchivedWorkers
+                ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700"
+                : "bg-slate-200/50 dark:bg-slate-700/50 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600"
+                }`}
             >
               {showArchivedWorkers ? "إخفاء المؤرشفين" : "إظهار المؤرشفين"}
             </button>
@@ -547,11 +549,10 @@ export function WorkersTab({
                   return (
                     <div
                       key={w.id}
-                      className={`p-4 rounded-2xl border text-xs space-y-2 transition ${
-                        isArchived
-                          ? "border-amber-300/60 bg-amber-50/20 dark:bg-amber-950/10 dark:border-amber-800/40 opacity-80"
-                          : "border-slate-200 dark:border-slate-700"
-                      }`}
+                      className={`p-4 rounded-2xl border text-xs space-y-2 transition ${isArchived
+                        ? "border-amber-300/60 bg-amber-50/20 dark:bg-amber-950/10 dark:border-amber-800/40 opacity-80"
+                        : "border-slate-200 dark:border-slate-700"
+                        }`}
                     >
                       <div className="flex justify-between items-center">
                         <div className="flex items-center gap-1.5 flex-wrap">
@@ -655,220 +656,221 @@ export function WorkersTab({
         </div>
       ) : (
         <div className="card-surface rounded-2xl p-5 space-y-4 overflow-x-auto">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h3 className="text-sm font-extrabold">كشف حساب وأجور العمال (Worker Account Report)</h3>
-            <p className="text-xs text-slate-500">فرز العمال وتصدير التقارير إلى إكسل و بي دي إف</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 no-print">
-            <select
-              value={filterWorker}
-              onChange={(e) => setFilterWorker(e.target.value)}
-              className="rounded-xl border border-slate-300 bg-transparent px-3 py-1.5 text-xs font-semibold"
-            >
-              <option value="ALL">جميع العمال (الكل)</option>
-              {uniqueWorkerNames.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={() => onExportWorkerExcel(filterWorker)}
-              className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold"
-            >
-              تصدير Excel
-            </button>
-            <button
-              onClick={() =>
-                void printUasDocument({
-                  titleAr: "كشف حساب وأجور العمال",
-                  titleEn: "Worker Account Report",
-                  documentNumber: `RPT-WRK-${new Date().toISOString().slice(0, 10)}`,
-                  currency: "YER",
-                  status: "POSTED",
-                  format: "A4_PORTRAIT",
-                  metadata: [
-                    {
-                      labelAr: "نطاق التقرير",
-                      labelEn: "Filter",
-                      value: filterWorker === "ALL" ? "جميع العمال / All Workers" : filterWorker,
-                    },
-                  ],
-                  summaryCards: [
-                    { labelAr: "إجمالي الأيام", labelEn: "Total Days", value: fmtNum(sumDays), tone: "neutral" },
-                    { labelAr: "إجمالي الأجور", labelEn: "Total Wages", value: `${fmtNum(sumTotal)} YER`, tone: "indigo" },
-                    { labelAr: "المسلم (دائن)", labelEn: "Paid", value: `${fmtNum(sumCredit)} YER`, tone: "emerald" },
-                    { labelAr: "المتبقي (مدين)", labelEn: "Balance Due", value: `${fmtNum(sumDebit)} YER`, tone: "rose" },
-                  ],
-                  tables: [
-                    {
-                      headingAr: "تفاصيل مستحقات العمال",
-                      headingEn: "Worker Wage Entries",
-                      columns: [
-                        { key: "date", labelAr: "التاريخ", labelEn: "Date" },
-                        { key: "name", labelAr: "اسم العامل", labelEn: "Worker" },
-                        { key: "harvest", labelAr: "القطفة", labelEn: "Harvest" },
-                        { key: "dailyWage", labelAr: "الأجر اليومي", labelEn: "Daily Wage", numeric: true },
-                        { key: "days", labelAr: "الأيام", labelEn: "Days", numeric: true },
-                        { key: "total", labelAr: "الإجمالي", labelEn: "Total", numeric: true },
-                        { key: "credit", labelAr: "المسلم", labelEn: "Paid", numeric: true },
-                        { key: "debit", labelAr: "المتبقي", labelEn: "Due", numeric: true },
-                      ],
-                      rows: visibleWorkers.map((w) => ({
-                        date: w.date,
-                        name: w.name,
-                        harvest: w.harvest,
-                        dailyWage: fmtNum(w.dailyWage),
-                        days: fmtNum(w.days),
-                        total: fmtNum(w.total),
-                        credit: fmtNum(w.credit),
-                        debit: fmtNum(w.debit),
-                      })),
-                      totalsRow: {
-                        date: "الإجمالي",
-                        days: fmtNum(sumDays),
-                        total: fmtNum(sumTotal),
-                        credit: fmtNum(sumCredit),
-                        debit: fmtNum(sumDebit),
-                      },
-                    },
-                  ],
-                })
-              }
-              className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold inline-flex items-center gap-1"
-            >
-              <Printer className="w-3.5 h-3.5" />
-              <span>PDF</span>
-            </button>
-            {!readOnly && (
-              <button
-                id="wrkNameInput"
-                type="button"
-                onClick={openCreateDrawer}
-                className="px-3.5 py-1.5 rounded-xl accent-bg text-xs font-extrabold inline-flex items-center gap-1.5 shadow-sm"
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-extrabold">كشف حساب وأجور العمال (Worker Account Report)</h3>
+              <p className="text-xs text-slate-500">فرز العمال وتصدير التقارير إلى إكسل و بي دي إف</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 no-print">
+              <select
+                value={filterWorker}
+                onChange={(e) => setFilterWorker(e.target.value)}
+                className="rounded-xl border border-slate-300 bg-transparent px-3 py-1.5 text-xs font-semibold"
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>تسجيل أجر عامل</span>
+                <option value="ALL">جميع العمال (الكل)</option>
+                {uniqueWorkerNames.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => onExportWorkerExcel(filterWorker)}
+                className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold"
+              >
+                تصدير Excel
               </button>
-            )}
+              <button
+                onClick={() =>
+                  void printUasDocument({
+                    titleAr: "كشف حساب وأجور العمال",
+                    titleEn: "Worker Account Report",
+                    documentNumber: `RPT-WRK-${new Date().toISOString().slice(0, 10)}`,
+                    currency: "YER",
+                    status: "POSTED",
+                    format: "A4_PORTRAIT",
+                    letterhead: resolveLetterheadFromProfile(enterpriseProfile),
+                    metadata: [
+                      {
+                        labelAr: "نطاق التقرير",
+                        labelEn: "Filter",
+                        value: filterWorker === "ALL" ? "جميع العمال / All Workers" : filterWorker,
+                      },
+                    ],
+                    summaryCards: [
+                      { labelAr: "إجمالي الأيام", labelEn: "Total Days", value: fmtNum(sumDays), tone: "neutral" },
+                      { labelAr: "إجمالي الأجور", labelEn: "Total Wages", value: `${fmtNum(sumTotal)} YER`, tone: "indigo" },
+                      { labelAr: "المسلم (دائن)", labelEn: "Paid", value: `${fmtNum(sumCredit)} YER`, tone: "emerald" },
+                      { labelAr: "المتبقي (مدين)", labelEn: "Balance Due", value: `${fmtNum(sumDebit)} YER`, tone: "rose" },
+                    ],
+                    tables: [
+                      {
+                        headingAr: "تفاصيل مستحقات العمال",
+                        headingEn: "Worker Wage Entries",
+                        columns: [
+                          { key: "date", labelAr: "التاريخ", labelEn: "Date" },
+                          { key: "name", labelAr: "اسم العامل", labelEn: "Worker" },
+                          { key: "harvest", labelAr: "القطفة", labelEn: "Harvest" },
+                          { key: "dailyWage", labelAr: "الأجر اليومي", labelEn: "Daily Wage", numeric: true },
+                          { key: "days", labelAr: "الأيام", labelEn: "Days", numeric: true },
+                          { key: "total", labelAr: "الإجمالي", labelEn: "Total", numeric: true },
+                          { key: "credit", labelAr: "المسلم", labelEn: "Paid", numeric: true },
+                          { key: "debit", labelAr: "المتبقي", labelEn: "Due", numeric: true },
+                        ],
+                        rows: visibleWorkers.map((w) => ({
+                          date: w.date,
+                          name: w.name,
+                          harvest: w.harvest,
+                          dailyWage: fmtNum(w.dailyWage),
+                          days: fmtNum(w.days),
+                          total: fmtNum(w.total),
+                          credit: fmtNum(w.credit),
+                          debit: fmtNum(w.debit),
+                        })),
+                        totalsRow: {
+                          date: "الإجمالي",
+                          days: fmtNum(sumDays),
+                          total: fmtNum(sumTotal),
+                          credit: fmtNum(sumCredit),
+                          debit: fmtNum(sumDebit),
+                        },
+                      },
+                    ],
+                  })
+                }
+                className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold inline-flex items-center gap-1"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>PDF</span>
+              </button>
+              {!readOnly && (
+                <button
+                  id="wrkNameInput"
+                  type="button"
+                  onClick={openCreateDrawer}
+                  className="px-3.5 py-1.5 rounded-xl accent-bg text-xs font-extrabold inline-flex items-center gap-1.5 shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>تسجيل أجر عامل</span>
+                </button>
+              )}
+            </div>
           </div>
-        </div>
 
-        {visibleWorkers.length === 0 ? (
-          <EmptyState
-            title="لا توجد سجلات أجور للعمال"
-            description="سجل أيام العمل والأجر اليومي لمتابعة المستحقات والدفعات."
-          />
-        ) : (
-          <table className="w-full text-xs text-right border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/90 dark:bg-slate-800/90">
-                <th className="p-2.5">الاسم</th>
-                <th className="p-2.5">المشروع / القطفة</th>
-                <th className="p-2.5">الأجر اليومي</th>
-                <th className="p-2.5">عدد الأيام</th>
-                <th className="p-2.5">الإجمالي</th>
-                <th className="p-2.5">دائن (مستلم)</th>
-                <th className="p-2.5">مدين (متبقي له)</th>
-                <th className="p-2.5">التاريخ</th>
-                <th className="p-2.5 no-print">سند / إجراء</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-              {visibleWorkers.map((w) => {
-                const proj = projects.find((p) => p.id === w.projectId);
-                return (
-                  <tr key={w.id}>
-                    <td className="p-2.5 font-extrabold">{w.name}</td>
-                    <td className="p-2.5">
-                      <div>{proj ? proj.name : ""} — {w.harvest}</div>
-                      {w.subProjectId && (() => {
-                        const sp = proj?.subProjects?.find((s) => s.id === w.subProjectId);
-                        return sp ? (
-                          <span className="inline-block mt-0.5 text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                            {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
+          {visibleWorkers.length === 0 ? (
+            <EmptyState
+              title="لا توجد سجلات أجور للعمال"
+              description="سجل أيام العمل والأجر اليومي لمتابعة المستحقات والدفعات."
+            />
+          ) : (
+            <table className="w-full text-xs text-right border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/90 dark:bg-slate-800/90">
+                  <th className="p-2.5">الاسم</th>
+                  <th className="p-2.5">المشروع / القطفة</th>
+                  <th className="p-2.5">الأجر اليومي</th>
+                  <th className="p-2.5">عدد الأيام</th>
+                  <th className="p-2.5">الإجمالي</th>
+                  <th className="p-2.5">دائن (مستلم)</th>
+                  <th className="p-2.5">مدين (متبقي له)</th>
+                  <th className="p-2.5">التاريخ</th>
+                  <th className="p-2.5 no-print">سند / إجراء</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                {visibleWorkers.map((w) => {
+                  const proj = projects.find((p) => p.id === w.projectId);
+                  return (
+                    <tr key={w.id}>
+                      <td className="p-2.5 font-extrabold">{w.name}</td>
+                      <td className="p-2.5">
+                        <div>{proj ? proj.name : ""} — {w.harvest}</div>
+                        {w.subProjectId && (() => {
+                          const sp = proj?.subProjects?.find((s) => s.id === w.subProjectId);
+                          return sp ? (
+                            <span className="inline-block mt-0.5 text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                              {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
+                            </span>
+                          ) : null;
+                        })()}
+                      </td>
+                      <td className="p-2.5 tabular-nums">{fmtNum(w.dailyWage)}</td>
+                      <td className="p-2.5 tabular-nums">{fmtNum(w.days)}</td>
+                      <td className="p-2.5 font-bold tabular-nums">{fmtNum(w.total)}</td>
+                      <td className="p-2.5 text-emerald-600 font-semibold tabular-nums">{fmtNum(w.credit)}</td>
+                      <td className="p-2.5 text-rose-600 font-bold tabular-nums">{fmtNum(w.debit)}</td>
+                      <td className="p-2.5 font-mono">{w.date}</td>
+                      <td className="p-2.5 no-print flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => onOpenWorkerVoucher(w)}
+                          className="px-2 py-1 rounded bg-indigo-50 text-indigo-700 font-bold"
+                        >
+                          سند
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPayoutInitialData({
+                              sourceVoucherType: "WORKER_WAGE",
+                              sourceVoucherId: w.id,
+                              beneficiaryName: w.name,
+                              beneficiaryAccountOrPhone: "",
+                              amount: w.debit > 0 ? w.debit : w.total,
+                              currencyCode: "YER",
+                              notes: `صرف أجر عامل: ${w.name} — قطفة: ${w.harvest}`,
+                            });
+                            setPayoutModalOpen(true);
+                          }}
+                          className="px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 font-bold hover:bg-emerald-100 flex items-center gap-1"
+                        >
+                          <Send className="w-3 h-3" />
+                          <span>تحويل بنكي</span>
+                        </button>
+                        {executedWorkerDispatches[w.id] && (
+                          <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200 font-bold">
+                            تم: {executedWorkerDispatches[w.id]}
                           </span>
-                        ) : null;
-                      })()}
-                    </td>
-                    <td className="p-2.5 tabular-nums">{fmtNum(w.dailyWage)}</td>
-                    <td className="p-2.5 tabular-nums">{fmtNum(w.days)}</td>
-                    <td className="p-2.5 font-bold tabular-nums">{fmtNum(w.total)}</td>
-                    <td className="p-2.5 text-emerald-600 font-semibold tabular-nums">{fmtNum(w.credit)}</td>
-                    <td className="p-2.5 text-rose-600 font-bold tabular-nums">{fmtNum(w.debit)}</td>
-                    <td className="p-2.5 font-mono">{w.date}</td>
-                    <td className="p-2.5 no-print flex items-center gap-2 flex-wrap">
-                      <button
-                        type="button"
-                        onClick={() => onOpenWorkerVoucher(w)}
-                        className="px-2 py-1 rounded bg-indigo-50 text-indigo-700 font-bold"
-                      >
-                        سند
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPayoutInitialData({
-                            sourceVoucherType: "WORKER_WAGE",
-                            sourceVoucherId: w.id,
-                            beneficiaryName: w.name,
-                            beneficiaryAccountOrPhone: "",
-                            amount: w.debit > 0 ? w.debit : w.total,
-                            currencyCode: "YER",
-                            notes: `صرف أجر عامل: ${w.name} — قطفة: ${w.harvest}`,
-                          });
-                          setPayoutModalOpen(true);
-                        }}
-                        className="px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 font-bold hover:bg-emerald-100 flex items-center gap-1"
-                      >
-                        <Send className="w-3 h-3" />
-                        <span>تحويل بنكي</span>
-                      </button>
-                      {executedWorkerDispatches[w.id] && (
-                        <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200 font-bold">
-                          تم: {executedWorkerDispatches[w.id]}
-                        </span>
-                      )}
-                      {!readOnly && canEditRecords && onEditWorker && (
-                        <button
-                          type="button"
-                          onClick={() => openEditDrawer(w)}
-                          className="inline-flex items-center gap-1 text-indigo-600 hover:underline font-bold"
-                        >
-                          <Pencil className="w-3 h-3" />
-                          <span>تعديل</span>
-                        </button>
-                      )}
-                      {!readOnly && (
-                        <button
-                          type="button"
-                          onClick={() => onDeleteWorker(w.id)}
-                          className="text-rose-600 hover:underline font-bold"
-                        >
-                          حذف
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            <tfoot className="font-extrabold bg-slate-50 dark:bg-slate-800/40 tabular-nums">
-              <tr>
-                <td colSpan={3} className="p-2.5">
-                  الإجمالي الكلي لأجور العمال
-                </td>
-                <td className="p-2.5">{fmtNum(sumDays)} يوم</td>
-                <td className="p-2.5">{fmtNum(sumTotal)} ريال</td>
-                <td className="p-2.5 text-emerald-600">{fmtNum(sumCredit)} ريال</td>
-                <td className="p-2.5 text-rose-600">{fmtNum(sumDebit)} ريال</td>
-                <td colSpan={2} />
-              </tr>
-            </tfoot>
-          </table>
-        )}
-      </div>
+                        )}
+                        {!readOnly && canEditRecords && onEditWorker && (
+                          <button
+                            type="button"
+                            onClick={() => openEditDrawer(w)}
+                            className="inline-flex items-center gap-1 text-indigo-600 hover:underline font-bold"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            <span>تعديل</span>
+                          </button>
+                        )}
+                        {!readOnly && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteWorker(w.id)}
+                            className="text-rose-600 hover:underline font-bold"
+                          >
+                            حذف
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot className="font-extrabold bg-slate-50 dark:bg-slate-800/40 tabular-nums">
+                <tr>
+                  <td colSpan={3} className="p-2.5">
+                    الإجمالي الكلي لأجور العمال
+                  </td>
+                  <td className="p-2.5">{fmtNum(sumDays)} يوم</td>
+                  <td className="p-2.5">{fmtNum(sumTotal)} ريال</td>
+                  <td className="p-2.5 text-emerald-600">{fmtNum(sumCredit)} ريال</td>
+                  <td className="p-2.5 text-rose-600">{fmtNum(sumDebit)} ريال</td>
+                  <td colSpan={2} />
+                </tr>
+              </tfoot>
+            </table>
+          )}
+        </div>
       )}
 
       {/* Shared Bank / Wallet Payout Execution Gateway Modal */}

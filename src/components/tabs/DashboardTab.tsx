@@ -13,7 +13,10 @@ import {
 import { Bar, Doughnut } from "react-chartjs-2";
 import { computeNetOperatingProfit, fmtNum, formatCurrencyVal, type CurrencyCode } from "@/lib/formulas";
 import { getDict } from "@/lib/i18n";
-import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
+import {
+  printUasDocument,
+  resolveLetterheadFromProfile,
+} from "@/lib/print/uasDocumentPrinter";
 import type {
   LanguageCode,
   TabId,
@@ -259,6 +262,7 @@ export function DashboardTab({
                 currency: "YER",
                 status: "POSTED",
                 format: "A4_LANDSCAPE",
+                letterhead: resolveLetterheadFromProfile(state.enterpriseProfile),
                 summaryCards: [
                   { labelAr: "قيمة المشاريع", labelEn: "Projects Value", value: formatAmt(totalProjVal), tone: "indigo" },
                   { labelAr: "إجمالي المبيعات", labelEn: "Total Sales", value: formatAmt(totalSales), tone: "emerald" },
@@ -327,9 +331,8 @@ export function DashboardTab({
         <div className="card-surface rounded-2xl p-4 shadow-sm">
           <div className="text-xs text-slate-500 font-semibold">{dict.kpiNetProfit}</div>
           <div
-            className={`text-xl font-extrabold mt-1 ${
-              netProfit >= 0 ? "text-emerald-600" : "text-rose-600"
-            }`}
+            className={`text-xl font-extrabold mt-1 ${netProfit >= 0 ? "text-emerald-600" : "text-rose-600"
+              }`}
           >
             {formatAmt(netProfit)}
           </div>
@@ -448,9 +451,8 @@ export function DashboardTab({
                   <td className="p-2.5 text-amber-600">{fmtNum(eTotal)}</td>
                   <td className="p-2.5 text-indigo-600">{fmtNum(wTotal)}</td>
                   <td
-                    className={`p-2.5 font-extrabold ${
-                      pNet >= 0 ? "text-emerald-600" : "text-rose-600"
-                    }`}
+                    className={`p-2.5 font-extrabold ${pNet >= 0 ? "text-emerald-600" : "text-rose-600"
+                      }`}
                   >
                     {fmtNum(pNet)}
                   </td>
@@ -532,9 +534,8 @@ export function DashboardTab({
                       </td>
                       <td className="p-2.5">
                         <span
-                          className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
-                            isOver ? "bg-rose-100 text-rose-800" : "bg-emerald-100 text-emerald-800"
-                          }`}
+                          className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${isOver ? "bg-rose-100 text-rose-800" : "bg-emerald-100 text-emerald-800"
+                            }`}
                         >
                           {utilPct.toFixed(1)}%
                         </span>
@@ -543,16 +544,14 @@ export function DashboardTab({
                         {fmtNum(spSales)}
                       </td>
                       <td
-                        className={`p-2.5 font-mono font-extrabold ${
-                          profit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"
-                        }`}
+                        className={`p-2.5 font-mono font-extrabold ${profit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"
+                          }`}
                       >
                         {fmtNum(profit)}
                       </td>
                       <td
-                        className={`p-2.5 font-mono font-bold ${
-                          marginPct >= 0 ? "text-emerald-700 dark:text-emerald-300" : "text-rose-600"
-                        }`}
+                        className={`p-2.5 font-mono font-bold ${marginPct >= 0 ? "text-emerald-700 dark:text-emerald-300" : "text-rose-600"
+                          }`}
                       >
                         {marginPct.toFixed(1)}%
                       </td>

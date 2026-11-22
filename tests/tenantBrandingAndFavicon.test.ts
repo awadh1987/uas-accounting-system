@@ -36,6 +36,12 @@ import { GET as publicTenantLogoGET } from "../src/app/api/public/tenant/logo/ro
 import { PUT as brandingPUT } from "../src/app/api/system/branding/route";
 import { DELETE as brandingUploadDELETE } from "../src/app/api/system/branding/upload/route";
 import { PUT as tenantConfigPUT } from "../src/app/api/tenant/config/route";
+import {
+  buildUasPrintHtml,
+  resolveLetterheadFromProfile,
+} from "../src/lib/print/uasDocumentPrinter";
+import { buildCopilotConversationPrintSpec } from "../src/lib/ai/conversationArchiveEngine";
+import { buildCustomerStatementPrintSpec } from "../src/components/tabs/CustomersTab";
 
 const HAS_ARABIC_REGEX = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
 
@@ -412,5 +418,93 @@ describe("Tenant Branding, Custom Favicon/Logo, Editable Tagline & English-Only 
         fs.rmSync(path.dirname(tmpDataDir), { recursive: true, force: true });
       } catch {}
     }
+  });
+
+  it("organizes desktop TopCommandBar without overflow-x-auto clipping and groups secondary utilities cleanly", () => {
+    const topBarSrc = fs.readFileSync(path.join(process.cwd(), "src/components/TopCommandBar.tsx"), "utf8");
+    assert.equal(topBarSrc.includes("overflow-x-auto"), false, "TopCommandBar must not clip controls in overflow-x-auto");
+    assert.equal(topBarSrc.includes('data-testid="topbar-utilities-btn"'), true);
+    assert.equal(topBarSrc.includes('data-testid="topbar-utilities-popover"'), true);
+    assert.equal(topBarSrc.includes('data-testid="topbar-user-menu-btn"'), true);
+    assert.equal(topBarSrc.includes('data-testid="topbar-approvals-btn"'), true);
+    assert.equal(topBarSrc.includes('data-testid="topbar-drafts-btn"'), true);
+    assert.equal(topBarSrc.includes('data-testid="topbar-sync-now-btn"'), true);
+  });
+
+  it("applies tenant custom branding in PDF/print documents and removes (Default), UA monogram & stale Powered by UAS", () => {
+    const tenantProfile = {
+      id: "default",
+      legalNameAr: "وكالة ياسر البوكلي لتجارة القات",
+      legalNameEn: "Yasser Albukli Qat Trading",
+      currencyCode: "YER",
+      brandColor: "#059669",
+      tenantSlug: "yasser-albukli",
+      taglineAr: "تجارة القات اليمني الفاخر — صنعاء",
+      taglineEn: "Premium Yemeni Qat Trading",
+      enterpriseLogoCustomUrl: "/api/public/tenant/logo?slug=yasser-albukli&v=77",
+      contactPhone: "+967-777000111",
+      contactAddress: "صنعاء - سوق الجملة",
+      commercialReg: "CR-55123",
+      taxNumber: "TAX-9911",
+      isConfigured: true,
+    };
+
+    const lh = resolveLetterheadFromProfile(tenantProfile);
+    assert.equal(lh.isCustomTenantBrand, true);
+    assert.equal(lh.logoUrl, "/api/public/tenant/logo?slug=yasser-albukli&v=77");
+    assert.equal(lh.taglineAr, "تجارة القات اليمني الفاخر — صنعاء");
+    assert.equal(lh.phone, "+967-777000111");
+    assert.equal(lh.address, "صنعاء - سوق الجملة");
+
+    // Customer statement print spec carries tenant letterhead
+    const custSpec = buildCustomerStatementPrintSpec({
+      selectedCustomer: "ALL",
+      visibleRows: [],
+      projects: [],
+      includeSaleDetails: false,
+      enterpriseProfile: tenantProfile,
+    });
+    const custHtml = buildUasPrintHtml(custSpec);
+    assert.ok(custHtml.includes("وكالة ياسر البوكلي لتجارة القات"));
+    assert.ok(custHtml.includes("تجارة القات اليمني الفاخر — صنعاء"));
+    assert.ok(custHtml.includes("/api/public/tenant/logo?slug=yasser-albukli&amp;v=77"));
+    assert.ok(custHtml.includes("https://yasser-albukli.qat.world"));
+    assert.equal(custHtml.includes("Powered by UAS"), false);
+    assert.equal(custHtml.includes("(Default)"), false);
+    assert.equal(custHtml.includes(">UA<"), false);
+
+    // AI Copilot transcript print spec carries tenant letterhead
+    const copilotSpec = buildCopilotConversationPrintSpec({
+      thread: {
+        id: "th-brand-1",
+        titleAr: "استشارة مالية",
+        messages: [],
+      },
+      enterpriseProfile: tenantProfile,
+      lang: "ar",
+    });
+    const copilotHtml = buildUasPrintHtml(copilotSpec);
+    assert.ok(copilotHtml.includes("وكالة ياسر البوكلي لتجارة القات"));
+    assert.ok(copilotHtml.includes("/api/public/tenant/logo?slug=yasser-albukli&amp;v=77"));
+    assert.equal(copilotHtml.includes("Powered by UAS"), false);
+
+    // Default UAS profile strips (Default) and renders /uas-logo.png rather than UA monogram
+    const defaultLh = resolveLetterheadFromProfile({
+      id: "default",
+      legalNameAr: "النظام المحاسبي الموحد (Default)",
+      legalNameEn: "Unified Accounting System (Default)",
+      currencyCode: "YER",
+      brandColor: "#059669",
+    });
+    assert.equal(defaultLh.companyNameAr, "النظام المحاسبي الموحد");
+    assert.equal(defaultLh.companyNameEn, "Unified Accounting System");
+    assert.equal(defaultLh.isCustomTenantBrand, false);
+    const defaultHtml = buildUasPrintHtml({
+      titleAr: "تقرير عام",
+      letterhead: defaultLh,
+    });
+    assert.equal(defaultHtml.includes("(Default)"), false);
+    assert.equal(defaultHtml.includes(">UA<"), false);
+    assert.ok(defaultHtml.includes('src="/uas-logo.png"'));
   });
 });

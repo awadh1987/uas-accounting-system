@@ -8,6 +8,7 @@ import {
   printUasDocument,
   resolveLetterheadFromProfile,
 } from "@/lib/print/uasDocumentPrinter";
+import { DualLogoBadge } from "@/components/DualLogoBadge";
 import type { LanguageCode, UasEnterpriseProfile, VoucherModalPayload } from "@/types/uas";
 import { QrVerificationBlock } from "./QrVerificationBlock";
 
@@ -75,9 +76,12 @@ export function VoucherModal({
       >
         <div className="flex items-center justify-between border-b pb-3 mb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl accent-bg flex items-center justify-center font-bold">
-              {logoText || "UAS"}
-            </div>
+            <DualLogoBadge
+              profile={enterpriseProfile}
+              logoText={logoText}
+              size="md"
+              iconOnly
+            />
             <div>
               <h3 className="font-bold text-base">{voucher.title}</h3>
               <p className="text-xs text-slate-500">

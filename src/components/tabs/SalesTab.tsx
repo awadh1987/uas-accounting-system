@@ -25,8 +25,12 @@ import {
   type AccountingDirectionValue,
 } from "@/components/AccountingDirectionSelector";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
-import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
+import {
+  printUasDocument,
+  resolveLetterheadFromProfile,
+} from "@/lib/print/uasDocumentPrinter";
 import type {
+  UasEnterpriseProfile,
   UasProject,
   UasSaleTransaction,
   UasTreasuryAccount,
@@ -69,6 +73,7 @@ interface SalesTabProps {
   sales: UasSaleTransaction[];
   treasuryAccounts?: UasTreasuryAccount[];
   currentUser?: UasUser;
+  enterpriseProfile?: UasEnterpriseProfile | null;
   readOnly?: boolean;
   canEditRecords?: boolean;
   canEditDate?: boolean;
@@ -94,6 +99,7 @@ export function SalesTab({
   sales,
   treasuryAccounts = [],
   currentUser,
+  enterpriseProfile,
   readOnly = false,
   canEditRecords = false,
   canEditDate = false,
@@ -845,6 +851,7 @@ export function SalesTab({
                   currency: "YER",
                   status: "POSTED",
                   format: "A4_LANDSCAPE",
+                  letterhead: resolveLetterheadFromProfile(enterpriseProfile),
                   summaryCards: [
                     { labelAr: "إجمالي المبيعات", labelEn: "Total Sales", value: `${fmtNum(sumTotal)} YER`, tone: "indigo" },
                     { labelAr: "التحصيل النقدي", labelEn: "Cash Collected", value: `${fmtNum(sumCredit)} YER`, tone: "emerald" },

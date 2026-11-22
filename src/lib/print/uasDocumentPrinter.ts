@@ -11,6 +11,11 @@
  *    (with Capacitor Filesystem/Share fallback)
  */
 import { isCapacitorNative, triggerNativePrint } from "@/lib/nativeBridge";
+import {
+  DEFAULT_UAS_LOGO_URL,
+  resolveEffectiveBrandInfo,
+  resolveEffectiveTagline,
+} from "@/lib/branding";
 import type { UasEnterpriseProfile } from "@/types/uas";
 
 export type PrintPaperFormat = "A4_PORTRAIT" | "A4_LANDSCAPE" | "THERMAL_80MM";
@@ -26,6 +31,10 @@ export interface CompanyLetterheadMeta {
   phone?: string;
   address?: string;
   slogan?: string;
+  taglineAr?: string;
+  taglineEn?: string;
+  tenantUrl?: string;
+  isCustomTenantBrand?: boolean;
 }
 
 export interface PrintKeyValue {
@@ -137,21 +146,79 @@ export function isolateBdi(raw: string | number | null | undefined, className = 
   return `<bdi dir="auto"${cls}>${safe}</bdi>`;
 }
 
+let activePrintProfile: UasEnterpriseProfile | null = null;
+
+export function setActivePrintEnterpriseProfile(profile?: UasEnterpriseProfile | null): void {
+  activePrintProfile = profile ?? null;
+}
+
+export function getActivePrintEnterpriseProfile(): UasEnterpriseProfile | null {
+  return activePrintProfile;
+}
+
+function stripDefaultSuffix(raw?: string | null): string {
+  return String(raw || "")
+    .replace(/\s*\(Default\)\s*$/i, "")
+    .trim();
+}
+
+function isGenericUasName(nameAr?: string | null, nameEn?: string | null): boolean {
+  const ar = stripDefaultSuffix(nameAr).toLowerCase();
+  const en = stripDefaultSuffix(nameEn).toLowerCase();
+  const genericAr = new Set([
+    "",
+    "اسم المنشأة",
+    "النظام المحاسبي الموحد",
+    "منظومة uas المحاسبية",
+    "منظومة uas المحاسبية والمالية الذكية",
+  ]);
+  const genericEn = new Set([
+    "",
+    "enterprise name",
+    "unified accounting system",
+    "uas accounting system",
+    "uas smart erp & accounting system",
+  ]);
+  return genericAr.has(ar) && genericEn.has(en);
+}
+
 export function resolveLetterheadFromProfile(
   profile?: UasEnterpriseProfile | null
 ): CompanyLetterheadMeta {
-  const nameAr = profile?.legalNameAr?.trim() || "النظام المحاسبي الموحد";
-  const nameEn = profile?.legalNameEn?.trim() || "Unified Accounting System";
+  const brand = resolveEffectiveBrandInfo(profile, profile?.tenantSlug);
+  const rawAr = stripDefaultSuffix(profile?.legalNameAr);
+  const rawEn = stripDefaultSuffix(profile?.legalNameEn);
+
+  const companyNameAr =
+    rawAr && rawAr !== "اسم المنشأة" ? rawAr : "النظام المحاسبي الموحد";
+  const companyNameEn =
+    rawEn && rawEn !== "Enterprise Name" ? rawEn : "Unified Accounting System";
+
+  const hasSlug = Boolean(profile?.tenantSlug && profile.tenantSlug !== "default");
+  const isCustomTenantBrand = Boolean(
+    brand.hasCustomBrand ||
+      hasSlug ||
+      (profile?.isConfigured && !isGenericUasName(companyNameAr, companyNameEn))
+  );
+
+  const taglineAr =
+    (profile?.taglineAr || "").trim() || resolveEffectiveTagline(profile, "ar");
+  const taglineEn =
+    (profile?.taglineEn || "").trim() || resolveEffectiveTagline(profile, "en");
+
   return {
-    companyNameAr: nameAr,
-    companyNameEn: nameEn,
-    logoUrl: profile?.enterpriseLogoCustomUrl || profile?.logoUrl || null,
-    branchName: profile?.heroBadgeAr?.trim() || undefined,
+    companyNameAr,
+    companyNameEn,
+    logoUrl: brand.effectiveLogoUrl || DEFAULT_UAS_LOGO_URL,
     crNumber: profile?.commercialReg?.trim() || undefined,
     taxNumber: profile?.taxNumber?.trim() || undefined,
-    phone: profile?.phone?.trim() || undefined,
-    address: profile?.address?.trim() || undefined,
-    slogan: profile?.heroBadgeEn?.trim() || undefined,
+    phone: profile?.contactPhone?.trim() || profile?.phone?.trim() || undefined,
+    address: profile?.contactAddress?.trim() || profile?.address?.trim() || undefined,
+    taglineAr,
+    taglineEn,
+    slogan: taglineAr,
+    tenantUrl: hasSlug ? `https://${profile!.tenantSlug}.qat.world` : undefined,
+    isCustomTenantBrand,
   };
 }
 
@@ -199,15 +266,33 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
   const format: PrintPaperFormat = spec.format ?? "A4_PORTRAIT";
   const status: DocumentStatusBadge = spec.status ?? "POSTED";
   const st = STATUS_META[status];
+  const defaultResolved = !spec.letterhead
+    ? resolveLetterheadFromProfile(activePrintProfile)
+    : null;
+  const rawCompanyAr = stripDefaultSuffix(
+    spec.letterhead?.companyNameAr || defaultResolved?.companyNameAr || "النظام المحاسبي الموحد"
+  );
+  const rawCompanyEn = stripDefaultSuffix(
+    spec.letterhead?.companyNameEn ?? defaultResolved?.companyNameEn ?? "Unified Accounting System"
+  );
   const lh: CompanyLetterheadMeta = {
-    companyNameAr: spec.letterhead?.companyNameAr?.trim() || "النظام المحاسبي الموحد",
-    companyNameEn: spec.letterhead?.companyNameEn?.trim() || "Unified Accounting System",
-    logoUrl: spec.letterhead?.logoUrl || null,
-    branchName: spec.letterhead?.branchName,
-    crNumber: spec.letterhead?.crNumber,
-    taxNumber: spec.letterhead?.taxNumber,
-    phone: spec.letterhead?.phone,
-    address: spec.letterhead?.address,
+    companyNameAr: rawCompanyAr || "النظام المحاسبي الموحد",
+    companyNameEn: rawCompanyEn || undefined,
+    logoUrl:
+      spec.letterhead !== undefined
+        ? spec.letterhead.logoUrl ?? null
+        : defaultResolved?.logoUrl || DEFAULT_UAS_LOGO_URL,
+    branchName: spec.letterhead?.branchName ?? defaultResolved?.branchName,
+    crNumber: spec.letterhead?.crNumber ?? defaultResolved?.crNumber,
+    taxNumber: spec.letterhead?.taxNumber ?? defaultResolved?.taxNumber,
+    phone: spec.letterhead?.phone ?? defaultResolved?.phone,
+    address: spec.letterhead?.address ?? defaultResolved?.address,
+    taglineAr: spec.letterhead?.taglineAr ?? spec.letterhead?.slogan ?? defaultResolved?.taglineAr,
+    taglineEn: spec.letterhead?.taglineEn ?? defaultResolved?.taglineEn,
+    slogan: spec.letterhead?.slogan ?? defaultResolved?.slogan,
+    tenantUrl: spec.letterhead?.tenantUrl ?? defaultResolved?.tenantUrl,
+    isCustomTenantBrand:
+      spec.letterhead?.isCustomTenantBrand ?? defaultResolved?.isCustomTenantBrand ?? false,
   };
 
   const issueDate = spec.issueDate || new Date().toISOString().slice(0, 16).replace("T", " ");
@@ -219,14 +304,18 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
 
   const logoHtml = lh.logoUrl
     ? `<img src="${escapeHtml(lh.logoUrl)}" alt="${escapeHtml(lh.companyNameAr)}" class="uas-logo-img" />`
+    : isGenericUasName(lh.companyNameAr, lh.companyNameEn)
+    ? `<img src="${DEFAULT_UAS_LOGO_URL}" alt="UAS" class="uas-logo-img" />`
     : `<div class="uas-logo-monogram">${escapeHtml(buildMonogram(lh.companyNameAr, lh.companyNameEn))}</div>`;
 
+  const taglineDisplay = (lh.taglineAr || lh.slogan || "").trim();
   const companyDetailsParts: string[] = [];
   if (lh.branchName) companyDetailsParts.push(`الفرع: ${isolateBdi(lh.branchName)}`);
   if (lh.crNumber) companyDetailsParts.push(`س.ت / CR: ${isolateBdi(lh.crNumber)}`);
   if (lh.taxNumber) companyDetailsParts.push(`الرقم الضريبي / Tax: ${isolateBdi(lh.taxNumber)}`);
   if (lh.phone) companyDetailsParts.push(`هاتف: ${isolateBdi(lh.phone)}`);
   if (lh.address) companyDetailsParts.push(`العنوان: ${escapeHtml(lh.address)}`);
+  if (lh.tenantUrl) companyDetailsParts.push(`${isolateBdi(lh.tenantUrl)}`);
 
   const docMetaItems: PrintKeyValue[] = [
     { labelAr: "رقم المستند", labelEn: "Doc No", value: docNumber },
@@ -384,6 +473,7 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
     }
     .uas-company-ar { font-size: 16px; font-weight: 900; color: #0F172A; line-height: 1.25; }
     .uas-company-en { font-size: 11px; font-weight: 700; color: #475569; margin-top: 2px; }
+    .uas-company-tagline { font-size: 10px; font-weight: 600; color: #334155; margin-top: 2px; }
     .uas-company-details { font-size: 9.5px; color: #334155; margin-top: 4px; display: flex; flex-wrap: wrap; gap: 10px; }
 
     .uas-doc-header-right { text-align: left; }
@@ -560,6 +650,7 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
           <div>
             <div class="uas-company-ar">${escapeHtml(lh.companyNameAr)}</div>
             ${lh.companyNameEn ? `<div class="uas-company-en">${isolateBdi(lh.companyNameEn)}</div>` : ""}
+            ${taglineDisplay ? `<div class="uas-company-tagline">${escapeHtml(taglineDisplay)}</div>` : ""}
             ${companyDetailsParts.length > 0 ? `<div class="uas-company-details">${companyDetailsParts.map((p) => `<span>${p}</span>`).join("")}</div>` : ""}
           </div>
         </div>
@@ -597,7 +688,17 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
           <span class="uas-page-num">صفحة ${isolateBdi("1")} من ${isolateBdi("1")}</span>
           <span class="uas-powered-badge">
             <span class="uas-powered-dot"></span>
-            <span>${isolateBdi("Powered by UAS")} • النظام المحاسبي الموحد</span>
+            ${
+              lh.isCustomTenantBrand
+                ? `<span>${escapeHtml(lh.companyNameAr)}${
+                    lh.tenantUrl
+                      ? ` • ${isolateBdi(lh.tenantUrl)}`
+                      : lh.companyNameEn
+                      ? ` • ${isolateBdi(lh.companyNameEn)}`
+                      : ""
+                  }</span>`
+                : `<span>${isolateBdi("Powered by UAS")} • النظام المحاسبي الموحد</span>`
+            }
           </span>
         </div>
       </footer>
