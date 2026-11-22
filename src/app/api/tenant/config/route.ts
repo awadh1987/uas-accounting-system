@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
-import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
+import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
 import {
@@ -53,7 +53,9 @@ function buildTenantAdminConfig(params: {
 
 export const GET = withTenantRoute(async function GET() {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
     const tenantId = getActiveTenantId();
     const meta = getTenantMetadata(tenantId);
     const [profile, settings] = await Promise.all([
@@ -76,7 +78,9 @@ export const GET = withTenantRoute(async function GET() {
 
 async function handleSaveTenantConfig(req: NextRequest) {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
     const body = (await req.json()) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, {
       moduleId: "system",

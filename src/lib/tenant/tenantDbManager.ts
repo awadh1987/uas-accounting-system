@@ -825,6 +825,9 @@ async function initializeTenantDatabase(
   }
 
   // 7. Initial SUPER_ADMIN / OWNER user
+  const hasExplicitAdminInput = Boolean(
+    options?.adminUsername || options?.adminEmail || options?.adminPassword
+  );
   const adminUsername = (options?.adminUsername || "system_owner").trim() || "system_owner";
   const adminEmail = (
     options?.adminEmail ||
@@ -869,6 +872,49 @@ async function initializeTenantDatabase(
         assignedProjects: "[]",
       },
     });
+  } else if (hasExplicitAdminInput) {
+    const matchedAdmin = await client.user.findFirst({
+      where: {
+        OR: [{ username: adminUsername }, { email: adminEmail }],
+      },
+      select: { id: true },
+    });
+
+    if (matchedAdmin) {
+      await client.user.update({
+        where: { id: matchedAdmin.id },
+        data: {
+          role: "SUPER_ADMIN",
+          active: true,
+          isActive: true,
+          archivedAt: null,
+          ...(options?.adminName ? { name: adminName, fullName: `${adminName} / ${companyName}` } : {}),
+          ...(options?.adminPassword ? { passwordHash: hashPassword(adminPassword) } : {}),
+        },
+      });
+    } else {
+      await client.user.create({
+        data: {
+          username: adminUsername,
+          name: adminName,
+          fullName: `${adminName} / ${companyName}`,
+          displayName: "مدير النظام",
+          phone: "",
+          email: adminEmail,
+          passwordHash: hashPassword(adminPassword),
+          role: "SUPER_ADMIN",
+          department: "الإدارة العليا",
+          active: true,
+          isActive: true,
+          avatarChar: adminName.charAt(0) || "م",
+          avatarColor: "#059669",
+          preferredLang: "ar",
+          preferredCurrency: "YER",
+          preferredTheme: "emerald",
+          assignedProjects: "[]",
+        },
+      });
+    }
   }
 
   // 8. Baseline Audit Log

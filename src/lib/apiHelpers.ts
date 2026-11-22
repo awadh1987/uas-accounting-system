@@ -18,7 +18,10 @@ import { parseAssignedProjects } from "@/lib/serverBootstrap";
 import { checkLicenseAndClock } from "@/lib/licensing/guard";
 import { getRuntimeConfig } from "@/lib/runtimeMode";
 import { extractSessionTokenFromRequest } from "@/lib/authSession";
+import { buildCorsHeaders, corsOptionsResponse } from "@/lib/cors";
 import type { UasUser, UserRole } from "@/types/uas";
+
+export { buildCorsHeaders, corsOptionsResponse };
 
 export interface ActorPayload {
   userId?: string | null;

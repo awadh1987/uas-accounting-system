@@ -18,6 +18,13 @@ import {
   validateTenantSlug,
 } from "../src/lib/tenant";
 import { GET as publicTenantGET } from "../src/app/api/public/tenant/route";
+import {
+  OPTIONS as provisionOPTIONS,
+  POST as provisionPOST,
+} from "../src/app/api/tenants/provision/route";
+import { POST as loginPOST } from "../src/app/api/auth/login/route";
+import { issueSessionToken } from "../src/lib/authSession";
+import { hashPassword } from "../src/lib/serverBootstrap";
 import { prisma } from "../src/lib/prisma";
 import {
   canonicalizeLicensePayload,
@@ -285,5 +292,201 @@ describe("Multi-Tenant Subdomain-on-Key, Slug Validation & Tenant Routing", () =
       assert.equal(sets?.autoSyncIntervalSec, 45);
       assert.equal(sets?.defaultDeviceSyncMode, "MANUAL");
     });
+  });
+
+  it("handles OPTIONS, enforces auth, provisions tenant via POST /api/tenants/provision, resolves ?slug= & subdomain, and allows tenant SUPER_ADMIN login", async () => {
+    const optRes = await provisionOPTIONS(
+      new NextRequest("https://qat.world/api/tenants/provision", {
+        method: "OPTIONS",
+        headers: { origin: "https://qat.world" },
+      })
+    );
+    assert.equal(optRes.status, 204);
+    assert.ok(optRes.headers.get("access-control-allow-methods")?.includes("POST"));
+
+    // 1. Unauthenticated caller -> 401
+    const unauthRes = await provisionPOST(
+      new NextRequest("https://qat.world/api/tenants/provision", {
+        method: "POST",
+        headers: { host: "qat.world", "content-type": "application/json" },
+        body: JSON.stringify({ slug: "alwaha-unauth", companyName: "Alwaha Unauth" }),
+      })
+    );
+    assert.equal(unauthRes.status, 401);
+
+    // Prepare root SUPER_ADMIN and root non-admin users in default DB
+    let rootAdminId = "";
+    let rootAcctId = "";
+    await runWithTenant("default", async () => {
+      const existingAdmin = await prisma.user.findFirst({
+        where: { role: "SUPER_ADMIN", active: true, isActive: true },
+      });
+      if (existingAdmin) {
+        rootAdminId = existingAdmin.id;
+      } else {
+        const created = await prisma.user.create({
+          data: {
+            username: `prov_root_sa_${Date.now()}`,
+            name: "Root Provision Admin",
+            fullName: "Root Provision Admin",
+            email: `prov_root_sa_${Date.now()}@qat.world`,
+            passwordHash: hashPassword("RootPass@2026"),
+            role: "SUPER_ADMIN",
+            active: true,
+            isActive: true,
+          },
+        });
+        rootAdminId = created.id;
+      }
+
+      const acct = await prisma.user.create({
+        data: {
+          username: `prov_acct_${Date.now()}`,
+          name: "Root Field Acct",
+          fullName: "Root Field Acct",
+          email: `prov_acct_${Date.now()}@qat.world`,
+          passwordHash: hashPassword("AcctPass@2026"),
+          role: "FIELD_ACCOUNTANT",
+          active: true,
+          isActive: true,
+        },
+      });
+      rootAcctId = acct.id;
+    });
+
+    const rootAdminToken = issueSessionToken({
+      userId: rootAdminId,
+      userRole: "SUPER_ADMIN",
+      tenantId: "default",
+      userDisplay: "Root Provision Admin",
+    });
+    const rootAcctToken = issueSessionToken({
+      userId: rootAcctId,
+      userRole: "FIELD_ACCOUNTANT",
+      tenantId: "default",
+      userDisplay: "Root Field Acct",
+    });
+
+    const provSlug = `alwaha-p-${Date.now().toString().slice(-5)}`;
+    const provTenantId = normalizeTenantId(provSlug);
+
+    try {
+      // 2. Non-SUPER_ADMIN caller -> 403
+      const forbiddenRes = await provisionPOST(
+        new NextRequest("https://qat.world/api/tenants/provision", {
+          method: "POST",
+          headers: {
+            host: "qat.world",
+            "content-type": "application/json",
+            authorization: `Bearer ${rootAcctToken}`,
+          },
+          body: JSON.stringify({ slug: provSlug, companyName: "Alwaha Prohibited" }),
+        })
+      );
+      assert.equal(forbiddenRes.status, 403);
+
+      // 3. Valid root SUPER_ADMIN provisions tenant (even with companyName in JSON body!) -> 201
+      const provRes = await provisionPOST(
+        new NextRequest("https://qat.world/api/tenants/provision", {
+          method: "POST",
+          headers: {
+            host: "qat.world",
+            "content-type": "application/json",
+            authorization: `Bearer ${rootAdminToken}`,
+          },
+          body: JSON.stringify({
+            slug: provSlug,
+            companyName: "شركة الواحة للاختبار",
+            nameAr: "شركة الواحة للاختبار",
+            nameEn: "Alwaha Provision Test Co",
+            adminUsername: "alwaha_owner",
+            adminEmail: `owner@${provSlug}.qat.world`,
+            adminPassword: "AlwahaOwnerPass#2026",
+            adminName: "مالك الواحة",
+          }),
+        })
+      );
+      assert.equal(provRes.status, 201);
+      const provJson = await provRes.json();
+      assert.equal(provJson.success, true);
+      assert.equal(provJson.slug, provSlug);
+      assert.equal(provJson.tenantId, provTenantId);
+      assert.equal(provJson.tenantUrl, `https://${provSlug}.qat.world`);
+      assert.equal(provJson.adminAccount?.username, "alwaha_owner");
+      assert.equal(provJson.adminAccount?.role, "SUPER_ADMIN");
+
+      // 4. Duplicate slug without allowExisting -> 409
+      const dupRes = await provisionPOST(
+        new NextRequest("https://qat.world/api/tenants/provision", {
+          method: "POST",
+          headers: {
+            host: "qat.world",
+            "content-type": "application/json",
+            authorization: `Bearer ${rootAdminToken}`,
+          },
+          body: JSON.stringify({ slug: provSlug, companyName: "Dup" }),
+        })
+      );
+      assert.equal(dupRes.status, 409);
+
+      // 5. Public resolution works immediately via both ?slug= and Host subdomain
+      const bySlugRes = await publicTenantGET(
+        new NextRequest(`https://qat.world/api/public/tenant?slug=${provSlug}`, {
+          headers: { host: "qat.world" },
+        })
+      );
+      assert.equal(bySlugRes.status, 200);
+      const bySlugJson = await bySlugRes.json();
+      assert.equal(bySlugJson.isTenantWorkspace, true);
+      assert.equal(bySlugJson.tenantSlug, provSlug);
+      assert.equal(bySlugJson.resolutionSource, "query");
+
+      const byHostRes = await publicTenantGET(
+        new NextRequest(`https://${provSlug}.qat.world/api/public/tenant`, {
+          headers: { host: `${provSlug}.qat.world` },
+        })
+      );
+      assert.equal(byHostRes.status, 200);
+      const byHostJson = await byHostRes.json();
+      assert.equal(byHostJson.isTenantWorkspace, true);
+      assert.equal(byHostJson.tenantSlug, provSlug);
+      assert.equal(byHostJson.resolutionSource, "subdomain");
+
+      // 6. Seeded tenant SUPER_ADMIN can log in directly on <slug>.qat.world
+      const loginRes = await loginPOST(
+        new NextRequest(`https://${provSlug}.qat.world/api/auth/login`, {
+          method: "POST",
+          headers: {
+            host: `${provSlug}.qat.world`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            identifier: "alwaha_owner",
+            password: "AlwahaOwnerPass#2026",
+          }),
+        })
+      );
+      assert.equal(loginRes.status, 200);
+      const loginJson = await loginRes.json();
+      assert.equal(loginJson.tenantId, provTenantId);
+      assert.equal(loginJson.user?.role, "SUPER_ADMIN");
+      assert.ok(loginJson.sessionToken);
+    } finally {
+      if (rootAcctId) {
+        await runWithTenant("default", async () => {
+          await prisma.user.delete({ where: { id: rootAcctId } }).catch(() => {});
+        });
+      }
+      unregisterTenant(provTenantId);
+      await resetTenantClientsForTests();
+      const dbPath = resolveTenantDbFilePath(provTenantId);
+      if (dbPath) {
+        for (const f of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
+          if (fs.existsSync(f)) {
+            try { fs.unlinkSync(f); } catch {}
+          }
+        }
+      }
+    }
   });
 });

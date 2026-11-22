@@ -230,6 +230,22 @@ export function findTenantBySlug(rawSlug?: string | null): TenantMetadata | null
   return inMemoryRegistry.get(norm) || null;
 }
 
+function isPostgresRuntimeUrl(): boolean {
+  const url = (process.env.DATABASE_URL || "")
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .toLowerCase();
+  return url.startsWith("postgresql://") || url.startsWith("postgres://");
+}
+
+function resolveSchemaOrDbIdentifier(normId: string): string {
+  if (normId === "default") return "default";
+  if (isPostgresRuntimeUrl()) {
+    return normId.startsWith("tenant_") ? normId : `tenant_${normId}`;
+  }
+  return normId;
+}
+
 export function registerTenant(params: {
   tenantId: string;
   companyName: string;
@@ -239,6 +255,7 @@ export function registerTenant(params: {
   tenantUrl?: string;
   licenseId?: string;
   maxSeats?: number;
+  schemaOrDb?: string;
 }): TenantMetadata {
   ensureRegistryInitialized();
   const normId = normalizeTenantId(params.tenantId);
@@ -270,7 +287,7 @@ export function registerTenant(params: {
     nameEn: params.nameEn ?? existing?.nameEn ?? (params.companyName.trim() || normId),
     tenantUrl: resolvedUrl,
     licenseId: params.licenseId ?? existing?.licenseId,
-    schemaOrDb: normId,
+    schemaOrDb: params.schemaOrDb || resolveSchemaOrDbIdentifier(normId),
     status: existing?.status || "ACTIVE",
     createdAt: existing?.createdAt || now,
     updatedAt: now,
@@ -285,7 +302,7 @@ export function registerTenant(params: {
 export function ensureTenantRegistered(
   rawTenantId?: string | null,
   companyName?: string,
-  extra?: { slug?: string; nameAr?: string; nameEn?: string; licenseId?: string }
+  extra?: { slug?: string; nameAr?: string; nameEn?: string; licenseId?: string; maxSeats?: number }
 ): TenantMetadata {
   ensureRegistryInitialized();
   const normId = normalizeTenantId(rawTenantId);
@@ -313,6 +330,15 @@ export function ensureTenantRegistered(
       existing.licenseId = extra.licenseId;
       changed = true;
     }
+    if (typeof extra?.maxSeats === "number" && extra.maxSeats > 0 && extra.maxSeats !== existing.maxSeats) {
+      existing.maxSeats = extra.maxSeats;
+      changed = true;
+    }
+    const expectedSchemaOrDb = resolveSchemaOrDbIdentifier(normId);
+    if (existing.schemaOrDb !== expectedSchemaOrDb) {
+      existing.schemaOrDb = expectedSchemaOrDb;
+      changed = true;
+    }
     if (changed) {
       existing.updatedAt = new Date().toISOString();
       saveRegistryToDisk();
@@ -327,5 +353,6 @@ export function ensureTenantRegistered(
     nameAr: extra?.nameAr,
     nameEn: extra?.nameEn,
     licenseId: extra?.licenseId,
+    maxSeats: extra?.maxSeats,
   });
 }

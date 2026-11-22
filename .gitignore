@@ -27,11 +27,12 @@ out/downloads/*.exe
 !public/downloads/.gitkeep
 
 # Cryptographic licensing private keys & release bundles
-keys/
-release/
+/keys/
+/release/
 uas.runtime.json
 license.uas
 tenants_registry.json
-tenants/
+prisma/tenants/
+/tenants/
 
 public/downloads/version.json
