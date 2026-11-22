@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withTenantRoute } from "@/lib/prisma";
+import { getActiveTenantId, getTenantMetadata } from "@/lib/tenant";
 import { getMachineHwid, getMachineRequestCode } from "@/lib/licensing/hwid";
 import { loadInstalledLicense } from "@/lib/licensing/verifier";
 import { checkLicenseAndClock } from "@/lib/licensing/guard";
@@ -19,11 +20,13 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
   const lanIps = getServerLanIps();
   const lanUrl = getLanServerUrl(runtimeConfig.port);
 
+  const tenantId = getActiveTenantId();
+  const meta = getTenantMetadata(tenantId);
   const seatToken = req.headers.get("x-uas-seat-token") || undefined;
   const clientIp = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "127.0.0.1";
 
   const guardResult = await checkLicenseAndClock(runtimeConfig.mode, seatToken, clientIp);
-  const { license } = loadInstalledLicense();
+  const { license } = loadInstalledLicense(tenantId);
 
   let remainingDays = 0;
   if (license?.expires_at) {
@@ -55,7 +58,10 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     request_code: requestCode,
     hwid,
     active_mode: runtimeConfig.mode,
+    tenant_id: tenantId,
+    tenant_slug: meta?.slug && meta.slug !== "default" ? meta.slug : tenantId === "default" ? null : tenantId,
     license_status: guardResult.status,
+    code: guardResult.code || null,
     is_valid: guardResult.allowed,
     error: guardResult.error || null,
     customer_name: license?.customer_name || null,

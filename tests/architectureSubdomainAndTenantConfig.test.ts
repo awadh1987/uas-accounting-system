@@ -2,6 +2,8 @@ import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { NextRequest } from "next/server";
 import {
   buildTenantWorkspaceUrl,
@@ -31,7 +33,15 @@ import {
   validateLicenseStructure,
   type UasSignedLicense,
 } from "../src/lib/licensing/licenseSchema";
-import { verifyLicenseSignature } from "../src/lib/licensing/verifier";
+import {
+  loadInstalledLicense,
+  resolveLicenseDataDirectory,
+  resolveTenantLicensePath,
+  resolveWritableProjectRoot,
+  verifyLicenseSignature,
+} from "../src/lib/licensing/verifier";
+import { POST as licensingActivatePOST } from "../src/app/api/licensing/activate/route";
+import { GET as licensingStatusGET } from "../src/app/api/licensing/status/route";
 import { verifyKeyRequest } from "../src/lib/licensing/licenseAuthority";
 import { MemorySeatStore } from "../src/lib/licensing/seatService";
 
@@ -486,6 +496,151 @@ describe("Multi-Tenant Subdomain-on-Key, Slug Validation & Tenant Routing", () =
             try { fs.unlinkSync(f); } catch {}
           }
         }
+      }
+    }
+  });
+
+  it("isolates tenant licenses under persistent data/licenses/<slug>/license.uas outside .next/standalone", async () => {
+    // 1. Standalone cwd resolution must walk above .next/standalone
+    const standaloneCwd = path.join(os.tmpdir(), "uas-qat", ".next", "standalone");
+    const expectedRoot = path.join(os.tmpdir(), "uas-qat");
+    assert.equal(resolveWritableProjectRoot(standaloneCwd), expectedRoot);
+
+    const prevDataDir = process.env.UAS_DATA_DIR;
+    const tmpDataDir = path.join(os.tmpdir(), `uas-lic-data-${Date.now()}`);
+    const aljabriSlug = `aljabri-${Date.now().toString().slice(-5)}`;
+    const otherSlug = `other-${Date.now().toString().slice(-5)}`;
+    const aljabriId = normalizeTenantId(aljabriSlug);
+    const otherId = normalizeTenantId(otherSlug);
+
+    try {
+      delete process.env.UAS_DATA_DIR;
+      const fallbackPath = resolveTenantLicensePath(aljabriSlug, standaloneCwd);
+      assert.ok(
+        !fallbackPath.replace(/\\/g, "/").includes("/.next/standalone/"),
+        "Tenant license path must never point inside .next/standalone"
+      );
+
+      process.env.UAS_DATA_DIR = tmpDataDir;
+      assert.equal(resolveLicenseDataDirectory(standaloneCwd), path.resolve(tmpDataDir));
+
+      ensureTenantRegistered(aljabriId, "شركة الجابري للاختبار", {
+        slug: aljabriSlug,
+        nameAr: "شركة الجابري للاختبار",
+        nameEn: "Aljabri License Isolation Test",
+      });
+      ensureTenantRegistered(otherId, "منشأة أخرى بدون ترخيص", {
+        slug: otherSlug,
+        nameAr: "منشأة أخرى بدون ترخيص",
+        nameEn: "Other Unlicensed Tenant",
+      });
+
+      const rootLicPath = path.resolve(process.cwd(), "license.uas");
+      assert.ok(fs.existsSync(rootLicPath), "Repo root license.uas required for signed activation test");
+      const validSignedLic = JSON.parse(fs.readFileSync(rootLicPath, "utf8")) as UasSignedLicense;
+      const validUasKey = `UASKEY-${Buffer.from(JSON.stringify(validSignedLic), "utf8").toString("base64")}`;
+
+      await runWithTenant(aljabriId, async () => {
+        await prisma.enterpriseProfile.updateMany({
+          where: { id: "default" },
+          data: {
+            legalNameAr: validSignedLic.company_name || "وكالة الجابري لتجارة القات",
+            legalNameEn: validSignedLic.company_name || "Al-Jabri",
+            isConfigured: true,
+          },
+        });
+      });
+
+      // 2. Unactivated tenant must NEVER inherit default license or report INVALID_SIGNATURE
+      const unactStatusRes = await licensingStatusGET(
+        new NextRequest(`https://${aljabriSlug}.qat.world/api/licensing/status`, {
+          headers: { host: `${aljabriSlug}.qat.world` },
+        })
+      );
+      assert.equal(unactStatusRes.status, 200);
+      const unactJson = await unactStatusRes.json();
+      assert.equal(unactJson.is_valid, false);
+      assert.equal(unactJson.license_status, "UNLICENSED");
+      assert.equal(unactJson.code, "LICENSE_MISSING");
+      assert.equal(unactJson.license_id, null);
+
+      // 3. Tampered UASKEY must fail activation
+      const tamperedLic = { ...validSignedLic, max_lan_seats: 9999 };
+      const tamperedKey = `UASKEY-${Buffer.from(JSON.stringify(tamperedLic), "utf8").toString("base64")}`;
+      const badSigRes = await licensingActivatePOST(
+        new NextRequest(`https://${aljabriSlug}.qat.world/api/licensing/activate`, {
+          method: "POST",
+          headers: { host: `${aljabriSlug}.qat.world`, "content-type": "application/json" },
+          body: JSON.stringify({ activationKey: tamperedKey, userEmail: "admin@aljabri.qat.world" }),
+        })
+      );
+      assert.equal(badSigRes.status, 400);
+
+      // 4. Valid UASKEY activates aljabri and writes ONLY to <tmpDataDir>/licenses/<aljabriSlug>/license.uas
+      const actRes = await licensingActivatePOST(
+        new NextRequest(`https://${aljabriSlug}.qat.world/api/licensing/activate`, {
+          method: "POST",
+          headers: { host: `${aljabriSlug}.qat.world`, "content-type": "application/json" },
+          body: JSON.stringify({
+            activationKey: validUasKey,
+            companyName: validSignedLic.company_name || "وكالة الجابري لتجارة القات",
+            userEmail: "admin@aljabri.qat.world",
+            platform: "windows",
+          }),
+        })
+      );
+      assert.equal(actRes.status, 200);
+      const actJson = await actRes.json();
+      assert.equal(actJson.success, true);
+      assert.equal(actJson.license_status, "ACTIVE");
+      assert.equal(actJson.is_valid, true);
+
+      const expectedSavedPath = path.join(tmpDataDir, "licenses", aljabriSlug, "license.uas");
+      assert.equal(path.resolve(actJson.saved_path), path.resolve(expectedSavedPath));
+      assert.equal(fs.existsSync(expectedSavedPath), true);
+      assert.equal(fs.existsSync(path.join(tmpDataDir, "licenses", "default", "license.uas")), false);
+
+      // 5. Status for activated tenant is ACTIVE, while another unactivated tenant remains UNLICENSED
+      const actStatusRes = await licensingStatusGET(
+        new NextRequest(`https://${aljabriSlug}.qat.world/api/licensing/status`, {
+          headers: { host: `${aljabriSlug}.qat.world` },
+        })
+      );
+      assert.equal(actStatusRes.status, 200);
+      const actStatusJson = await actStatusRes.json();
+      assert.equal(actStatusJson.is_valid, true);
+      assert.equal(actStatusJson.license_status, "ACTIVE");
+      assert.equal(actStatusJson.license_id, validSignedLic.license_id);
+
+      const otherStatusRes = await licensingStatusGET(
+        new NextRequest(`https://${otherSlug}.qat.world/api/licensing/status`, {
+          headers: { host: `${otherSlug}.qat.world` },
+        })
+      );
+      assert.equal(otherStatusRes.status, 200);
+      const otherStatusJson = await otherStatusRes.json();
+      assert.equal(otherStatusJson.is_valid, false);
+      assert.equal(otherStatusJson.license_status, "UNLICENSED");
+      assert.equal(otherStatusJson.code, "LICENSE_MISSING");
+      assert.equal(loadInstalledLicense(otherId).license, null);
+    } finally {
+      if (prevDataDir === undefined) delete process.env.UAS_DATA_DIR;
+      else process.env.UAS_DATA_DIR = prevDataDir;
+      unregisterTenant(aljabriId);
+      unregisterTenant(otherId);
+      await resetTenantClientsForTests();
+      for (const tid of [aljabriId, otherId]) {
+        const dbPath = resolveTenantDbFilePath(tid);
+        if (dbPath) {
+          for (const f of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
+            if (fs.existsSync(f)) {
+              try { fs.unlinkSync(f); } catch {}
+            }
+          }
+        }
+      }
+      if (fs.existsSync(tmpDataDir)) {
+        try { fs.rmSync(tmpDataDir, { recursive: true, force: true }); } catch {}
       }
     }
   });

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { withTenantRoute } from "@/lib/prisma";
-import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
+import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import { createPrismaSeatStore } from "@/lib/licensing/prismaSeatStore";
 import { releaseKeySeat, verifyKeyRequest } from "@/lib/licensing/licenseAuthority";
 import {
@@ -59,7 +59,9 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       );
     }
 
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
     const body = (await req.json()) as Record<string, unknown>;
     const store = createPrismaSeatStore();
 

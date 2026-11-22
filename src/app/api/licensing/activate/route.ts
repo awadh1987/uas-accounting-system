@@ -1,8 +1,19 @@
+import fs from "node:fs";
+import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
-import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
-import { validateLicenseStructure, type SeatPlatform, type UasSignedLicense } from "@/lib/licensing/licenseSchema";
-import { verifyLicense, saveInstalledLicense } from "@/lib/licensing/verifier";
+import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
+import {
+  validateLicenseStructure,
+  type SeatPlatform,
+  type UasSignedLicense,
+} from "@/lib/licensing/licenseSchema";
+import {
+  loadInstalledLicense,
+  resolveTenantLicensePath,
+  saveInstalledLicense,
+  verifyLicense,
+} from "@/lib/licensing/verifier";
 import { getMachineHwid } from "@/lib/licensing/hwid";
 import { getRuntimeConfig } from "@/lib/runtimeMode";
 import { createPrismaSeatStore } from "@/lib/licensing/prismaSeatStore";
@@ -14,16 +25,38 @@ import {
   ensureTenantRegistered,
   findTenantBySlug,
   generateTenantSlug,
+  getActiveTenantId,
+  getTenantMetadata,
   getTenantPrisma,
   listExistingSlugs,
   normalizeTenantId,
+  runWithTenant,
 } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
+function decodeUasKeyToken(rawKey: string): UasSignedLicense | null {
+  const key = rawKey.trim();
+  if (!/^UASKEY-/i.test(key)) return null;
+  const b64 = key.replace(/^UASKEY-/i, "").trim();
+  for (const encoding of ["base64", "base64url"] as const) {
+    try {
+      const decoded = Buffer.from(b64, encoding).toString("utf8");
+      const parsed = validateLicenseStructure(JSON.parse(decoded));
+      if (parsed) return parsed;
+    } catch {
+      // Try next encoding
+    }
+  }
+  return null;
+}
+
 export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
+
     let licenseObj: UasSignedLicense | null = null;
     let confirmCompanyName = "";
     let userEmail = "";
@@ -46,7 +79,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         licenseObj = validateLicenseStructure(JSON.parse(text));
       }
     } else {
-      const body = await req.json();
+      const body = (await req.json()) as Record<string, unknown>;
       confirmCompanyName = String(body.companyName || body.company_name || "").trim();
       userEmail = String(body.userEmail || body.user_email || "").trim();
       platform = normalizePlatform(String(body.platform || "windows")) || "windows";
@@ -54,26 +87,19 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       deviceName = String(body.deviceName || body.device_name || "").trim();
 
       if (body.licenseFileContent) {
-        const text = typeof body.licenseFileContent === "string"
-          ? body.licenseFileContent
-          : JSON.stringify(body.licenseFileContent);
+        const text =
+          typeof body.licenseFileContent === "string"
+            ? body.licenseFileContent
+            : JSON.stringify(body.licenseFileContent);
         licenseObj = validateLicenseStructure(JSON.parse(text));
       } else if (body.activationKey) {
         const key = String(body.activationKey).trim();
-        if (key.startsWith("UASKEY-")) {
-          try {
-            const b64 = key.replace("UASKEY-", "");
-            const decoded = Buffer.from(b64, "base64").toString("utf8");
-            licenseObj = validateLicenseStructure(JSON.parse(decoded));
-          } catch {
-            licenseObj = null;
-          }
-        }
+        licenseObj = decodeUasKeyToken(key);
 
-        // Query online activation server (always https://qat.world unless UAS_ACTIVATION_URL is overridden)
-        // when key is an online key or when online verification is explicitly requested.
+        // Query online activation server only for non-UASKEY keys or when explicitly configured/requested.
         const envActivationUrl = (process.env.UAS_ACTIVATION_URL || "").trim().replace(/\/+$/, "");
-        const shouldQueryOnline = !key.startsWith("UASKEY-") || Boolean(envActivationUrl) || body.verifyOnline === true;
+        const shouldQueryOnline =
+          !/^UASKEY-/i.test(key) || Boolean(envActivationUrl) || body.verifyOnline === true;
         if (shouldQueryOnline) {
           try {
             const serverBase =
@@ -94,14 +120,17 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
               }),
               signal: AbortSignal.timeout(8000),
             });
-            const data = await res.json().catch(() => ({}));
+            const data = (await res.json().catch(() => ({}))) as {
+              license?: unknown;
+              code?: string;
+              error?: string;
+            };
             if (res.ok) {
               if (data.license) {
-                licenseObj = validateLicenseStructure(data.license);
+                licenseObj = validateLicenseStructure(data.license) || licenseObj;
               }
             } else {
               onlineError = { status: res.status, code: data?.code, error: data?.error };
-              // If the cloud authority explicitly rejected the company name or seat quota, stop immediately
               if (res.status === 403 || res.status === 409) {
                 return NextResponse.json(
                   {
@@ -113,8 +142,8 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
                 );
               }
             }
-          } catch (e: any) {
-            console.error("[Licensing Activation] Online activation check error:", e);
+          } catch (err: unknown) {
+            console.error("[Licensing Activation] Online activation check error:", err);
           }
         }
       }
@@ -133,7 +162,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       );
     }
 
-    // Verify cryptographic signature, HWID match, and expiry
+    // Verify cryptographic signature (against UAS_LICENSE_PUBLIC_KEY), HWID match, expiry, and mode
     const runtimeConfig = getRuntimeConfig();
     const verification = verifyLicense(licenseObj, runtimeConfig.mode);
 
@@ -142,75 +171,59 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         {
           success: false,
           status: verification.status,
+          code: `LICENSE_${verification.status}`,
           error: verification.error || "فشل التحقق من صلاحية الترخيص / License verification failed",
         },
         { status: 400 }
       );
     }
 
-    const currentHwid = getMachineHwid();
-    const seatHwid = (customHwid || currentHwid).toUpperCase();
+    // Validate tenant_slug matching when activating inside a non-default tenant workspace
+    const activeTenantId = getActiveTenantId();
+    const activeMeta = getTenantMetadata(activeTenantId);
+    const activeSlug = activeMeta?.slug || (activeTenantId === "default" ? "default" : activeTenantId);
 
-    // Company-name lock (EnterpriseProfile) + activating user's seat (7 users × 1 Windows + 1 Android)
-    const policy = await enforceActivationPolicy(
-      {
-        license: licenseObj,
-        confirmCompanyName,
-        userEmail,
-        platform,
-        hwid: seatHwid,
-        deviceName: deviceName || process.env.COMPUTERNAME || process.env.HOSTNAME || undefined,
-      },
-      { profileRepo: createPrismaProfileRepo(), seatStore: createPrismaSeatStore() }
-    );
-    if (!policy.ok) {
-      return NextResponse.json(
-        { success: false, code: policy.code, error: policy.error },
-        { status: policy.status }
-      );
+    if (activeTenantId !== "default" && licenseObj.tenant_slug) {
+      const licSlugClean = licenseObj.tenant_slug.trim().toLowerCase();
+      const licNormId = normalizeTenantId(licSlugClean);
+      if (licNormId !== activeTenantId && licSlugClean !== activeSlug.trim().toLowerCase()) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: "TENANT_MISMATCH",
+            error: `الترخيص مخصص للمنشأة (${licSlugClean}) ولا يطابق مساحة المنشأة الحالية (${activeSlug}) / License tenant_slug does not match target workspace.`,
+          },
+          { status: 403 }
+        );
+      }
     }
 
-    // Persist to disk (C:\UAS-Data\license.uas or local license.uas)
-    const savedPath = saveInstalledLicense(licenseObj);
+    // Determine target tenant for storage & DB state
+    let targetTenantId = activeTenantId;
+    let tenantSlug: string | null = licenseObj.tenant_slug || (activeTenantId !== "default" ? activeSlug : null);
+    let tenantUrl: string | null = licenseObj.tenant_url || (tenantSlug ? buildTenantWorkspaceUrl(tenantSlug) : null);
 
-    // Update Database LicenseState
-    const now = new Date();
-    await prisma.licenseState.upsert({
-      where: { id: "active" },
-      update: {
-        licenseId: licenseObj.license_id,
-        customerName: licenseObj.customer_name,
-        hwidHash: currentHwid,
-        lastVerifiedUtc: now,
-        status: "ACTIVE",
-        licenseDataJson: JSON.stringify(licenseObj),
-      },
-      create: {
-        id: "active",
-        licenseId: licenseObj.license_id,
-        customerName: licenseObj.customer_name,
-        hwidHash: currentHwid,
-        lastVerifiedUtc: now,
-        status: "ACTIVE",
-        licenseDataJson: JSON.stringify(licenseObj),
-      },
-    });
-
-    // Persist tenant subdomain mapping & provision isolated DB/schema when slug or company name is present
-    let tenantSlug = licenseObj.tenant_slug || null;
-    let tenantUrl = licenseObj.tenant_url || null;
     const companyForTenant = (licenseObj.company_name || licenseObj.customer_name || confirmCompanyName || "").trim();
-    if (companyForTenant) {
+    if (activeTenantId === "default" && licenseObj.tenant_slug) {
+      const existingBySlug = findTenantBySlug(licenseObj.tenant_slug);
+      const resolvedSlug = existingBySlug?.slug || licenseObj.tenant_slug.trim().toLowerCase();
+      const resolvedId = existingBySlug?.tenantId || normalizeTenantId(resolvedSlug);
+      const meta = ensureTenantRegistered(resolvedId, companyForTenant || resolvedSlug, {
+        slug: resolvedSlug,
+        nameAr: licenseObj.name_ar || companyForTenant || resolvedSlug,
+        nameEn: licenseObj.name_en || companyForTenant || resolvedSlug,
+        licenseId: licenseObj.license_id,
+      });
+      await getTenantPrisma(meta.tenantId);
+      targetTenantId = meta.tenantId;
+      tenantSlug = meta.slug;
+      tenantUrl = meta.tenantUrl || buildTenantWorkspaceUrl(meta.slug);
+    } else if (companyForTenant && activeTenantId === "default") {
       try {
-        const existingBySlug = tenantSlug ? findTenantBySlug(tenantSlug) : null;
-        const resolvedSlug =
-          tenantSlug ||
-          existingBySlug?.slug ||
-          generateTenantSlug(licenseObj.name_en || companyForTenant, {
-            existingSlugs: listExistingSlugs(),
-          }).slug;
-        const tenantId = existingBySlug?.tenantId || normalizeTenantId(resolvedSlug);
-        const meta = ensureTenantRegistered(tenantId, companyForTenant, {
+        const resolvedSlug = generateTenantSlug(licenseObj.name_en || companyForTenant, {
+          existingSlugs: listExistingSlugs(),
+        }).slug;
+        const meta = ensureTenantRegistered(normalizeTenantId(resolvedSlug), companyForTenant, {
           slug: resolvedSlug,
           nameAr: licenseObj.name_ar || companyForTenant,
           nameEn: licenseObj.name_en || companyForTenant,
@@ -224,29 +237,151 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({
-      success: true,
-      message: "تم تفعيل الترخيص بنجاح وتوثيقه مشفراً على هذا الجهاز / License activated successfully and bound to this hardware.",
-      saved_path: savedPath,
-      license: licenseObj,
-      tenant_slug: tenantSlug,
-      tenant_url: tenantUrl,
-      company_lock: policy.companyLock,
-      seat: policy.seat
-        ? {
-            user_email: policy.seat.binding.userEmail,
-            platform: policy.seat.binding.platform,
-            hwid: policy.seat.binding.hwid,
-            status: policy.seat.status,
+    const currentHwid = getMachineHwid();
+    const seatHwid = (customHwid || currentHwid).toUpperCase();
+
+    return await runWithTenant(targetTenantId, async () => {
+      const targetLicensePath = resolveTenantLicensePath(targetTenantId);
+      const hadPriorFile = fs.existsSync(/*turbopackIgnore: true*/ targetLicensePath);
+      const priorFileContent = hadPriorFile
+        ? fs.readFileSync(/*turbopackIgnore: true*/ targetLicensePath, "utf8")
+        : null;
+      const priorLicenseLookup = loadInstalledLicense(targetTenantId);
+
+      // Snapshot EnterpriseProfile & LicenseState before mutating so any write error rolls back cleanly
+      const priorProfile = await prisma.enterpriseProfile.findUnique({ where: { id: "default" } });
+      const priorLicenseState = await prisma.licenseState.findUnique({ where: { id: "active" } });
+
+      // 1. Company-name lock (EnterpriseProfile) + activating user's seat
+      const policy = await enforceActivationPolicy(
+        {
+          license: licenseObj,
+          confirmCompanyName,
+          userEmail,
+          platform,
+          hwid: seatHwid,
+          deviceName: deviceName || process.env.COMPUTERNAME || process.env.HOSTNAME || undefined,
+        },
+        { profileRepo: createPrismaProfileRepo(), seatStore: createPrismaSeatStore() }
+      );
+      if (!policy.ok) {
+        return NextResponse.json(
+          { success: false, code: policy.code, error: policy.error },
+          { status: policy.status }
+        );
+      }
+
+      // 2. Persist license file into persistent writable directory (`data/licenses/<tenantSlug>/license.uas`)
+      let savedPath: string;
+      try {
+        savedPath = saveInstalledLicense(licenseObj, targetTenantId);
+      } catch (fsErr: unknown) {
+        // Roll back any profile mutation if disk write fails (e.g., EACCES / EPERM / EROFS)
+        if (priorProfile) {
+          await prisma.enterpriseProfile
+            .update({
+              where: { id: "default" },
+              data: {
+                legalNameAr: priorProfile.legalNameAr,
+                legalNameEn: priorProfile.legalNameEn,
+                isConfigured: priorProfile.isConfigured,
+              },
+            })
+            .catch(() => {});
+        }
+        const errCode = (fsErr as NodeJS.ErrnoException)?.code;
+        const msg = fsErr instanceof Error ? fsErr.message : String(fsErr);
+        console.error("[Licensing Activation] Failed to write license file:", fsErr);
+        return NextResponse.json(
+          {
+            success: false,
+            code: errCode === "EACCES" || errCode === "EPERM" ? "LICENSE_STORAGE_PERMISSION_DENIED" : "LICENSE_STORAGE_UNWRITABLE",
+            error: `تعذر حفظ ملف الترخيص على القرص (${path.basename(targetLicensePath)}): ${msg}`,
+          },
+          { status: errCode === "EACCES" || errCode === "EPERM" ? 403 : 500 }
+        );
+      }
+
+      // 3. Update Database LicenseState (roll back written file if DB update fails)
+      const now = new Date();
+      try {
+        await prisma.licenseState.upsert({
+          where: { id: "active" },
+          update: {
+            licenseId: licenseObj.license_id,
+            customerName: licenseObj.customer_name,
+            hwidHash: currentHwid,
+            lastVerifiedUtc: now,
+            status: "ACTIVE",
+            licenseDataJson: JSON.stringify(licenseObj),
+          },
+          create: {
+            id: "active",
+            licenseId: licenseObj.license_id,
+            customerName: licenseObj.customer_name,
+            hwidHash: currentHwid,
+            lastVerifiedUtc: now,
+            status: "ACTIVE",
+            licenseDataJson: JSON.stringify(licenseObj),
+          },
+        });
+      } catch (dbErr) {
+        try {
+          if (hadPriorFile && priorFileContent !== null) {
+            fs.writeFileSync(/*turbopackIgnore: true*/ savedPath, priorFileContent, "utf8");
+          } else if (!priorLicenseLookup.license && fs.existsSync(/*turbopackIgnore: true*/ savedPath)) {
+            fs.unlinkSync(/*turbopackIgnore: true*/ savedPath);
           }
-        : null,
+          if (priorLicenseState) {
+            await prisma.licenseState
+              .update({
+                where: { id: "active" },
+                data: {
+                  licenseId: priorLicenseState.licenseId,
+                  customerName: priorLicenseState.customerName,
+                  hwidHash: priorLicenseState.hwidHash,
+                  lastVerifiedUtc: priorLicenseState.lastVerifiedUtc,
+                  status: priorLicenseState.status,
+                  licenseDataJson: priorLicenseState.licenseDataJson,
+                },
+              })
+              .catch(() => {});
+          }
+        } catch {
+          // Best-effort rollback
+        }
+        throw dbErr;
+      }
+
+      return NextResponse.json({
+        success: true,
+        license_status: "ACTIVE",
+        is_valid: true,
+        message:
+          "تم تفعيل الترخيص بنجاح وتوثيقه مشفراً على هذا الجهاز / License activated successfully and bound to this workspace.",
+        saved_path: savedPath,
+        license: licenseObj,
+        tenant_id: targetTenantId,
+        tenant_slug: tenantSlug,
+        tenant_url: tenantUrl,
+        company_lock: policy.companyLock,
+        seat: policy.seat
+          ? {
+              user_email: policy.seat.binding.userEmail,
+              platform: policy.seat.binding.platform,
+              hwid: policy.seat.binding.hwid,
+              status: policy.seat.status,
+            }
+          : null,
+      });
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
     console.error("[Licensing Activation Error]:", err);
     return NextResponse.json(
       {
         success: false,
-        error: `خطأ أثناء معالجة التفعيل: ${err?.message || "Unknown error"}`,
+        error: `خطأ أثناء معالجة التفعيل: ${msg}`,
       },
       { status: 500 }
     );

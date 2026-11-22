@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withTenantRoute } from "@/lib/prisma";
-import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
+import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import { getRuntimeConfig } from "@/lib/runtimeMode";
 import { getMachineHwid } from "@/lib/licensing/hwid";
 import { loadInstalledLicense, verifyLicense } from "@/lib/licensing/verifier";
@@ -32,7 +32,9 @@ function noLicense() {
 /** Seat usage for the installed license. Per-user device details are returned to SUPER_ADMIN only. */
 export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
     const { license } = loadInstalledLicense();
     if (!license) return noLicense();
     if (!isCompanyLockedPayload(license)) {
@@ -63,7 +65,9 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
  */
 export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
     const body = (await req.json()) as Record<string, unknown>;
 
     const { license } = loadInstalledLicense();

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
+import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import { loadInstalledLicense, verifyLicense } from "./verifier";
 import { getMachineHwid } from "./hwid";
 import { isCompanyLockedPayload, type RuntimeMode, type UasSignedLicense } from "./licenseSchema";
@@ -16,7 +16,17 @@ export interface ActiveSeatRecord {
 
 export interface LicenseGuardCheck {
   allowed: boolean;
-  status: "ACTIVE" | "UNLICENSED" | "EXPIRED" | "HWID_MISMATCH" | "CLOCK_TAMPER" | "SEAT_LIMIT_REACHED" | "MODE_NOT_ALLOWED" | "COMPANY_MISMATCH";
+  status:
+  | "ACTIVE"
+  | "UNLICENSED"
+  | "EXPIRED"
+  | "HWID_MISMATCH"
+  | "INVALID_SIGNATURE"
+  | "CORRUPT"
+  | "CLOCK_TAMPER"
+  | "SEAT_LIMIT_REACHED"
+  | "MODE_NOT_ALLOWED"
+  | "COMPANY_MISMATCH";
   code?: string;
   error?: string;
   license?: UasSignedLicense | null;
@@ -32,7 +42,9 @@ export async function checkLicenseAndClock(
   clientIp?: string,
   deviceName?: string
 ): Promise<LicenseGuardCheck> {
-  await ensureSqliteDatabaseReady();
+  if (isSqliteRuntime()) {
+    await ensureSqliteDatabaseReady();
+  }
   const currentHwid = getMachineHwid();
   const { license } = loadInstalledLicense();
 
@@ -51,7 +63,7 @@ export async function checkLicenseAndClock(
   if (!verification.valid) {
     return {
       allowed: false,
-      status: verification.status === "ACTIVE" ? "MODE_NOT_ALLOWED" : (verification.status as any),
+      status: verification.status === "ACTIVE" ? "MODE_NOT_ALLOWED" : verification.status,
       code: `LICENSE_${verification.status}`,
       error: verification.error,
       license,

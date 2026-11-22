@@ -19,6 +19,8 @@ export interface SupportSystemDiagnostics {
     | "UNLICENSED"
     | "EXPIRED"
     | "HWID_MISMATCH"
+    | "INVALID_SIGNATURE"
+    | "CORRUPT"
     | "CLOCK_TAMPER"
     | "SEAT_LIMIT_REACHED"
     | "MODE_NOT_ALLOWED"

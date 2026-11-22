@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { NextRequest } from "next/server";
 import { prisma } from "../src/lib/prisma";
@@ -10,7 +11,11 @@ import {
   runWithTenant,
 } from "../src/lib/tenant";
 import { issueSessionToken, SESSION_COOKIE_NAME } from "../src/lib/authSession";
-import { loadInstalledLicense } from "../src/lib/licensing/verifier";
+import {
+  loadInstalledLicense,
+  resolveTenantLicensePath,
+  saveInstalledLicense,
+} from "../src/lib/licensing/verifier";
 import { hashPassword } from "../src/lib/serverBootstrap";
 import { ensure6GenerationCoaHierarchy } from "../src/lib/accountingCoreEngine";
 import {
@@ -118,12 +123,16 @@ describe("Phase 2 & Phase 3 Core — Inventory↔GL, Approvals, AR/AP Controls, 
   let equityLeafId = "";
 
   before(async () => {
+    const defaultLicense = loadInstalledLicense("default").license;
     const licensedCompanyName =
-      loadInstalledLicense().license?.company_name || "وكالة الجابري لتجارة القات";
+      defaultLicense?.company_name || "وكالة الجابري لتجارة القات";
     ensureTenantRegistered(TEST_TENANT, licensedCompanyName, {
       nameAr: licensedCompanyName,
       nameEn: "Phase 2 & 3 ERP Test Tenant",
     });
+    if (defaultLicense) {
+      saveInstalledLicense(defaultLicense, TEST_TENANT);
+    }
 
     await runWithTenant(TEST_TENANT, async () => {
       await prisma.enterpriseProfile.findFirst();
@@ -214,6 +223,12 @@ describe("Phase 2 & Phase 3 Core — Inventory↔GL, Approvals, AR/AP Controls, 
 
   after(async () => {
     await resetTenantClientsForTests();
+    const licPath = resolveTenantLicensePath(TEST_TENANT);
+    if (fs.existsSync(licPath)) {
+      try {
+        fs.rmSync(path.dirname(licPath), { recursive: true, force: true });
+      } catch {}
+    }
     const dbPath = resolveTenantDbFilePath(TEST_TENANT);
     if (dbPath && fs.existsSync(dbPath)) {
       try {

@@ -11,7 +11,11 @@ import {
   runWithTenant,
 } from "../src/lib/tenant";
 import { issueSessionToken, SESSION_COOKIE_NAME } from "../src/lib/authSession";
-import { loadInstalledLicense } from "../src/lib/licensing/verifier";
+import {
+  loadInstalledLicense,
+  resolveTenantLicensePath,
+  saveInstalledLicense,
+} from "../src/lib/licensing/verifier";
 import { hashPassword } from "../src/lib/serverBootstrap";
 import {
   createTreasuryAccount,
@@ -118,12 +122,16 @@ describe("Phase 1 — Core Accounting Integrity, Financial Reports, Treasury Syn
   let equityAccountId = "";
 
   before(async () => {
+    const defaultLicense = loadInstalledLicense("default").license;
     const licensedCompanyName =
-      loadInstalledLicense().license?.company_name || "وكالة الجابري لتجارة القات";
+      defaultLicense?.company_name || "وكالة الجابري لتجارة القات";
     ensureTenantRegistered(TEST_TENANT, licensedCompanyName, {
       nameAr: licensedCompanyName,
       nameEn: "Phase 1 Core Accounting Test Tenant",
     });
+    if (defaultLicense) {
+      saveInstalledLicense(defaultLicense, TEST_TENANT);
+    }
 
     await runWithTenant(TEST_TENANT, async () => {
       await prisma.enterpriseProfile.findFirst();
@@ -193,6 +201,12 @@ describe("Phase 1 — Core Accounting Integrity, Financial Reports, Treasury Syn
 
   after(async () => {
     await resetTenantClientsForTests();
+    const licPath = resolveTenantLicensePath(TEST_TENANT);
+    if (fs.existsSync(licPath)) {
+      try {
+        fs.rmSync(path.dirname(licPath), { recursive: true, force: true });
+      } catch {}
+    }
     const dbPath = resolveTenantDbFilePath(TEST_TENANT);
     if (dbPath && fs.existsSync(dbPath)) {
       try {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
-import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
+import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import { appendAuditLogTx } from "@/lib/serverBootstrap";
 import { loadInstalledLicense } from "@/lib/licensing/verifier";
 import { isCompanyLockedPayload } from "@/lib/licensing/licenseSchema";
@@ -21,7 +21,9 @@ export const dynamic = "force-dynamic";
  */
 export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
     const body = (await req.json()) as Record<string, unknown>;
 
     const admin = await requireSuperAdmin(req, body);

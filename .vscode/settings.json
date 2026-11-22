@@ -5,6 +5,9 @@
   "typescript.enablePromptUseWorkspaceTsdk": true,
   "java.jdt.ls.java.home": "C:\\Program Files\\Android\\Android Studio\\jbr",
   "java.import.gradle.java.home": "C:\\Program Files\\Android\\Android Studio\\jbr",
+  "java.import.gradle.wrapper.enabled": true,
+  "java.import.gradle.version": "8.14.3",
+  "gradle.nestedProjects": ["android"],
   "java.configuration.updateBuildConfiguration": "automatic",
   "java.import.exclusions": [
     "**/node_modules/**",

@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { getActiveTenantId, normalizeTenantId } from "@/lib/tenant/tenantContext";
+import { getTenantMetadata } from "@/lib/tenant/tenantRegistry";
 import {
   canonicalizeLicensePayload,
   getLicenseSeatPolicy,
@@ -109,24 +111,124 @@ export function verifyLicense(
   };
 }
 
-export function getLicenseCandidatePaths(): string[] {
-  const paths: string[] = [];
-  if (process.env.UAS_LICENSE_PATH) {
-    paths.push(process.env.UAS_LICENSE_PATH);
+/**
+ * Resolves the writable project root directory.
+ * When Next.js standalone runs with `process.cwd()` inside `.next/standalone`,
+ * walks two levels up to the real project root so files are never written inside `.next/standalone`.
+ */
+export function resolveWritableProjectRoot(cwdOverride?: string): string {
+  const cwd = path.resolve(cwdOverride || process.cwd());
+  const normalized = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (normalized.endsWith("/.next/standalone")) {
+    return path.resolve(cwd, "..", "..");
   }
-  // Windows typical persistent data directory
+  return cwd;
+}
+
+/**
+ * Resolves the persistent, writable data root directory for tenant license storage.
+ * Priority: `UAS_DATA_DIR` > `DATA_DIR` > `C:\UAS-Data` / `C:\UAS` (Windows if present) > `<projectRoot>/data`.
+ */
+export function resolveLicenseDataDirectory(cwdOverride?: string): string {
+  const envDataDir = (process.env.UAS_DATA_DIR || process.env.DATA_DIR || "").trim();
+  if (envDataDir) {
+    return path.resolve(/*turbopackIgnore: true*/ envDataDir);
+  }
+
+  if (process.platform === "win32") {
+    try {
+      if (fs.existsSync(/*turbopackIgnore: true*/ "C:\\UAS-Data")) {
+        return "C:\\UAS-Data";
+      }
+      if (fs.existsSync(/*turbopackIgnore: true*/ "C:\\UAS")) {
+        return "C:\\UAS";
+      }
+    } catch {
+      // Ignore filesystem check errors
+    }
+  }
+
+  const projectRoot = resolveWritableProjectRoot(cwdOverride);
+  return path.join(/*turbopackIgnore: true*/ projectRoot, "data");
+}
+
+function resolveTenantLicenseKeys(rawTenantId?: string | null): string[] {
+  const effectiveTenantId = normalizeTenantId(rawTenantId ?? getActiveTenantId());
+  if (effectiveTenantId === "default") {
+    return ["default"];
+  }
+
+  const meta = getTenantMetadata(effectiveTenantId);
+  const keys: string[] = [];
+  if (meta?.slug && meta.slug !== "default") {
+    keys.push(meta.slug.trim().toLowerCase());
+  }
+  if (!keys.includes(effectiveTenantId)) {
+    keys.push(effectiveTenantId);
+  }
+  const hyphenSlug = effectiveTenantId.replace(/_/g, "-");
+  if (hyphenSlug && !keys.includes(hyphenSlug)) {
+    keys.push(hyphenSlug);
+  }
+  return keys;
+}
+
+/**
+ * Resolves the canonical tenant-scoped license file path:
+ * `<dataRoot>/licenses/<tenantSlug>/license.uas`
+ */
+export function resolveTenantLicensePath(
+  explicitTenantId?: string | null,
+  cwdOverride?: string
+): string {
+  const dataDir = resolveLicenseDataDirectory(cwdOverride);
+  const [primaryKey] = resolveTenantLicenseKeys(explicitTenantId);
+  return path.join(/*turbopackIgnore: true*/ dataDir, "licenses", primaryKey, "license.uas");
+}
+
+/**
+ * Resolves candidate license file paths strictly scoped to the target/active tenant.
+ * Non-default tenants ONLY inspect `licenses/<tenantSlug>/license.uas` (never falling back to `default`).
+ * The `default` tenant checks `UAS_LICENSE_PATH`, `licenses/default/license.uas`, Windows legacy paths,
+ * and `<projectRoot>/license.uas` / `<projectRoot>/data/license.uas`.
+ */
+export function getLicenseCandidatePaths(explicitTenantId?: string | null): string[] {
+  const effectiveTenantId = normalizeTenantId(explicitTenantId ?? getActiveTenantId());
+  const dataDir = resolveLicenseDataDirectory();
+  const projectRoot = resolveWritableProjectRoot();
+
+  if (effectiveTenantId !== "default") {
+    const keys = resolveTenantLicenseKeys(effectiveTenantId);
+    const seen = new Set<string>();
+    const tenantPaths: string[] = [];
+    for (const key of keys) {
+      const p = path.join(/*turbopackIgnore: true*/ dataDir, "licenses", key, "license.uas");
+      if (!seen.has(p)) {
+        seen.add(p);
+        tenantPaths.push(p);
+      }
+    }
+    return tenantPaths;
+  }
+
+  const paths: string[] = [];
+  if (process.env.UAS_LICENSE_PATH?.trim()) {
+    paths.push(path.resolve(/*turbopackIgnore: true*/ process.env.UAS_LICENSE_PATH.trim()));
+  }
+  paths.push(path.join(/*turbopackIgnore: true*/ dataDir, "licenses", "default", "license.uas"));
   if (process.platform === "win32") {
     paths.push("C:\\UAS-Data\\license.uas");
     paths.push("C:\\UAS\\license.uas");
   }
-  // Project root and current working directory
-  paths.push(path.resolve(process.cwd(), "license.uas"));
-  paths.push(path.resolve(process.cwd(), "data", "license.uas"));
-  return paths;
+  paths.push(path.resolve(/*turbopackIgnore: true*/ projectRoot, "license.uas"));
+  paths.push(path.resolve(/*turbopackIgnore: true*/ projectRoot, "data", "license.uas"));
+  return Array.from(new Set(paths));
 }
 
-export function loadInstalledLicense(): { license: UasSignedLicense | null; sourcePath?: string } {
-  const candidates = getLicenseCandidatePaths();
+export function loadInstalledLicense(
+  explicitTenantId?: string | null
+): { license: UasSignedLicense | null; sourcePath?: string } {
+  const candidates = getLicenseCandidatePaths(explicitTenantId);
   for (const p of candidates) {
     try {
       if (fs.existsSync(/*turbopackIgnore: true*/ p)) {
@@ -144,19 +246,16 @@ export function loadInstalledLicense(): { license: UasSignedLicense | null; sour
   return { license: null };
 }
 
-export function saveInstalledLicense(license: UasSignedLicense): string {
-  let targetPath = path.resolve(process.cwd(), "license.uas");
-  if (process.platform === "win32" && fs.existsSync("C:\\UAS-Data")) {
-    targetPath = "C:\\UAS-Data\\license.uas";
-  } else if (process.platform === "win32" && fs.existsSync("C:\\UAS")) {
-    targetPath = "C:\\UAS\\license.uas";
-  }
-
+export function saveInstalledLicense(
+  license: UasSignedLicense,
+  explicitTenantId?: string | null
+): string {
+  const targetPath = resolveTenantLicensePath(explicitTenantId);
   const dir = path.dirname(targetPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(/*turbopackIgnore: true*/ dir)) {
+    fs.mkdirSync(/*turbopackIgnore: true*/ dir, { recursive: true });
   }
 
-  fs.writeFileSync(targetPath, JSON.stringify(license, null, 2), "utf8");
+  fs.writeFileSync(/*turbopackIgnore: true*/ targetPath, JSON.stringify(license, null, 2), "utf8");
   return targetPath;
 }
