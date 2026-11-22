@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { DualLogoBadge } from "@/components/DualLogoBadge";
+import { resolveEffectiveTagline } from "@/lib/branding";
 import { isInstalledClientApp } from "@/lib/runtimePlatform";
 import {
   getApiBaseUrl,
@@ -329,6 +330,7 @@ export function LoginView({
   const legalName = isAr
     ? enterpriseProfile?.legalNameAr?.trim() || "منظومة تخطيط الموارد المحاسبية"
     : enterpriseProfile?.legalNameEn?.trim() || "Enterprise Resource Planning";
+  const tagline = resolveEffectiveTagline(enterpriseProfile, lang);
   const hostSlug =
     typeof window !== "undefined" ? extractSubdomainSlugFromHost(window.location.host) : null;
   const tenantSlug = hostSlug || enterpriseProfile?.tenantSlug || null;
@@ -376,14 +378,12 @@ export function LoginView({
                 />
               </div>
               <div className="space-y-1">
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-black">
-                  <span>{logoText || "UAS"}</span>
-                  <span>•</span>
-                  <span>{isAr ? "النظام المحاسبي الموحد" : "Unified Accounting System"}</span>
-                </div>
                 <h1 className="text-xl sm:text-2xl font-black tracking-tight pt-1">
                   {legalName}
                 </h1>
+                <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  {tagline}
+                </p>
                 {tenantUrl && (
                   <div className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-300" dir="ltr">
                     {tenantUrl}
@@ -391,8 +391,8 @@ export function LoginView({
                 )}
                 <p className="text-xs text-slate-500 dark:text-slate-400">
                   {isAr
-                    ? "تسجيل الدخول إلى منظومة الحسابات الموحدة (UAS ERP)"
-                    : "Sign in to Unified Accounting System (UAS ERP)"}
+                    ? "تسجيل الدخول إلى بوابة النظام المحاسبي"
+                    : "Sign in to your accounting workspace"}
                 </p>
                 {welcomeNotice && (
                   <div className="mt-2 p-2.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-[11px] font-bold text-emerald-800 dark:text-emerald-200">

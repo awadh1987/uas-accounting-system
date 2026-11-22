@@ -201,11 +201,10 @@ export function TopCommandBar({
           <div className={mobileSimulatorActive || sidebarCollapsed ? "flex items-center gap-2" : "md:hidden flex items-center"}>
             <DualLogoBadge profile={enterpriseProfile} logoText={logoText} size="sm" iconOnly />
             {sidebarCollapsed && !mobileSimulatorActive && (
-              <span className="hidden md:inline-flex items-center gap-1.5 font-black text-xs tracking-tight text-slate-900 dark:text-white">
-                <span>{logoText || "UAS"}</span>
-                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono">
-                  ERP
-                </span>
+              <span className="hidden md:inline-flex items-center font-black text-xs tracking-tight text-slate-900 dark:text-white truncate max-w-[160px]">
+                {isAr
+                  ? enterpriseProfile?.legalNameAr?.trim() || "النظام المحاسبي الموحد"
+                  : enterpriseProfile?.legalNameEn?.trim() || "UAS Accounting System"}
               </span>
             )}
           </div>

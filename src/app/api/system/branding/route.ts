@@ -5,6 +5,12 @@ import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import { checkProfileUpdateAgainstLock } from "@/lib/licensing/companyLock";
 import { loadActiveLockedLicense } from "@/lib/licensing/companyLockServer";
+import { getActiveTenantId, getTenantMetadata } from "@/lib/tenant";
+import {
+  decodeDataUrlAsset,
+  deleteTenantBrandAssetFile,
+  saveTenantBrandAssetFile,
+} from "@/lib/brandingAssets";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +24,31 @@ export const GET = withTenantRoute(async function GET() {
   }
 });
 
+function persistInlineDataUrlIfNeeded(
+  rawUrl: string | null | undefined,
+  tenantKey: string,
+  kind: "logo" | "favicon"
+): string | null | undefined {
+  if (rawUrl === undefined) return undefined;
+  if (rawUrl === null) return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("data:")) {
+    const decoded = decodeDataUrlAsset(trimmed);
+    if (decoded) {
+      const saved = saveTenantBrandAssetFile({
+        tenantKey,
+        kind,
+        buffer: decoded.buffer,
+        contentType: decoded.contentType,
+        ext: decoded.ext,
+      });
+      return saved.publicUrl;
+    }
+  }
+  return trimmed;
+}
+
 async function handleUpdateBranding(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
@@ -27,7 +58,10 @@ async function handleUpdateBranding(req: NextRequest) {
     });
     if (!auth.ok) return auth.response;
 
+    const tenantId = getActiveTenantId();
+    const meta = getTenantMetadata(tenantId);
     const existing = await prisma.enterpriseProfile.findUnique({ where: { id: "default" } });
+    const tenantKey = existing?.tenantSlug || meta?.slug || tenantId;
 
     const strOpt = (key: string) =>
       body[key] !== undefined ? String(body[key] ?? "").trim() : undefined;
@@ -52,6 +86,69 @@ async function handleUpdateBranding(req: NextRequest) {
       }
     }
 
+    if (body.resetToDefaultBrand === true) {
+      deleteTenantBrandAssetFile(tenantKey, "all");
+      const resetProfile = await prisma.$transaction(async (tx) => {
+        const profile = await tx.enterpriseProfile.upsert({
+          where: { id: "default" },
+          update: {
+            logoUrl: "/uas-logo.png",
+            faviconUrl: null,
+            enterpriseLogoCustomUrl: null,
+            enterpriseLogoStyle: "agri-leaf",
+            showEnterpriseLogo: false,
+            showUasLogo: true,
+            uasLogoStyle: "official-brand",
+            uasLogoCustomUrl: "/uas-logo.png",
+            taglineAr: "",
+            taglineEn: "",
+          },
+          create: {
+            id: "default",
+            legalNameAr: meta?.nameAr || "اسم المنشأة",
+            legalNameEn: meta?.nameEn || "Enterprise Name",
+            tenantSlug: meta?.slug && meta.slug !== "default" ? meta.slug : null,
+            logoUrl: "/uas-logo.png",
+            faviconUrl: null,
+            enterpriseLogoCustomUrl: null,
+            enterpriseLogoStyle: "agri-leaf",
+            showEnterpriseLogo: false,
+            showUasLogo: true,
+            uasLogoStyle: "official-brand",
+            uasLogoCustomUrl: "/uas-logo.png",
+            taglineAr: "",
+            taglineEn: "",
+          },
+        });
+        await appendAuditLogTx(tx, {
+          ...auth.actor,
+          actionType: "استعادة هوية UAS الافتراضية",
+          entityReference: "enterprise_profile",
+          details: `إعادة ضبط شعار وأيقونة وشعار المنشأة (${profile.legalNameAr}) إلى هوية UAS الافتراضية`,
+        });
+        return profile;
+      });
+      const state = await getBootstrapState();
+      return NextResponse.json({ enterpriseProfile: resetProfile, state });
+    }
+
+    const rawLogoUrl = nullableStrOpt("logoUrl");
+    const rawEntLogoUrl = nullableStrOpt("enterpriseLogoCustomUrl");
+    const rawFaviconUrl = nullableStrOpt("faviconUrl");
+
+    const resolvedEntLogoUrl = persistInlineDataUrlIfNeeded(rawEntLogoUrl, tenantKey, "logo");
+    const resolvedLogoUrl =
+      persistInlineDataUrlIfNeeded(rawLogoUrl, tenantKey, "logo") ??
+      (resolvedEntLogoUrl !== undefined && resolvedEntLogoUrl ? resolvedEntLogoUrl : undefined);
+    const resolvedFaviconUrl = persistInlineDataUrlIfNeeded(rawFaviconUrl, tenantKey, "favicon");
+
+    if (rawFaviconUrl === null) {
+      deleteTenantBrandAssetFile(tenantKey, "favicon");
+    }
+    if (rawEntLogoUrl === null && (rawLogoUrl === null || rawLogoUrl === "/uas-logo.png")) {
+      deleteTenantBrandAssetFile(tenantKey, "logo");
+    }
+
     const updateData = {
       isConfigured: true,
       ...(strOpt("legalNameAr") ? { legalNameAr: strOpt("legalNameAr") } : {}),
@@ -64,7 +161,10 @@ async function handleUpdateBranding(req: NextRequest) {
       ...(nullableStrOpt("address") !== undefined ? { address: nullableStrOpt("address") } : {}),
       ...(nullableStrOpt("phone") !== undefined ? { phone: nullableStrOpt("phone") } : {}),
       ...(nullableStrOpt("email") !== undefined ? { email: nullableStrOpt("email") } : {}),
-      ...(nullableStrOpt("logoUrl") !== undefined ? { logoUrl: nullableStrOpt("logoUrl") } : {}),
+      ...(resolvedLogoUrl !== undefined ? { logoUrl: resolvedLogoUrl || "/uas-logo.png" } : {}),
+      ...(resolvedFaviconUrl !== undefined ? { faviconUrl: resolvedFaviconUrl } : {}),
+      ...(strOpt("taglineAr") !== undefined ? { taglineAr: strOpt("taglineAr") } : {}),
+      ...(strOpt("taglineEn") !== undefined ? { taglineEn: strOpt("taglineEn") } : {}),
       ...(strOpt("brandColor") ? { brandColor: strOpt("brandColor") } : {}),
       ...(boolOpt("showUasLogo") !== undefined ? { showUasLogo: boolOpt("showUasLogo") } : {}),
       ...(strOpt("uasLogoStyle") ? { uasLogoStyle: strOpt("uasLogoStyle") } : {}),
@@ -75,8 +175,8 @@ async function handleUpdateBranding(req: NextRequest) {
         ? { showEnterpriseLogo: boolOpt("showEnterpriseLogo") }
         : {}),
       ...(strOpt("enterpriseLogoStyle") ? { enterpriseLogoStyle: strOpt("enterpriseLogoStyle") } : {}),
-      ...(nullableStrOpt("enterpriseLogoCustomUrl") !== undefined
-        ? { enterpriseLogoCustomUrl: nullableStrOpt("enterpriseLogoCustomUrl") }
+      ...(resolvedEntLogoUrl !== undefined
+        ? { enterpriseLogoCustomUrl: resolvedEntLogoUrl }
         : {}),
       ...(strOpt("heroBadgeAr") !== undefined ? { heroBadgeAr: strOpt("heroBadgeAr") } : {}),
       ...(strOpt("heroBadgeEn") !== undefined ? { heroBadgeEn: strOpt("heroBadgeEn") } : {}),
@@ -136,6 +236,8 @@ async function handleUpdateBranding(req: NextRequest) {
               showUasLogo: existing.showUasLogo,
               showEnterpriseLogo: existing.showEnterpriseLogo,
               heroTitleAr: existing.heroTitleAr,
+              taglineAr: existing.taglineAr,
+              faviconUrl: existing.faviconUrl,
             }
           : null,
         after: {
@@ -143,6 +245,8 @@ async function handleUpdateBranding(req: NextRequest) {
           showUasLogo: profile.showUasLogo,
           showEnterpriseLogo: profile.showEnterpriseLogo,
           heroTitleAr: profile.heroTitleAr,
+          taglineAr: profile.taglineAr,
+          faviconUrl: profile.faviconUrl,
         },
       });
 
@@ -171,4 +275,3 @@ export const PUT = withTenantRoute(async function PUT(req: NextRequest) {
 export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
   return handleUpdateBranding(req);
 });
-

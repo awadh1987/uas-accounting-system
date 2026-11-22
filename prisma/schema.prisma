@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -144,13 +144,16 @@ model EnterpriseProfile {
   phone         String?
   email         String?
   logoUrl       String?
+  faviconUrl    String?
   brandColor    String  @default("#059669")
+  taglineAr     String  @default("")
+  taglineEn     String  @default("")
 
   // Dual Logo Generator & Toggle Settings
   showUasLogo             Boolean @default(true)
-  uasLogoStyle            String  @default("emerald-shield")
+  uasLogoStyle            String  @default("official-brand")
   uasLogoCustomUrl        String?
-  showEnterpriseLogo      Boolean @default(true)
+  showEnterpriseLogo      Boolean @default(false)
   enterpriseLogoStyle     String  @default("agri-leaf")
   enterpriseLogoCustomUrl String?
 

@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { SvgAvatar } from "@/components/SvgAvatar";
 import { DualLogoBadge } from "@/components/DualLogoBadge";
+import { resolveEffectiveTagline } from "@/lib/branding";
 import { ERP_GROUPS, resolveGroupForTab } from "@/lib/erpNavigation";
 import { canAccessModule, getRoleMeta, isReadOnly } from "@/lib/permissions";
 import type { ErpGroupId, LanguageCode, TabId, UasEnterpriseProfile, UasUser } from "@/types/uas";
@@ -101,18 +102,16 @@ export function SidebarNav({
             />
             {!isIconRail && (
               <div className="min-w-0">
-                <div className="text-xs font-black truncate leading-tight flex items-center gap-1.5">
-                  <span className="text-emerald-600 dark:text-emerald-400 font-extrabold">{logoText || "UAS"}</span>
-                  <span className="text-slate-300 dark:text-slate-600">•</span>
-                  <span className="truncate">
-                    {(lang === "ar"
-                      ? enterpriseProfile?.legalNameAr?.trim() || "النظام المحاسبي الموحد"
-                      : enterpriseProfile?.legalNameEn?.trim() || "Accounting System")}
-                  </span>
+                <div className="text-xs font-black truncate leading-tight">
+                  {lang === "ar"
+                    ? enterpriseProfile?.legalNameAr?.trim() || "النظام المحاسبي الموحد"
+                    : enterpriseProfile?.legalNameEn?.trim() || "Accounting System"}
                 </div>
                 <div className="text-[10px] text-slate-500 font-semibold flex items-center gap-1 mt-0.5">
                   <ShieldCheck className="w-3 h-3 text-emerald-600 shrink-0" />
-                  <span className="truncate font-mono">{activeGroup.domainPath}</span>
+                  <span className="truncate">
+                    {resolveEffectiveTagline(enterpriseProfile, lang)}
+                  </span>
                 </div>
               </div>
             )}

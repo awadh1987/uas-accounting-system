@@ -331,8 +331,8 @@ function buildPostgresSeedSql({
 
   const lines = [
     "BEGIN;",
-    `INSERT INTO "EnterpriseProfile" ("id","legalNameAr","legalNameEn","taxNumber","commercialReg","currencyCode","isConfigured","address","phone","email","logoUrl","brandColor","contactPhone","contactWhatsApp","contactAddress","tenantSlug","supportEmail","updatedAt")
-     VALUES ('default',${sqlLit(nameAr)},${sqlLit(nameEn)},'','','YER',TRUE,'','','','/uas-logo.png','#059669','','','',${sqlLit(tenantSlug)},${sqlLit(adminEmail)},NOW())
+    `INSERT INTO "EnterpriseProfile" ("id","legalNameAr","legalNameEn","taxNumber","commercialReg","currencyCode","isConfigured","address","phone","email","logoUrl","faviconUrl","brandColor","taglineAr","taglineEn","showUasLogo","uasLogoStyle","showEnterpriseLogo","contactPhone","contactWhatsApp","contactAddress","tenantSlug","supportEmail","updatedAt")
+     VALUES ('default',${sqlLit(nameAr)},${sqlLit(nameEn)},'','','YER',TRUE,'','','','/uas-logo.png',NULL,'#059669','','',TRUE,'official-brand',FALSE,'','','',${sqlLit(tenantSlug)},${sqlLit(adminEmail)},NOW())
      ON CONFLICT ("id") DO UPDATE SET
        "legalNameAr" = EXCLUDED."legalNameAr",
        "legalNameEn" = EXCLUDED."legalNameEn",
@@ -592,9 +592,10 @@ async function provisionIsolatedSqliteDb({
       db.prepare(`
         INSERT INTO "EnterpriseProfile" (
           "id","legalNameAr","legalNameEn","taxNumber","commercialReg","currencyCode","isConfigured",
-          "address","phone","email","logoUrl","brandColor","contactPhone","contactWhatsApp","contactAddress",
-          "tenantSlug","supportEmail","updatedAt"
-        ) VALUES ('default', ?, ?, '', '', 'YER', 1, '', '', '', '/uas-logo.png', '#059669', '', '', '', ?, ?, ?)
+          "address","phone","email","logoUrl","faviconUrl","brandColor","taglineAr","taglineEn",
+          "showUasLogo","uasLogoStyle","showEnterpriseLogo",
+          "contactPhone","contactWhatsApp","contactAddress","tenantSlug","supportEmail","updatedAt"
+        ) VALUES ('default', ?, ?, '', '', 'YER', 1, '', '', '', '/uas-logo.png', NULL, '#059669', '', '', 1, 'official-brand', 0, '', '', '', ?, ?, ?)
         ON CONFLICT("id") DO UPDATE SET
           "legalNameAr" = excluded."legalNameAr",
           "legalNameEn" = excluded."legalNameEn",

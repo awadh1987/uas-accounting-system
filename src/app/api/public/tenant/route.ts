@@ -1,21 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { EnterpriseProfile } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import {
   buildTenantWorkspaceUrl,
-  extractSubdomainSlugFromHost,
-  extractTenantResolutionFromRequest,
-  findTenantBySlug,
   getTenantMetadata,
   runWithTenant,
 } from "@/lib/tenant";
+import { resolvePublicTenantFromRequest } from "@/lib/publicTenantResolver";
+import { resolveEffectiveBrandInfo } from "@/lib/branding";
 import { jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
 
 function mapPublicProfile(profile: EnterpriseProfile | null, effectiveSlug: string | null) {
   if (!profile) return null;
+  const brand = resolveEffectiveBrandInfo(profile, effectiveSlug);
   return {
     id: profile.id,
     legalNameAr: profile.legalNameAr,
@@ -25,6 +24,15 @@ function mapPublicProfile(profile: EnterpriseProfile | null, effectiveSlug: stri
     currencyCode: profile.currencyCode,
     brandColor: profile.brandColor,
     logoUrl: profile.logoUrl,
+    faviconUrl: profile.faviconUrl,
+    taglineAr: profile.taglineAr || "",
+    taglineEn: profile.taglineEn || "",
+    effectiveLogoUrl: brand.effectiveLogoUrl,
+    effectiveFaviconUrl: brand.effectiveFaviconUrl,
+    hasCustomLogo: brand.hasCustomLogo,
+    hasCustomFavicon: brand.hasCustomFavicon,
+    hasCustomBrand: brand.hasCustomBrand,
+    tabTitleEn: brand.tabTitleEn,
     showUasLogo: profile.showUasLogo,
     uasLogoStyle: profile.uasLogoStyle,
     uasLogoCustomUrl: profile.uasLogoCustomUrl,
@@ -61,54 +69,26 @@ function mapPublicProfile(profile: EnterpriseProfile | null, effectiveSlug: stri
  */
 export async function GET(req: NextRequest) {
   try {
-    if (isSqliteRuntime()) {
-      await ensureSqliteDatabaseReady();
-    }
-
-    const hostSubSlug =
-      extractSubdomainSlugFromHost(req.headers.get("x-forwarded-host")) ||
-      extractSubdomainSlugFromHost(req.headers.get("host")) ||
-      extractSubdomainSlugFromHost(new URL(req.url, "http://localhost").host);
-
-    const url = new URL(req.url, "http://localhost");
-    const explicitQuerySlug = (url.searchParams.get("slug") || "").trim().toLowerCase();
-
-    let targetTenantId = "default";
-    let resolvedSlug: string | null = null;
-    let resolutionSource = "default";
-
-    if (!hostSubSlug && explicitQuerySlug) {
-      if (explicitQuerySlug === "default") {
-        targetTenantId = "default";
-        resolvedSlug = null;
-        resolutionSource = "query";
-      } else {
-        const matched = findTenantBySlug(explicitQuerySlug);
-        if (!matched || matched.status !== "ACTIVE") {
-          return NextResponse.json(
-            {
-              success: false,
-              code: "TENANT_NOT_FOUND",
-              error: `لم يتم العثور على مساحة منشأة مسجلة للنطاق "${explicitQuerySlug}" / Registered tenant workspace not found`,
-            },
-            {
-              status: 404,
-              headers: {
-                "Cache-Control": "no-store, no-cache, must-revalidate",
-              },
-            }
-          );
+    const lookup = await resolvePublicTenantFromRequest(req);
+    if (!lookup.found) {
+      return NextResponse.json(
+        {
+          success: false,
+          code: "TENANT_NOT_FOUND",
+          error: `لم يتم العثور على مساحة منشأة مسجلة للنطاق "${lookup.explicitQuerySlug}" / Registered tenant workspace not found`,
+        },
+        {
+          status: 404,
+          headers: {
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+          },
         }
-        targetTenantId = matched.tenantId;
-        resolvedSlug = matched.slug || explicitQuerySlug;
-        resolutionSource = "query";
-      }
-    } else {
-      const resolution = extractTenantResolutionFromRequest(req);
-      targetTenantId = resolution.tenantId;
-      resolvedSlug = resolution.slug;
-      resolutionSource = resolution.source;
+      );
     }
+
+    const targetTenantId = lookup.tenantId;
+    const resolvedSlug = lookup.resolvedSlug;
+    const resolutionSource = lookup.resolutionSource;
 
     const meta = getTenantMetadata(targetTenantId);
     const { profile, settings } = await runWithTenant(targetTenantId, async () => {
@@ -124,6 +104,7 @@ export async function GET(req: NextRequest) {
       profile?.tenantSlug ||
       (meta?.slug && meta.slug !== "default" ? meta.slug : null);
     const isTenantWorkspace = Boolean(effectiveSlug && effectiveSlug !== "default");
+    const brandInfo = resolveEffectiveBrandInfo(profile, effectiveSlug);
 
     return NextResponse.json(
       {
@@ -135,6 +116,7 @@ export async function GET(req: NextRequest) {
           ? meta?.tenantUrl || buildTenantWorkspaceUrl(effectiveSlug)
           : "https://qat.world",
         resolutionSource,
+        branding: brandInfo,
         profile: mapPublicProfile(profile, effectiveSlug),
         defaults: {
           defaultLang: settings?.defaultLang || "ar",

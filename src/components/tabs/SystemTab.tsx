@@ -40,6 +40,11 @@ import {
   Trash2,
 } from "lucide-react";
 import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl, safeFetchJson, getStoredTenantId } from "@/lib/apiClient";
+import {
+  DEFAULT_TAGLINE_AR,
+  DEFAULT_TAGLINE_EN,
+  resolveEffectiveBrandInfo,
+} from "@/lib/branding";
 import { exportOrShareBinaryFile } from "@/lib/nativeBridge";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { AccountingSettingsPanel } from "@/components/AccountingSettingsPanel";
@@ -268,10 +273,13 @@ const DEFAULT_PROFILE_DRAFT: Partial<UasEnterpriseProfile> = {
   legalNameAr: "اسم المنشأة",
   legalNameEn: "Enterprise Name",
   brandColor: "#059669",
+  faviconUrl: "",
+  taglineAr: "",
+  taglineEn: "",
   showUasLogo: true,
-  uasLogoStyle: "emerald-shield",
+  uasLogoStyle: "official-brand",
   uasLogoCustomUrl: "",
-  showEnterpriseLogo: true,
+  showEnterpriseLogo: false,
   enterpriseLogoStyle: "agri-leaf",
   enterpriseLogoCustomUrl: "",
   heroBadgeAr: "النظام المحاسبي الموحد • معيار 5 مستويات GL",
@@ -1089,16 +1097,77 @@ export function SystemTab({
   const profileName = profileNameDraft ?? currentUser.name;
   const profileAvatarChar = profileAvatarDraft ?? currentUser.avatarChar;
 
-  function handleLogoFileUpload(
-    field: "uasLogoCustomUrl" | "enterpriseLogoCustomUrl",
-    styleField: "uasLogoStyle" | "enterpriseLogoStyle",
+  async function handleLogoFileUpload(
+    field: "uasLogoCustomUrl" | "enterpriseLogoCustomUrl" | "faviconUrl",
+    styleField: "uasLogoStyle" | "enterpriseLogoStyle" | null,
     file?: File
   ) {
     if (!file) return;
-    if (file.size > 512 * 1024) {
-      onToast(isAr ? "حجم الشعار يجب أن لا يتجاوز 512 كيلوبايت" : "Logo file must be <= 512 KB");
+    if (file.size > 1024 * 1024) {
+      onToast(isAr ? "حجم الملف يجب أن لا يتجاوز 1 ميجابايت" : "Image file must be <= 1 MB");
       return;
     }
+
+    if (field === "enterpriseLogoCustomUrl" || field === "faviconUrl") {
+      const kind = field === "faviconUrl" ? "favicon" : "logo";
+      const formData = new FormData();
+      formData.append("kind", kind);
+      formData.append("file", file);
+      formData.append(
+        "actor",
+        JSON.stringify({
+          userId: currentUser.id,
+          userDisplay: `${currentUser.name} (${currentUser.role})`,
+          userRole: currentUser.role,
+        })
+      );
+      try {
+        const res = await fetch("/api/system/branding/upload", {
+          method: "POST",
+          headers: {
+            "x-uas-user-id": currentUser.id,
+            "x-uas-role": String(currentUser.role),
+            "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+          },
+          body: formData,
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          success?: boolean;
+          assetUrl?: string;
+          error?: string;
+        };
+        if (!res.ok || !data.success || !data.assetUrl) {
+          onToast(data.error || (isAr ? "تعذر رفع الملف" : "Failed to upload brand asset"));
+          return;
+        }
+        updateCmsDraft((prev) => ({
+          ...prev,
+          [field]: data.assetUrl,
+          ...(kind === "logo"
+            ? {
+                logoUrl: data.assetUrl,
+                enterpriseLogoStyle: "custom",
+                showEnterpriseLogo: true,
+              }
+            : {}),
+        }));
+        onToast(
+          kind === "favicon"
+            ? isAr
+              ? "✅ تم رفع أيقونة المتصفح (Favicon) المخصصة للمنشأة"
+              : "✅ Custom tenant favicon uploaded"
+            : isAr
+            ? "✅ تم رفع شعار المنشأة المخصص وتحديث أيقونة التبويب"
+            : "✅ Custom enterprise logo uploaded & browser tab icon updated"
+        );
+        await onRefreshState?.();
+        return;
+      } catch {
+        onToast(isAr ? "تعذر الاتصال بالخادم لرفع الملف" : "Network error uploading asset");
+        return;
+      }
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       const result = typeof reader.result === "string" ? reader.result : "";
@@ -1106,11 +1175,25 @@ export function SystemTab({
         updateCmsDraft((prev) => ({
           ...prev,
           [field]: result,
-          [styleField]: "custom",
+          ...(styleField ? { [styleField]: "custom" } : {}),
         }));
       }
     };
     reader.readAsDataURL(file);
+  }
+
+  async function handleResetDefaultBrand() {
+    if (!onSaveEnterpriseBranding) return;
+    setSavingCms(true);
+    try {
+      await onSaveEnterpriseBranding({
+        resetToDefaultBrand: true,
+      } as Partial<UasEnterpriseProfile> & { resetToDefaultBrand?: boolean });
+      setCmsOverrides(null);
+      await onRefreshState?.();
+    } finally {
+      setSavingCms(false);
+    }
   }
 
   async function handleSaveCmsSubmit(e: React.FormEvent) {
@@ -2336,6 +2419,20 @@ export function SystemTab({
               />
             </div>
             <button
+              type="button"
+              disabled={readOnly || !canManageCms || savingCms}
+              onClick={() => void handleResetDefaultBrand()}
+              className="px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+              title={
+                isAr
+                  ? "إزالة الشعار والأيقونة والشعار الفرعي المخصص والعودة إلى هوية UAS الافتراضية"
+                  : "Remove custom logo/favicon/tagline and restore default UAS branding"
+              }
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>{isAr ? "استعادة هوية UAS" : "Reset to UAS"}</span>
+            </button>
+            <button
               type="submit"
               disabled={readOnly || !canManageCms || savingCms}
               className="px-4 py-2.5 rounded-xl accent-bg font-extrabold inline-flex items-center gap-2 shadow-sm disabled:opacity-50"
@@ -2529,7 +2626,7 @@ export function SystemTab({
                   disabled={readOnly || !canManageCms}
                   className="hidden"
                   onChange={(e) =>
-                    handleLogoFileUpload(
+                    void handleLogoFileUpload(
                       "enterpriseLogoCustomUrl",
                       "enterpriseLogoStyle",
                       e.target.files?.[0]
@@ -2540,6 +2637,130 @@ export function SystemTab({
             </div>
           </div>
         </div>
+
+        {/* Browser Tab Favicon & Editable Brand Subtitle/Tagline */}
+        {(() => {
+          const previewBrand = resolveEffectiveBrandInfo(cmsDraft as UasEnterpriseProfile);
+          return (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-2 border-t border-slate-200 dark:border-slate-700">
+              <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-900/30">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-extrabold flex items-center gap-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={previewBrand.effectiveFaviconUrl}
+                      alt="Browser Tab Icon"
+                      className="w-5 h-5 rounded object-contain border border-slate-200 dark:border-slate-700 bg-white p-0.5"
+                    />
+                    <span>
+                      {isAr
+                        ? "أيقونة تبويب المتصفح (Favicon) وعنوان التبويب"
+                        : "Browser Tab Icon (Favicon) & Tab Title"}
+                    </span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md bg-slate-200/70 dark:bg-slate-800 text-[10px] font-mono" dir="ltr">
+                    {previewBrand.tabTitleEn}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  {previewBrand.hasCustomFavicon
+                    ? isAr
+                      ? "أيقونة Favicon مخصصة نشطة حالياً لتبويب المتصفح."
+                      : "Dedicated custom favicon is active for browser tabs."
+                    : previewBrand.derivedFaviconFromLogo
+                    ? isAr
+                      ? "يتم اشتقاق أيقونة تبويب المتصفح تلقائياً من شعار المؤسسة المخصص."
+                      : "Browser tab favicon is automatically derived from your custom enterprise logo."
+                    : isAr
+                    ? "يتم استخدام أيقونة UAS الافتراضية حتى يتم رفع شعار أو أيقونة مخصصة."
+                    : "Using default UAS favicon until a custom logo or favicon is uploaded."}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={cmsDraft.faviconUrl ?? ""}
+                    disabled={readOnly || !canManageCms}
+                    onChange={(e) =>
+                      updateCmsDraft((prev) => ({
+                        ...prev,
+                        faviconUrl: e.target.value,
+                      }))
+                    }
+                    placeholder={
+                      isAr
+                        ? "رابط أيقونة مخصصة (اختياري — يُشتق من الشعار تلقائياً)..."
+                        : "Custom favicon URL (optional — auto-derived from logo)..."
+                    }
+                    className="flex-1 min-w-[180px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
+                  />
+                  <label className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center gap-1.5">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>{isAr ? "رفع أيقونة" : "Upload Icon"}</span>
+                    <input
+                      type="file"
+                      accept="image/*,.ico,.svg"
+                      disabled={readOnly || !canManageCms}
+                      className="hidden"
+                      onChange={(e) =>
+                        void handleLogoFileUpload("faviconUrl", null, e.target.files?.[0])
+                      }
+                    />
+                  </label>
+                  {cmsDraft.faviconUrl && (
+                    <button
+                      type="button"
+                      disabled={readOnly || !canManageCms}
+                      onClick={() => updateCmsDraft((prev) => ({ ...prev, faviconUrl: null }))}
+                      className="px-2.5 py-1.5 rounded-xl border border-rose-300 text-rose-600 font-bold hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                    >
+                      {isAr ? "مسح" : "Clear"}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-900/30">
+                <div className="font-extrabold">
+                  {isAr
+                    ? "الوصف التعريفي أسفل اسم المنشأة (Editable Tagline)"
+                    : "Editable Brand Subtitle / Tagline"}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold mb-1">
+                      {isAr ? "الشعار اللفظي / الوصف (عربي)" : "Tagline (Arabic)"}
+                    </label>
+                    <input
+                      type="text"
+                      value={cmsDraft.taglineAr ?? ""}
+                      disabled={readOnly || !canManageCms}
+                      onChange={(e) =>
+                        updateCmsDraft((p) => ({ ...p, taglineAr: e.target.value }))
+                      }
+                      placeholder={DEFAULT_TAGLINE_AR}
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold mb-1">
+                      {isAr ? "الشعار اللفظي / الوصف (إنجليزي)" : "Tagline (English)"}
+                    </label>
+                    <input
+                      type="text"
+                      value={cmsDraft.taglineEn ?? ""}
+                      disabled={readOnly || !canManageCms}
+                      onChange={(e) =>
+                        updateCmsDraft((p) => ({ ...p, taglineEn: e.target.value }))
+                      }
+                      placeholder={DEFAULT_TAGLINE_EN}
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Legal Identity & Theme Color */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-200 dark:border-slate-700">

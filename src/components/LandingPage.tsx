@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { DualLogoBadge } from "@/components/DualLogoBadge";
 import { getApiBaseUrl } from "@/lib/apiClient";
+import { resolveEffectiveTagline } from "@/lib/branding";
 import { fmtNum } from "@/lib/formulas";
 import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
 import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
@@ -92,6 +93,8 @@ export function LandingPage({
     isTenantWorkspace: boolean;
     tenantSlug: string | null;
     tenantUrl: string;
+    taglineAr?: string;
+    taglineEn?: string;
     welcomeNoticeAr?: string;
     welcomeNoticeEn?: string;
     supportEmail?: string;
@@ -117,6 +120,8 @@ export function LandingPage({
             isTenantWorkspace: Boolean(data.isTenantWorkspace),
             tenantSlug: data.tenantSlug || hostSlug,
             tenantUrl: data.tenantUrl || (hostSlug ? `https://${hostSlug}.qat.world` : "https://qat.world"),
+            taglineAr: data.profile?.taglineAr || "",
+            taglineEn: data.profile?.taglineEn || "",
             welcomeNoticeAr: data.profile?.welcomeNoticeAr || "",
             welcomeNoticeEn: data.profile?.welcomeNoticeEn || "",
             supportEmail: data.profile?.supportEmail || "",
@@ -179,6 +184,13 @@ export function LandingPage({
   const legalName = isAr
     ? profile?.legalNameAr?.trim() || "منظومة تخطيط الموارد المحاسبية"
     : profile?.legalNameEn?.trim() || "Enterprise Resource Planning";
+  const tagline = resolveEffectiveTagline(
+    {
+      taglineAr: profile?.taglineAr || tenantPortalInfo?.taglineAr || "",
+      taglineEn: profile?.taglineEn || tenantPortalInfo?.taglineEn || "",
+    },
+    lang
+  );
 
   const ArrowIcon = isAr ? ArrowLeft : ArrowRight;
   const totalSalesFallback = state.sales.reduce((s, x) => s + Number(x.total || 0), 0);
@@ -225,33 +237,26 @@ export function LandingPage({
               size="md"
             />
             <div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-black text-emerald-600 dark:text-emerald-400">
-                  {state.settings.logoText || "UAS"}
-                </span>
-                <span className="text-slate-300 dark:text-slate-600">•</span>
-                <h1 className="font-black text-sm sm:text-base leading-tight inline">
-                  {legalName}
-                </h1>
-              </div>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-2">
-                {[
-                  profile?.commercialReg
-                    ? `${isAr ? "سجل تجاري:" : "CR:"} ${profile.commercialReg}`
-                    : null,
-                  profile?.taxNumber
-                    ? `${isAr ? "الرقم الضريبي:" : "Tax ID:"} ${profile.taxNumber}`
-                    : null,
-                ]
-                  .filter(Boolean)
-                  .map((el, i) => (
-                    <React.Fragment key={i}>
-                      {i > 0 && <span>•</span>}
-                      <span>{el}</span>
-                    </React.Fragment>
-                  ))}
-                {!profile?.commercialReg && !profile?.taxNumber && (
-                  <span>{isAr ? "منظومة مالية ومحاسبية مؤسسية" : "Enterprise Accounting Platform"}</span>
+              <h1 className="font-black text-sm sm:text-base leading-tight">
+                {legalName}
+              </h1>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-2">
+                <span>{tagline}</span>
+                {profile?.commercialReg && (
+                  <>
+                    <span>•</span>
+                    <span>
+                      {isAr ? `سجل تجاري: ${profile.commercialReg}` : `CR: ${profile.commercialReg}`}
+                    </span>
+                  </>
+                )}
+                {profile?.taxNumber && (
+                  <>
+                    <span>•</span>
+                    <span>
+                      {isAr ? `الرقم الضريبي: ${profile.taxNumber}` : `Tax ID: ${profile.taxNumber}`}
+                    </span>
+                  </>
                 )}
               </p>
             </div>

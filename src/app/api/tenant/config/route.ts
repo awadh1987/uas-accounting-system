@@ -10,6 +10,11 @@ import {
 } from "@/lib/tenant";
 import { checkProfileUpdateAgainstLock } from "@/lib/licensing/companyLock";
 import { loadActiveLockedLicense } from "@/lib/licensing/companyLockServer";
+import {
+  decodeDataUrlAsset,
+  deleteTenantBrandAssetFile,
+  saveTenantBrandAssetFile,
+} from "@/lib/brandingAssets";
 import type { UasTenantAdminConfig } from "@/types/uas";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +34,9 @@ function buildTenantAdminConfig(params: {
     legalNameEn: profile?.legalNameEn || "Enterprise Name",
     brandColor: profile?.brandColor || "#059669",
     logoUrl: profile?.enterpriseLogoCustomUrl || profile?.logoUrl || "/uas-logo.png",
+    faviconUrl: profile?.faviconUrl ?? null,
+    taglineAr: profile?.taglineAr || "",
+    taglineEn: profile?.taglineEn || "",
     welcomeNoticeAr: profile?.welcomeNoticeAr || "",
     welcomeNoticeEn: profile?.welcomeNoticeEn || "",
     supportEmail: profile?.supportEmail || profile?.email || "",
@@ -91,6 +99,7 @@ async function handleSaveTenantConfig(req: NextRequest) {
     const tenantId = getActiveTenantId();
     const meta = getTenantMetadata(tenantId);
     const existingProfile = await prisma.enterpriseProfile.findUnique({ where: { id: "default" } });
+    const tenantKey = existingProfile?.tenantSlug || meta?.slug || tenantId;
 
     const legalNameAr =
       typeof body.legalNameAr === "string" ? body.legalNameAr.trim() : undefined;
@@ -139,6 +148,48 @@ async function handleSaveTenantConfig(req: NextRequest) {
         ? body.periodLockDate.trim()
         : undefined;
 
+    const rawLogoInput =
+      body.logoUrl !== undefined ? (body.logoUrl ? String(body.logoUrl).trim() : null) : undefined;
+    const rawFaviconInput =
+      body.faviconUrl !== undefined ? (body.faviconUrl ? String(body.faviconUrl).trim() : null) : undefined;
+
+    let resolvedLogoUrl: string | null | undefined = rawLogoInput;
+    if (typeof rawLogoInput === "string" && rawLogoInput.startsWith("data:")) {
+      const decoded = decodeDataUrlAsset(rawLogoInput);
+      if (decoded) {
+        resolvedLogoUrl = saveTenantBrandAssetFile({
+          tenantKey,
+          kind: "logo",
+          buffer: decoded.buffer,
+          contentType: decoded.contentType,
+          ext: decoded.ext,
+        }).publicUrl;
+      }
+    } else if (rawLogoInput === null) {
+      deleteTenantBrandAssetFile(tenantKey, "logo");
+    }
+
+    let resolvedFaviconUrl: string | null | undefined = rawFaviconInput;
+    if (typeof rawFaviconInput === "string" && rawFaviconInput.startsWith("data:")) {
+      const decoded = decodeDataUrlAsset(rawFaviconInput);
+      if (decoded) {
+        resolvedFaviconUrl = saveTenantBrandAssetFile({
+          tenantKey,
+          kind: "favicon",
+          buffer: decoded.buffer,
+          contentType: decoded.contentType,
+          ext: decoded.ext,
+        }).publicUrl;
+      }
+    } else if (rawFaviconInput === null) {
+      deleteTenantBrandAssetFile(tenantKey, "favicon");
+    }
+
+    const resetBrand = body.resetToDefaultBrand === true;
+    if (resetBrand) {
+      deleteTenantBrandAssetFile(tenantKey, "all");
+    }
+
     const { profile, settings } = await prisma.$transaction(async (tx) => {
       const savedProfile = await tx.enterpriseProfile.upsert({
         where: { id: "default" },
@@ -147,14 +198,40 @@ async function handleSaveTenantConfig(req: NextRequest) {
           ...(legalNameAr ? { legalNameAr } : {}),
           ...(legalNameEn ? { legalNameEn } : {}),
           ...(strOpt("brandColor") ? { brandColor: strOpt("brandColor") } : {}),
-          ...(body.logoUrl !== undefined
+          ...(resetBrand
             ? {
-                logoUrl: body.logoUrl ? String(body.logoUrl).trim() : null,
-                ...(body.logoUrl
-                  ? { enterpriseLogoCustomUrl: String(body.logoUrl).trim(), enterpriseLogoStyle: "custom" }
-                  : {}),
+                logoUrl: "/uas-logo.png",
+                faviconUrl: null,
+                enterpriseLogoCustomUrl: null,
+                enterpriseLogoStyle: "agri-leaf",
+                showEnterpriseLogo: false,
+                showUasLogo: true,
+                uasLogoStyle: "official-brand",
+                uasLogoCustomUrl: "/uas-logo.png",
+                taglineAr: "",
+                taglineEn: "",
               }
-            : {}),
+            : {
+                ...(resolvedLogoUrl !== undefined
+                  ? {
+                      logoUrl: resolvedLogoUrl || "/uas-logo.png",
+                      ...(resolvedLogoUrl && resolvedLogoUrl !== "/uas-logo.png"
+                        ? {
+                            enterpriseLogoCustomUrl: resolvedLogoUrl,
+                            enterpriseLogoStyle: "custom",
+                            showEnterpriseLogo: true,
+                          }
+                        : {
+                            enterpriseLogoCustomUrl: null,
+                            enterpriseLogoStyle: "agri-leaf",
+                            showEnterpriseLogo: false,
+                          }),
+                    }
+                  : {}),
+                ...(resolvedFaviconUrl !== undefined ? { faviconUrl: resolvedFaviconUrl } : {}),
+                ...(strOpt("taglineAr") !== undefined ? { taglineAr: strOpt("taglineAr") } : {}),
+                ...(strOpt("taglineEn") !== undefined ? { taglineEn: strOpt("taglineEn") } : {}),
+              }),
           ...(strOpt("welcomeNoticeAr") !== undefined
             ? { welcomeNoticeAr: strOpt("welcomeNoticeAr") }
             : {}),

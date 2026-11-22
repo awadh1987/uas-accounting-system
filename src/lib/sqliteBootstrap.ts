@@ -276,7 +276,13 @@ async function seedDefaultBaselineRecords(): Promise<void> {
       phone: "",
       email: "",
       logoUrl: "/uas-logo.png",
+      faviconUrl: null,
       brandColor: "#059669",
+      taglineAr: "",
+      taglineEn: "",
+      showUasLogo: true,
+      uasLogoStyle: "official-brand",
+      showEnterpriseLogo: false,
       contactPhone: "",
       contactWhatsApp: "",
       contactAddress: "",
@@ -431,6 +437,18 @@ async function ensureAdditiveColumns(client: {
         {
           name: "supportEmail",
           ddl: 'ALTER TABLE "EnterpriseProfile" ADD COLUMN "supportEmail" TEXT NOT NULL DEFAULT \'\'',
+        },
+        {
+          name: "faviconUrl",
+          ddl: 'ALTER TABLE "EnterpriseProfile" ADD COLUMN "faviconUrl" TEXT',
+        },
+        {
+          name: "taglineAr",
+          ddl: 'ALTER TABLE "EnterpriseProfile" ADD COLUMN "taglineAr" TEXT NOT NULL DEFAULT \'\'',
+        },
+        {
+          name: "taglineEn",
+          ddl: 'ALTER TABLE "EnterpriseProfile" ADD COLUMN "taglineEn" TEXT NOT NULL DEFAULT \'\'',
         },
       ],
     },

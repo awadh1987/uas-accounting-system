@@ -108,7 +108,10 @@ export interface UasEnterpriseProfile {
   phone?: string | null;
   email?: string | null;
   logoUrl?: string | null;
+  faviconUrl?: string | null;
   brandColor: string;
+  taglineAr?: string;
+  taglineEn?: string;
   showUasLogo?: boolean;
   uasLogoStyle?: string;
   uasLogoCustomUrl?: string | null;
@@ -575,6 +578,9 @@ export interface UasTenantAdminConfig {
   legalNameEn: string;
   brandColor: string;
   logoUrl?: string | null;
+  faviconUrl?: string | null;
+  taglineAr?: string;
+  taglineEn?: string;
   welcomeNoticeAr: string;
   welcomeNoticeEn: string;
   supportEmail: string;

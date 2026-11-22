@@ -1,6 +1,7 @@
 "use client";
 
 import type { UasEnterpriseProfile } from "@/types/uas";
+import { resolveCustomLogoUrl } from "@/lib/branding";
 
 export interface LogoPresetOption {
   id: string;
@@ -172,7 +173,11 @@ export function DualLogoBadge({
   const brandColor = profile?.brandColor || "#059669";
 
   const showUas = profile?.showUasLogo ?? true;
-  const showEnterprise = profile?.showEnterpriseLogo ?? false;
+  const customEntUrl = resolveCustomLogoUrl(profile);
+  const hasCustomEntLogo = Boolean(customEntUrl);
+  const showEnterprise = hasCustomEntLogo
+    ? profile?.showEnterpriseLogo ?? true
+    : Boolean(profile?.showEnterpriseLogo && profile?.enterpriseLogoStyle && profile.enterpriseLogoStyle !== "agri-leaf");
 
   const uasStyle = profile?.uasLogoStyle || "official-brand";
   const uasUrl = profile?.uasLogoCustomUrl?.trim() || "/uas-logo.png";
@@ -185,10 +190,8 @@ export function DualLogoBadge({
     );
 
   const entStyle = profile?.enterpriseLogoStyle || "agri-leaf";
-  const entUrl = profile?.enterpriseLogoCustomUrl?.trim() || profile?.logoUrl?.trim() || "";
-  const useCustomEnt = Boolean(
-    entUrl && (entStyle === "custom" || !ENTERPRISE_LOGO_PRESETS.some((p) => p.id === entStyle))
-  );
+  const entUrl = customEntUrl || "";
+  const useCustomEnt = Boolean(entUrl);
 
   const uasBadge = (
     <div
@@ -267,20 +270,15 @@ export function DualLogoBadge({
     return (
       <div className={`relative inline-flex items-center justify-center ${className}`}>
         {showEnterprise ? enterpriseBadge : uasBadge}
-        {showUas && showEnterprise && (
-          <span
-            className="absolute -bottom-0.5 -end-0.5 w-3 h-3 rounded-full border-2 border-white dark:border-slate-900"
-            style={{ backgroundColor: brandColor }}
-            title="Dual Identity Active"
-          />
-        )}
       </div>
     );
   }
 
+  // When a tenant has a custom logo and did not explicitly disable it, show it cleanly.
+  // If no custom enterprise logo is configured, UAS brand mark serves as the clean default fallback.
   return (
     <div className={`inline-flex items-center ${s.gap} shrink-0 ${className}`}>
-      {showUas && uasBadge}
+      {showUas && (!hasCustomEntLogo || showUas) && uasBadge}
       {showEnterprise && enterpriseBadge}
     </div>
   );

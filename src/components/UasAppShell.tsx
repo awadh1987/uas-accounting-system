@@ -75,6 +75,7 @@ import { INITIAL_FALLBACK_STATE } from "@/lib/seedFallback";
 import { performManualSyncNow, startAutoSyncController } from "@/lib/sync/clientSyncManager";
 import { resolveTransportTarget } from "@/lib/transportResolver";
 import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
+import { resolveEffectiveBrandInfo } from "@/lib/branding";
 import {
   ensureNotificationChannelsAndPermission,
   flushQueuedNotifications,
@@ -553,6 +554,43 @@ export function UasAppShell() {
     document.documentElement.lang = lang;
     document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
   }, [lang]);
+
+  // Sync strictly English-only browser tab <title> and dynamic tenant/UAS favicon & apple-touch-icon
+  useEffect(() => {
+    if (typeof document === "undefined" || typeof window === "undefined") return;
+    const hostSlug = extractSubdomainSlugFromHost(window.location.host);
+    const effectiveSlug = hostSlug || state.enterpriseProfile?.tenantSlug || null;
+    const brand = resolveEffectiveBrandInfo(state.enterpriseProfile, effectiveSlug);
+
+    document.title = brand.tabTitleEn;
+
+    const head = document.head;
+    if (!head) return;
+
+    const existingIcons = head.querySelectorAll(
+      "link[rel~='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']"
+    );
+    existingIcons.forEach((el) => el.parentNode?.removeChild(el));
+
+    const appendIconLink = (rel: string, href: string, type?: string) => {
+      const link = document.createElement("link");
+      link.rel = rel;
+      link.href = href;
+      if (type) link.type = type;
+      head.appendChild(link);
+    };
+
+    if (brand.hasCustomBrand) {
+      appendIconLink("icon", brand.effectiveFaviconUrl);
+      appendIconLink("shortcut icon", brand.effectiveFaviconUrl);
+      appendIconLink("apple-touch-icon", brand.effectiveFaviconUrl);
+    } else {
+      appendIconLink("icon", "/favicon.ico");
+      appendIconLink("icon", "/favicon-32x32.png", "image/png");
+      appendIconLink("shortcut icon", "/favicon-32x32.png", "image/png");
+      appendIconLink("apple-touch-icon", "/apple-touch-icon.png", "image/png");
+    }
+  }, [state.enterpriseProfile, lang, viewMode]);
 
   useEffect(() => {
     document.body.classList.remove("theme-dark", "theme-royal");

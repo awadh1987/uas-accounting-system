@@ -7,11 +7,18 @@ import {
   Copy,
   Globe2,
   RefreshCw,
+  RotateCcw,
   Save,
   ShieldCheck,
   Sliders,
+  Upload,
 } from "lucide-react";
 import { safeFetchJson } from "@/lib/apiClient";
+import {
+  DEFAULT_TAGLINE_AR,
+  DEFAULT_TAGLINE_EN,
+  resolveEffectiveBrandInfo,
+} from "@/lib/branding";
 import type { UasTenantAdminConfig, UasUser } from "@/types/uas";
 
 interface TenantAdminConfigPanelProps {
@@ -94,6 +101,105 @@ export function TenantAdminConfigPanel({
           : "✅ Tenant workspace configuration saved successfully"
       );
       await onRefreshState?.();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleUploadAsset(kind: "logo" | "favicon", file?: File) {
+    if (!file || !config || readOnly) return;
+    if (file.size > 1024 * 1024) {
+      onToast(isAr ? "حجم الملف يجب أن لا يتجاوز 1 ميجابايت" : "File must be <= 1 MB");
+      return;
+    }
+    const formData = new FormData();
+    formData.append("kind", kind);
+    formData.append("file", file);
+    formData.append(
+      "actor",
+      JSON.stringify({
+        userId: currentUser.id,
+        userDisplay: `${currentUser.name} (${currentUser.role})`,
+        userRole: currentUser.role,
+      })
+    );
+    setSaving(true);
+    try {
+      const res = await fetch("/api/system/branding/upload", {
+        method: "POST",
+        headers: {
+          "x-uas-user-id": currentUser.id,
+          "x-uas-role": String(currentUser.role),
+          "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+        },
+        body: formData,
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        assetUrl?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.success || !data.assetUrl) {
+        onToast(data.error || (isAr ? "تعذر رفع الملف" : "Upload failed"));
+        return;
+      }
+      setConfig((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...(kind === "logo" ? { logoUrl: data.assetUrl } : { faviconUrl: data.assetUrl }),
+            }
+          : prev
+      );
+      onToast(
+        kind === "favicon"
+          ? isAr
+            ? "✅ تم تحديث أيقونة التبويب (Favicon) بنجاح"
+            : "✅ Tenant favicon updated"
+          : isAr
+          ? "✅ تم تحديث شعار المنشأة بنجاح"
+          : "✅ Tenant logo updated"
+      );
+      await onRefreshState?.();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleResetDefaultBranding() {
+    if (!config || readOnly) return;
+    setSaving(true);
+    try {
+      const res = await safeFetchJson<{
+        success?: boolean;
+        config?: UasTenantAdminConfig;
+        error?: string;
+      }>("/api/tenant/config", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "x-uas-user-id": currentUser.id,
+          "x-uas-role": String(currentUser.role),
+          "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+        },
+        body: JSON.stringify({
+          resetToDefaultBrand: true,
+          actor: {
+            userId: currentUser.id,
+            userDisplay: `${currentUser.name} (${currentUser.role})`,
+            userRole: currentUser.role,
+          },
+        }),
+      });
+      if (res.ok && res.data?.config) {
+        setConfig(res.data.config);
+        onToast(
+          isAr
+            ? "✅ تمت استعادة هوية UAS الافتراضية"
+            : "✅ Restored default UAS branding"
+        );
+        await onRefreshState?.();
+      }
     } finally {
       setSaving(false);
     }
@@ -195,6 +301,105 @@ export function TenantAdminConfigPanel({
               />
             </div>
           </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-bold mb-1">
+                {isAr ? "الوصف التعريفي أسفل الاسم (عربي)" : "Brand Subtitle / Tagline (Arabic)"}
+              </label>
+              <input
+                type="text"
+                value={config.taglineAr ?? ""}
+                onChange={(e) => setConfig({ ...config, taglineAr: e.target.value })}
+                disabled={readOnly}
+                placeholder={DEFAULT_TAGLINE_AR}
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="block font-bold mb-1">
+                {isAr ? "الوصف التعريفي أسفل الاسم (إنجليزي)" : "Brand Subtitle / Tagline (English)"}
+              </label>
+              <input
+                type="text"
+                value={config.taglineEn ?? ""}
+                onChange={(e) => setConfig({ ...config, taglineEn: e.target.value })}
+                disabled={readOnly}
+                placeholder={DEFAULT_TAGLINE_EN}
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+              />
+            </div>
+          </div>
+
+          {(() => {
+            const brandPreview = resolveEffectiveBrandInfo(
+              {
+                legalNameAr: config.legalNameAr,
+                legalNameEn: config.legalNameEn,
+                logoUrl: config.logoUrl,
+                faviconUrl: config.faviconUrl,
+                tenantSlug: config.slug,
+              },
+              config.slug
+            );
+            return (
+              <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-900/30 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 font-bold">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={brandPreview.effectiveLogoUrl}
+                      alt="Tenant Logo"
+                      className="w-7 h-7 rounded-lg object-contain bg-white border border-slate-200 p-0.5"
+                    />
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={brandPreview.effectiveFaviconUrl}
+                      alt="Tenant Favicon"
+                      className="w-5 h-5 rounded object-contain bg-white border border-slate-200 p-0.5"
+                    />
+                    <span className="text-[11px] font-mono text-slate-500" dir="ltr">
+                      {brandPreview.tabTitleEn}
+                    </span>
+                  </div>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => void handleResetDefaultBranding()}
+                      className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 text-[11px] font-bold inline-flex items-center gap-1 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>{isAr ? "استعادة UAS" : "Reset UAS"}</span>
+                    </button>
+                  )}
+                </div>
+                {!readOnly && (
+                  <div className="flex flex-wrap gap-2">
+                    <label className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center gap-1.5">
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{isAr ? "رفع شعار المنشأة" : "Upload Logo"}</span>
+                      <input
+                        type="file"
+                        accept="image/*,.svg"
+                        className="hidden"
+                        onChange={(e) => void handleUploadAsset("logo", e.target.files?.[0])}
+                      />
+                    </label>
+                    <label className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center gap-1.5">
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{isAr ? "رفع أيقونة التبويب (Favicon)" : "Upload Favicon"}</span>
+                      <input
+                        type="file"
+                        accept="image/*,.ico,.svg"
+                        className="hidden"
+                        onChange={(e) => void handleUploadAsset("favicon", e.target.files?.[0])}
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
