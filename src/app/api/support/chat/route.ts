@@ -6,6 +6,7 @@ import {
   diagnoseLiveSystemState,
   type SupportSystemDiagnostics,
 } from "@/lib/localSupportEngine";
+import { runGeminiSupportSynthesis } from "@/lib/ai/geminiCopilotEngine";
 import { collectServerSupportDiagnostics } from "@/lib/supportDiagnosticsServer";
 
 export const dynamic = "force-dynamic";
@@ -31,12 +32,13 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
       diagnostics: liveDiagnostics,
       diagnosticReport: diagnoseLiveSystemState(liveDiagnostics),
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : undefined;
     console.error("GET /api/support/chat error:", err);
     return NextResponse.json(
       {
         success: false,
-        error: err?.message || "تعذر تحميل دليل الدعم الفني / Failed to load support knowledge base",
+        error: errMsg || "تعذر تحميل دليل الدعم الفني / Failed to load support knowledge base",
       },
       { status: 500 }
     );
@@ -69,16 +71,30 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       topK: typeof body.topK === "number" ? body.topK : 3,
     });
 
+    const resolvedLang = lang ?? result.lang;
+    const synthesized = await runGeminiSupportSynthesis({
+      query,
+      lang: resolvedLang,
+      baselineAnswerAr: result.answerAr,
+      baselineAnswerEn: result.answerEn,
+      diagnosticsSummary: `${result.diagnosticReport.statusBadge}: ${(resolvedLang === "ar" ? result.diagnosticReport.findingsAr : result.diagnosticReport.findingsEn).join(" | ")}`,
+    });
+
     return NextResponse.json({
       success: true,
       ...result,
+      answer: synthesized ? synthesized.text : result.answer,
+      answerAr: synthesized && resolvedLang === "ar" ? synthesized.text : result.answerAr,
+      answerEn: synthesized && resolvedLang === "en" ? synthesized.text : result.answerEn,
+      modelUsed: synthesized ? synthesized.modelUsed : "Offline Local Engine",
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : undefined;
     console.error("POST /api/support/chat error:", err);
     return NextResponse.json(
       {
         success: false,
-        error: err?.message || "تعذر معالجة استفسار الدعم الفني / Failed to process support query",
+        error: errMsg || "تعذر معالجة استفسار الدعم الفني / Failed to process support query",
       },
       { status: 500 }
     );

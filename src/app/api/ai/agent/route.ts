@@ -8,7 +8,11 @@ import {
   type UasAgentToolName,
   type UasWorkspaceContext,
 } from "@/lib/ai/uasAgentTools";
-import { runUasAiAgent } from "@/lib/ai/offlineAgentEngine";
+import {
+  DEFAULT_GEMINI_FAST_MODEL,
+  DEFAULT_GEMINI_REASONING_MODEL,
+  runGeminiCopilotAgent,
+} from "@/lib/ai/geminiCopilotEngine";
 import {
   buildServerAgentContext,
   executeConfirmedAiAction,
@@ -17,10 +21,18 @@ import {
 export const dynamic = "force-dynamic";
 
 export const GET = withTenantRoute(async function GET() {
+  const geminiConfigured = Boolean(process.env.GEMINI_API_KEY?.trim());
   return NextResponse.json({
     success: true,
     agent: "UAS Enterprise Bilingual Voice + Text Reasoning ERP Copilot",
-    tiers: ["tier1_cloud_llm", "tier2_local_ollama", "tier3_offline_deterministic"],
+    geminiEnabled: geminiConfigured,
+    models: {
+      fast: process.env.UAS_GEMINI_FAST_MODEL || DEFAULT_GEMINI_FAST_MODEL,
+      reasoning: process.env.UAS_GEMINI_REASONING_MODEL || DEFAULT_GEMINI_REASONING_MODEL,
+    },
+    tiers: geminiConfigured
+      ? ["gemini_4_argon", "gemini_3_8_flash", "tier2_local_ollama", "tier3_offline_deterministic"]
+      : ["tier2_local_ollama", "tier3_offline_deterministic"],
     confirmationGate: "MANDATORY_FOR_ALL_FINANCIAL_WRITES",
     tools: UAS_AGENT_TOOL_SCHEMAS,
   });
@@ -68,7 +80,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         ? (body.explicitTool as { toolName: UasAgentToolName; args: Record<string, unknown> })
         : undefined;
 
-    const agentResponse = await runUasAiAgent(prompt, {
+    const agentResponse = await runGeminiCopilotAgent(prompt, {
       ...serverCtx,
       workspaceContext,
       explicitTool,

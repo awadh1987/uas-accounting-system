@@ -145,6 +145,8 @@ interface WindowWithSpeech {
 
 interface CopilotAgentResponse extends Partial<UasAgentToolResult> {
   tierUsed?: ReasoningTier;
+  modelUsed?: string;
+  taskComplexity?: "operational" | "deep_reasoning";
   reasoningTrace?: AgentReasoningStep[];
   reply?: string;
   replyAr?: string;
@@ -873,6 +875,17 @@ export function UasAiCopilot({
     onToast(isAr ? "تم تجاهل الاقتراح دون ترحيل" : "Proposal dismissed without posting");
   };
 
+  function isOfflineClientContext(): boolean {
+    const isPackagedStaticOrigin =
+      typeof window !== "undefined" &&
+      (window.location.protocol === "capacitor:" || window.location.protocol === "file:");
+    return (
+      offlineMode ||
+      isPackagedStaticOrigin ||
+      (typeof navigator !== "undefined" && !navigator.onLine)
+    );
+  }
+
   async function handleSendPrompt(overrideText?: string, baseMessages?: CopilotChatMessage[]) {
     const prompt = (overrideText ?? inputPrompt).trim();
     if (!prompt || busy) return;
@@ -899,8 +912,7 @@ export function UasAiCopilot({
 
     try {
       let agentRes: CopilotAgentResponse | null = null;
-      const shouldUseOfflineDirectly =
-        offlineMode || (typeof navigator !== "undefined" && !navigator.onLine);
+      const shouldUseOfflineDirectly = isOfflineClientContext();
 
       if (!shouldUseOfflineDirectly) {
         try {
@@ -953,6 +965,10 @@ export function UasAiCopilot({
         text: replyText,
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
         tierUsed: agentRes.tierUsed,
+        modelUsed:
+          agentRes.modelUsed ||
+          (agentRes.tierUsed === "tier3_offline_deterministic" ? "Offline Local Engine" : undefined),
+        taskComplexity: agentRes.taskComplexity,
         reasoningTrace: agentRes.reasoningTrace,
         confirmationCard: agentRes.confirmationCard,
         navigationTab: agentRes.navigationTab,
@@ -996,7 +1012,7 @@ export function UasAiCopilot({
       let entryNumber = `JV-AI-${getNextMsgId("e")}`;
       let handledByServer = false;
 
-      if (!offlineMode && (typeof navigator === "undefined" || navigator.onLine)) {
+      if (!isOfflineClientContext()) {
         try {
           const headers: Record<string, string> = { "Content-Type": "application/json" };
           if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
@@ -1129,7 +1145,7 @@ export function UasAiCopilot({
       let draftNumber = `DRFT-AI-${getNextMsgId("e")}`;
       let handledByServer = false;
 
-      if (!offlineMode && (typeof navigator === "undefined" || navigator.onLine)) {
+      if (!isOfflineClientContext()) {
         try {
           const headers: Record<string, string> = { "Content-Type": "application/json" };
           if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
@@ -1395,8 +1411,13 @@ export function UasAiCopilot({
                       ? "وكيل UAS المحاسبي الذكي وخدمة العملاء"
                       : "UAS Reasoning ERP Copilot & Support"}
                   </span>
-                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 font-mono text-[9px]">
-                    {mergedWorkspaceContext.isOffline ? "OFFLINE" : "ONLINE AI"}
+                  <span
+                    data-testid="uas-ai-runtime-badge"
+                    className="px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 font-mono text-[9px]"
+                  >
+                    {mergedWorkspaceContext.isOffline
+                      ? "Offline Local Engine"
+                      : "Online • Gemini"}
                   </span>
                 </div>
                 <div className="text-[10px] text-slate-300">
@@ -1670,7 +1691,19 @@ export function UasAiCopilot({
                           </div>
                         </div>
                       ) : (
-                        <div className="whitespace-pre-line leading-relaxed">{msg.text}</div>
+                        <div className="space-y-1">
+                          {msg.role === "assistant" && msg.modelUsed && (
+                            <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-400">
+                              <span
+                                data-testid={`msg-model-badge-${msg.id}`}
+                                className="px-1.5 py-0.5 rounded bg-slate-200/70 dark:bg-slate-700/70 text-slate-700 dark:text-slate-200"
+                              >
+                                {msg.modelUsed}
+                              </span>
+                            </div>
+                          )}
+                          <div className="whitespace-pre-line leading-relaxed">{msg.text}</div>
+                        </div>
                       )}
 
                       {/* Collapsible Reasoning Trace */}

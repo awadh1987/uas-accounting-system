@@ -51,6 +51,10 @@ export interface UasAiAgentResponse {
   ok: boolean;
   lang: "ar" | "en";
   tierUsed: ReasoningTier;
+  modelUsed?: string;
+  modelId?: string;
+  taskComplexity?: "operational" | "deep_reasoning";
+  fallbackReason?: string;
   prompt: string;
   reply: string;
   replyAr: string;
@@ -1118,6 +1122,12 @@ export async function runUasAiAgent(
     ok: toolResult.ok,
     lang,
     tierUsed,
+    modelUsed:
+      tierUsed === "tier3_offline_deterministic"
+        ? "Offline Local Engine"
+        : tierUsed === "tier2_local_ollama"
+        ? "Local Ollama LLM"
+        : "Cloud LLM",
     prompt: cleanPrompt,
     reply: lang === "ar" ? toolResult.summaryAr : toolResult.summaryEn,
     replyAr: toolResult.summaryAr,

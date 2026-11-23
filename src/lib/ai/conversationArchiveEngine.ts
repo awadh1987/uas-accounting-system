@@ -32,6 +32,8 @@ export interface CopilotChatMessage {
   text: string;
   timestamp: string;
   tierUsed?: ReasoningTier;
+  modelUsed?: string;
+  taskComplexity?: "operational" | "deep_reasoning";
   reasoningTrace?: AgentReasoningStep[];
   confirmationCard?: ConfirmationPreviewCard;
   confirmedResult?: {
