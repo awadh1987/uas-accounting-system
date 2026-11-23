@@ -40,6 +40,11 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "../..");
+const explicitDataDir = (process.env.UAS_DATA_DIR || "").trim();
+const dataRootDir = explicitDataDir ? path.resolve(explicitDataDir) : path.join(projectRoot, "data");
+const registryFilePath = explicitDataDir
+  ? path.join(dataRootDir, "tenants_registry.json")
+  : path.join(projectRoot, "tenants_registry.json");
 
 const DEFAULT_MAX_USERS = 7;
 
@@ -117,7 +122,7 @@ function transliterateArabic(input) {
 
 function loadExistingSlugsFromRegistry() {
   const slugs = new Set();
-  const regPath = path.join(projectRoot, "tenants_registry.json");
+  const regPath = registryFilePath;
   try {
     if (fs.existsSync(regPath)) {
       const list = JSON.parse(fs.readFileSync(regPath, "utf8"));
@@ -531,7 +536,7 @@ async function provisionIsolatedSqliteDb({
 }) {
   const { DatabaseSync } = await import("node:sqlite");
   const relPath = `data/tenants/${tenantSlug}.db`;
-  const sqlitePath = path.join(projectRoot, relPath);
+  const sqlitePath = path.join(dataRootDir, "tenants", `${tenantSlug}.db`);
   fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
 
   const db = new DatabaseSync(sqlitePath);
@@ -759,7 +764,7 @@ async function provisionIsolatedSqliteDb({
 
   const standaloneDir = path.join(projectRoot, ".next", "standalone");
   let standaloneSqlitePath = null;
-  if (fs.existsSync(standaloneDir)) {
+  if (!explicitDataDir && fs.existsSync(standaloneDir)) {
     standaloneSqlitePath = path.join(standaloneDir, relPath);
     fs.mkdirSync(path.dirname(standaloneSqlitePath), { recursive: true });
     fs.copyFileSync(sqlitePath, standaloneSqlitePath);
@@ -808,9 +813,21 @@ if (rawCompany === undefined || rawCompany === true || String(rawCompany).trim()
 const companyName = String(rawCompany).trim().replace(/\s+/g, " ");
 
 // ---------------------------------------------------------------------------
-// Seat policy
+// Plan & Seat policy
 // ---------------------------------------------------------------------------
-const maxUsers = parseIntStrict("users", params.users, { min: 1, max: 10000, fallback: DEFAULT_MAX_USERS });
+const PLAN_DEFAULTS = {
+  enterprise: { users: 7, branches: 3, seats: 10 },
+  pro: { users: 5, branches: 2, seats: 7 },
+  starter: { users: 2, branches: 1, seats: 3 },
+};
+const rawPlan = typeof params.plan === "string" ? params.plan.trim().toLowerCase() : "enterprise";
+if (!Object.prototype.hasOwnProperty.call(PLAN_DEFAULTS, rawPlan)) {
+  fail(`--plan must be one of: enterprise, pro, starter (got "${params.plan}")`);
+}
+const licensePlan = rawPlan;
+const planDefaults = PLAN_DEFAULTS[licensePlan];
+
+const maxUsers = parseIntStrict("users", params.users, { min: 1, max: 10000, fallback: planDefaults.users ?? DEFAULT_MAX_USERS });
 const winPerUser = parseIntStrict("win-per-user", params["win-per-user"], { min: 0, max: 10, fallback: 1 });
 const androidPerUser = parseIntStrict("android-per-user", params["android-per-user"], { min: 0, max: 10, fallback: 1 });
 if (winPerUser + androidPerUser < 1) {
@@ -872,8 +889,8 @@ const rawModes = typeof params.modes === "string" ? params.modes.split(",").map(
 const allowed_modes = rawModes.filter((m) => ["local", "lan", "cloud"].includes(m));
 if (allowed_modes.length === 0) allowed_modes.push("local", "lan", "cloud");
 
-const maxBranches = parseIntStrict("branches", params.branches, { min: 1, max: 1000, fallback: 3 });
-const maxLanSeats = parseIntStrict("seats", params.seats, { min: 1, max: 10000, fallback: 10 });
+const maxBranches = parseIntStrict("branches", params.branches, { min: 1, max: 1000, fallback: planDefaults.branches ?? 3 });
+const maxLanSeats = parseIntStrict("seats", params.seats, { min: 1, max: 10000, fallback: planDefaults.seats ?? 10 });
 const days = parseIntStrict("days", params.days, { min: 1, max: 36500, fallback: 365 });
 
 const issuedAt = new Date().toISOString();
@@ -1074,7 +1091,7 @@ if (shouldProvision && provisionCreds) {
   });
 
   // C. Mirror license files under data/licenses/<slug>/ & .next/standalone/data/licenses/<slug>/
-  const tenantLicDir = path.join(projectRoot, "data", "licenses", tenantSlug);
+  const tenantLicDir = path.join(dataRootDir, "licenses", tenantSlug);
   fs.mkdirSync(tenantLicDir, { recursive: true });
   const canonicalLicFile = path.join(tenantLicDir, "license.uas");
   const slugLicFile = path.join(tenantLicDir, `${tenantSlug}.uas`);
@@ -1085,7 +1102,7 @@ if (shouldProvision && provisionCreds) {
 
   const standaloneDir = path.join(projectRoot, ".next", "standalone");
   const standaloneTenantLicDir = path.join(standaloneDir, "data", "licenses", tenantSlug);
-  if (fs.existsSync(standaloneDir)) {
+  if (!explicitDataDir && fs.existsSync(standaloneDir)) {
     fs.mkdirSync(standaloneTenantLicDir, { recursive: true });
     fs.writeFileSync(path.join(standaloneTenantLicDir, "license.uas"), JSON.stringify(signedLicense, null, 2), "utf8");
     fs.writeFileSync(path.join(standaloneTenantLicDir, `${tenantSlug}.uas`), JSON.stringify(signedLicense, null, 2), "utf8");
@@ -1111,6 +1128,7 @@ if (shouldProvision && provisionCreds) {
     nameEn,
     tenantUrl,
     licenseId,
+    plan: licensePlan,
     postgresDb: tenantPgDbName,
     sqliteDbPath: sqliteResult.relPath,
     schemaOrDb: tenantPgDbName,
@@ -1124,20 +1142,21 @@ if (shouldProvision && provisionCreds) {
   else list.push(meta);
 
   const registryJson = JSON.stringify(list, null, 2);
+  fs.mkdirSync(path.dirname(regPath), { recursive: true });
   fs.writeFileSync(regPath, registryJson, "utf8");
   const standaloneRegPath = path.join(standaloneDir, "tenants_registry.json");
-  if (fs.existsSync(standaloneDir)) {
+  if (!explicitDataDir && fs.existsSync(standaloneDir)) {
     fs.writeFileSync(standaloneRegPath, registryJson, "utf8");
   }
 
   chownForUasIfRoot([
     outDir,
     tenantLicDir,
-    standaloneTenantLicDir,
-    path.join(projectRoot, "data", "tenants"),
-    path.join(standaloneDir, "data", "tenants"),
+    !explicitDataDir ? standaloneTenantLicDir : null,
+    path.join(dataRootDir, "tenants"),
+    !explicitDataDir ? path.join(standaloneDir, "data", "tenants") : null,
     regPath,
-    standaloneRegPath,
+    !explicitDataDir ? standaloneRegPath : null,
   ]);
 
   provisionSummary = {

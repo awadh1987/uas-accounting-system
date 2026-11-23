@@ -51,6 +51,8 @@ import { AccountingSettingsPanel } from "@/components/AccountingSettingsPanel";
 import { ApprovalRulesMatrixPanel } from "@/components/ApprovalRulesMatrixPanel";
 import { TenantAdminConfigPanel } from "@/components/TenantAdminConfigPanel";
 import { TenantDevicesPanel } from "@/components/TenantDevicesPanel";
+import { SuperadminLicenseGeneratorPanel } from "@/components/SuperadminLicenseGeneratorPanel";
+import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
 import {
   ALL_USER_ROLES,
   ROLE_DEFAULT_PERMISSIONS,
@@ -326,8 +328,20 @@ export function SystemTab({
   onToast,
 }: SystemTabProps) {
   const isAr = lang === "ar";
+  const isRootPlatformHost =
+    typeof window === "undefined" || !extractSubdomainSlugFromHost(window.location.host);
+  const isPlatformSuperadmin =
+    isRootPlatformHost &&
+    (currentUser.email || "").trim().toLowerCase() === "admin@qat.world";
+
   const [activeSubTab, setActiveSubTab] = useState<
-    "branding" | "users" | "accounting" | "tenant-config" | "devices" | "security"
+    | "branding"
+    | "users"
+    | "accounting"
+    | "tenant-config"
+    | "devices"
+    | "security"
+    | "superadmin-licenses"
   >("branding");
 
   React.useEffect(() => {
@@ -335,13 +349,21 @@ export function SystemTab({
 
     const isValidSubTab = (
       s: string | null | undefined
-    ): s is "branding" | "users" | "accounting" | "tenant-config" | "devices" | "security" =>
+    ): s is
+      | "branding"
+      | "users"
+      | "accounting"
+      | "tenant-config"
+      | "devices"
+      | "security"
+      | "superadmin-licenses" =>
       s === "branding" ||
       s === "users" ||
       s === "accounting" ||
       s === "tenant-config" ||
       s === "devices" ||
-      s === "security";
+      s === "security" ||
+      (s === "superadmin-licenses" && isPlatformSuperadmin);
 
     const readInitialSubTab = () => {
       const rawHash = window.location.hash.replace(/^#\/?/, "");
@@ -373,10 +395,17 @@ export function SystemTab({
 
     window.addEventListener("hashchange", handleHash);
     return () => window.removeEventListener("hashchange", handleHash);
-  }, []);
+  }, [isPlatformSuperadmin]);
 
   function handleSelectSubTab(
-    subTab: "branding" | "users" | "accounting" | "tenant-config" | "devices" | "security"
+    subTab:
+      | "branding"
+      | "users"
+      | "accounting"
+      | "tenant-config"
+      | "devices"
+      | "security"
+      | "superadmin-licenses"
   ) {
     setActiveSubTab(subTab);
     if (typeof window !== "undefined") {
@@ -1301,7 +1330,33 @@ export function SystemTab({
           <Sliders className="w-4 h-4" />
           <span>{isAr ? "إعدادات النظام والأمان والربط (Settings & Connectivity)" : "System Settings & Connectivity"}</span>
         </button>
+        {isPlatformSuperadmin && (
+          <button
+            type="button"
+            onClick={() => handleSelectSubTab("superadmin-licenses")}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+              activeSubTab === "superadmin-licenses"
+                ? "accent-bg shadow-sm"
+                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
+            }`}
+          >
+            <KeyRound className="w-4 h-4" />
+            <span>
+              {isAr
+                ? "مولد التراخيص والمنشآت (Superadmin)"
+                : "Superadmin License Generator"}
+            </span>
+          </button>
+        )}
       </div>
+
+      {isPlatformSuperadmin && activeSubTab === "superadmin-licenses" && (
+        <SuperadminLicenseGeneratorPanel
+          lang={lang}
+          onToast={onToast}
+          showStandaloneLink
+        />
+      )}
 
       {activeSubTab === "tenant-config" && (
         <TenantAdminConfigPanel

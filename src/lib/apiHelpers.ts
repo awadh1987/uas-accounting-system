@@ -48,6 +48,7 @@ export interface ResolvedActor {
 const USER_AUTH_SELECT = {
   id: true,
   username: true,
+  email: true,
   name: true,
   fullName: true,
   displayName: true,
@@ -284,7 +285,7 @@ export async function resolveVerifiedActor(
     fullName: dbUser.fullName,
     displayName: dbUser.displayName ?? "",
     phone: "",
-    email: "",
+    email: dbUser.email ?? "",
     role,
     department: dbUser.department,
     active: dbUser.active && (dbUser.isActive ?? true),

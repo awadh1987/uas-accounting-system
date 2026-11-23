@@ -11,6 +11,7 @@ export interface TenantMetadata {
   nameEn?: string;
   tenantUrl?: string;
   licenseId?: string;
+  plan?: string;
   postgresDb?: string;
   sqliteDbPath?: string;
   allowedModes?: ("local" | "lan" | "cloud")[];
@@ -278,6 +279,7 @@ export function registerTenant(params: {
   nameEn?: string;
   tenantUrl?: string;
   licenseId?: string;
+  plan?: string;
   postgresDb?: string;
   sqliteDbPath?: string;
   allowedModes?: ("local" | "lan" | "cloud")[];
@@ -336,6 +338,7 @@ export function registerTenant(params: {
     nameEn: params.nameEn ?? existing?.nameEn ?? (params.companyName.trim() || normId),
     tenantUrl: resolvedUrl,
     licenseId: params.licenseId ?? existing?.licenseId,
+    ...(params.plan ?? existing?.plan ? { plan: params.plan ?? existing?.plan } : {}),
     ...(resolvedPostgresDb ? { postgresDb: resolvedPostgresDb } : {}),
     ...(resolvedSqliteDbPath ? { sqliteDbPath: resolvedSqliteDbPath } : {}),
     ...(resolvedAllowedModes ? { allowedModes: resolvedAllowedModes } : {}),
@@ -359,6 +362,7 @@ export function ensureTenantRegistered(
     nameAr?: string;
     nameEn?: string;
     licenseId?: string;
+    plan?: string;
     postgresDb?: string;
     sqliteDbPath?: string;
     allowedModes?: ("local" | "lan" | "cloud")[];
@@ -389,6 +393,10 @@ export function ensureTenantRegistered(
     }
     if (extra?.licenseId && extra.licenseId !== existing.licenseId) {
       existing.licenseId = extra.licenseId;
+      changed = true;
+    }
+    if (extra?.plan && extra.plan !== existing.plan) {
+      existing.plan = extra.plan;
       changed = true;
     }
     if (extra?.postgresDb && extra.postgresDb !== existing.postgresDb) {
@@ -432,6 +440,7 @@ export function ensureTenantRegistered(
     nameAr: extra?.nameAr,
     nameEn: extra?.nameEn,
     licenseId: extra?.licenseId,
+    plan: extra?.plan,
     postgresDb: extra?.postgresDb,
     sqliteDbPath: extra?.sqliteDbPath,
     allowedModes: extra?.allowedModes,
