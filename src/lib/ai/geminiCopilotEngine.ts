@@ -38,6 +38,7 @@ import {
   type UasWorkspaceContext,
 } from "./uasAgentTools";
 import type { CopilotMemoryEntry } from "./copilotMemoryTypes";
+import type { ExecutiveBriefingReport } from "./executiveBriefingEngine";
 import {
   runUasAiAgent,
   type AgentReasoningStep,
@@ -747,6 +748,75 @@ export async function runGeminiSupportSynthesis(params: {
     };
   } catch (err: unknown) {
     console.warn("[GeminiSupportSynthesis] Falling back to offline KB answer:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+export async function runGeminiBriefingSynthesis(params: {
+  briefing: ExecutiveBriefingReport;
+  geminiApiKey?: string;
+  clientFactory?: GeminiClientFactory;
+}): Promise<{ text: string; modelUsed: string } | null> {
+  const apiKey =
+    params.geminiApiKey ??
+    (typeof process !== "undefined" ? process.env?.GEMINI_API_KEY?.trim() : "");
+  if (!apiKey) return null;
+
+  const b = params.briefing;
+  const selection = selectGeminiModelForPrompt(
+    b.counts.criticalAlertsCount > 0
+      ? "analyze executive briefing low stock shortage overdue receivables"
+      : "daily operational briefing summary"
+  );
+  const dialectRules = buildGeminiDialectInstruction(b.lang, b.dialect);
+
+  try {
+    const ai: GeminiClientLike = params.clientFactory
+      ? params.clientFactory(apiKey)
+      : new GoogleGenAI({ apiKey });
+
+    const baseline = b.lang === "ar" ? b.briefingAr : b.briefingEn;
+    const cascadeRes = await generateWithModelCascade({
+      ai,
+      primaryModel: selection.model,
+      fastModel: selection.fastModel,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text:
+                `Tenant: ${b.tenantSlug} | Date: ${b.date} | Actor Role: ${b.role}\n` +
+                `KPIs: ${JSON.stringify(b.counts)}\n` +
+                `Low-Stock Alerts (${b.lowStockAlerts.length}): ${b.lowStockAlerts.slice(0, 5).map((a) => (b.lang === "ar" ? a.summaryAr : a.summaryEn)).join(" | ") || "None"}\n` +
+                `Overdue Receivables (${b.overdueReceivableAlerts.length}): ${b.overdueReceivableAlerts.slice(0, 5).map((a) => (b.lang === "ar" ? a.summaryAr : a.summaryEn)).join(" | ") || "None"}\n` +
+                `Applied Tenant Memories: ${b.appliedMemories.map((m) => m.content).join(" | ") || "None"}\n\n` +
+                `Deterministic Baseline Briefing:\n${baseline}`,
+            },
+          ],
+        },
+      ],
+      baseConfig: {
+        systemInstruction: [
+          `You are UAS Enterprise Executive Briefing Advisor. Deliver a concise, warm, humanized ${b.lang === "ar" ? "Arabic" : "English"} daily executive briefing for role (${b.role}) grounded STRICTLY in the provided KPIs, low-stock alerts, overdue receivables, and tenant memories. Never invent numbers or suggest bypassing RBAC/confirmation cards.`,
+          dialectRules,
+        ].join("\n\n"),
+        temperature: 0.25,
+      },
+      includeThinking: false,
+    });
+
+    const text = (cascadeRes.response.text || "").trim();
+    if (!text) return null;
+    return {
+      text,
+      modelUsed: formatGeminiModelLabel(cascadeRes.activeModel),
+    };
+  } catch (err: unknown) {
+    console.warn(
+      "[GeminiBriefingSynthesis] Falling back to structured executive briefing:",
+      err instanceof Error ? err.message : err
+    );
     return null;
   }
 }

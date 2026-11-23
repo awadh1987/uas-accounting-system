@@ -304,6 +304,36 @@ export function parseBilingualAgentIntent(
   const activeProjectId = ctx?.workspaceContext?.selectedProjectId ?? undefined;
   const activeHarvest = ctx?.workspaceContext?.selectedHarvest ?? undefined;
 
+  // 0. Proactive Daily Executive Briefing, Low-Stock & Overdue Receivable Alerts
+  if (
+    /(?:ملخص\s+اليوم|الموجز\s+اليومي|ملخص\s+تنفيذي|اولويات\s+اليوم|أولويات\s+اليوم|تقرير\s+اليوم\s+التنفيذي|منخفض[هة]?\s+المخزون|اصناف\s+ناقص|نقص\s+المخزون|تنبيهات\s+المخزون|العملاء\s+المتاخر|العملاء\s+المتأخر|الذمم\s+المتاخر|الذمم\s+المتأخر|مديوني[هة]\s+متاخر|مديوني[هة]\s+متأخر|daily\s+(?:executive\s+)?briefing|executive\s+briefing|low[- ]stock|overdue\s+receivable)/i.test(
+      norm
+    ) &&
+    !/(?:فاتور|سند|قيد|انشئ|أنشئ|invoice|voucher|draft|journal)/i.test(norm)
+  ) {
+    const focus = /(?:مخزون|اصناف|أصناف|low[- ]stock|stock\s+alert)/i.test(norm)
+      ? "low_stock"
+      : /(?:متاخر|متأخر|ذمم|مديوني|overdue|aging)/i.test(norm)
+      ? "overdue_receivables"
+      : "all";
+    return {
+      toolName: "get_daily_executive_briefing",
+      args: { focus },
+      thoughtAr:
+        focus === "low_stock"
+          ? "تحليل النية: استعراض تنبيهات نقص المخزون ودفعات الحصاد تحت الحد."
+          : focus === "overdue_receivables"
+          ? "تحليل النية: استعراض المديونيات والفواتير المتأخرة عن السداد."
+          : "تحليل النية: توليد الملخص التنفيذي اليومي والأولويات والتنبيهات الاستباقية.",
+      thoughtEn:
+        focus === "low_stock"
+          ? "Intent parsed: Inspect low-stock items and harvest batch depletion alerts."
+          : focus === "overdue_receivables"
+          ? "Intent parsed: Inspect overdue customer receivables and aging priority."
+          : "Intent parsed: Generate Daily Executive Briefing with low-stock and overdue-receivable alerts.",
+    };
+  }
+
   // 1. Check explicit navigation intent ("افتح قسم ...", "انتقل إلى ...", "open ...", "navigate to ...", "go to ...")
   const navMatch = raw.match(
     /^(?:افتح|انتقل\s+(?:إلى|الى)|اذهب\s+(?:إلى|الى)|اعرض\s+(?:قسم|شاشة|تبويب)|open|navigate\s+to|go\s+to|show\s+tab)\s+(.+)$/i

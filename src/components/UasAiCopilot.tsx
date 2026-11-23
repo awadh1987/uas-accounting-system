@@ -7,6 +7,7 @@ import {
   ArchiveRestore,
   ArrowUpRight,
   Ban,
+  Bell,
   BookOpen,
   Bot,
   Brain,
@@ -16,6 +17,7 @@ import {
   ChevronDown,
   ChevronUp,
   Cpu,
+  CreditCard,
   Edit3,
   ExternalLink,
   FileText,
@@ -28,11 +30,13 @@ import {
   MessageSquarePlus,
   Mic,
   MicOff,
+  Package,
   Paperclip,
   Phone,
   Pin,
   Plus,
   Printer,
+  RefreshCw,
   RotateCcw,
   Search,
   Send,
@@ -55,6 +59,12 @@ import {
   type CopilotMemoryEntry,
   type MemoryMutationEvent,
 } from "@/lib/ai/copilotMemoryTypes";
+import {
+  generateExecutiveBriefing,
+  loadCachedExecutiveBriefing,
+  saveCachedExecutiveBriefing,
+  type ExecutiveBriefingReport,
+} from "@/lib/ai/executiveBriefingEngine";
 import {
   UAS_SUPPORT_CHAPTERS,
   type SupportChapter,
@@ -367,6 +377,47 @@ export function UasAiCopilot({
   const [newMemoryContent, setNewMemoryContent] = useState("");
   const [newMemoryCategory, setNewMemoryCategory] = useState<CopilotMemoryCategory>("domain_fact");
   const [memoryBusy, setMemoryBusy] = useState(false);
+  const [briefing, setBriefing] = useState<ExecutiveBriefingReport | null>(() => {
+    if (typeof window !== "undefined") {
+      return loadCachedExecutiveBriefing(
+        normalizeMemoryTenantSlug(
+          workspaceContext?.tenantSlug || state.enterpriseProfile?.tenantSlug || getStoredTenantId() || "default"
+        )
+      );
+    }
+    return null;
+  });
+  const [briefingExpanded, setBriefingExpanded] = useState(false);
+  const [briefingBusy, setBriefingBusy] = useState(false);
+
+  const liveFallbackBriefing = useMemo(
+    () =>
+      generateExecutiveBriefing({
+        tenantSlug: activeTenantSlug,
+        lang: isAr ? "ar" : "en",
+        dialect,
+        user: currentUser ?? "EXTERNAL_AUDITOR",
+        userId: currentUser?.id,
+        state,
+        memories,
+        offlineQueueCount: workspaceContext?.offlineQueueCount ?? 0,
+        pendingConflictsCount: workspaceContext?.pendingConflictsCount ?? 0,
+      }),
+    [
+      activeTenantSlug,
+      isAr,
+      dialect,
+      currentUser,
+      state,
+      memories,
+      workspaceContext?.offlineQueueCount,
+      workspaceContext?.pendingConflictsCount,
+    ]
+  );
+
+  const activeBriefing = briefing ?? liveFallbackBriefing;
+  const totalBriefingAlertsCount =
+    activeBriefing.counts.lowStockCount + activeBriefing.counts.overdueReceivablesCount;
 
   const mergedWorkspaceContext: UasWorkspaceContext = useMemo(
     () => ({
@@ -1142,13 +1193,82 @@ export function UasAiCopilot({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTenantSlug, offlineMode, currentUser?.id]);
 
+  const refreshExecutiveBriefing = useCallback(
+    async (forceRefresh = false) => {
+      if (isOfflineClientContext()) {
+        const offlineReport = generateExecutiveBriefing({
+          tenantSlug: activeTenantSlug,
+          lang: isAr ? "ar" : "en",
+          dialect,
+          user: currentUser ?? "VIEWER",
+          userId: currentUser?.id,
+          state,
+          memories,
+          offlineQueueCount: workspaceContext?.offlineQueueCount ?? 0,
+          pendingConflictsCount: workspaceContext?.pendingConflictsCount ?? 0,
+        });
+        saveCachedExecutiveBriefing(activeTenantSlug, offlineReport);
+        setBriefing(offlineReport);
+        return;
+      }
+
+      setBriefingBusy(true);
+      try {
+        const headers = buildCopilotRequestHeaders();
+        const res = forceRefresh
+          ? await fetch("/api/ai/briefing", {
+              method: "POST",
+              headers,
+              body: JSON.stringify({
+                lang: isAr ? "ar" : "en",
+                dialect,
+                refresh: true,
+              }),
+            })
+          : await fetch(
+              `/api/ai/briefing?lang=${isAr ? "ar" : "en"}&dialect=${dialect}`,
+              { headers }
+            );
+        if (res.ok) {
+          const data = (await res.json()) as ExecutiveBriefingReport & { success?: boolean };
+          if (data && data.counts) {
+            saveCachedExecutiveBriefing(activeTenantSlug, data);
+            setBriefing(data);
+            return;
+          }
+        }
+      } catch {
+        // Fallback to local snapshot calculation
+      } finally {
+        setBriefingBusy(false);
+      }
+
+      const fallbackReport = generateExecutiveBriefing({
+        tenantSlug: activeTenantSlug,
+        lang: isAr ? "ar" : "en",
+        dialect,
+        user: currentUser ?? "EXTERNAL_AUDITOR",
+        userId: currentUser?.id,
+        state,
+        memories,
+        offlineQueueCount: workspaceContext?.offlineQueueCount ?? 0,
+        pendingConflictsCount: workspaceContext?.pendingConflictsCount ?? 0,
+      });
+      saveCachedExecutiveBriefing(activeTenantSlug, fallbackReport);
+      setBriefing(fallbackReport);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTenantSlug, isAr, dialect, offlineMode, currentUser?.id]
+  );
+
   useEffect(() => {
     if (!open) return;
     const timer = window.setTimeout(() => {
       void refreshTenantMemories();
+      void refreshExecutiveBriefing(false);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [open, refreshTenantMemories]);
+  }, [open, refreshTenantMemories, refreshExecutiveBriefing]);
 
   const handleUndoLearnedEvent = async (msgId: string, ev: MemoryMutationEvent) => {
     try {
@@ -1799,8 +1919,19 @@ export function UasAiCopilot({
           >
             <div className="relative flex items-center justify-center">
               <Bot className="w-5 h-5" />
-              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-300 animate-ping" />
-              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-400" />
+              {totalBriefingAlertsCount > 0 ? (
+                <span
+                  data-testid="copilot-fab-alert-badge"
+                  className="absolute -top-2 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black flex items-center justify-center shadow"
+                >
+                  {totalBriefingAlertsCount}
+                </span>
+              ) : (
+                <>
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-300 animate-ping" />
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-400" />
+                </>
+              )}
             </div>
             <div className="text-start hidden sm:block">
               <div className="text-xs font-black leading-tight flex items-center gap-1">
@@ -2074,6 +2205,142 @@ export function UasAiCopilot({
                 >
                   {isAr ? "⚡ فحص ذكي للسياق" : "⚡ Analyze Context"}
                 </button>
+              </div>
+
+              {/* Compact Collapsible Daily Executive Briefing & Low-Stock / Overdue Alerts */}
+              <div
+                data-testid="copilot-executive-briefing-banner"
+                className="px-3.5 py-2 bg-gradient-to-r from-amber-500/10 via-emerald-500/5 to-sky-500/10 border-b border-slate-200 dark:border-slate-800 text-[11px]"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <button
+                    type="button"
+                    data-testid="copilot-briefing-toggle"
+                    onClick={() => setBriefingExpanded((v) => !v)}
+                    className="flex flex-wrap items-center gap-1.5 font-black text-slate-800 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-300 transition text-start"
+                  >
+                    <Bell className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span>{isAr ? "ملخص اليوم والتنبيهات" : "Daily Briefing & Alerts"}</span>
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-rose-500/15 text-rose-700 dark:text-rose-300 text-[10px]">
+                      <Package className="w-3 h-3" />
+                      {isAr
+                        ? `نقص المخزون: ${activeBriefing.counts.lowStockCount}`
+                        : `Low Stock: ${activeBriefing.counts.lowStockCount}`}
+                    </span>
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-800 dark:text-amber-300 text-[10px]">
+                      <CreditCard className="w-3 h-3" />
+                      {isAr
+                        ? `ذمم متأخرة: ${activeBriefing.counts.overdueReceivablesCount}`
+                        : `Overdue: ${activeBriefing.counts.overdueReceivablesCount}`}
+                    </span>
+                    {briefingExpanded ? (
+                      <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                    )}
+                  </button>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      data-testid="copilot-briefing-speak-btn"
+                      onClick={() =>
+                        void speakText(
+                          activeBriefing.briefing,
+                          "daily-briefing-banner",
+                          true
+                        )
+                      }
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-emerald-700 dark:text-emerald-300 font-bold text-[10px] hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition"
+                      title={isAr ? "استماع لملخص اليوم بصوت طبيعي" : "Read Executive Briefing Aloud"}
+                    >
+                      {speakingMsgId === "daily-briefing-banner" ? (
+                        <VolumeX className="w-3 h-3" />
+                      ) : (
+                        <Volume2 className="w-3 h-3" />
+                      )}
+                      <span>{isAr ? "استماع" : "Read Aloud"}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      data-testid="copilot-briefing-refresh-btn"
+                      disabled={briefingBusy}
+                      onClick={() => {
+                        setBriefingExpanded(true);
+                        void refreshExecutiveBriefing(true);
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-[10px] transition"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${briefingBusy ? "animate-spin" : ""}`} />
+                      <span>{isAr ? "تحديث الملخص" : "Generate Briefing"}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {briefingExpanded && (
+                  <div className="mt-2.5 pt-2.5 border-t border-slate-200/70 dark:border-slate-700/70 space-y-2 max-h-48 overflow-y-auto">
+                    <div className="flex items-center justify-between text-[10px] text-slate-500">
+                      <span>{activeBriefing.date}</span>
+                      <span className="px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono">
+                        {activeBriefing.modelUsed}
+                      </span>
+                    </div>
+                    <div className="whitespace-pre-line text-[11px] text-slate-700 dark:text-slate-200 leading-relaxed bg-white/80 dark:bg-slate-900/80 p-2.5 rounded-xl border border-slate-200/70 dark:border-slate-800">
+                      {activeBriefing.briefing}
+                    </div>
+
+                    {activeBriefing.lowStockAlerts.length > 0 && (
+                      <div className="space-y-1">
+                        <div className="text-[10px] font-black text-rose-700 dark:text-rose-300">
+                          {isAr ? "📦 تنبيهات انخفاض المخزون:" : "📦 Low-Stock Alerts:"}
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {activeBriefing.lowStockAlerts.slice(0, 4).map((al) => (
+                            <button
+                              key={al.id}
+                              type="button"
+                              data-testid="copilot-low-stock-alert"
+                              onClick={() => {
+                                void handleSendPrompt(
+                                  isAr ? al.followUpPromptAr : al.followUpPromptEn
+                                );
+                              }}
+                              className="text-start px-2 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 text-[10px] text-rose-800 dark:text-rose-200 font-bold transition"
+                            >
+                              {isAr ? al.summaryAr : al.summaryEn}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {activeBriefing.overdueReceivableAlerts.length > 0 && (
+                      <div className="space-y-1">
+                        <div className="text-[10px] font-black text-amber-800 dark:text-amber-300">
+                          {isAr ? "💳 المديونيات المتأخرة عن السداد:" : "💳 Overdue Receivables:"}
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {activeBriefing.overdueReceivableAlerts.slice(0, 4).map((al) => (
+                            <button
+                              key={al.id}
+                              type="button"
+                              data-testid="copilot-overdue-alert"
+                              onClick={() => {
+                                void handleSendPrompt(
+                                  isAr ? al.followUpPromptAr : al.followUpPromptEn
+                                );
+                              }}
+                              className="text-start px-2 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-[10px] text-amber-900 dark:text-amber-200 font-bold transition"
+                            >
+                              {isAr ? al.summaryAr : al.summaryEn}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="flex-1 overflow-y-auto p-3.5 space-y-3 max-h-[52vh]">

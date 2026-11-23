@@ -28,6 +28,11 @@ import {
   reconcileHarvestInventory,
 } from "@/lib/harvestReconciliation";
 import type { CopilotMemoryEntry } from "./copilotMemoryTypes";
+import {
+  generateExecutiveBriefing,
+  type BriefingInventoryItemInput,
+  type BriefingSalesInvoiceInput,
+} from "./executiveBriefingEngine";
 import type {
   TabId,
   UasBootstrapState,
@@ -62,7 +67,8 @@ export type UasAgentToolName =
   | "draft_worker_wage"
   | "draft_treasury_transfer"
   | "toggle_period_lock"
-  | "add_harvest_cycle";
+  | "add_harvest_cycle"
+  | "get_daily_executive_briefing";
 
 export interface UasWorkspaceContext {
   activeTab?: TabId;
@@ -233,6 +239,9 @@ export interface UasAgentExecutionContext {
   reportSnapshot?: UasAgentReportSnapshot | null;
   diagnostics?: Partial<SupportSystemDiagnostics> | null;
   memories?: CopilotMemoryEntry[];
+  briefingInventoryItems?: BriefingInventoryItemInput[];
+  briefingSalesInvoices?: BriefingSalesInvoiceInput[];
+  pendingConflictsCount?: number;
   qrLookupHook?: (code: string) => Promise<{
     verified: boolean;
     documentType?: string;
@@ -542,6 +551,19 @@ export const UAS_AGENT_TOOL_SCHEMAS: UasAgentToolSchema[] = [
       projectId: "optional project ID",
       projectName: "optional project name",
       name: "harvest cycle name",
+    },
+  },
+  {
+    name: "get_daily_executive_briefing",
+    isWriteTool: false,
+    descriptionAr:
+      "توليد الملخص التنفيذي اليومي الاستباقي متضمناً تنبيهات نقص المخزون والقطفات، والذمم والمديونيات المتأخرة، وأرصدة الخزينة والأولويات.",
+    descriptionEn:
+      "Generate proactive Daily Executive Briefing with low-stock alerts, overdue customer receivables, cash position, and prioritized next actions.",
+    parameters: {
+      focus: "optional all|low_stock|overdue_receivables",
+      lowStockThreshold: "optional numeric bundle threshold override",
+      defaultCreditTermDays: "optional overdue credit days threshold override",
     },
   },
 ];
@@ -3645,6 +3667,68 @@ export async function executeUasAgentTool(
         summaryAr: `🛡️ **بوابة التأكيد:** جاهز لإضافة القطفة الجديدة **(${name})** إلى مشروع **${project.name}**.`,
         summaryEn: `🛡️ **Confirmation Gate:** Ready to add harvest cycle **(${name})** to project **${project.name}**.`,
       });
+    }
+
+    // -----------------------------------------------------------------------
+    // 26. get_daily_executive_briefing
+    // -----------------------------------------------------------------------
+    case "get_daily_executive_briefing": {
+      const focusRaw = String(args.focus ?? "all").trim();
+      const focus =
+        focusRaw === "low_stock" || focusRaw === "overdue_receivables"
+          ? focusRaw
+          : "all";
+      const report = generateExecutiveBriefing({
+        tenantSlug:
+          ctx.workspaceContext?.tenantSlug ||
+          ctx.state?.enterpriseProfile?.tenantSlug ||
+          "default",
+        lang,
+        dialect: ctx.workspaceContext?.dialect ?? "yemeni",
+        user: ctx.user,
+        userId: typeof ctx.user === "object" && ctx.user ? ctx.user.id : undefined,
+        state: ctx.state,
+        inventoryItems: ctx.briefingInventoryItems,
+        salesInvoices: ctx.briefingSalesInvoices,
+        memories: ctx.memories,
+        offlineQueueCount: ctx.workspaceContext?.offlineQueueCount ?? 0,
+        pendingConflictsCount:
+          ctx.pendingConflictsCount ?? ctx.workspaceContext?.pendingConflictsCount ?? 0,
+        lowStockThreshold:
+          typeof args.lowStockThreshold === "number" ? args.lowStockThreshold : undefined,
+        defaultCreditTermDays:
+          typeof args.defaultCreditTermDays === "number"
+            ? args.defaultCreditTermDays
+            : undefined,
+        focus,
+      });
+
+      const citations: CitationLink[] = [
+        { labelAr: "المخزون والدفعات", labelEn: "Inventory & Batches", tab: "inventory", type: "tab" },
+        { labelAr: "المبيعات والذمم", labelEn: "Sales & Receivables", tab: "sales", type: "tab" },
+        { labelAr: "الخزينة والصناديق", labelEn: "Treasury Cashboxes", tab: "treasury", type: "tab" },
+      ];
+
+      return makeResult(
+        lang,
+        {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          citations,
+          data: {
+            date: report.date,
+            tenantSlug: report.tenantSlug,
+            counts: report.counts,
+            lowStockAlerts: report.lowStockAlerts.slice(0, 8),
+            overdueReceivableAlerts: report.overdueReceivableAlerts.slice(0, 8),
+            priorities: report.priorities,
+          },
+          summaryAr: report.briefingAr,
+          summaryEn: report.briefingEn,
+        },
+        ctx
+      );
     }
   }
 }

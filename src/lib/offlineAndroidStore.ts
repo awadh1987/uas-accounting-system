@@ -43,6 +43,7 @@ import {
   type CopilotMemoryEntry,
   type CopilotMemoryScope,
 } from "@/lib/ai/copilotMemoryTypes";
+import { generateExecutiveBriefing } from "@/lib/ai/executiveBriefingEngine";
 import type {
   UasBootstrapState,
   UasEnterpriseProfile,
@@ -3129,6 +3130,45 @@ async function handleOfflineAndroidApiRequestCore(
       { debit: 0, credit: 0, netIncome }
     );
     return jsonResponse({ rows, totals, offline: true }, 200);
+  }
+
+  if (pathname === "/api/ai/briefing") {
+    const state = loadOfflineAndroidState(s);
+    const tenantSlug = normalizeMemoryTenantSlug(
+      state.enterpriseProfile?.tenantSlug || "default"
+    );
+    let memories: CopilotMemoryEntry[] = [];
+    try {
+      const rawMem = s?.getItem(`uas_copilot_memory_v1_${tenantSlug}`);
+      if (rawMem) {
+        const parsed = JSON.parse(rawMem);
+        if (Array.isArray(parsed)) memories = parsed as CopilotMemoryEntry[];
+      }
+    } catch {
+      memories = [];
+    }
+    const queue = readCollection<Record<string, unknown>>(OFFLINE_SYNC_QUEUE_KEY, s);
+    const reqUrl = new URL(rawUrl, "https://localhost");
+    const langParam = body.lang || reqUrl.searchParams.get("lang");
+    const dialectParam = body.dialect || reqUrl.searchParams.get("dialect");
+    const focusParam = body.focus || reqUrl.searchParams.get("focus");
+    const lang: "ar" | "en" = langParam === "en" ? "en" : "ar";
+    const dialect = dialectParam === "msa" ? "msa" : "yemeni";
+    const focus =
+      focusParam === "low_stock" || focusParam === "overdue_receivables"
+        ? focusParam
+        : "all";
+    const report = generateExecutiveBriefing({
+      tenantSlug,
+      lang,
+      dialect,
+      user: state.users?.[0] || "SUPER_ADMIN",
+      state,
+      memories,
+      offlineQueueCount: queue.length,
+      focus,
+    });
+    return jsonResponse({ success: true, ...report, offline: true }, 200);
   }
 
   if (pathname === "/api/ai/memory") {

@@ -30,6 +30,7 @@ import {
   isHarvestLockedTx,
 } from "@/lib/serverBootstrap";
 import { collectServerSupportDiagnostics } from "@/lib/supportDiagnosticsServer";
+import { collectServerBriefingInputs } from "./executiveBriefingServer";
 import {
   canCreate,
   canLockPeriod,
@@ -52,7 +53,7 @@ export async function buildServerAgentContext(
 ): Promise<UasAgentExecutionContext> {
   await ensureSqliteDatabaseReady();
 
-  const [state, reports, diagnostics, rawEntries] = await Promise.all([
+  const [state, reports, diagnostics, rawEntries, briefingInputs] = await Promise.all([
     getBootstrapState(),
     generateFinancialReports(),
     collectServerSupportDiagnostics(),
@@ -61,6 +62,7 @@ export async function buildServerAgentContext(
       orderBy: [{ date: "desc" }, { entryNumber: "desc" }],
       include: { lines: true },
     }),
+    collectServerBriefingInputs(),
   ]);
 
   const coaAccounts = reports.trialBalance.rows.map((r) => ({
@@ -207,6 +209,9 @@ export async function buildServerAgentContext(
       totalEquity: reports.balanceSheet.totalEquity,
     },
     diagnostics,
+    briefingInventoryItems: briefingInputs.inventoryItems,
+    briefingSalesInvoices: briefingInputs.salesInvoices,
+    pendingConflictsCount: briefingInputs.pendingConflictsCount,
     qrLookupHook,
   };
 }
