@@ -41,10 +41,8 @@ export default function SuperadminLicensesPage() {
     }, 3200);
   }, []);
 
-  const verifySession = useCallback(async () => {
-    setAuthState("checking");
-    setAuthError(null);
-    const res = await safeFetchJson<{
+  const fetchSessionStatus = useCallback(async () => {
+    return safeFetchJson<{
       success?: boolean;
       actor?: { email?: string };
       error?: string;
@@ -52,25 +50,48 @@ export default function SuperadminLicensesPage() {
       cache: "no-store",
       credentials: "include",
     });
+  }, []);
 
-    if (res.ok && res.data?.success) {
-      setActorEmail(res.data.actor?.email || "admin@qat.world");
-      setAuthState("authorized");
-      return;
-    }
+  const applySessionResponse = useCallback(
+    (
+      res: Awaited<ReturnType<typeof fetchSessionStatus>>,
+      fallbackError: string
+    ) => {
+      if (res.ok && res.data?.success) {
+        setActorEmail(res.data.actor?.email || "admin@qat.world");
+        setAuthState("authorized");
+        return;
+      }
+      if (res.status === 401) {
+        setAuthState("unauthenticated");
+        return;
+      }
+      setAuthError(res.data?.error || fallbackError);
+      setAuthState("forbidden");
+    },
+    []
+  );
 
-    if (res.status === 401) {
-      setAuthState("unauthenticated");
-      return;
-    }
-
-    setAuthError(res.data?.error || (isAr ? "غير مصرح بالوصول" : "Access denied"));
-    setAuthState("forbidden");
-  }, [isAr]);
+  const verifySession = useCallback(async () => {
+    setAuthState("checking");
+    setAuthError(null);
+    const res = await fetchSessionStatus();
+    applySessionResponse(
+      res,
+      isAr ? "غير مصرح بالوصول" : "Access denied"
+    );
+  }, [applySessionResponse, fetchSessionStatus, isAr]);
 
   useEffect(() => {
-    void verifySession();
-  }, [verifySession]);
+    let cancelled = false;
+    void fetchSessionStatus().then((res) => {
+      if (cancelled) return;
+      applySessionResponse(res, "غير مصرح بالوصول / Access denied");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [applySessionResponse, fetchSessionStatus]);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();

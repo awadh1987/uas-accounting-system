@@ -243,18 +243,22 @@ export function SuperadminLicenseGeneratorPanel({
     }, 2000);
   }, []);
 
+  const loadTenantsRequest = useCallback(async () => {
+    return safeFetchJson<{
+      success?: boolean;
+      tenants?: SuperadminTenantLicenseItem[];
+      error?: string;
+    }>("/api/superadmin/licenses", {
+      cache: "no-store",
+      credentials: "include",
+    });
+  }, []);
+
   const fetchTenants = useCallback(async () => {
     setLoadingTenants(true);
     setListError(null);
     try {
-      const res = await safeFetchJson<{
-        success?: boolean;
-        tenants?: SuperadminTenantLicenseItem[];
-        error?: string;
-      }>("/api/superadmin/licenses", {
-        cache: "no-store",
-        credentials: "include",
-      });
+      const res = await loadTenantsRequest();
       if (!res.ok || !res.data?.success) {
         setListError(
           res.data?.error ||
@@ -266,11 +270,28 @@ export function SuperadminLicenseGeneratorPanel({
     } finally {
       setLoadingTenants(false);
     }
-  }, [isAr]);
+  }, [isAr, loadTenantsRequest]);
 
   useEffect(() => {
-    void fetchTenants();
-  }, [fetchTenants]);
+    let cancelled = false;
+    void loadTenantsRequest().then((res) => {
+      if (cancelled) return;
+      if (!res.ok || !res.data?.success) {
+        setListError(
+          res.data?.error ||
+            "تعذر تحميل سجل التراخيص والمنشآت / Failed to load issued licenses"
+        );
+        setLoadingTenants(false);
+        return;
+      }
+      setTenants(Array.isArray(res.data.tenants) ? res.data.tenants : []);
+      setListError(null);
+      setLoadingTenants(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadTenantsRequest]);
 
   const slugValidation = useMemo(() => {
     if (!slug) return null;
