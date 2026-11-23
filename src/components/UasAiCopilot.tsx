@@ -9,6 +9,7 @@ import {
   Ban,
   BookOpen,
   Bot,
+  Brain,
   Camera,
   Check,
   CheckCircle2,
@@ -29,19 +30,31 @@ import {
   MicOff,
   Paperclip,
   Phone,
+  Pin,
   Plus,
   Printer,
+  RotateCcw,
   Search,
   Send,
   Settings,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  ToggleLeft,
+  ToggleRight,
   Trash2,
   Volume2,
   VolumeX,
   X,
 } from "lucide-react";
+import {
+  loadLocalCopilotMemories,
+  normalizeMemoryTenantSlug,
+  saveLocalCopilotMemories,
+  type CopilotMemoryCategory,
+  type CopilotMemoryEntry,
+  type MemoryMutationEvent,
+} from "@/lib/ai/copilotMemoryTypes";
 import {
   UAS_SUPPORT_CHAPTERS,
   type SupportChapter,
@@ -166,6 +179,9 @@ interface CopilotAgentResponse extends Partial<UasAgentToolResult> {
   citations?: CitationLink[];
   clarificationPrompt?: ClarificationPromptData;
   escalationCard?: EscalationCardData;
+  learnedEvents?: MemoryMutationEvent[];
+  forgottenEntries?: CopilotMemoryEntry[];
+  appliedMemoriesCount?: number;
 }
 
 
@@ -216,7 +232,7 @@ export function UasAiCopilot({
 
   const isAr = lang === "ar" || (lang !== "en" && docRtl);
   const [open, setOpen] = useState(false);
-  const [activePane, setActivePane] = useState<"copilot" | "threads" | "support" | "manual">("copilot");
+  const [activePane, setActivePane] = useState<"copilot" | "threads" | "support" | "manual" | "memory">("copilot");
   const [inputPrompt, setInputPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -326,9 +342,36 @@ export function UasAiCopilot({
     });
   };
 
+  const activeTenantSlug = useMemo(
+    () =>
+      normalizeMemoryTenantSlug(
+        workspaceContext?.tenantSlug ||
+          state.enterpriseProfile?.tenantSlug ||
+          getStoredTenantId() ||
+          "default"
+      ),
+    [workspaceContext?.tenantSlug, state.enterpriseProfile?.tenantSlug]
+  );
+
+  const [memories, setMemories] = useState<CopilotMemoryEntry[]>(() => {
+    if (typeof window !== "undefined") {
+      return loadLocalCopilotMemories(
+        normalizeMemoryTenantSlug(
+          workspaceContext?.tenantSlug || state.enterpriseProfile?.tenantSlug || getStoredTenantId() || "default"
+        )
+      );
+    }
+    return [];
+  });
+  const [memorySearch, setMemorySearch] = useState("");
+  const [newMemoryContent, setNewMemoryContent] = useState("");
+  const [newMemoryCategory, setNewMemoryCategory] = useState<CopilotMemoryCategory>("domain_fact");
+  const [memoryBusy, setMemoryBusy] = useState(false);
+
   const mergedWorkspaceContext: UasWorkspaceContext = useMemo(
     () => ({
       ...(workspaceContext ?? {}),
+      tenantSlug: activeTenantSlug,
       isOffline:
         workspaceContext?.isOffline ??
         (offlineMode ||
@@ -337,7 +380,7 @@ export function UasAiCopilot({
       currency: workspaceContext?.currency || state.settings.defaultCurrency,
       dialect: isAr ? dialect : undefined,
     }),
-    [workspaceContext, offlineMode, state.settings.defaultCurrency, isAr, dialect]
+    [workspaceContext, activeTenantSlug, offlineMode, state.settings.defaultCurrency, isAr, dialect]
   );
 
   const clientDiagnostics: Partial<SupportSystemDiagnostics> = useMemo(
@@ -1002,12 +1045,19 @@ export function UasAiCopilot({
     const idx = messages.findIndex((m) => m.id === msgId);
     if (idx === -1) return;
 
+    const prevMsg = messages[idx];
+    const isCorrectionEdit = prevMsg.text.trim() !== trimmed && trimmed.length >= 8;
+
     // Truncate subsequent messages after this turn
     const truncated = messages.slice(0, idx);
     setMessages(truncated);
 
-    // Re-run AI reasoning with updated prompt
-    await handleSendPrompt(trimmed, truncated);
+    // Re-run AI reasoning with updated prompt & capture correction context if changed
+    await handleSendPrompt(
+      trimmed,
+      truncated,
+      isCorrectionEdit && idx > 0 ? `تصحيح/تعديل المستخدم للطلب السابق: ${trimmed}` : undefined
+    );
   };
 
   const messageSeqRef = useRef(1);
@@ -1051,7 +1101,202 @@ export function UasAiCopilot({
     return headers;
   }
 
-  async function handleSendPrompt(overrideText?: string, baseMessages?: CopilotChatMessage[]) {
+  const refreshTenantMemories = useCallback(async () => {
+    const localSnapshot = loadLocalCopilotMemories(activeTenantSlug);
+    if (isOfflineClientContext()) {
+      setMemories(localSnapshot);
+      return;
+    }
+    setMemoryBusy(true);
+    try {
+      const headers = buildCopilotRequestHeaders();
+      const res = await fetch("/api/ai/memory?includeInactive=true", { headers });
+      if (!res.ok) {
+        setMemories(localSnapshot);
+        return;
+      }
+      const data = (await res.json()) as { memories?: CopilotMemoryEntry[] };
+      let serverList = Array.isArray(data.memories) ? data.memories : [];
+      const serverIds = new Set(serverList.map((m) => m.id));
+      const unsyncedLocal = localSnapshot.filter((m) => !serverIds.has(m.id));
+      if (unsyncedLocal.length > 0) {
+        const syncRes = await fetch("/api/ai/memory", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ action: "sync", entries: unsyncedLocal }),
+        });
+        if (syncRes.ok) {
+          const syncData = (await syncRes.json()) as { memories?: CopilotMemoryEntry[] };
+          if (Array.isArray(syncData.memories)) {
+            serverList = syncData.memories;
+          }
+        }
+      }
+      saveLocalCopilotMemories(activeTenantSlug, serverList);
+      setMemories(serverList);
+    } catch {
+      setMemories(localSnapshot);
+    } finally {
+      setMemoryBusy(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTenantSlug, offlineMode, currentUser?.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    const timer = window.setTimeout(() => {
+      void refreshTenantMemories();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [open, refreshTenantMemories]);
+
+  const handleUndoLearnedEvent = async (msgId: string, ev: MemoryMutationEvent) => {
+    try {
+      const payload =
+        ev.action === "forgotten"
+          ? {
+              action: "upsert",
+              ...ev.entry,
+            }
+          : {
+              action: "undo",
+              id: ev.entry.id,
+              previousEntry: ev.previousEntry ?? undefined,
+            };
+
+      if (!isOfflineClientContext()) {
+        const res = await fetch("/api/ai/memory", {
+          method: "POST",
+          headers: buildCopilotRequestHeaders(),
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { memories?: CopilotMemoryEntry[] };
+          if (Array.isArray(data.memories)) {
+            saveLocalCopilotMemories(activeTenantSlug, data.memories);
+            setMemories(data.memories);
+          }
+        }
+      } else {
+        const current = loadLocalCopilotMemories(activeTenantSlug);
+        let next =
+          ev.action === "forgotten"
+            ? [ev.entry, ...current.filter((m) => m.id !== ev.entry.id)]
+            : current.filter((m) => m.id !== ev.entry.id);
+        if (ev.action !== "forgotten" && ev.previousEntry) {
+          next = [ev.previousEntry, ...next];
+        }
+        saveLocalCopilotMemories(activeTenantSlug, next);
+        setMemories(next);
+      }
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId
+            ? {
+                ...m,
+                learnedEvents: (m.learnedEvents ?? []).filter((x) => x.entry.id !== ev.entry.id),
+              }
+            : m
+        )
+      );
+      onToast(isAr ? "تم التراجع عن التعلّم وتحديث ذاكرة المساعد" : "Undid learned memory");
+    } catch {
+      onToast(isAr ? "تعذر التراجع عن المعلومة" : "Failed to undo memory");
+    }
+  };
+
+  const handleAddManualMemory = async () => {
+    const content = newMemoryContent.trim();
+    if (content.length < 6) return;
+    setMemoryBusy(true);
+    try {
+      const headers = buildCopilotRequestHeaders();
+      const res = await fetch("/api/ai/memory", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          action: "upsert",
+          category: newMemoryCategory,
+          scope: newMemoryCategory === "workflow_preference" ? "user" : "workspace",
+          topicKey: `${newMemoryCategory}:${content.slice(0, 36)}`,
+          content,
+          sourceSnippet: content,
+          confidence: 0.96,
+          pinned: true,
+        }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { memories?: CopilotMemoryEntry[]; event?: MemoryMutationEvent };
+        if (Array.isArray(data.memories)) {
+          saveLocalCopilotMemories(activeTenantSlug, data.memories);
+          setMemories(data.memories);
+        }
+        setNewMemoryContent("");
+        onToast(isAr ? "تم حفظ القاعدة في ذاكرة المنشأة" : "Rule saved to tenant memory");
+      } else {
+        const errData = (await res.json().catch(() => ({}))) as { error?: string };
+        onToast(errData.error || (isAr ? "تعذر حفظ المعلومة" : "Failed to save rule"));
+      }
+    } finally {
+      setMemoryBusy(false);
+    }
+  };
+
+  const handleMutateMemory = async (
+    mem: CopilotMemoryEntry,
+    action: "toggle" | "pin" | "delete"
+  ) => {
+    setMemoryBusy(true);
+    try {
+      const payload =
+        action === "delete"
+          ? { action: "delete", id: mem.id }
+          : action === "pin"
+          ? { action: "pin", id: mem.id, pinned: !mem.pinned }
+          : { action: "toggle", id: mem.id, active: !mem.active };
+
+      if (!isOfflineClientContext()) {
+        const res = await fetch("/api/ai/memory", {
+          method: "POST",
+          headers: buildCopilotRequestHeaders(),
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { memories?: CopilotMemoryEntry[] };
+          if (Array.isArray(data.memories)) {
+            saveLocalCopilotMemories(activeTenantSlug, data.memories);
+            setMemories(data.memories);
+          }
+        }
+      } else {
+        const current = loadLocalCopilotMemories(activeTenantSlug);
+        const next =
+          action === "delete"
+            ? current.filter((m) => m.id !== mem.id)
+            : current.map((m) =>
+                m.id === mem.id
+                  ? {
+                      ...m,
+                      pinned: action === "pin" ? !mem.pinned : m.pinned,
+                      active: action === "toggle" ? !mem.active : m.active,
+                      updatedAt: new Date().toISOString(),
+                    }
+                  : m
+              );
+        saveLocalCopilotMemories(activeTenantSlug, next);
+        setMemories(next);
+      }
+    } finally {
+      setMemoryBusy(false);
+    }
+  };
+
+  async function handleSendPrompt(
+    overrideText?: string,
+    baseMessages?: CopilotChatMessage[],
+    editedDraftContext?: string
+  ) {
     const prompt = (overrideText ?? inputPrompt).trim();
     if (!prompt || busy) return;
 
@@ -1095,6 +1340,7 @@ export function UasAiCopilot({
               lang,
               workspaceContext: mergedWorkspaceContext,
               conversationHistory: historySnapshot,
+              ...(editedDraftContext ? { editedDraftContext } : {}),
               actor: currentUser
                 ? {
                     userId: currentUser.id,
@@ -1174,7 +1420,12 @@ export function UasAiCopilot({
         citations: agentRes.citations,
         clarificationPrompt: agentRes.clarificationPrompt,
         escalationCard: agentRes.escalationCard,
+        learnedEvents: agentRes.learnedEvents,
       };
+
+      if (agentRes.learnedEvents && agentRes.learnedEvents.length > 0) {
+        void refreshTenantMemories();
+      }
 
       setMessages((prev) => [...prev, assistantMsg]);
       void speakText(replyText, assistantId);
@@ -1764,6 +2015,27 @@ export function UasAiCopilot({
               <BookOpen className="w-3.5 h-3.5" />
               <span>{isAr ? "دليل (7)" : "Manual (7)"}</span>
             </button>
+
+            <button
+              type="button"
+              data-testid="copilot-memory-tab"
+              onClick={() => {
+                setActivePane("memory");
+                void refreshTenantMemories();
+              }}
+              className={`flex-1 py-2.5 px-2 border-b-2 flex items-center justify-center gap-1.5 transition ${
+                activePane === "memory"
+                  ? "border-emerald-600 text-emerald-600 dark:text-emerald-400 bg-white dark:bg-slate-900"
+                  : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+              }`}
+            >
+              <Brain className="w-3.5 h-3.5" />
+              <span>
+                {isAr
+                  ? `ذاكرة المساعد (${memories.filter((m) => m.active).length})`
+                  : `Memory (${memories.filter((m) => m.active).length})`}
+              </span>
+            </button>
           </div>
 
           {/* =============================================================== */}
@@ -1987,6 +2259,48 @@ export function UasAiCopilot({
                               ))}
                             </div>
                           )}
+                        </div>
+                      )}
+
+                      {/* Learned & Saved Pill with 1-Click Undo */}
+                      {msg.learnedEvents && msg.learnedEvents.length > 0 && (
+                        <div
+                          data-testid={`learned-memory-pill-${msg.id}`}
+                          className="mt-1.5 space-y-1"
+                        >
+                          {msg.learnedEvents.map((ev) => (
+                            <div
+                              key={`${ev.action}-${ev.entry.id}`}
+                              className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-[10px]"
+                            >
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <Brain className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                                <div className="truncate">
+                                  <span className="font-black text-emerald-700 dark:text-emerald-300 me-1">
+                                    {ev.action === "forgotten"
+                                      ? isAr
+                                        ? "تم النسيان:"
+                                        : "Forgotten:"
+                                      : isAr
+                                      ? "تم التعلم والحفظ:"
+                                      : "Learned & Saved:"}
+                                  </span>
+                                  <span className="text-slate-700 dark:text-slate-200">
+                                    {ev.entry.content}
+                                  </span>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => void handleUndoLearnedEvent(msg.id, ev)}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-rose-600 dark:text-rose-400 font-bold shrink-0 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                                title={isAr ? "تراجع عن هذا الحفظ" : "Undo learned rule"}
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                <span>{isAr ? "تراجع" : "Undo"}</span>
+                              </button>
+                            </div>
+                          ))}
                         </div>
                       )}
 
@@ -3127,6 +3441,175 @@ export function UasAiCopilot({
                     ))}
                   </div>
                 </>
+              )}
+            </div>
+          )}
+
+          {/* =============================================================== */}
+          {/* PANE 4: TENANT-SCOPED COPILOT MEMORY & RULES MANAGER            */}
+          {/* =============================================================== */}
+          {activePane === "memory" && (
+            <div className="p-3.5 space-y-3 overflow-y-auto max-h-[62vh] text-xs">
+              <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between gap-2">
+                <div>
+                  <div className="font-black text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                    <Brain className="w-4 h-4" />
+                    <span>{isAr ? "ذاكرة المساعد الذكي الخاصة بالمنشأة" : "Tenant-Scoped Copilot Memory"}</span>
+                  </div>
+                  <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                    {isAr
+                      ? `يتعلم المساعد تلقائياً من تصحيحاتك وتفضيلاتك ويعزلها بالكامل للمنشأة (${activeTenantSlug}).`
+                      : `Automatically learns corrections, aliases & preferences strictly isolated to tenant (${activeTenantSlug}).`}
+                  </div>
+                </div>
+              </div>
+
+              {/* Manual Add Rule Form */}
+              <div className="p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-2">
+                <div className="font-black text-[11px] text-slate-700 dark:text-slate-200">
+                  {isAr ? "إضافة قاعدة أو معلومة جديدة يدوياً" : "Manually Add Memory Rule"}
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <select
+                    value={newMemoryCategory}
+                    onChange={(e) => setNewMemoryCategory(e.target.value as CopilotMemoryCategory)}
+                    className="rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-1.5 text-[11px]"
+                  >
+                    <option value="domain_fact">{isAr ? "حقيقة/مصطلح منشأة" : "Domain Fact"}</option>
+                    <option value="naming_alias">{isAr ? "مسمى محلي / وحدة" : "Local Alias / Unit"}</option>
+                    <option value="correction">{isAr ? "تصحيح محاسبي" : "Correction"}</option>
+                    <option value="operational_pattern">{isAr ? "نمط تشغيلي" : "Operational Pattern"}</option>
+                    <option value="workflow_preference">{isAr ? "تفضيل شخصي" : "User Preference"}</option>
+                  </select>
+                  <input
+                    type="text"
+                    data-testid="copilot-memory-add-input"
+                    value={newMemoryContent}
+                    onChange={(e) => setNewMemoryContent(e.target.value)}
+                    placeholder={
+                      isAr
+                        ? "مثال: العلاقية درجة أولى تساوي 10 ربطات وتُسجل على فرع صنعاء..."
+                        : "e.g. Delivery fees for Sanaa always post to Freight Expense..."
+                    }
+                    className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3 py-1.5 text-[11px]"
+                  />
+                  <button
+                    type="button"
+                    data-testid="copilot-memory-add-btn"
+                    disabled={memoryBusy || newMemoryContent.trim().length < 6}
+                    onClick={() => void handleAddManualMemory()}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-[11px] inline-flex items-center justify-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>{isAr ? "حفظ" : "Save"}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Search Memories */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute top-2.5 start-3" />
+                <input
+                  type="text"
+                  value={memorySearch}
+                  onChange={(e) => setMemorySearch(e.target.value)}
+                  placeholder={isAr ? "بحث في القواعد والمعلومات المحفوظة..." : "Search learned rules & facts..."}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 ps-8 pe-3 py-1.5 text-[11px]"
+                />
+              </div>
+
+              {/* Memory List */}
+              {memories.length === 0 ? (
+                <div className="p-4 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 text-center text-slate-500 text-[11px]">
+                  {isAr
+                    ? "لا توجد قواعد محفوظة لهذه المنشأة بعد. أخبر المساعد مثل: «تذكر أن مصاريف التوصيل لصنعاء تسجل على مصروفات النقل»."
+                    : "No saved memories yet. Tell the Copilot rules like 'Remember that delivery fees post under Freight Expense'."}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {memories
+                    .filter((m) => {
+                      const q = memorySearch.trim().toLowerCase();
+                      if (!q) return true;
+                      return (
+                        m.content.toLowerCase().includes(q) ||
+                        m.topicKey.toLowerCase().includes(q) ||
+                        m.category.toLowerCase().includes(q)
+                      );
+                    })
+                    .map((mem) => (
+                      <div
+                        key={mem.id}
+                        className={`p-3 rounded-2xl border space-y-1.5 ${
+                          mem.active
+                            ? "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
+                            : "border-slate-200/60 dark:border-slate-800/50 bg-slate-100/60 dark:bg-slate-900/40 opacity-65"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                              {mem.category}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded-full text-[9px] font-mono bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                              {mem.scope}
+                            </span>
+                            {mem.pinned && (
+                              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                                {isAr ? "مثبت" : "Pinned"}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              disabled={memoryBusy}
+                              onClick={() => void handleMutateMemory(mem, "pin")}
+                              className={`p-1 rounded-lg transition ${
+                                mem.pinned
+                                  ? "text-amber-600 bg-amber-500/10"
+                                  : "text-slate-400 hover:text-amber-600"
+                              }`}
+                              title={isAr ? "تثبيت / إلغاء التثبيت" : "Pin / Unpin"}
+                            >
+                              <Pin className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={memoryBusy}
+                              onClick={() => void handleMutateMemory(mem, "toggle")}
+                              className="p-1 rounded-lg text-slate-500 hover:text-emerald-600 transition"
+                              title={isAr ? "تفعيل / تعطيل" : "Enable / Disable"}
+                            >
+                              {mem.active ? (
+                                <ToggleRight className="w-4 h-4 text-emerald-600" />
+                              ) : (
+                                <ToggleLeft className="w-4 h-4 text-slate-400" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={memoryBusy}
+                              onClick={() => void handleMutateMemory(mem, "delete")}
+                              className="p-1 rounded-lg text-slate-400 hover:text-rose-600 transition"
+                              title={isAr ? "حذف نهائي" : "Delete"}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="font-semibold text-slate-800 dark:text-slate-100 leading-relaxed">
+                          {mem.content}
+                        </div>
+                        <div className="text-[10px] text-slate-400 flex items-center justify-between gap-2 font-mono">
+                          <span className="truncate">{mem.topicKey}</span>
+                          <span>
+                            {isAr ? `استخدام: ${mem.usageCount}` : `Used: ${mem.usageCount}`}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                </div>
               )}
             </div>
           )}

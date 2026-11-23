@@ -11,6 +11,7 @@ import {
   type SupportChapter,
   type SupportManualSection,
 } from "./uasSupportKnowledge";
+import type { CopilotMemoryEntry } from "./ai/copilotMemoryTypes";
 import type { TabId } from "@/types/uas";
 
 export interface SupportSystemDiagnostics {
@@ -750,6 +751,7 @@ export function answerSupportQuery(
   opts: {
     lang?: "ar" | "en";
     diagnostics?: Partial<SupportSystemDiagnostics> | null;
+    memories?: CopilotMemoryEntry[];
     topK?: number;
   } = {}
 ): SupportAnswerResult {
@@ -893,8 +895,20 @@ export function answerSupportQuery(
     );
   }
 
+  const activeMemories = (opts.memories ?? []).filter((m) => m.active).slice(0, 3);
+  if (activeMemories.length > 0) {
+    arParts.push(
+      `**قواعد وذاكرة المنشأة المطبّقة:**\n${activeMemories.map((m) => `- ${m.content}`).join("\n")}`
+    );
+  }
+
   const answerAr = arParts.join("\n\n");
-  const answerEn = enParts.join("\n\n");
+  const answerEn =
+    activeMemories.length > 0
+      ? `${enParts.join("\n\n")}\n\n**Applied Tenant Rules & Memories:**\n${activeMemories
+          .map((m) => `- ${m.content}`)
+          .join("\n")}`
+      : enParts.join("\n\n");
 
   return {
     query: cleanQuery,

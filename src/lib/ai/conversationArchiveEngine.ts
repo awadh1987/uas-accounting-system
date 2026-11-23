@@ -17,6 +17,7 @@ import type {
   EscalationCardData,
 } from "./uasAgentTools";
 import type { AgentReasoningStep, ReasoningTier } from "./offlineAgentEngine";
+import type { MemoryMutationEvent } from "./copilotMemoryTypes";
 import type { TabId, UasEnterpriseProfile, UasUser } from "@/types/uas";
 import {
   resolveLetterheadFromProfile,
@@ -47,6 +48,7 @@ export interface CopilotChatMessage {
   dismissed?: boolean;
   navigationTab?: TabId;
   openLicenseModal?: boolean;
+  learnedEvents?: MemoryMutationEvent[];
 }
 
 export interface CopilotThread {

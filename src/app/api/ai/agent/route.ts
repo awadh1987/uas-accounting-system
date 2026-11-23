@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withTenantRoute } from "@/lib/prisma";
+import { getActiveTenantId } from "@/lib/tenant/tenantContext";
 import { authorizeApiAction } from "@/lib/apiHelpers";
 import { getBootstrapState } from "@/lib/serverBootstrap";
 import {
@@ -17,6 +18,12 @@ import {
   buildServerAgentContext,
   executeConfirmedAiAction,
 } from "@/lib/ai/agentServerExecutor";
+import { normalizeMemoryTenantSlug } from "@/lib/ai/copilotMemoryTypes";
+import {
+  recordMemoryUsage,
+  retrieveServerCopilotMemories,
+} from "@/lib/ai/copilotMemoryStore";
+import { learnFromCopilotTurn } from "@/lib/ai/copilotLearner";
 
 export const dynamic = "force-dynamic";
 
@@ -84,17 +91,58 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       ? (body.conversationHistory as Array<{ role: "user" | "assistant"; text: string }>)
       : undefined;
 
+    const tenantSlug = normalizeMemoryTenantSlug(
+      getActiveTenantId() || workspaceContext?.tenantSlug
+    );
+    const activeMemories = retrieveServerCopilotMemories({
+      tenantSlug,
+      userId: actor.userId,
+      query: prompt,
+      activeTab: workspaceContext?.activeTab,
+      limit: 8,
+    });
+
     const agentResponse = await runGeminiCopilotAgent(prompt, {
       ...serverCtx,
       workspaceContext,
       explicitTool,
       conversationHistory,
+      memories: activeMemories,
+      skipLocalLearning: true,
       enableLocalOllamaProbe: body.enableLocalOllamaProbe === true,
     });
+
+    if (activeMemories.length > 0) {
+      recordMemoryUsage({
+        tenantSlug,
+        memoryIds: activeMemories.map((m) => m.id),
+      });
+    }
+
+    const editedDraftContext =
+      typeof body.editedDraftContext === "string" ? body.editedDraftContext : undefined;
+    const learnResult =
+      prompt || editedDraftContext
+        ? await learnFromCopilotTurn({
+            prompt,
+            assistantReply: agentResponse.reply,
+            tenantSlug,
+            userId: actor.userId ?? undefined,
+            activeTab: workspaceContext?.activeTab,
+            editedDraftContext,
+          })
+        : { learnedEvents: [], forgottenEntries: [] };
 
     return NextResponse.json({
       success: true,
       ...agentResponse,
+      ...(learnResult.learnedEvents.length > 0
+        ? { learnedEvents: learnResult.learnedEvents }
+        : {}),
+      ...(learnResult.forgottenEntries.length > 0
+        ? { forgottenEntries: learnResult.forgottenEntries }
+        : {}),
+      ...(activeMemories.length > 0 ? { appliedMemoriesCount: activeMemories.length } : {}),
     });
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : undefined;

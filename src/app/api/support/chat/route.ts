@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withTenantRoute } from "@/lib/prisma";
+import { getActiveTenantId } from "@/lib/tenant/tenantContext";
 import { UAS_SUPPORT_CHAPTERS } from "@/lib/uasSupportKnowledge";
 import {
   answerSupportQuery,
@@ -8,6 +9,8 @@ import {
 } from "@/lib/localSupportEngine";
 import { runGeminiSupportSynthesis } from "@/lib/ai/geminiCopilotEngine";
 import { collectServerSupportDiagnostics } from "@/lib/supportDiagnosticsServer";
+import { normalizeMemoryTenantSlug } from "@/lib/ai/copilotMemoryTypes";
+import { retrieveServerCopilotMemories } from "@/lib/ai/copilotMemoryStore";
 
 export const dynamic = "force-dynamic";
 
@@ -65,9 +68,17 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       },
     };
 
+    const tenantSlug = normalizeMemoryTenantSlug(getActiveTenantId());
+    const activeMemories = retrieveServerCopilotMemories({
+      tenantSlug,
+      query,
+      limit: 5,
+    });
+
     const result = answerSupportQuery(query, {
       lang,
       diagnostics: mergedDiagnostics,
+      memories: activeMemories,
       topK: typeof body.topK === "number" ? body.topK : 3,
     });
 
@@ -80,6 +91,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       baselineAnswerAr: result.answerAr,
       baselineAnswerEn: result.answerEn,
       diagnosticsSummary: `${result.diagnosticReport.statusBadge}: ${(resolvedLang === "ar" ? result.diagnosticReport.findingsAr : result.diagnosticReport.findingsEn).join(" | ")}`,
+      memories: activeMemories,
     });
 
     return NextResponse.json({

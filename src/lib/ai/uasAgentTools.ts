@@ -27,6 +27,7 @@ import {
   evaluateSaleAgainstHarvestStock,
   reconcileHarvestInventory,
 } from "@/lib/harvestReconciliation";
+import type { CopilotMemoryEntry } from "./copilotMemoryTypes";
 import type {
   TabId,
   UasBootstrapState,
@@ -231,6 +232,7 @@ export interface UasAgentExecutionContext {
   journalEntries?: UasAgentJournalSummary[];
   reportSnapshot?: UasAgentReportSnapshot | null;
   diagnostics?: Partial<SupportSystemDiagnostics> | null;
+  memories?: CopilotMemoryEntry[];
   qrLookupHook?: (code: string) => Promise<{
     verified: boolean;
     documentType?: string;

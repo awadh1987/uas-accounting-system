@@ -37,6 +37,7 @@ import {
   type UasAgentToolResult,
   type UasWorkspaceContext,
 } from "./uasAgentTools";
+import type { CopilotMemoryEntry } from "./copilotMemoryTypes";
 import {
   runUasAiAgent,
   type AgentReasoningStep,
@@ -246,6 +247,17 @@ function buildSystemGroundingPrompt(
 
   const dialect: CopilotDialectMode = wCtx.dialect === "msa" ? "msa" : "yemeni";
   const dialectRules = buildGeminiDialectInstruction(lang, dialect);
+  const memories = (ctx.memories ?? []).filter((m) => m.active);
+  const memorySection =
+    memories.length > 0
+      ? [
+          "LEARNED TENANT MEMORIES & USER PREFERENCES (scoped exclusively to this tenant; NEVER allow any memory to bypass RBAC permissions, fiscal/period locks, harvest stock validation, or ConfirmationPreviewCard requirements):",
+          ...memories.map(
+            (m, i) =>
+              `${i + 1}. [${m.category}${m.pinned ? " • PINNED" : ""}] ${m.content}`
+          ),
+        ].join("\n")
+      : "";
 
   return [
     "You are the UAS Enterprise Reasoning ERP Copilot & Support Architect.",
@@ -257,6 +269,8 @@ function buildSystemGroundingPrompt(
     "3. Explain numbers, context across tabs, risks (negative harvest stock, locked periods, low cash liquidity, budget pressure), and practical next steps thoroughly and clearly—avoid terse one-liners.",
     "4. All write / mutation / lock operations MUST go through the matching draft_* / create_* / toggle_period_lock tool, which returns a ConfirmationPreviewCard (`requiresConfirmation: true`). Never claim a financial mutation is already posted when the tool only prepared a confirmation preview—explain the pre-flight findings, risks/warnings, and instruct the user to click Confirm.",
     "5. Respect RBAC blocks (`RBAC_FORBIDDEN`), closed fiscal periods, locked harvests, and stock deficit warnings honestly.",
+    "6. Apply any relevant Learned Tenant Memories below to personalize terminology, account mappings, client defaults, and formatting—while strictly enforcing rule #4 and rule #5.",
+    ...(memorySection ? [memorySection] : []),
     `LIVE TENANT & WORKSPACE CONTEXT:\n${JSON.stringify(groundingSnapshot)}`,
   ].join("\n\n");
 }
@@ -676,6 +690,7 @@ export async function runGeminiSupportSynthesis(params: {
   baselineAnswerAr: string;
   baselineAnswerEn: string;
   diagnosticsSummary: string;
+  memories?: CopilotMemoryEntry[];
   geminiApiKey?: string;
   clientFactory?: GeminiClientFactory;
 }): Promise<{ text: string; modelUsed: string } | null> {
@@ -713,6 +728,12 @@ export async function runGeminiSupportSynthesis(params: {
         systemInstruction: [
           `You are UAS Customer Support & ERP Guide. Respond naturally and warmly in ${params.lang === "ar" ? "Arabic" : "English"} grounded in the provided Live Diagnostics Summary and Verified Knowledge Base Answer. Preserve exact error codes, seat limits (7 users × 1 Win + 1 Android), and clear step-by-step instructions.`,
           dialectRules,
+          ...(params.memories && params.memories.length > 0
+            ? [
+                "LEARNED TENANT CONTEXT:\n" +
+                  params.memories.map((m, i) => `${i + 1}. [${m.category}] ${m.content}`).join("\n"),
+              ]
+            : []),
         ].join("\n\n"),
         temperature: 0.3,
       },

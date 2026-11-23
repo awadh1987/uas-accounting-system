@@ -22,6 +22,19 @@ import {
   type UasAgentToolName,
   type UasAgentToolResult,
 } from "./uasAgentTools";
+import {
+  detectForgetMemoryIntent,
+  extractDeterministicMemories,
+} from "./copilotLearnerRules";
+import {
+  forgetLocalCopilotMemories,
+  loadLocalCopilotMemories,
+  normalizeMemoryTenantSlug,
+  retrieveRelevantMemories,
+  upsertLocalCopilotMemory,
+  type CopilotMemoryEntry,
+  type MemoryMutationEvent,
+} from "./copilotMemoryTypes";
 import type { TabId } from "@/types/uas";
 
 export type ReasoningTier =
@@ -76,6 +89,9 @@ export interface UasAiAgentResponse {
   clarificationPrompt?: ClarificationPromptData;
   escalationCard?: EscalationCardData;
   reasoningTrace: AgentReasoningStep[];
+  learnedEvents?: MemoryMutationEvent[];
+  forgottenEntries?: CopilotMemoryEntry[];
+  appliedMemories?: CopilotMemoryEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1034,6 +1050,8 @@ export interface RunUasAiAgentOptions extends UasAgentExecutionContext {
   enableLocalOllamaProbe?: boolean;
   /** Optional cloud API key for Tier 1 online reasoning. */
   cloudApiKey?: string;
+  /** Skip browser localStorage learning/forget (used when server /api/ai/agent owns persistence). */
+  skipLocalLearning?: boolean;
 }
 
 export async function runUasAiAgent(
@@ -1042,6 +1060,60 @@ export async function runUasAiAgent(
 ): Promise<UasAiAgentResponse> {
   const cleanPrompt = String(prompt ?? "").trim();
   const lang = opts.lang ?? detectSupportLanguage(cleanPrompt, "ar");
+  const tenantSlug = normalizeMemoryTenantSlug(
+    opts.workspaceContext?.tenantSlug || opts.state?.enterpriseProfile?.tenantSlug
+  );
+  const currentUserId =
+    typeof opts.user === "object" && opts.user ? opts.user.id : undefined;
+
+  let learnedEvents: MemoryMutationEvent[] | undefined;
+  let forgottenEntries: CopilotMemoryEntry[] | undefined;
+
+  if (!opts.skipLocalLearning && typeof window !== "undefined" && cleanPrompt) {
+    const forgetIntent = detectForgetMemoryIntent(cleanPrompt);
+    if (forgetIntent.matched && forgetIntent.query) {
+      const removed = forgetLocalCopilotMemories({
+        tenantSlug,
+        userId: currentUserId,
+        query: forgetIntent.query,
+      });
+      if (removed.length > 0) {
+        forgottenEntries = removed;
+        learnedEvents = removed.map((entry) => ({
+          action: "forgotten" as const,
+          entry,
+          previousEntry: entry,
+        }));
+      }
+    } else {
+      const candidates = extractDeterministicMemories({
+        prompt: cleanPrompt,
+        tenantSlug,
+        userId: currentUserId,
+        activeTab: opts.workspaceContext?.activeTab,
+      });
+      const events: MemoryMutationEvent[] = [];
+      for (const c of candidates) {
+        const ev = upsertLocalCopilotMemory(c);
+        if (ev) events.push(ev);
+      }
+      if (events.length > 0) {
+        learnedEvents = events;
+      }
+    }
+  }
+
+  const candidateMemories =
+    opts.memories ??
+    (typeof window !== "undefined" ? loadLocalCopilotMemories(tenantSlug) : []);
+  const appliedMemories = retrieveRelevantMemories({
+    entries: candidateMemories,
+    tenantSlug,
+    userId: currentUserId,
+    query: cleanPrompt,
+    activeTab: opts.workspaceContext?.activeTab,
+    limit: 5,
+  });
 
   let tierUsed: ReasoningTier = "tier3_offline_deterministic";
   let intent: ParsedAgentIntent | null = null;
@@ -1081,6 +1153,7 @@ export async function runUasAiAgent(
   const toolResult = await executeUasAgentTool(intent.toolName, intent.args, {
     ...opts,
     lang,
+    memories: appliedMemories,
   });
 
   const wCtx = opts.workspaceContext;
@@ -1133,10 +1206,32 @@ export async function runUasAiAgent(
       type: "response",
       titleAr: "4. صياغة الرد النهائي",
       titleEn: "4. Final Bilingual Response",
-      detailAr: `الاستجابة جاهزة عبر (${tierUsed}).`,
-      detailEn: `Response generated via (${tierUsed}).`,
+      detailAr:
+        appliedMemories.length > 0
+          ? `الاستجابة جاهزة عبر (${tierUsed}) مع مراعاة ${appliedMemories.length} قاعدة/تفضيل من ذاكرة المنشأة.`
+          : `الاستجابة جاهزة عبر (${tierUsed}).`,
+      detailEn:
+        appliedMemories.length > 0
+          ? `Response generated via (${tierUsed}) grounded with ${appliedMemories.length} learned tenant memory rule(s).`
+          : `Response generated via (${tierUsed}).`,
     },
   ];
+
+  const memoryNoticeAr =
+    forgottenEntries && forgottenEntries.length > 0
+      ? `\n\n🧹 **تم حذف ${forgottenEntries.length} قاعدة من ذاكرة المساعد لهذه المنشأة.**`
+      : appliedMemories.length > 0 && !opts.memories
+      ? `\n\n🧠 **تفضيلات وقواعد محفوظة مفعّلة:** ${appliedMemories.slice(0, 2).map((m) => m.content).join(" • ")}`
+      : "";
+  const memoryNoticeEn =
+    forgottenEntries && forgottenEntries.length > 0
+      ? `\n\n🧹 **Forgot ${forgottenEntries.length} learned rule(s) for this tenant.**`
+      : appliedMemories.length > 0 && !opts.memories
+      ? `\n\n🧠 **Active tenant memory applied:** ${appliedMemories.slice(0, 2).map((m) => m.content).join(" • ")}`
+      : "";
+
+  const finalAr = `${toolResult.summaryAr}${memoryNoticeAr}`;
+  const finalEn = `${toolResult.summaryEn}${memoryNoticeEn}`;
 
   return {
     ok: toolResult.ok,
@@ -1149,9 +1244,9 @@ export async function runUasAiAgent(
         ? "Local Ollama LLM"
         : "Cloud LLM",
     prompt: cleanPrompt,
-    reply: lang === "ar" ? toolResult.summaryAr : toolResult.summaryEn,
-    replyAr: toolResult.summaryAr,
-    replyEn: toolResult.summaryEn,
+    reply: lang === "ar" ? finalAr : finalEn,
+    replyAr: finalAr,
+    replyEn: finalEn,
     toolName: intent.toolName,
     toolArgs: intent.args,
     toolResult,
@@ -1163,5 +1258,8 @@ export async function runUasAiAgent(
     clarificationPrompt: toolResult.clarificationPrompt,
     escalationCard: toolResult.escalationCard,
     reasoningTrace,
+    ...(learnedEvents ? { learnedEvents } : {}),
+    ...(forgottenEntries ? { forgottenEntries } : {}),
+    ...(appliedMemories.length > 0 ? { appliedMemories } : {}),
   };
 }

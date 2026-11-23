@@ -36,6 +36,13 @@ import {
   DEFAULT_WAREHOUSES,
   slugifyLookupCode,
 } from "@/lib/multiUnitInventoryEngine";
+import {
+  applyMemoryUpsert,
+  normalizeMemoryTenantSlug,
+  type CopilotMemoryCategory,
+  type CopilotMemoryEntry,
+  type CopilotMemoryScope,
+} from "@/lib/ai/copilotMemoryTypes";
 import type {
   UasBootstrapState,
   UasEnterpriseProfile,
@@ -3122,6 +3129,115 @@ async function handleOfflineAndroidApiRequestCore(
       { debit: 0, credit: 0, netIncome }
     );
     return jsonResponse({ rows, totals, offline: true }, 200);
+  }
+
+  if (pathname === "/api/ai/memory") {
+    const state = loadOfflineAndroidState(s);
+    const tenantSlug = normalizeMemoryTenantSlug(
+      state.enterpriseProfile?.tenantSlug || "default"
+    );
+    const storageKey = `uas_copilot_memory_v1_${tenantSlug}`;
+    const readMem = (): CopilotMemoryEntry[] => {
+      if (!s) return [];
+      try {
+        const raw = s.getItem(storageKey);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? (parsed as CopilotMemoryEntry[]) : [];
+      } catch {
+        return [];
+      }
+    };
+    const writeMem = (list: CopilotMemoryEntry[]) => {
+      if (!s) return;
+      try {
+        s.setItem(storageKey, JSON.stringify(list));
+      } catch {
+        // ignore quota errors
+      }
+    };
+
+    if (method === "GET") {
+      return jsonResponse({ success: true, tenantSlug, memories: readMem(), offline: true }, 200);
+    }
+
+    const action = String(body.action || "upsert").toLowerCase();
+    let current = readMem();
+    if (action === "sync" && Array.isArray(body.entries)) {
+      for (const rawEntry of body.entries as Array<Partial<CopilotMemoryEntry>>) {
+        const res = applyMemoryUpsert(current, {
+          id: rawEntry.id,
+          tenantSlug,
+          scope: (rawEntry.scope === "user" ? "user" : "workspace") as CopilotMemoryScope,
+          userId: rawEntry.userId,
+          category: (rawEntry.category || "domain_fact") as CopilotMemoryCategory,
+          topicKey: String(rawEntry.topicKey || rawEntry.content || "rule"),
+          content: String(rawEntry.content || ""),
+          sourceSnippet: rawEntry.sourceSnippet,
+          confidence: rawEntry.confidence,
+          pinned: Boolean(rawEntry.pinned),
+          active: rawEntry.active !== false,
+        });
+        current = res.nextList;
+      }
+      writeMem(current);
+      return jsonResponse({ success: true, tenantSlug, memories: current, offline: true }, 200);
+    }
+    if (action === "delete" || action === "undo") {
+      const id = String(body.id || "").trim();
+      current = current.filter((m) => m.id !== id);
+      if (action === "undo" && body.previousEntry && typeof body.previousEntry === "object") {
+        const prev = body.previousEntry as CopilotMemoryEntry;
+        current = applyMemoryUpsert(current, { ...prev, tenantSlug }).nextList;
+      }
+      writeMem(current);
+      return jsonResponse({ success: true, tenantSlug, memories: current, offline: true }, 200);
+    }
+    if (action === "update" || action === "toggle" || action === "pin") {
+      const id = String(body.id || "").trim();
+      current = current.map((m) =>
+        m.id === id
+          ? {
+              ...m,
+              ...(body.active !== undefined ? { active: Boolean(body.active) } : {}),
+              ...(body.pinned !== undefined ? { pinned: Boolean(body.pinned) } : {}),
+              ...(typeof body.content === "string" && body.content.trim()
+                ? { content: body.content.trim() }
+                : {}),
+              updatedAt: new Date().toISOString(),
+            }
+          : m
+      );
+      writeMem(current);
+      return jsonResponse({ success: true, tenantSlug, memories: current, offline: true }, 200);
+    }
+    const upsertRes = applyMemoryUpsert(current, {
+      id: typeof body.id === "string" ? body.id : undefined,
+      tenantSlug,
+      scope: (body.scope === "user" ? "user" : "workspace") as CopilotMemoryScope,
+      userId: typeof body.userId === "string" ? body.userId : undefined,
+      category: (body.category || "domain_fact") as CopilotMemoryCategory,
+      topicKey: String(body.topicKey || body.content || "rule"),
+      content: String(body.content || ""),
+      sourceSnippet: typeof body.sourceSnippet === "string" ? body.sourceSnippet : undefined,
+      confidence: typeof body.confidence === "number" ? body.confidence : 0.92,
+      pinned: Boolean(body.pinned),
+      active: body.active !== false,
+    });
+    if (!upsertRes.event) {
+      return jsonResponse({ success: false, error: "DISALLOWED_OR_INVALID_MEMORY" }, 400);
+    }
+    writeMem(upsertRes.nextList);
+    return jsonResponse(
+      {
+        success: true,
+        tenantSlug,
+        event: upsertRes.event,
+        memories: upsertRes.nextList,
+        offline: true,
+      },
+      200
+    );
   }
 
   // Generic local fallback for any other `/api/*` write/read in Android Local Mode
