@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { createPortal } from "react-dom";
 import { SvgAvatar } from "@/components/SvgAvatar";
 import {
@@ -51,9 +52,30 @@ import { AccountingSettingsPanel } from "@/components/AccountingSettingsPanel";
 import { ApprovalRulesMatrixPanel } from "@/components/ApprovalRulesMatrixPanel";
 import { TenantAdminConfigPanel } from "@/components/TenantAdminConfigPanel";
 import { TenantDevicesPanel } from "@/components/TenantDevicesPanel";
-import { SuperadminLicenseGeneratorPanel } from "@/components/SuperadminLicenseGeneratorPanel";
-import { PlatformControlPanel } from "@/components/PlatformControlPanel";
+import { isPlatformAdminSurfaceEnabled } from "@/lib/buildTarget";
 import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
+
+const SuperadminLicenseGeneratorPanel =
+  process.env.NEXT_PUBLIC_ENABLE_PLATFORM_ADMIN === "0"
+    ? null
+    : dynamic(
+        () =>
+          import("@/components/SuperadminLicenseGeneratorPanel").then(
+            (m) => m.SuperadminLicenseGeneratorPanel
+          ),
+        { ssr: false }
+      );
+
+const PlatformControlPanel =
+  process.env.NEXT_PUBLIC_ENABLE_PLATFORM_ADMIN === "0"
+    ? null
+    : dynamic(
+        () =>
+          import("@/components/PlatformControlPanel").then(
+            (m) => m.PlatformControlPanel
+          ),
+        { ssr: false }
+      );
 import {
   ALL_USER_ROLES,
   ROLE_DEFAULT_PERMISSIONS,
@@ -331,7 +353,9 @@ export function SystemTab({
   const isAr = lang === "ar";
   const isRootPlatformHost =
     typeof window === "undefined" || !extractSubdomainSlugFromHost(window.location.host);
+  const platformAdminEnabled = isPlatformAdminSurfaceEnabled();
   const isPlatformSuperadmin =
+    platformAdminEnabled &&
     isRootPlatformHost &&
     (currentUser.email || "").trim().toLowerCase() === "admin@qat.world";
 
@@ -1372,7 +1396,7 @@ export function SystemTab({
         )}
       </div>
 
-      {isPlatformSuperadmin && activeSubTab === "superadmin-licenses" && (
+      {isPlatformSuperadmin && activeSubTab === "superadmin-licenses" && SuperadminLicenseGeneratorPanel && (
         <SuperadminLicenseGeneratorPanel
           lang={lang}
           onToast={onToast}
@@ -1380,7 +1404,7 @@ export function SystemTab({
         />
       )}
 
-      {isPlatformSuperadmin && activeSubTab === "control-panel" && (
+      {isPlatformSuperadmin && activeSubTab === "control-panel" && PlatformControlPanel && (
         <PlatformControlPanel
           lang={lang}
           onToast={onToast}

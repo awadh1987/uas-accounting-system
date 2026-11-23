@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { isPlatformAdminSurfaceEnabled } from "@/lib/buildTarget";
 import {
   buildTenantWorkspaceUrl,
   ensureTenantRegistered,
@@ -76,6 +77,11 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   try {
+    if (!isPlatformAdminSurfaceEnabled()) {
+      return forbiddenError(
+        "⛔ تجهيز مساحات المنشآت متاح في المنصة السحابية الرئيسية فقط / Tenant provisioning is restricted to the cloud platform"
+      );
+    }
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const adminToken = (process.env.UAS_VENDOR_ADMIN_TOKEN || "").trim();
     const authHeader = req.headers.get("authorization") || "";

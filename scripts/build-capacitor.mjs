@@ -4,9 +4,13 @@ import { execSync } from "node:child_process";
 
 const rootDir = process.cwd();
 const apiDir = path.join(rootDir, "src", "app", "api");
+const controlPanelPageDir = path.join(rootDir, "src", "app", "control-panel");
+const superadminPageDir = path.join(rootDir, "src", "app", "superadmin");
 const proxyFile = path.join(rootDir, "src", "proxy.ts");
 const backupDir = path.join(rootDir, ".capacitor-api-backup");
 const backupApiDir = path.join(backupDir, "api");
+const backupControlPanelDir = path.join(backupDir, "control-panel");
+const backupSuperadminDir = path.join(backupDir, "superadmin");
 const backupProxyFile = path.join(backupDir, "proxy.ts");
 const nextCacheDir = path.join(rootDir, ".next");
 const apkStashDir = path.join(rootDir, ".capacitor-apk-stash");
@@ -38,6 +42,8 @@ function movePathSafe(src, dest) {
 /** @type {Array<{ name: string, src: string, dest: string }>} */
 const stashedApks = [];
 let movedApi = false;
+let movedControlPanel = false;
+let movedSuperadmin = false;
 let movedProxy = false;
 let isCleaningUp = false;
 
@@ -101,6 +107,14 @@ function restoreWorkspace() {
     if ((movedApi || !fs.existsSync(apiDir)) && fs.existsSync(backupApiDir)) {
       movePathSafe(backupApiDir, apiDir);
       movedApi = false;
+    }
+    if ((movedControlPanel || !fs.existsSync(controlPanelPageDir)) && fs.existsSync(backupControlPanelDir)) {
+      movePathSafe(backupControlPanelDir, controlPanelPageDir);
+      movedControlPanel = false;
+    }
+    if ((movedSuperadmin || !fs.existsSync(superadminPageDir)) && fs.existsSync(backupSuperadminDir)) {
+      movePathSafe(backupSuperadminDir, superadminPageDir);
+      movedSuperadmin = false;
     }
     if ((movedProxy || !fs.existsSync(proxyFile)) && fs.existsSync(backupProxyFile)) {
       movePathSafe(backupProxyFile, proxyFile);
@@ -197,17 +211,38 @@ try {
   }
 
   movedApi = movePathSafe(apiDir, backupApiDir);
+  movedControlPanel = movePathSafe(controlPanelPageDir, backupControlPanelDir);
+  movedSuperadmin = movePathSafe(superadminPageDir, backupSuperadminDir);
   movedProxy = movePathSafe(proxyFile, backupProxyFile);
 
   if (fs.existsSync(nextCacheDir)) {
     fs.rmSync(nextCacheDir, { recursive: true, force: true });
   }
 
-  console.log("Building static Capacitor web bundle into ./out ...");
+  console.log("Building static Capacitor web bundle into ./out (excluding Control Panel & Superadmin License Generator)...");
   execSync("npx next build", {
     stdio: "inherit",
-    env: { ...process.env, CAPACITOR_EXPORT: "1" },
+    env: {
+      ...process.env,
+      CAPACITOR_EXPORT: "1",
+      NEXT_PUBLIC_CAPACITOR_EXPORT: "1",
+      NEXT_PUBLIC_UAS_BUILD_TARGET: "mobile",
+      UAS_BUILD_TARGET: "mobile",
+      NEXT_PUBLIC_ENABLE_PLATFORM_ADMIN: "0",
+    },
   });
+
+  // Ensure no excluded root-platform routes leaked into ./out
+  for (const excludedOut of ["control-panel", "superadmin"]) {
+    const excludedPath = path.join(rootDir, "out", excludedOut);
+    if (fs.existsSync(excludedPath)) {
+      fs.rmSync(excludedPath, { recursive: true, force: true });
+    }
+    const htmlFile = path.join(rootDir, "out", `${excludedOut}.html`);
+    if (fs.existsSync(htmlFile)) {
+      fs.rmSync(htmlFile, { force: true });
+    }
+  }
 
   // Ensure no stale .apk, .exe, .map sourcemaps, or /downloads folder exist in out/ before capacitor sync
   cleanApkFiles(path.join(rootDir, "out"));

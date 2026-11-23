@@ -2034,6 +2034,18 @@ export function UasAppShell() {
         state={state}
         licenseStatus={licenseStatus}
         offlineMode={offlineMode}
+        workspaceContext={{
+          activeTab,
+          selectedProjectId: selectedProjectId === "ALL" ? null : selectedProjectId,
+          selectedSubProjectId: selectedSubProjectId === "ALL" ? null : selectedSubProjectId,
+          selectedHarvest: selectedHarvest === "ALL" ? null : selectedHarvest,
+          tenantSlug: state.enterpriseProfile?.tenantSlug ?? null,
+          runtimeMode: getStoredRuntimeMode(),
+          offlineQueueCount,
+          pendingConflictsCount,
+          isOffline: offlineMode,
+          currency,
+        }}
         onNavigateTab={(tab) => {
           if (currentUser && viewMode !== "erp") {
             setViewMode("erp");
@@ -2042,6 +2054,10 @@ export function UasAppShell() {
         }}
         onOpenLicenseModal={() => setLicenseModalOpen(true)}
         onRefreshState={refreshFromServer}
+        onApplyState={(nextState, qCount) => {
+          setState(nextState);
+          setOfflineQueueCount(qCount);
+        }}
         onToast={showToast}
       />
     </div>

@@ -931,6 +931,32 @@ function applyLocalOptimistic(
     return { next };
   }
 
+  if (endpoint === "/api/treasury/transfer" && method === "POST") {
+    const fromId = String(payload.fromTreasuryId || "");
+    const toId = String(payload.toTreasuryId || "");
+    const amount = Number(payload.amount) || 0;
+    const fromAcc = next.treasuryAccounts.find((t) => t.id === fromId || t.code === fromId);
+    const toAcc = next.treasuryAccounts.find((t) => t.id === toId || t.code === toId);
+    if (fromAcc && toAcc && amount > 0) {
+      fromAcc.balance = Math.max(0, Number(fromAcc.balance || 0) - amount);
+      fromAcc.balanceYER = Math.max(0, Number(fromAcc.balanceYER || fromAcc.balance || 0) - amount);
+      toAcc.balance = Number(toAcc.balance || 0) + amount;
+      toAcc.balanceYER = Number(toAcc.balanceYER || toAcc.balance || 0) + amount;
+      addAudit("تحويل مالي داخلي (محلي)", `${fromAcc.nameAr} -> ${toAcc.nameAr} (${amount.toLocaleString()})`);
+    }
+    return { next };
+  }
+
+  if (endpoint === "/api/sales/customers" && method === "POST") {
+    addAudit("إنشاء عميل جديد (محلي)", String(payload.name || payload.nameAr || ""));
+    return { next };
+  }
+
+  if (endpoint === "/api/procurement/vendors" && method === "POST") {
+    addAudit("إنشاء مورد جديد (محلي)", String(payload.nameAr || payload.name || ""));
+    return { next };
+  }
+
   if (endpoint === "/api/system/settings" && method === "PATCH") {
     if (payload.orgName) next.settings.orgName = String(payload.orgName);
     if (payload.logoText) next.settings.logoText = String(payload.logoText);

@@ -3,18 +3,36 @@ import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import {
   createVendorWithAccountTx,
   ensureCustomerWithAccountTx,
+  ensureWorkerWithAccountTx,
   generateFinancialReports,
+  postCustomerReceipt,
   postJournalEntry,
+  postOperatingExpenseJournalTx,
+  postSalesInvoice,
+  postWorkerWageJournalTx,
   recordAuditDiffTx,
+  transferBetweenTreasuries,
 } from "@/lib/accounting/ledgerService";
+import {
+  computeOperatingExpenseTotal,
+  computeSaleTotals,
+  computeWorkerWageTotals,
+} from "@/lib/formulas";
+import { validateHarvestStockForSaleTx } from "@/lib/harvestStockGuard";
 import { provisionEntityGen6AccountAndCostCenter } from "@/lib/accountingCoreEngine";
 import { assertDateNotInClosedFiscalYear } from "@/lib/fiscalYearClosingEngine";
 import { findMatchingApprovalRule, submitApprovalRequest } from "@/lib/approvalEngine";
 import { createWorkspaceDraft } from "@/lib/workspaceDraftsEngine";
-import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
+import {
+  appendAuditLogTx,
+  findHarvestCycle,
+  getBootstrapState,
+  isHarvestLockedTx,
+} from "@/lib/serverBootstrap";
 import { collectServerSupportDiagnostics } from "@/lib/supportDiagnosticsServer";
 import {
   canCreate,
+  canLockPeriod,
   canPostLedger,
   isReadOnly,
   normalizeRole,
@@ -249,9 +267,27 @@ export async function executeConfirmedAiAction(input: {
     CREATE_VENDOR: "procurement",
     CREATE_PROJECT: "projects",
     EXPORT_CLIENT_REPORT: "customers",
+    RECORD_HARVEST_BATCH: "inventory",
+    RECORD_SALE: "sales",
+    RECORD_EXPENSE: "expenses",
+    RECORD_WORKER_WAGE: "workers",
+    TREASURY_TRANSFER: "treasury",
+    TOGGLE_PERIOD_LOCK: "audit",
+    ADD_HARVEST_CYCLE: "projects",
   };
   const requiredModule = moduleMap[op] || "ledger";
-  if (!canCreate(targetUser, requiredModule)) {
+  if (op === "TOGGLE_PERIOD_LOCK") {
+    if (!canLockPeriod(targetUser)) {
+      return {
+        ok: false,
+        status: 403,
+        code: "RBAC_FORBIDDEN",
+        executed_by_ai: false,
+        summaryAr: `⛔ غير مصرح: إغلاق أو فتح فترات الحصاد محصور بالإدارة العليا ورئيس الحسابات.`,
+        summaryEn: `⛔ RBAC Blocked: Locking/unlocking harvest periods requires SUPER_ADMIN or CHIEF_ACCOUNTANT.`,
+      };
+    }
+  } else if (!canCreate(targetUser, requiredModule)) {
     return {
       ok: false,
       status: 403,
@@ -462,8 +498,457 @@ export async function executeConfirmedAiAction(input: {
       status: 200,
       executed_by_ai: true,
       entryNumber: `RPT-CUST-${Date.now().toString().slice(-4)}`,
-      summaryAr: `📄 **جاهز لتصدير/طباعة كشف حساب العميل (${partyName})**\n- خيار تفاصيل المبيعات: **${includeSaleDetails ? "مضمّنة بالكامل (تفاصيل الأصناف والكميات والأسعار) ✅" : "ملخص إجمالي فقط 📊"}**\nيمكنك طباعة الكشف أو تصديره إلى PDF مباشرة من قسم العملاء.`,
+      summaryAr: `📄 **جاهز لتصدير/طباعة كشف حساب العميل (${partyName})**\n- خيار تفاصيل المبيعات: **${includeSaleDetails ? "مضمّنة بالكامل (تفاصيل الأصناف والكميات والأسعار) ✅" : "ملخص إجمالي فقط 📊"}**\nيمكنك طباعة الكشف أو تصدير الملف PDF مباشرة من قسم العملاء.`,
       summaryEn: `📄 **Ready to export/print Client Account Statement (${partyName})**\n- Sale Details: **${includeSaleDetails ? "Itemized sales included (items, qty, price, total) ✅" : "Summary totals only 📊"}**\nYou can print or export PDF directly from the Customers module.`,
+    };
+  }
+
+  // 0b. Operational & Multi-Section Execution (Harvest, Sales, Expenses, Wages, Treasury Transfer, Locks, Cycles)
+  if (op === "RECORD_HARVEST_BATCH") {
+    const p = confirmationCard.executionPayload || {};
+    const projectId = String(p.projectId || confirmationCard.projectId || "").trim();
+    const harvestName = String(p.harvest || "").trim();
+    const productGrade = String(p.grade || "رقم 1").trim();
+    const harvestedBundles = Math.max(0, Math.round(Number(p.harvestedBundles) || 0));
+    const shrinkageBundles = Math.max(0, Math.round(Number(p.shrinkageBundles) || 0));
+    const subProjectId = p.subProjectId ? String(p.subProjectId).trim() : null;
+    const notes = String(p.notes || "تسجيل عبر المساعد الذكي").trim();
+
+    const res = await prisma.$transaction(async (tx) => {
+      if (await isHarvestLockedTx(tx, projectId, harvestName)) {
+        return { locked: true as const };
+      }
+      const cycle = await findHarvestCycle(tx, projectId, harvestName);
+      const batch = await tx.harvestInventoryBatch.create({
+        data: {
+          projectId,
+          subProjectId,
+          harvestCycleId: cycle?.id ?? null,
+          harvestName,
+          productGrade,
+          harvestedBundles,
+          shrinkageBundles,
+          notes,
+        },
+      });
+      await appendAuditLogTx(tx, {
+        ...actor,
+        actionType: "إضافة دفعة مخزون عبر المساعد الذكي [executed_by_ai: true]",
+        entityReference: batch.id,
+        details: `${harvestName} (${productGrade}) — ${harvestedBundles} علاقية`,
+      });
+      return { locked: false as const, batch };
+    });
+
+    if (res.locked) {
+      return {
+        ok: false,
+        status: 423,
+        code: "PERIOD_LOCKED",
+        executed_by_ai: false,
+        summaryAr: "🔒 تعذر التنفيذ: هذه القطفة مغلقة محاسبياً.",
+        summaryEn: "🔒 Blocked: This harvest period is locked in the audit trail.",
+      };
+    }
+
+    return {
+      ok: true,
+      status: 201,
+      executed_by_ai: true,
+      entryNumber: res.batch.id,
+      summaryAr: `✅ **تم تسجيل دفعة مخزون الحصاد بنجاح!** الكمية: **${harvestedBundles}** (${productGrade}) في **${harvestName}** [executed_by_ai: true].`,
+      summaryEn: `✅ **Harvest Inventory Batch Recorded!** Qty: **${harvestedBundles}** (${productGrade}) in **${harvestName}** [executed_by_ai: true].`,
+    };
+  }
+
+  if (op === "RECORD_SALE") {
+    const p = confirmationCard.executionPayload || {};
+    const projectId = String(p.projectId || confirmationCard.projectId || "").trim();
+    const subProjectId = p.subProjectId ? String(p.subProjectId).trim() : null;
+    const harvestName = String(p.harvest || "").trim();
+    const productGrade = String(p.grade || "رقم 1").trim();
+    const customerName = String(p.customer || confirmationCard.partyName || "").trim();
+    const customerPhone = String(p.phone || "").trim();
+    const bundlesCount = Math.max(0, Math.round(Number(p.bundles) || 0));
+    const unitPrice = Number(p.price) || 0;
+    const creditPaid = Number(p.credit) || 0;
+    const saleDate = String(p.date || confirmationCard.date || new Date().toISOString().slice(0, 10));
+    const treasuryAccountId = p.treasuryAccountId ? String(p.treasuryAccountId).trim() : "t1";
+    const notes = String(p.notes || "تسجيل بيع عبر المساعد الذكي").trim();
+
+    const { totalAmount, debitReceivable } = computeSaleTotals(bundlesCount, unitPrice, creditPaid);
+    const res = await prisma.$transaction(async (tx) => {
+      if (await isHarvestLockedTx(tx, projectId, harvestName)) {
+        return { locked: true as const };
+      }
+      const year = new Date(saleDate).getFullYear() || 2026;
+      const prefix = `SO-${year}-`;
+      const countThisYear = await tx.saleTransaction.count({ where: { sequenceNumber: { startsWith: prefix } } });
+      let seqNum = countThisYear + 1;
+      let sequenceNumber = `${prefix}${String(seqNum).padStart(4, "0")}`;
+      while (await tx.saleTransaction.findFirst({ where: { sequenceNumber } })) {
+        seqNum++;
+        sequenceNumber = `${prefix}${String(seqNum).padStart(4, "0")}`;
+      }
+      const receiptVoucherNo = `RV-${Math.floor(100 + Math.random() * 900)}`;
+      const dailyBatchLabel = `بيع ذكي #${seqNum}`;
+      const cycle = await findHarvestCycle(tx, projectId, harvestName);
+      const customer = await ensureCustomerWithAccountTx(tx, { name: customerName, phone: customerPhone });
+      const stockGuard = bundlesCount > 0
+        ? await validateHarvestStockForSaleTx(tx, {
+            projectId,
+            subProjectId,
+            harvestName,
+            productGrade,
+            requestedBundles: bundlesCount,
+            allowNegativeStock: Boolean(p.allowNegativeStock),
+            actorRole: actor.userRole,
+          })
+        : { overridden: false, availableBundles: 0, shortageBundles: 0 };
+
+      let journalEntryId: string | null = null;
+      let finalRevenueCode = "411101";
+      if (totalAmount > 0) {
+        const invRes = await postSalesInvoice({
+          tx,
+          customerId: customer.id,
+          projectId,
+          subProjectId,
+          harvestCycleId: cycle?.id ?? null,
+          amount: totalAmount,
+          currency: "YER",
+          date: new Date(`${saleDate}T10:00:00Z`),
+          creditPaidImmediate: creditPaid,
+          notes,
+          sequenceNumber,
+          dailyBatchLabel,
+          treasuryAccountId,
+          createdById: actor.userId ?? undefined,
+        });
+        journalEntryId = invRes.journalEntry.id;
+        finalRevenueCode = invRes.invoice.revenueAccountCode || finalRevenueCode;
+        if (creditPaid > 0) {
+          await postCustomerReceipt({
+            tx,
+            customerId: customer.id,
+            invoiceId: invRes.invoice.id,
+            projectId,
+            subProjectId,
+            treasuryId: treasuryAccountId,
+            amount: creditPaid,
+            currency: "YER",
+            date: new Date(`${saleDate}T10:05:00Z`),
+            notes: `تحصيل عند البيع (${receiptVoucherNo})`,
+            createdById: actor.userId ?? undefined,
+          });
+        }
+      }
+
+      const sale = await tx.saleTransaction.create({
+        data: {
+          sequenceNumber,
+          dailyBatchLabel,
+          salesOfficerId: actor.userId || null,
+          salesOfficerTitle: actor.userDisplay || "المساعد الذكي",
+          revenueAccountCode: finalRevenueCode,
+          treasuryAccountId,
+          projectId,
+          subProjectId,
+          harvestCycleId: cycle?.id ?? null,
+          harvestName,
+          saleBatchLabel: dailyBatchLabel,
+          customerId: customer.id,
+          customerName: customer.name,
+          customerPhone: customer.phone,
+          productGrade,
+          bundlesCount,
+          unitPrice,
+          totalAmount,
+          creditPaid,
+          debitReceivable,
+          saleDate,
+          receiptVoucherNo,
+          notes,
+          journalEntryId,
+        },
+      });
+      await appendAuditLogTx(tx, {
+        ...actor,
+        actionType: `ترحيل بيع عبر المساعد الذكي (${sequenceNumber}) [executed_by_ai: true]`,
+        entityReference: sale.id,
+        details: `${customer.name} • ${bundlesCount} × ${unitPrice} = ${totalAmount} (${harvestName})${stockGuard.overridden ? " [تجاوز مخزون]" : ""}`,
+      });
+      return { locked: false as const, sale, sequenceNumber };
+    });
+
+    if (res.locked) {
+      return {
+        ok: false,
+        status: 423,
+        code: "PERIOD_LOCKED",
+        executed_by_ai: false,
+        summaryAr: "🔒 تعذر ترحيل البيع: القطفة مغلقة محاسبياً.",
+        summaryEn: "🔒 Sale blocked: Target harvest period is locked.",
+      };
+    }
+
+    return {
+      ok: true,
+      status: 201,
+      executed_by_ai: true,
+      entryNumber: res.sequenceNumber,
+      summaryAr: `✅ **تم تسجيل وترحيل عملية البيع بنجاح (${res.sequenceNumber})!** العميل: **${customerName}** • الإجمالي: **${totalAmount.toLocaleString()} YER** [executed_by_ai: true].`,
+      summaryEn: `✅ **Harvest Sale Posted (${res.sequenceNumber})!** Customer: **${customerName}** • Total: **${totalAmount.toLocaleString()} YER** [executed_by_ai: true].`,
+    };
+  }
+
+  if (op === "RECORD_EXPENSE") {
+    const p = confirmationCard.executionPayload || {};
+    const projectId = String(p.projectId || confirmationCard.projectId || "").trim();
+    const subProjectId = p.subProjectId ? String(p.subProjectId).trim() : null;
+    const harvestName = String(p.harvest || "").trim();
+    const category = String(p.category || "وقود/محروقات").trim();
+    const subType = String(p.subType || category).trim();
+    const quantity = Number(p.qty) || 1;
+    const unitPrice = Number(p.unitPrice) || 0;
+    const expenseDate = String(p.date || confirmationCard.date || new Date().toISOString().slice(0, 10));
+    const treasuryAccountId = p.treasuryAccountId ? String(p.treasuryAccountId).trim() : undefined;
+    const notes = String(p.notes || "مصروف تشغيلي عبر المساعد الذكي").trim();
+    const totalAmount = computeOperatingExpenseTotal(quantity, unitPrice);
+
+    const res = await prisma.$transaction(async (tx) => {
+      if (await isHarvestLockedTx(tx, projectId, harvestName)) {
+        return { locked: true as const };
+      }
+      const cycle = await findHarvestCycle(tx, projectId, harvestName);
+      const expense = await tx.operatingExpense.create({
+        data: {
+          projectId,
+          subProjectId,
+          harvestCycleId: cycle?.id ?? null,
+          harvestName,
+          category,
+          subType,
+          quantity,
+          unitPrice,
+          totalAmount,
+          expenseDate,
+          notes,
+        },
+      });
+      const je = await postOperatingExpenseJournalTx(tx, {
+        expenseId: expense.id,
+        projectId,
+        subProjectId,
+        harvestCycleId: cycle?.id ?? null,
+        category,
+        subType,
+        totalAmount,
+        date: expenseDate,
+        treasuryAccountId,
+        createdById: actor.userId ?? undefined,
+      });
+      if (je) {
+        await tx.operatingExpense.update({ where: { id: expense.id }, data: { journalEntryId: je.id } });
+      }
+      await appendAuditLogTx(tx, {
+        ...actor,
+        actionType: "ترحيل مصروف تشغيلي عبر المساعد الذكي [executed_by_ai: true]",
+        entityReference: expense.id,
+        details: `${category} — ${totalAmount.toLocaleString()} YER (${harvestName})`,
+      });
+      return { locked: false as const, expense, entryNumber: je?.entryNumber || expense.id };
+    });
+
+    if (res.locked) {
+      return {
+        ok: false,
+        status: 423,
+        code: "PERIOD_LOCKED",
+        executed_by_ai: false,
+        summaryAr: "🔒 تعذر تسجيل المصروف: القطفة مغلقة محاسبياً.",
+        summaryEn: "🔒 Blocked: Harvest period is locked.",
+      };
+    }
+
+    return {
+      ok: true,
+      status: 201,
+      executed_by_ai: true,
+      entryNumber: res.entryNumber,
+      summaryAr: `✅ **تم تسجيل وترحيل المصروف التشغيلي (${res.entryNumber})!** الفئة: **${category}** • المبلغ: **${totalAmount.toLocaleString()} YER** [executed_by_ai: true].`,
+      summaryEn: `✅ **Operating Expense Posted (${res.entryNumber})!** Category: **${category}** • Amount: **${totalAmount.toLocaleString()} YER** [executed_by_ai: true].`,
+    };
+  }
+
+  if (op === "RECORD_WORKER_WAGE") {
+    const p = confirmationCard.executionPayload || {};
+    const projectId = String(p.projectId || confirmationCard.projectId || "").trim();
+    const subProjectId = p.subProjectId ? String(p.subProjectId).trim() : null;
+    const harvestName = String(p.harvest || "").trim();
+    const name = String(p.name || confirmationCard.partyName || "").trim();
+    const dailyWage = Number(p.dailyWage) || 0;
+    const daysWorked = Number(p.days) || 1;
+    const creditAmount = Number(p.credit) || 0;
+    const workDate = String(p.date || confirmationCard.date || new Date().toISOString().slice(0, 10));
+    const notes = String(p.notes || "أجر مسجل عبر المساعد الذكي").trim();
+    const { totalWage, debitBalance } = computeWorkerWageTotals(dailyWage, daysWorked, creditAmount);
+
+    const res = await prisma.$transaction(async (tx) => {
+      if (await isHarvestLockedTx(tx, projectId, harvestName)) {
+        return { locked: true as const };
+      }
+      const cycle = await findHarvestCycle(tx, projectId, harvestName);
+      const worker = await ensureWorkerWithAccountTx(tx, { name, defaultDailyWage: dailyWage, phone: "" });
+      const entry = await tx.workerWageEntry.create({
+        data: {
+          workerId: worker.id,
+          workerName: worker.name,
+          projectId,
+          subProjectId,
+          harvestCycleId: cycle?.id ?? null,
+          harvestName,
+          dailyWage,
+          daysWorked,
+          totalWage,
+          creditAmount,
+          debitBalance,
+          workDate,
+          notes,
+        },
+      });
+      if (worker.accountId) {
+        const je = await postWorkerWageJournalTx(tx, {
+          wageEntryId: entry.id,
+          workerName: worker.name,
+          workerAccountId: worker.accountId,
+          projectId,
+          subProjectId,
+          harvestCycleId: cycle?.id ?? null,
+          totalWage,
+          creditAmount,
+          date: workDate,
+          costCenterId: worker.costCenterId ?? undefined,
+          createdById: actor.userId ?? undefined,
+        });
+        if (je) {
+          await tx.workerWageEntry.update({ where: { id: entry.id }, data: { journalEntryId: je.id } });
+        }
+      }
+      await appendAuditLogTx(tx, {
+        ...actor,
+        actionType: "تسجيل أجر عامل عبر المساعد الذكي [executed_by_ai: true]",
+        entityReference: entry.id,
+        details: `${worker.name} — ${totalWage.toLocaleString()} YER (${harvestName})`,
+      });
+      return { locked: false as const, entry, worker };
+    });
+
+    if (res.locked) {
+      return {
+        ok: false,
+        status: 423,
+        code: "PERIOD_LOCKED",
+        executed_by_ai: false,
+        summaryAr: "🔒 تعذر تسجيل الأجر: القطفة مغلقة محاسبياً.",
+        summaryEn: "🔒 Blocked: Harvest period is locked.",
+      };
+    }
+
+    return {
+      ok: true,
+      status: 201,
+      executed_by_ai: true,
+      entryNumber: res.entry.id,
+      summaryAr: `✅ **تم تسجيل أجر العامل بنجاح!** العامل: **${res.worker.name}** • الإجمالي: **${totalWage.toLocaleString()} YER** [executed_by_ai: true].`,
+      summaryEn: `✅ **Worker Wage Recorded!** Worker: **${res.worker.name}** • Total: **${totalWage.toLocaleString()} YER** [executed_by_ai: true].`,
+    };
+  }
+
+  if (op === "TREASURY_TRANSFER") {
+    const p = confirmationCard.executionPayload || {};
+    const res = await transferBetweenTreasuries({
+      fromTreasuryId: String(p.fromTreasuryId || ""),
+      toTreasuryId: String(p.toTreasuryId || ""),
+      amount: Number(p.amount) || 0,
+      notes: p.notes ? String(p.notes) : undefined,
+      date: p.date ? String(p.date) : new Date(),
+      createdById: actor.userId ?? undefined,
+    });
+    return {
+      ok: true,
+      status: 201,
+      executed_by_ai: true,
+      entryNumber: res.journalEntry.entryNumber,
+      journalEntryId: res.journalEntry.id,
+      summaryAr: `✅ **تم التحويل المالي بنجاح!** رقم القيد: **${res.journalEntry.entryNumber}** [executed_by_ai: true].`,
+      summaryEn: `✅ **Treasury Transfer Executed!** Entry: **${res.journalEntry.entryNumber}** [executed_by_ai: true].`,
+    };
+  }
+
+  if (op === "TOGGLE_PERIOD_LOCK") {
+    const p = confirmationCard.executionPayload || {};
+    const projectId = String(p.projectId || confirmationCard.projectId || "").trim();
+    const harvestName = String(p.harvest || "").trim();
+    const lockRes = await prisma.$transaction(async (tx) => {
+      const cycle = await tx.harvestCycle.findFirst({ where: { projectId, name: harvestName } });
+      if (!cycle) throw new Error("CYCLE_NOT_FOUND");
+      const nextLocked = !cycle.isLocked;
+      await tx.harvestCycle.update({
+        where: { id: cycle.id },
+        data: {
+          isLocked: nextLocked,
+          lockedByUserId: nextLocked ? actor.userId : null,
+          lockedById: nextLocked ? actor.userId : null,
+          lockedAt: nextLocked ? new Date() : null,
+        },
+      });
+      await appendAuditLogTx(tx, {
+        ...actor,
+        actionType: `${nextLocked ? "إغلاق فترة قطفة 🔒" : "إعادة فتح فترة قطفة 🔓"} عبر المساعد الذكي [executed_by_ai: true]`,
+        entityReference: cycle.id,
+        details: `${projectId}::${harvestName}`,
+      });
+      return { cycle, nextLocked };
+    });
+    return {
+      ok: true,
+      status: 200,
+      executed_by_ai: true,
+      entryNumber: lockRes.cycle.id,
+      summaryAr: `✅ **تم ${lockRes.nextLocked ? "الإغلاق المحاسبي 🔒" : "إعادة الفتح 🔓"} للقطفة (${harvestName}) بنجاح!** [executed_by_ai: true]`,
+      summaryEn: `✅ **Harvest Period "${harvestName}" ${lockRes.nextLocked ? "Locked 🔒" : "Unlocked 🔓"}!** [executed_by_ai: true]`,
+    };
+  }
+
+  if (op === "ADD_HARVEST_CYCLE") {
+    const p = confirmationCard.executionPayload || {};
+    const projectId = String(p.projectId || confirmationCard.projectId || "").trim();
+    const harvestName = String(p.name || "").trim();
+    await prisma.$transaction(async (tx) => {
+      const project = await tx.project.findUnique({ where: { id: projectId }, include: { harvestCycles: true } });
+      if (!project) throw new Error("PROJECT_NOT_FOUND");
+      const existing = project.harvestCycles.find((h) => h.name === harvestName);
+      if (!existing) {
+        await tx.harvestCycle.create({
+          data: { projectId, name: harvestName, sortOrder: project.harvestCycles.length + 1, isLocked: false },
+        });
+        await tx.project.update({ where: { id: projectId }, data: { plannedHarvestCount: project.harvestCycles.length + 1 } });
+        await appendAuditLogTx(tx, {
+          ...actor,
+          actionType: "إضافة قطفة عبر المساعد الذكي [executed_by_ai: true]",
+          entityReference: projectId,
+          details: `إضافة "${harvestName}" إلى ${project.name}`,
+        });
+      }
+    });
+    return {
+      ok: true,
+      status: 201,
+      executed_by_ai: true,
+      entryNumber: harvestName,
+      summaryAr: `✅ **تمت إضافة القطفة (${harvestName}) للمشروع بنجاح!** [executed_by_ai: true]`,
+      summaryEn: `✅ **Harvest cycle "${harvestName}" added to project!** [executed_by_ai: true]`,
     };
   }
 
@@ -530,7 +1015,7 @@ export async function executeConfirmedAiAction(input: {
   const entryDateStr = confirmationCard.date || new Date().toISOString().slice(0, 10);
   try {
     await assertDateNotInClosedFiscalYear(prisma, new Date(entryDateStr));
-  } catch (err: any) {
+  } catch {
     return {
       ok: false,
       status: 400,
@@ -719,14 +1204,15 @@ export async function executeConfirmedAiAction(input: {
       summaryAr: `✅ **تم التأكيد والترحيل بنجاح!** رقم القيد في دفتر الأستاذ: **${posted.entryNumber}** بمبلغ **${totalDr.toLocaleString()} ${confirmationCard.currency}** (موثق في سجل التدقيق بعلامة \`executed_by_ai: true\`).`,
       summaryEn: `✅ **Confirmed & Posted to General Ledger!** Entry Number: **${posted.entryNumber}** for **${totalDr.toLocaleString()} ${confirmationCard.currency}** (recorded in the audit trail with \`executed_by_ai: true\`).`,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : undefined;
     return {
       ok: false,
       status: 400,
       code: "EXECUTION_FAILED",
       executed_by_ai: false,
-      summaryAr: `⚠️ تعذر ترحيل العملية: ${err?.message || "خطأ غير معروف"}`,
-      summaryEn: `⚠️ Failed to post confirmed transaction: ${err?.message || "Unknown error"}`,
+      summaryAr: `⚠️ تعذر ترحيل العملية: ${errMsg || "خطأ غير معروف"}`,
+      summaryEn: `⚠️ Failed to post confirmed transaction: ${errMsg || "Unknown error"}`,
     };
   }
 }

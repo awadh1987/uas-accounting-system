@@ -2775,6 +2775,27 @@ async function handleOfflineAndroidApiRequestCore(
     );
   }
 
+  if (pathname === "/api/treasury/transfer" && method === "POST") {
+    const state = loadOfflineAndroidState(s);
+    const fromId = String(body.fromTreasuryId || "");
+    const toId = String(body.toTreasuryId || "");
+    const amount = Number(body.amount) || 0;
+    const fromAcc = state.treasuryAccounts.find((t) => t.id === fromId || t.code === fromId);
+    const toAcc = state.treasuryAccounts.find((t) => t.id === toId || t.code === toId);
+    if (!fromAcc || !toAcc || amount <= 0 || fromAcc.id === toAcc.id) {
+      return jsonResponse({ error: "بيانات التحويل المالي غير مكتملة" }, 400);
+    }
+    fromAcc.balance = Number(fromAcc.balance || 0) - amount;
+    fromAcc.balanceYER = Number(fromAcc.balanceYER || fromAcc.balance || 0) - amount;
+    toAcc.balance = Number(toAcc.balance || 0) + amount;
+    toAcc.balanceYER = Number(toAcc.balanceYER || toAcc.balance || 0) + amount;
+    const entryNumber = `TRF-LOC-${Date.now().toString().slice(-5)}`;
+    addLocalAudit(state, actor.userDisplay, "تحويل مالي داخلي (محلي)", `${fromAcc.nameAr} -> ${toAcc.nameAr} (${amount})`);
+    saveOfflineAndroidState(state, s);
+    appendOfflineSyncQueue(pathname, method, body, s);
+    return jsonResponse({ success: true, entryNumber, treasuryAccounts: state.treasuryAccounts, state, offline: true }, 201);
+  }
+
   if (pathname.startsWith("/api/treasury")) {
     const state = loadOfflineAndroidState(s);
     if (method === "GET") {

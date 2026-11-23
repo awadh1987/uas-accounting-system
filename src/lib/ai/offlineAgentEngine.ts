@@ -263,14 +263,20 @@ function extractPartyName(prompt: string, fallbackAr: string, fallbackEn: string
 // Tier 3: Deterministic Bilingual NLP Intent & Entity Parser
 // ---------------------------------------------------------------------------
 
-export function parseBilingualAgentIntent(prompt: string): ParsedAgentIntent {
+export function parseBilingualAgentIntent(
+  prompt: string,
+  ctx?: UasAgentExecutionContext
+): ParsedAgentIntent {
   const raw = String(prompt ?? "").trim();
   const norm = normalizeSupportText(normalizeDigits(raw));
-  const lang = detectSupportLanguage(raw, "ar");
+  const lang = detectSupportLanguage(raw, ctx?.lang ?? "ar");
   const currency = extractCurrencyFromPrompt(raw);
   const exchangeRate = extractExchangeRateFromPrompt(raw);
   const costCenterId = extractCostCenterFromPrompt(raw);
   const multiUnit = extractMultiUnitQuantityFromPrompt(raw);
+  const activeTab = ctx?.workspaceContext?.activeTab;
+  const activeProjectId = ctx?.workspaceContext?.selectedProjectId ?? undefined;
+  const activeHarvest = ctx?.workspaceContext?.selectedHarvest ?? undefined;
 
   // 1. Check explicit navigation intent ("افتح قسم ...", "انتقل إلى ...", "open ...", "navigate to ...", "go to ...")
   const navMatch = raw.match(
@@ -439,7 +445,7 @@ export function parseBilingualAgentIntent(prompt: string): ParsedAgentIntent {
     !/(?:انشئ|أنشئ|اضف|أضف|جديد|create|new|add)/i.test(norm);
 
   if (isProjectBudgetQuery) {
-    let projName = raw
+    const projName = raw
       .replace(/(?:موازنة|موازنه|ميزانية|ميزانيه|تكاليف|مصروفات|أرباح|ارباح|مشروع|project|budget|costs|totals)(?:\s+|$|\b)/gi, "")
       .trim();
     return {
@@ -498,6 +504,150 @@ export function parseBilingualAgentIntent(prompt: string): ParsedAgentIntent {
       },
       thoughtAr: `تحليل النية: طلب إنشاء مسودة قيد يومية مزدوج (حساب مدين: ${debitAcc} بمبلغ ${debitAmount}، حساب دائن: ${creditAcc} بمبلغ ${creditAmount}${exchangeRate ? `، بسعر صرف ${exchangeRate}` : ""}${costCenterId ? `، مركز تكلفة ${costCenterId}` : ""}). سيتم التحقق من صلاحية الدور وتوازن القيد وإرجاع بطاقة المعاينة للتأكيد.`,
       thoughtEn: `Intent parsed: Draft double-entry journal voucher (Debit ${debitAcc} = ${debitAmount}, Credit ${creditAcc} = ${creditAmount}${exchangeRate ? `, FX rate ${exchangeRate}` : ""}${costCenterId ? `, CC ${costCenterId}` : ""}). Enforcing RBAC, 5-level COA leaf check, and Confirmation Preview Card gate.`,
+    };
+  }
+
+  // 2.0 Operational Execution Intents (Harvest Batch, Sales, Expenses, Worker Wages, Treasury Transfer, Period Lock, Harvest Cycle)
+  // 2.0a Period Lock / Unlock ("إغلاق القطفة ...", "قفل القطفة ...", "فتح القطفة ...", "lock period", "unlock harvest")
+  if (
+    /(?:اغلاق\s+القطف|إغلاق\s+القطف|قفل\s+القطف|فتح\s+القطف|اقفال\s+الفتر|إقفال\s+الفتر|lock\s+(?:period|harvest)|unlock\s+(?:period|harvest)|toggle\s+lock)/i.test(
+      norm
+    )
+  ) {
+    return {
+      toolName: "toggle_period_lock",
+      args: { projectId: activeProjectId, harvest: activeHarvest },
+      thoughtAr: `تحليل النية: طلب تغيير حالة الإقفال المحاسبي للقطفة${activeHarvest ? ` (${activeHarvest})` : ""} مع فحص صلاحية الإدارة ومطابقة المخزون.`,
+      thoughtEn: `Intent parsed: Toggle accounting period lock${activeHarvest ? ` (${activeHarvest})` : ""} with RBAC & inventory pre-lock checks.`,
+    };
+  }
+
+  // 2.0b Add Harvest Cycle ("أضف قطفة ...", "قطفة جديدة ...", "add harvest cycle")
+  if (/(?:اضف\s+قطف|أضف\s+قطف|اضافه\s+قطف|قطفه\s+جديد|add\s+harvest\s+cycle|new\s+harvest)/i.test(norm)) {
+    const m = raw.match(/(?:باسم|قطفة|مرشة|harvest(?:\s+cycle)?)\s*[:=]?\s*([^\d،,\n]{2,40})$/i);
+    const name = m ? m[1].trim() : "";
+    return {
+      toolName: "add_harvest_cycle",
+      args: { projectId: activeProjectId, name },
+      thoughtAr: `تحليل النية: طلب إضافة دورة حصاد جديدة${name ? ` (${name})` : ""}.`,
+      thoughtEn: `Intent parsed: Add new harvest cycle${name ? ` (${name})` : ""}.`,
+    };
+  }
+
+  // 2.0c Treasury Transfer ("تحويل مالي ...", "تحويل بين الخزائن ...", "treasury transfer")
+  if (
+    /(?:تحويل\s+مالي|تحويل\s+بين\s+الخزائن|تحويل\s+من\s+الصندوق|تحويل\s+الى\s+البنك|treasury\s+transfer|internal\s+transfer|transfer\s+funds)/i.test(
+      norm
+    )
+  ) {
+    const amounts = extractMonetaryAmounts(raw);
+    return {
+      toolName: "draft_treasury_transfer",
+      args: { amount: amounts[0] ?? 0, notes: raw },
+      thoughtAr: `تحليل النية: طلب تحويل مالي داخلي بين حسابات الخزينة والبنوك بمبلغ ${amounts[0] ?? 0}.`,
+      thoughtEn: `Intent parsed: Draft internal treasury transfer of ${amounts[0] ?? 0}.`,
+    };
+  }
+
+  // 2.0d Record Harvest Inventory Batch ("سجل دفعة حصاد ...", "إضافة دفعة مخزون ...", "record harvest batch")
+  if (
+    /(?:دفعه\s+حصاد|دفعه\s+مخزون|سجل\s+حصاد|اضف\s+مخزون|اضافه\s+مخزون|record\s+harvest|add\s+harvest\s+batch|log\s+harvest)/i.test(
+      norm
+    )
+  ) {
+    const amounts = extractMonetaryAmounts(raw);
+    const bundles = amounts[0] ?? 0;
+    const gradeMatch = raw.match(/(?:درجة|فرز|صنف|grade)\s*[:=]?\s*(رقم\s*\d+|ممتاز|[A-Za-z0-9]+)/i);
+    return {
+      toolName: "draft_harvest_batch",
+      args: {
+        projectId: activeProjectId,
+        harvest: activeHarvest,
+        harvestedBundles: bundles,
+        grade: gradeMatch ? gradeMatch[1].trim() : "رقم 1",
+        notes: raw,
+      },
+      thoughtAr: `تحليل النية: تسجيل دفعة مخزون حصاد (${bundles} علاقي) ضمن سياق المشروع/القطفة النشطة.`,
+      thoughtEn: `Intent parsed: Record harvest inventory batch (${bundles} bundles) in active project/harvest context.`,
+    };
+  }
+
+  // 2.0e Record Sale Transaction ("سجل بيع ...", "عملية بيع ...", "record sale", "sell bundles")
+  if (
+    /(?:سجل\s+بيع|عمليه\s+بيع|بيع\s+\d+|record\s+sale|sell\s+\d+|post\s+sale)/i.test(norm) &&
+    !/(?:فاتور|invoice)/i.test(norm)
+  ) {
+    const amounts = extractMonetaryAmounts(raw);
+    const bundles = amounts[0] ?? 0;
+    const price = amounts[1] ?? 0;
+    const credit = amounts[2] ?? 0;
+    const customer = extractPartyName(raw, "", "", lang);
+    return {
+      toolName: "draft_sale_transaction",
+      args: {
+        projectId: activeProjectId,
+        harvest: activeHarvest,
+        customer,
+        bundles,
+        price,
+        credit,
+        notes: raw,
+      },
+      thoughtAr: `تحليل النية: إعداد عملية بيع من مخزون الحصاد مع فحص إغلاق القطفة وتوفر الكمية بالقطفة.`,
+      thoughtEn: `Intent parsed: Draft harvest sale transaction with period-lock & stock availability cross-checks.`,
+    };
+  }
+
+  // 2.0f Record Operating Expense ("سجل مصروف ...", "مصروف وقود ...", "record expense", "operating expense")
+  if (
+    /(?:سجل\s+مصروف|اضف\s+مصروف|مصروف\s+وقود|مصروف\s+نقل|مصروف\s+صيانه|record\s+expense|add\s+expense|operating\s+expense)/i.test(
+      norm
+    )
+  ) {
+    const amounts = extractMonetaryAmounts(raw);
+    const amount = amounts[0] ?? 0;
+    let category = "مصروفات تشغيلية";
+    if (norm.includes("وقود") || norm.includes("ديزل") || norm.includes("fuel")) category = "وقود/محروقات";
+    else if (norm.includes("نقل") || norm.includes("transport")) category = "نقل وتوريد";
+    else if (norm.includes("وجب") || norm.includes("meal")) category = "وجبات/إعاشة";
+    else if (norm.includes("صيان") || norm.includes("maint")) category = "صيانة ومستلزمات";
+    return {
+      toolName: "draft_operating_expense",
+      args: {
+        projectId: activeProjectId,
+        harvest: activeHarvest,
+        category,
+        qty: 1,
+        unitPrice: amount,
+        notes: raw,
+      },
+      thoughtAr: `تحليل النية: إعداد مسودة مصروف تشغيلي (${category}) بمبلغ ${amount} مع فحص الموازنة ورصيد الخزينة.`,
+      thoughtEn: `Intent parsed: Draft operating expense (${category}) of ${amount} with budget & treasury checks.`,
+    };
+  }
+
+  // 2.0g Record Worker Wage ("سجل أجر ...", "أجر عامل ...", "يومية عامل ...", "record wage", "worker wage")
+  if (
+    /(?:سجل\s+اجر|اجر\s+عامل|اجر\s+العامل|يوميه\s+عامل|record\s+wage|worker\s+wage|add\s+wage)/i.test(norm)
+  ) {
+    const amounts = extractMonetaryAmounts(raw);
+    const dailyWage = amounts[0] ?? 0;
+    const daysMatch = raw.match(/(?:لمدة|عدد)\s*(\d+)\s*(?:يوم|ايام|أيام|days?)/i);
+    const days = daysMatch ? Number(daysMatch[1]) : 1;
+    const nameMatch = raw.match(/(?:للعامل|العامل|worker)\s+([^\d،,\n]{2,30})/i);
+    const name = nameMatch ? nameMatch[1].replace(/\b(بمبلغ|مبلغ|لمدة|في|at|for)\b.*$/i, "").trim() : "";
+    return {
+      toolName: "draft_worker_wage",
+      args: {
+        projectId: activeProjectId,
+        harvest: activeHarvest,
+        name,
+        dailyWage,
+        days,
+        notes: raw,
+      },
+      thoughtAr: `تحليل النية: إعداد قيد أجر عامل${name ? ` (${name})` : ""} بمعدل ${dailyWage} × ${days} يوم.`,
+      thoughtEn: `Intent parsed: Draft worker wage${name ? ` (${name})` : ""} at ${dailyWage} × ${days} days.`,
     };
   }
 
@@ -638,7 +788,33 @@ export function parseBilingualAgentIntent(prompt: string): ParsedAgentIntent {
     };
   }
 
-  // 8. Check check_item_stock
+  // 8. Check reconcile_harvest_inventory & check_item_stock
+  if (
+    /(?:مطابقه\s+الحصاد|مطابقه\s+المخزون|تالف\s+الحصاد|عجز\s+المخزون|reconcile\s+harvest|harvest\s+reconciliation|stock\s+shortage|shrinkage)/i.test(
+      norm
+    )
+  ) {
+    return {
+      toolName: "reconcile_harvest_inventory",
+      args: { projectId: activeProjectId, harvest: activeHarvest },
+      thoughtAr: `تحليل النية: تنفيذ مطابقة شاملة بين دفعات الحصاد، الفاقد/التالف، المبيعات، والرصيد المتبقي.`,
+      thoughtEn: `Intent parsed: Run cross-section reconciliation across harvest batches, shrinkage, sales, and remaining stock.`,
+    };
+  }
+
+  if (
+    /(?:تحليل\s+الوضع|تحليل\s+الشاشه|تحليل\s+السياق|ملخص\s+القسم|فحص\s+العمل|analyze\s+workspace|analyze\s+current|executive\s+briefing|what\s+needs\s+attention)/i.test(
+      norm
+    )
+  ) {
+    return {
+      toolName: "analyze_workspace_context",
+      args: { focus: activeTab || "dashboard" },
+      thoughtAr: `تحليل النية: فحص سياق الشاشة النشطة (${activeTab || "dashboard"}) ومؤشرات المشروع والسيولة وحالة المزامنة.`,
+      thoughtEn: `Intent parsed: Inspect active tab (${activeTab || "dashboard"}), project/harvest KPIs, and online/offline sync status.`,
+    };
+  }
+
   if (
     /(?:فحص\s+المخزون|كميه\s+المخزون|رصيد\s+المخزون|الاصناف\s+المتوفره|check\s+stock|item\s+stock|inventory\s+balance|available\s+stock)/i.test(
       norm
@@ -649,6 +825,34 @@ export function parseBilingualAgentIntent(prompt: string): ParsedAgentIntent {
       args: { query: "" },
       thoughtAr: "تحليل النية: فحص الكميات المتاحة في المخزون ودفعات المحصول.",
       thoughtEn: "Intent parsed: Check available inventory stock and harvest batches.",
+    };
+  }
+
+  // 8.5 Workspace Workers / Audit / Treasury Query
+  if (/(?:اجور\s+العمال|ملخص\s+العمال|مستحقات\s+العمال|workers\s+summary|payroll\s+summary)/i.test(norm)) {
+    return {
+      toolName: "query_workspace_data",
+      args: { scope: "workers", query: raw },
+      thoughtAr: "تحليل النية: استعراض ملخص أجور العمال والمبالغ المدفوعة والمتبقية.",
+      thoughtEn: "Intent parsed: Query worker wage totals and unpaid balances.",
+    };
+  }
+
+  if (/(?:الفترات\s+المغلقه|سجل\s+التدقيق|حاله\s+المزامنه|طابور\s+الاوفلاين|audit\s+trail|locked\s+periods|sync\s+queue)/i.test(norm)) {
+    return {
+      toolName: "query_workspace_data",
+      args: { scope: "audit", query: raw },
+      thoughtAr: "تحليل النية: فحص سجل التدقيق وإقفال القطفات وطابور المزامنة.",
+      thoughtEn: "Intent parsed: Query audit trail, locked harvest periods, and offline sync queue.",
+    };
+  }
+
+  if (/(?:ارصده\s+الخزائن|ارصده\s+البنوك|حاله\s+السيوله|treasury\s+balances|cash\s+balances)/i.test(norm)) {
+    return {
+      toolName: "query_workspace_data",
+      args: { scope: "treasury", query: raw },
+      thoughtAr: "تحليل النية: فحص أرصدة حسابات الخزينة والبنوك المتاحة.",
+      thoughtEn: "Intent parsed: Query live treasury cash and bank account balances.",
     };
   }
 
@@ -844,7 +1048,7 @@ export async function runUasAiAgent(
 
     // Tier 3: Zero-Dependency Deterministic Bilingual NLP Engine
     if (!intent) {
-      intent = parseBilingualAgentIntent(cleanPrompt);
+      intent = parseBilingualAgentIntent(cleanPrompt, { ...opts, lang });
       tierUsed = "tier3_offline_deterministic";
     }
   }
@@ -855,14 +1059,24 @@ export async function runUasAiAgent(
     lang,
   });
 
+  const wCtx = opts.workspaceContext;
+  const ctxTagAr = wCtx?.activeTab
+    ? ` [الشاشة: ${wCtx.activeTab}${wCtx.isOffline ? " • وضع أوفلاين" : " • متصل"}${wCtx.offlineQueueCount ? ` • طابور: ${wCtx.offlineQueueCount}` : ""}]`
+    : "";
+  const ctxTagEn = wCtx?.activeTab
+    ? ` [Tab: ${wCtx.activeTab}${wCtx.isOffline ? " • Offline" : " • Online"}${wCtx.offlineQueueCount ? ` • Queue: ${wCtx.offlineQueueCount}` : ""}]`
+    : "";
+  const preFlightWarnings = toolResult.confirmationCard?.warningsAr ?? [];
+  const preFlightWarningsEn = toolResult.confirmationCard?.warningsEn ?? [];
+
   const reasoningTrace: AgentReasoningStep[] = [
     {
       step: 1,
       type: "thought",
-      titleAr: "1. التفكير وتحليل النية (Reasoning & Intent)",
-      titleEn: "1. Reasoning & Intent Analysis",
-      detailAr: intent.thoughtAr,
-      detailEn: intent.thoughtEn,
+      titleAr: "1. فحص السياق وتحليل النية (Context & Reasoning)",
+      titleEn: "1. Context Inspection & Intent Analysis",
+      detailAr: `${intent.thoughtAr}${ctxTagAr}`,
+      detailEn: `${intent.thoughtEn}${ctxTagEn}`,
     },
     {
       step: 2,
@@ -877,17 +1091,17 @@ export async function runUasAiAgent(
     {
       step: 3,
       type: "observation",
-      titleAr: "3. نتيجة الفحص وبوابة الأمان (Observation & Safety Gate)",
-      titleEn: "3. Observation & Financial Safety Gate",
+      titleAr: "3. الفحص المتقاطع وبوابة الأمان (Cross-Section Check & Safety)",
+      titleEn: "3. Cross-Section Pre-Flight & Safety Gate",
       detailAr: toolResult.requiresConfirmation
-        ? "تم التحقق من توازن المدين والدائن وصحة الحسابات الفرعية؛ تم تفعيل بوابة التأكيد الإلزامي قبل الترحيل."
+        ? `تم التحقق من التوازن والصلاحيات وفحص الأقسام المرتبطة${preFlightWarnings.length > 0 ? ` (${preFlightWarnings.length} تنبيه/ملاحظة)` : ""}؛ تم تفعيل بوابة التأكيد الإلزامي.`
         : toolResult.ok
-        ? "تم تنفيذ الاستعلام/التشخيص بنجاح."
+        ? "تم تنفيذ الاستعلام/التحليل المتقاطع بنجاح."
         : `تم إيقاف العملية بواسطة ضوابط الرقابة (${toolResult.code || "BLOCKED"}).`,
       detailEn: toolResult.requiresConfirmation
-        ? "Verified Debit === Credit balance and leaf COA accounts; activated mandatory Confirmation Preview Card gate."
+        ? `Verified permissions and cross-section prerequisites${preFlightWarningsEn.length > 0 ? ` (${preFlightWarningsEn.length} notice(s))` : ""}; activated mandatory Confirmation Preview Card gate.`
         : toolResult.ok
-        ? "Read/diagnostic operation completed immediately."
+        ? "Cross-section query/analysis completed successfully."
         : `Operation blocked by safety/RBAC guardrail (${toolResult.code || "BLOCKED"}).`,
     },
     {

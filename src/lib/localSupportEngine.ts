@@ -46,6 +46,12 @@ export interface SupportSystemDiagnostics {
   request_code?: string | null;
   license_id?: string | null;
   error?: string | null;
+  offline_queue_count?: number;
+  pending_conflicts_count?: number;
+  is_offline?: boolean;
+  signature_verified?: boolean | null;
+  tenant_slug?: string | null;
+  active_tab?: string | null;
 }
 
 export interface SupportDiagnosticReport {
@@ -460,6 +466,12 @@ export const DEFAULT_SUPPORT_DIAGNOSTICS: SupportSystemDiagnostics = {
   request_code: null,
   license_id: null,
   error: null,
+  offline_queue_count: 0,
+  pending_conflicts_count: 0,
+  is_offline: false,
+  signature_verified: null,
+  tenant_slug: null,
+  active_tab: null,
 };
 
 export function normalizeDiagnostics(
@@ -521,6 +533,20 @@ const DIAGNOSTIC_INTENT_KEYWORDS = [
   "cloud",
   "quota",
   "7 users",
+  "مزامنه",
+  "مزامنة",
+  "تعارض",
+  "توقيع",
+  "اوفلاين",
+  "دون انترنت",
+  "بدون انترنت",
+  "طابور",
+  "sync",
+  "queue",
+  "conflict",
+  "signature",
+  "offline",
+  "ed25519",
 ];
 
 export function isDiagnosticRelatedQuery(query: string): boolean {
@@ -560,6 +586,35 @@ export function diagnoseLiveSystemState(
   findingsEn.push(
     `Seat Usage: ${d.used_users} / ${d.max_users} Users (Bound devices: ${d.windows_bound} Windows + ${d.android_bound} Android • Quota per user: ${d.per_user_devices.windows} Win + ${d.per_user_devices.android} Android).`
   );
+
+  // Cross-check runtime connectivity, Ed25519 signature, sync queue & conflicts
+  const queueCount = Number(d.offline_queue_count ?? 0);
+  const conflictCount = Number(d.pending_conflicts_count ?? 0);
+  if (d.tenant_slug) {
+    findingsAr.push(`مساحة العمل النشطة: ${d.tenant_slug}.qat.world${d.active_tab ? ` (القسم الحالي: ${d.active_tab})` : ""}.`);
+    findingsEn.push(`Active Tenant Workspace: ${d.tenant_slug}.qat.world${d.active_tab ? ` (Current Tab: ${d.active_tab})` : ""}.`);
+  }
+  if (d.signature_verified === false || d.license_status === "INVALID_SIGNATURE") {
+    findingsAr.push("🚨 فشل التحقق من التوقيع الرقمي Ed25519 لملف الترخيص — قد يكون الملف معدلاً أو غير مكتمل.");
+    findingsEn.push("🚨 Ed25519 cryptographic license signature verification failed — the license file may be corrupted or tampered.");
+    remediationsAr.push("أعد تحميل ملف license.uas الأصلي الصادر لك من المزود وارفعه من نافذة تفعيل الترخيص.");
+    remediationsEn.push("Re-download your original signed license.uas file and re-import it in the License Activation Modal.");
+  }
+  if (d.is_offline || queueCount > 0 || conflictCount > 0) {
+    findingsAr.push(
+      `حالة الاتصال والمزامنة: ${d.is_offline ? "وضع العمل دون إنترنت (Offline)" : "متصل بالشبكة (Online)"} • عمليات معلقة في الطابور: ${queueCount} • تعارضات للمراجعة: ${conflictCount}.`
+    );
+    findingsEn.push(
+      `Connectivity & Sync: ${d.is_offline ? "Offline Local Queue Mode" : "Online"} • Pending queued operations: ${queueCount} • Sync conflicts: ${conflictCount}.`
+    );
+    if (conflictCount > 0) {
+      remediationsAr.push(`يوجد ${conflictCount} تعارض(ات) مزامنة بانتظار الحسم — افتح تبويب الجوال/المزامنة أو إعدادات المنشأة لحلها قبل إعادة الدفع.`);
+      remediationsEn.push(`There are ${conflictCount} unresolved sync conflict(s) — open Mobile/Sync to review and resolve them.`);
+    } else if (queueCount > 0 && !d.is_offline) {
+      remediationsAr.push(`توجد ${queueCount} عملية محلية بانتظار المزامنة — اضغط «مزامنة الآن» لرفعها للخادم.`);
+      remediationsEn.push(`${queueCount} offline mutation(s) are queued locally — trigger 'Sync Now' to push them to the server.`);
+    }
+  }
 
   // 1. Company Name Mismatch check
   if (d.license_status === "COMPANY_MISMATCH" || d.company_matches === false) {

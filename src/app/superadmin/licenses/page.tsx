@@ -17,10 +17,12 @@ import {
   setStoredTenantId,
 } from "@/lib/apiClient";
 import { SuperadminLicenseGeneratorPanel } from "@/components/SuperadminLicenseGeneratorPanel";
+import { isPlatformAdminSurfaceEnabled } from "@/lib/buildTarget";
 
 export default function SuperadminLicensesPage() {
   const [lang, setLang] = useState<"ar" | "en">("ar");
   const isAr = lang === "ar";
+  const surfaceEnabled = isPlatformAdminSurfaceEnabled();
 
   const [authState, setAuthState] = useState<
     "checking" | "authorized" | "unauthenticated" | "forbidden"
@@ -42,6 +44,13 @@ export default function SuperadminLicensesPage() {
   }, []);
 
   const fetchSessionStatus = useCallback(async () => {
+    if (!surfaceEnabled) {
+      return {
+        ok: false,
+        status: 403,
+        data: { error: "Restricted to cloud root platform (qat.world)" },
+      } as Awaited<ReturnType<typeof safeFetchJson<{ success?: boolean; actor?: { email?: string }; error?: string }>>>;
+    }
     return safeFetchJson<{
       success?: boolean;
       actor?: { email?: string };
@@ -50,7 +59,7 @@ export default function SuperadminLicensesPage() {
       cache: "no-store",
       credentials: "include",
     });
-  }, []);
+  }, [surfaceEnabled]);
 
   const applySessionResponse = useCallback(
     (
@@ -182,6 +191,28 @@ export default function SuperadminLicensesPage() {
       </header>
 
       <main className="max-w-5xl mx-auto px-3 sm:px-6 py-5 sm:py-8">
+        {!surfaceEnabled ? (
+          <div className="max-w-lg mx-auto rounded-2xl border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 p-6 text-center space-y-3">
+            <ShieldAlert className="w-10 h-10 text-rose-600 mx-auto" />
+            <h2 className="font-black text-base text-rose-800 dark:text-rose-200">
+              {isAr ? "مولد التراخيص غير متاح في هذه النسخة" : "Superadmin License Generator Unavailable"}
+            </h2>
+            <p className="text-xs text-rose-700 dark:text-rose-300">
+              {isAr
+                ? "مولد التراخيص متاح حصرياً لمالك المنصة على الخادم السحابي (qat.world)."
+                : "The Superadmin License Generator is excluded from standalone desktop and mobile builds."}
+            </p>
+            <div className="pt-2">
+              <Link
+                href="/"
+                className="inline-flex items-center justify-center min-h-[42px] px-4 rounded-xl bg-slate-900 text-white text-xs font-bold"
+              >
+                {isAr ? "العودة للصفحة الرئيسية" : "Return Home"}
+              </Link>
+            </div>
+          </div>
+        ) : (
+        <>
         {authState === "checking" && (
           <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-8 text-center text-sm text-slate-500 flex flex-col items-center gap-3">
             <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
@@ -273,6 +304,8 @@ export default function SuperadminLicensesPage() {
             onToast={showToast}
             showStandaloneLink={false}
           />
+        )}
+        </>
         )}
       </main>
 

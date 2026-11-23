@@ -6,6 +6,7 @@ import {
   UAS_AGENT_TOOL_SCHEMAS,
   type ConfirmationPreviewCard,
   type UasAgentToolName,
+  type UasWorkspaceContext,
 } from "@/lib/ai/uasAgentTools";
 import { runUasAiAgent } from "@/lib/ai/offlineAgentEngine";
 import {
@@ -57,6 +58,10 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     // 2. Normal reasoning & tool execution
     const prompt = String(body.prompt ?? body.query ?? body.message ?? "").trim();
     const serverCtx = await buildServerAgentContext(actor, lang);
+    const workspaceContext =
+      body.workspaceContext && typeof body.workspaceContext === "object"
+        ? (body.workspaceContext as UasWorkspaceContext)
+        : undefined;
 
     const explicitTool =
       body.explicitTool && typeof body.explicitTool === "object"
@@ -65,6 +70,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
 
     const agentResponse = await runUasAiAgent(prompt, {
       ...serverCtx,
+      workspaceContext,
       explicitTool,
       enableLocalOllamaProbe: body.enableLocalOllamaProbe === true,
     });
@@ -73,12 +79,13 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       success: true,
       ...agentResponse,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : undefined;
     console.error("POST /api/ai/agent error:", err);
     return NextResponse.json(
       {
         success: false,
-        error: err?.message || "تعذر تنفيذ طلب المساعد الذكي / Failed to process AI Copilot request",
+        error: errMsg || "تعذر تنفيذ طلب المساعد الذكي / Failed to process AI Copilot request",
       },
       { status: 500 }
     );

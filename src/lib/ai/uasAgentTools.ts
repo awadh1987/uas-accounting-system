@@ -11,6 +11,7 @@ import { STANDARD_COA_NODES } from "@/lib/accounting/coaCatalog";
 import {
   canAccessModule,
   canCreate,
+  canLockPeriod,
   canPostLedger,
   isReadOnly,
   normalizeRole,
@@ -21,11 +22,15 @@ import {
   diagnoseLiveSystemState,
   type SupportSystemDiagnostics,
 } from "@/lib/localSupportEngine";
-import { reconcileHarvestInventory } from "@/lib/harvestReconciliation";
+import {
+  evaluateSaleAgainstHarvestStock,
+  reconcileHarvestInventory,
+} from "@/lib/harvestReconciliation";
 import type {
   TabId,
   UasBootstrapState,
   UasCoaAccount,
+  UasProject,
   UasUser,
   UserRole,
 } from "@/types/uas";
@@ -46,7 +51,38 @@ export type UasAgentToolName =
   | "create_vendor"
   | "create_project"
   | "export_client_report"
-  | "query_workspace_data";
+  | "query_workspace_data"
+  | "reconcile_harvest_inventory"
+  | "analyze_workspace_context"
+  | "draft_harvest_batch"
+  | "draft_sale_transaction"
+  | "draft_operating_expense"
+  | "draft_worker_wage"
+  | "draft_treasury_transfer"
+  | "toggle_period_lock"
+  | "add_harvest_cycle";
+
+export interface UasWorkspaceContext {
+  activeTab?: TabId;
+  selectedProjectId?: string | null;
+  selectedSubProjectId?: string | null;
+  selectedHarvest?: string | null;
+  tenantSlug?: string | null;
+  runtimeMode?: string;
+  offlineQueueCount?: number;
+  pendingConflictsCount?: number;
+  isOffline?: boolean;
+  currency?: string;
+}
+
+export interface PreFlightCheckItem {
+  key: string;
+  status: "ok" | "warning" | "blocked";
+  labelAr: string;
+  labelEn: string;
+  detailAr?: string;
+  detailEn?: string;
+}
 
 export interface CitationLink {
   labelAr: string;
@@ -111,7 +147,14 @@ export interface ConfirmationPreviewCard {
     | "create_customer"
     | "create_vendor"
     | "create_project"
-    | "export_client_report";
+    | "export_client_report"
+    | "draft_harvest_batch"
+    | "draft_sale_transaction"
+    | "draft_operating_expense"
+    | "draft_worker_wage"
+    | "draft_treasury_transfer"
+    | "toggle_period_lock"
+    | "add_harvest_cycle";
   operationType:
     | "JOURNAL_ENTRY"
     | "RECEIPT_VOUCHER"
@@ -121,7 +164,14 @@ export interface ConfirmationPreviewCard {
     | "CREATE_CUSTOMER"
     | "CREATE_VENDOR"
     | "CREATE_PROJECT"
-    | "EXPORT_CLIENT_REPORT";
+    | "EXPORT_CLIENT_REPORT"
+    | "RECORD_HARVEST_BATCH"
+    | "RECORD_SALE"
+    | "RECORD_EXPENSE"
+    | "RECORD_WORKER_WAGE"
+    | "TREASURY_TRANSFER"
+    | "TOGGLE_PERIOD_LOCK"
+    | "ADD_HARVEST_CYCLE";
   titleAr: string;
   titleEn: string;
   narrationAr: string;
@@ -136,6 +186,11 @@ export interface ConfirmationPreviewCard {
   partyName?: string;
   projectId?: string;
   lines: PreviewLedgerLine[];
+  preFlightChecks?: PreFlightCheckItem[];
+  warningsAr?: string[];
+  warningsEn?: string[];
+  endpoint?: string;
+  httpMethod?: "POST" | "PATCH" | "DELETE";
   confirmButtonLabelAr: string;
   confirmButtonLabelEn: string;
   confirmButtonLabel: string;
@@ -169,6 +224,7 @@ export interface UasAgentExecutionContext {
   user?: UasUser | UserRole | string | null;
   lang?: "ar" | "en";
   state?: UasBootstrapState | null;
+  workspaceContext?: UasWorkspaceContext | null;
   coaAccounts?: Array<Pick<UasCoaAccount, "code" | "nameAr" | "nameEn" | "level" | "type" | "isPosting" | "rolledUpBalance" | "balance">>;
   journalEntries?: UasAgentJournalSummary[];
   reportSnapshot?: UasAgentReportSnapshot | null;
@@ -363,11 +419,125 @@ export const UAS_AGENT_TOOL_SCHEMAS: UasAgentToolSchema[] = [
   {
     name: "query_workspace_data",
     isWriteTool: false,
-    descriptionAr: "البحث في بيانات مساحة العمل اللحظية (أرصدة العملاء، مستحقات الموردين، موازنات المشاريع، رصيد المخزون، وآخر السندات) مع روابط الاقتباس المباشرة.",
-    descriptionEn: "Live workspace search for customer/vendor balances, project totals, inventory stock, and recent vouchers with citation links.",
+    descriptionAr: "البحث في بيانات مساحة العمل اللحظية (العملاء، الموردين، المشاريع، المخزون، العمال، الخزينة، التدقيق) مع روابط الاقتباس المباشرة.",
+    descriptionEn: "Live workspace search for customers, vendors, projects, inventory, workers, treasury, audit locks, and vouchers with citation links.",
     parameters: {
       query: "search query or target entity name",
-      scope: "all|customers|vendors|projects|inventory|vouchers",
+      scope: "all|customers|vendors|projects|inventory|vouchers|workers|treasury|audit",
+    },
+  },
+  {
+    name: "reconcile_harvest_inventory",
+    isWriteTool: false,
+    descriptionAr: "مطابقة مخزون الحصاد والمبيعات والفاقد والعجز والمبالغ المستحقة لكل مشروع وقطفة.",
+    descriptionEn: "Cross-check harvest batches, spoilage/shrinkage, sales quantities, shortages, and open receivables per project & harvest.",
+    parameters: {
+      projectId: "optional project ID or name",
+      harvest: "optional harvest cycle name",
+      grade: "optional product grade",
+    },
+  },
+  {
+    name: "analyze_workspace_context",
+    isWriteTool: false,
+    descriptionAr: "تحليل سياق الشاشة النشطة والمشروع المختار وحالة الاتصال والمزامنة وتقديم توصيات ومؤشرات مخاطر عابرة للأقسام.",
+    descriptionEn: "Inspect active tab, selected project/harvest, online/offline sync state, and surface cross-section risks and next actions.",
+    parameters: {
+      focus: "optional topic or section to prioritize",
+    },
+  },
+  {
+    name: "draft_harvest_batch",
+    isWriteTool: true,
+    descriptionAr: "إعداد مسودة تسجيل دفعة قطفة ومخزون حصاد جديدة مع فحص إغلاق القطفة (يتطلب تأكيد المستخدم).",
+    descriptionEn: "Draft a new harvest inventory batch with period-lock pre-flight checks (requires user confirmation).",
+    parameters: {
+      projectId: "optional project ID",
+      projectName: "optional project name",
+      harvest: "harvest cycle name",
+      grade: "product grade (e.g. رقم 1)",
+      harvestedBundles: "harvested bundles count",
+      shrinkageBundles: "optional spoilage/shrinkage count",
+      notes: "optional notes",
+    },
+  },
+  {
+    name: "draft_sale_transaction",
+    isWriteTool: true,
+    descriptionAr: "إعداد مسودة عملية بيع مع فحص توفر مخزون القطفة وإغلاق الفترة ومديونية العميل ورصيد الخزينة (يتطلب تأكيد المستخدم).",
+    descriptionEn: "Draft a harvest sale transaction with cross-section stock, period-lock, customer AR, and treasury checks (requires user confirmation).",
+    parameters: {
+      customer: "customer name",
+      bundles: "quantity sold",
+      price: "unit price",
+      credit: "amount paid immediately",
+      projectId: "optional project ID",
+      harvest: "optional harvest cycle name",
+      grade: "optional product grade",
+      treasuryAccountId: "optional treasury ID",
+    },
+  },
+  {
+    name: "draft_operating_expense",
+    isWriteTool: true,
+    descriptionAr: "إعداد مسودة مصروف تشغيلي (وقود، وجبات، صيانة، نقل) مع فحص إغلاق القطفة والموازنة وسيولة الخزينة (يتطلب تأكيد المستخدم).",
+    descriptionEn: "Draft an operating expense entry with period-lock, project budget, and treasury balance checks (requires user confirmation).",
+    parameters: {
+      category: "expense category",
+      subType: "optional expense item details",
+      qty: "quantity (default 1)",
+      unitPrice: "unit price or total amount",
+      projectId: "optional project ID",
+      harvest: "optional harvest cycle",
+      treasuryAccountId: "optional treasury account ID",
+    },
+  },
+  {
+    name: "draft_worker_wage",
+    isWriteTool: true,
+    descriptionAr: "إعداد مسودة أجر يومي لعامل مع فحص القطفة والموازنة والمصروف المدفوع والمتبقي (يتطلب تأكيد المستخدم).",
+    descriptionEn: "Draft a daily worker wage entry with period-lock and paid vs accrued wage validation (requires user confirmation).",
+    parameters: {
+      name: "worker full name",
+      dailyWage: "daily wage rate",
+      days: "number of days worked (default 1)",
+      credit: "amount paid upfront",
+      projectId: "optional project ID",
+      harvest: "optional harvest cycle",
+    },
+  },
+  {
+    name: "draft_treasury_transfer",
+    isWriteTool: true,
+    descriptionAr: "إعداد مسودة تحويل مالي بين حسابات الخزينة والبنوك مع فحص كفاية الرصيد ورسوم التحويل (يتطلب تأكيد المستخدم).",
+    descriptionEn: "Draft an internal treasury transfer between cashboxes/banks with balance sufficiency check (requires user confirmation).",
+    parameters: {
+      fromTreasuryId: "source treasury ID or name",
+      toTreasuryId: "destination treasury ID or name",
+      amount: "transfer amount",
+      notes: "optional transfer reference/notes",
+    },
+  },
+  {
+    name: "toggle_period_lock",
+    isWriteTool: true,
+    descriptionAr: "إغلاق أو إعادة فتح فترة قطفة محاسبياً مع فحص صلاحية الإدارة وتدقيق المخزون والذمم قبل الإقفال (يتطلب تأكيد المستخدم).",
+    descriptionEn: "Lock or unlock a harvest period with RBAC verification and stock/receivables pre-lock audit (requires user confirmation).",
+    parameters: {
+      projectId: "optional project ID",
+      projectName: "optional project name",
+      harvest: "harvest cycle name",
+    },
+  },
+  {
+    name: "add_harvest_cycle",
+    isWriteTool: true,
+    descriptionAr: "إضافة قطفة أو مرشة جديدة لمشروع قائم مع التحقق من عدم التكرار (يتطلب تأكيد المستخدم).",
+    descriptionEn: "Add a new harvest cycle to an existing project (requires user confirmation).",
+    parameters: {
+      projectId: "optional project ID",
+      projectName: "optional project name",
+      name: "harvest cycle name",
     },
   },
 ];
@@ -635,6 +805,213 @@ function checkWritePermission(
   }
 
   return { allowed: true };
+}
+
+function resolveProjectAndHarvest(
+  ctx: UasAgentExecutionContext,
+  args: Record<string, unknown>
+): { project: UasProject | null; harvest: string } {
+  const projects = ctx.state?.projects ?? [];
+  const requestedId = String(args.projectId ?? ctx.workspaceContext?.selectedProjectId ?? "").trim();
+  const requestedName = String(args.projectName ?? args.project ?? "").trim().toLowerCase();
+
+  let project: UasProject | null = null;
+  if (requestedId) {
+    project = projects.find((p) => p.id === requestedId) ?? null;
+  }
+  if (!project && requestedName) {
+    project =
+      projects.find(
+        (p) =>
+          p.name.toLowerCase().includes(requestedName) ||
+          requestedName.includes(p.name.toLowerCase()) ||
+          (p.code && p.code.toLowerCase() === requestedName)
+      ) ?? null;
+  }
+  if (!project && projects.length > 0) {
+    project = projects[0];
+  }
+
+  const requestedHarvest = String(args.harvest ?? ctx.workspaceContext?.selectedHarvest ?? "").trim();
+  const harvest =
+    requestedHarvest ||
+    (project?.harvests && project.harvests.length > 0 ? project.harvests[0] : "القطفة الأولى");
+
+  return { project, harvest };
+}
+
+function buildCrossSectionPreFlightChecks(params: {
+  ctx: UasAgentExecutionContext;
+  project?: UasProject | null;
+  harvest?: string;
+  treasuryIdOrCode?: string;
+  outflowAmount?: number;
+  checkBudgetSpend?: number;
+  customerName?: string;
+  grade?: string;
+  requestedBundles?: number;
+}): {
+  checks: PreFlightCheckItem[];
+  warningsAr: string[];
+  warningsEn: string[];
+  isPeriodLocked: boolean;
+  stockBlocked: boolean;
+} {
+  const { ctx, project, harvest, treasuryIdOrCode, outflowAmount, checkBudgetSpend, customerName, grade, requestedBundles } =
+    params;
+  const checks: PreFlightCheckItem[] = [];
+  const warningsAr: string[] = [];
+  const warningsEn: string[] = [];
+  let isPeriodLocked = false;
+  let stockBlocked = false;
+
+  if (project && harvest) {
+    const lockKey = `${project.id}::${harvest}`;
+    isPeriodLocked = Boolean(ctx.state?.lockedPeriods?.[lockKey]);
+    checks.push({
+      key: "period_lock",
+      status: isPeriodLocked ? "blocked" : "ok",
+      labelAr: isPeriodLocked ? `الفترة مقفلة محاسبياً (${harvest})` : `الفترة مفتوحة للتشغيل (${harvest})`,
+      labelEn: isPeriodLocked ? `Harvest period is locked (${harvest})` : `Harvest period is open (${harvest})`,
+    });
+    if (isPeriodLocked) {
+      warningsAr.push(`🔒 فترة "${harvest}" لمشروع "${project.name}" مغلقة محاسبياً في سجل المراجعة.`);
+      warningsEn.push(`🔒 Harvest period "${harvest}" on "${project.name}" is locked in Audit Trail.`);
+    }
+  }
+
+  if (project && harvest && typeof requestedBundles === "number" && requestedBundles > 0) {
+    const stockCheck = evaluateSaleAgainstHarvestStock({
+      batches: ctx.state?.inventoryBatches ?? [],
+      sales: ctx.state?.sales ?? [],
+      projectId: project.id,
+      harvest,
+      grade: grade || "رقم 1",
+      requestedBundles,
+    });
+    if (stockCheck.hasTrackedBatches) {
+      if (stockCheck.shortageBundles > 0) {
+        stockBlocked = true;
+        checks.push({
+          key: "harvest_stock",
+          status: "warning",
+          labelAr: `عجز مخزون الحصاد: متاح ${stockCheck.availableBundles} فقط والمطلوب ${requestedBundles}`,
+          labelEn: `Harvest stock shortage: ${stockCheck.availableBundles} available vs ${requestedBundles} requested`,
+        });
+        warningsAr.push(
+          `📦 عجز مخزون في (${harvest} - ${grade || "رقم 1"}): المتاح ${stockCheck.availableBundles} والمطلوب ${requestedBundles} (عجز ${stockCheck.shortageBundles}).`
+        );
+        warningsEn.push(
+          `📦 Stock shortage in (${harvest} - ${grade || "رقم 1"}): ${stockCheck.availableBundles} available vs ${requestedBundles} requested (short ${stockCheck.shortageBundles}).`
+        );
+      } else {
+        checks.push({
+          key: "harvest_stock",
+          status: "ok",
+          labelAr: `المخزون متوفر: ${stockCheck.availableBundles} وحدة قبل العملية`,
+          labelEn: `Stock available: ${stockCheck.availableBundles} bundles on hand`,
+        });
+      }
+    }
+  }
+
+  if (typeof outflowAmount === "number" && outflowAmount > 0 && (ctx.state?.treasuryAccounts?.length ?? 0) > 0) {
+    const accounts = ctx.state?.treasuryAccounts ?? [];
+    const targetAcc =
+      (treasuryIdOrCode
+        ? accounts.find((a) => a.id === treasuryIdOrCode || a.code === treasuryIdOrCode)
+        : undefined) ?? accounts[0];
+    if (targetAcc) {
+      const bal = Number(targetAcc.balanceYER ?? targetAcc.balance ?? 0);
+      if (bal < outflowAmount) {
+        checks.push({
+          key: "treasury_balance",
+          status: "warning",
+          labelAr: `رصيد ${targetAcc.nameAr} (${bal.toLocaleString()}) أقل من المطلوب (${outflowAmount.toLocaleString()})`,
+          labelEn: `${targetAcc.nameEn || targetAcc.nameAr} balance (${bal.toLocaleString()}) is below ${outflowAmount.toLocaleString()}`,
+        });
+        warningsAr.push(
+          `💳 تنبيه سيولة: رصيد "${targetAcc.nameAr}" الحالي ${bal.toLocaleString()} قد يصبح سالباً بعد صرف ${outflowAmount.toLocaleString()}.`
+        );
+        warningsEn.push(
+          `💳 Liquidity warning: "${targetAcc.nameEn || targetAcc.nameAr}" balance (${bal.toLocaleString()}) is lower than ${outflowAmount.toLocaleString()}.`
+        );
+      } else {
+        checks.push({
+          key: "treasury_balance",
+          status: "ok",
+          labelAr: `رصيد ${targetAcc.nameAr} كافٍ (${bal.toLocaleString()})`,
+          labelEn: `${targetAcc.nameEn || targetAcc.nameAr} has sufficient balance (${bal.toLocaleString()})`,
+        });
+      }
+    }
+  }
+
+  if (project && typeof checkBudgetSpend === "number" && checkBudgetSpend > 0) {
+    const budget = Number(project.budgetTotal || project.estimatedValue || 0);
+    if (budget > 0) {
+      const existingExp = (ctx.state?.expenses ?? [])
+        .filter((e) => e.projectId === project.id)
+        .reduce((s, e) => s + Number(e.total || 0), 0);
+      const existingWages = (ctx.state?.workers ?? [])
+        .filter((w) => w.projectId === project.id)
+        .reduce((s, w) => s + Number(w.total || 0), 0);
+      const projected = existingExp + existingWages + checkBudgetSpend;
+      const pct = Math.round((projected / budget) * 100);
+      if (projected > budget) {
+        checks.push({
+          key: "project_budget",
+          status: "warning",
+          labelAr: `تجاوز موازنة "${project.name}" (${pct}% من ${budget.toLocaleString()})`,
+          labelEn: `Exceeds "${project.name}" budget (${pct}% of ${budget.toLocaleString()})`,
+        });
+        warningsAr.push(`📊 تنبيه موازنة: هذه العملية ترفع إنفاق مشروع "${project.name}" إلى ${pct}% من الموازنة المعتمدة.`);
+        warningsEn.push(`📊 Budget warning: This entry brings "${project.name}" spend to ${pct}% of approved budget.`);
+      } else {
+        checks.push({
+          key: "project_budget",
+          status: "ok",
+          labelAr: `ضمن موازنة "${project.name}" (الاستهلاك بعد الترحيل ${pct}%)`,
+          labelEn: `Within "${project.name}" budget (${pct}% utilized after posting)`,
+        });
+      }
+    }
+  }
+
+  if (customerName) {
+    const openDue = (ctx.state?.sales ?? [])
+      .filter((s) => s.customer.toLowerCase() === customerName.toLowerCase())
+      .reduce((sum, s) => sum + Number(s.debit ?? Math.max(0, Number(s.total || 0) - Number(s.credit || 0))), 0);
+    if (openDue > 0) {
+      checks.push({
+        key: "customer_ar",
+        status: "ok",
+        labelAr: `رصيد مديونية سابقة على ${customerName}: ${openDue.toLocaleString()} YER`,
+        labelEn: `Existing receivable balance for ${customerName}: ${openDue.toLocaleString()} YER`,
+      });
+    }
+  }
+
+  if (ctx.workspaceContext?.isOffline || (ctx.workspaceContext?.offlineQueueCount ?? 0) > 0) {
+    const qCount = ctx.workspaceContext?.offlineQueueCount ?? 0;
+    checks.push({
+      key: "offline_sync",
+      status: "ok",
+      labelAr: `وضع محلي/أوفلاين: سيتم الترحيل محلياً (${qCount} في الطابور)`,
+      labelEn: `Offline/Local Mode: Posts locally & queues sync (${qCount} queued)`,
+    });
+  }
+
+  return { checks, warningsAr, warningsEn, isPeriodLocked, stockBlocked };
+}
+
+function appendWarningsText(summaryAr: string, summaryEn: string, warningsAr: string[], warningsEn: string[]): { summaryAr: string; summaryEn: string } {
+  const arBlock = warningsAr.length > 0 ? `\n\n⚠️ **ملاحظات الفحص المتقاطع:**\n${warningsAr.map((w) => `- ${w}`).join("\n")}` : "";
+  const enBlock = warningsEn.length > 0 ? `\n\n⚠️ **Cross-Section Pre-Flight Notes:**\n${warningsEn.map((w) => `- ${w}`).join("\n")}` : "";
+  return {
+    summaryAr: `${summaryAr}${arBlock}`,
+    summaryEn: `${summaryEn}${enBlock}`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1099,6 +1476,13 @@ export async function executeUasAgentTool(
             },
           ];
 
+      const voucherPreFlight = buildCrossSectionPreFlightChecks({
+        ctx,
+        outflowAmount: !isReceipt ? amount : undefined,
+        treasuryIdOrCode: treasuryAcc.code,
+        customerName: isReceipt ? partyName : undefined,
+      });
+
       const card: ConfirmationPreviewCard = {
         actionId: `ai-vch-${Date.now()}`,
         toolName: "draft_voucher",
@@ -1120,6 +1504,9 @@ export async function executeUasAgentTool(
         isBalanced: true,
         partyName,
         lines,
+        preFlightChecks: voucherPreFlight.checks,
+        warningsAr: voucherPreFlight.warningsAr,
+        warningsEn: voucherPreFlight.warningsEn,
         confirmButtonLabelAr: "تأكيد وترحيل",
         confirmButtonLabelEn: "Confirm & Execute",
         confirmButtonLabel: "تأكيد وترحيل / Confirm & Execute",
@@ -1138,14 +1525,21 @@ export async function executeUasAgentTool(
         },
       };
 
+      const voucherMsg = appendWarningsText(
+        `🛡️ **بوابة الأمان المحاسبي:** تم إعداد مسودة **${isReceipt ? "سند قبض" : "سند صرف"}** بمبلغ **${amount.toLocaleString()} ${currency}** (${partyName}). راجع القيد المزدوج أدناه واضغط **"تأكيد وترحيل / Confirm & Execute"** للاعتماد.`,
+        `🛡️ **Accounting Confirmation Gate:** Drafted a **${isReceipt ? "Receipt Voucher" : "Payment Voucher"}** for **${amount.toLocaleString()} ${currency}** (${partyName}). Review the Debit/Credit preview card below and click **"تأكيد وترحيل / Confirm & Execute"**.`,
+        voucherPreFlight.warningsAr,
+        voucherPreFlight.warningsEn
+      );
+
       return makeResult(lang, {
         ok: true,
         toolName,
         requiresConfirmation: true,
         confirmationCard: card,
-        data: { preview: card },
-        summaryAr: `🛡️ **بوابة الأمان المحاسبي:** تم إعداد مسودة **${isReceipt ? "سند قبض" : "سند صرف"}** بمبلغ **${amount.toLocaleString()} ${currency}** (${partyName}). راجع القيد المزدوج أدناه واضغط **"تأكيد وترحيل / Confirm & Execute"** للاعتماد.`,
-        summaryEn: `🛡️ **Accounting Confirmation Gate:** Drafted a **${isReceipt ? "Receipt Voucher" : "Payment Voucher"}** for **${amount.toLocaleString()} ${currency}** (${partyName}). Review the Debit/Credit preview card below and click **"تأكيد وترحيل / Confirm & Execute"**.`,
+        data: { preview: card, preFlightChecks: voucherPreFlight.checks },
+        summaryAr: voucherMsg.summaryAr,
+        summaryEn: voucherMsg.summaryEn,
       });
     }
 
@@ -1287,6 +1681,17 @@ export async function executeUasAgentTool(
         },
       ];
 
+      const invProject = resolveProjectAndHarvest(ctx, args);
+      const invPreFlight = buildCrossSectionPreFlightChecks({
+        ctx,
+        project: invProject.project,
+        harvest: invProject.harvest,
+        outflowAmount: isPurchase && paymentMethod === "CASH" ? totalAmount : undefined,
+        customerName: !isPurchase ? partyName : undefined,
+        grade: !isPurchase ? itemName : undefined,
+        requestedBundles: !isPurchase ? qty : undefined,
+      });
+
       const card: ConfirmationPreviewCard = {
         actionId: `ai-inv-${Date.now()}`,
         toolName: "draft_invoice",
@@ -1308,6 +1713,9 @@ export async function executeUasAgentTool(
         isBalanced: true,
         partyName,
         lines,
+        preFlightChecks: invPreFlight.checks,
+        warningsAr: invPreFlight.warningsAr,
+        warningsEn: invPreFlight.warningsEn,
         confirmButtonLabelAr: "تأكيد وترحيل",
         confirmButtonLabelEn: "Confirm & Execute",
         confirmButtonLabel: "تأكيد وترحيل / Confirm & Execute",
@@ -1329,14 +1737,21 @@ export async function executeUasAgentTool(
         },
       };
 
+      const invMsg = appendWarningsText(
+        `🛡️ **بوابة الأمان المحاسبي:** تم إعداد مسودة **${isPurchase ? "فاتورة مشتريات" : "فاتورة مبيعات"}** بمبلغ **${totalAmount.toLocaleString()} ${currency}** (${partyName} — ${itemName}). اضغط **"تأكيد وترحيل / Confirm & Execute"** لترحيل الفاتورة وقيدها المحاسبي.`,
+        `🛡️ **Accounting Confirmation Gate:** Drafted a **${isPurchase ? "Purchase Bill" : "Sales Invoice"}** for **${totalAmount.toLocaleString()} ${currency}** (${partyName} — ${itemName}). Click **"تأكيد وترحيل / Confirm & Execute"** to commit.`,
+        invPreFlight.warningsAr,
+        invPreFlight.warningsEn
+      );
+
       return makeResult(lang, {
         ok: true,
         toolName,
         requiresConfirmation: true,
         confirmationCard: card,
-        data: { preview: card },
-        summaryAr: `🛡️ **بوابة الأمان المحاسبي:** تم إعداد مسودة **${isPurchase ? "فاتورة مشتريات" : "فاتورة مبيعات"}** بمبلغ **${totalAmount.toLocaleString()} ${currency}** (${partyName} — ${itemName}). اضغط **"تأكيد وترحيل / Confirm & Execute"** لترحيل الفاتورة وقيدها المحاسبي.`,
-        summaryEn: `🛡️ **Accounting Confirmation Gate:** Drafted a **${isPurchase ? "Purchase Bill" : "Sales Invoice"}** for **${totalAmount.toLocaleString()} ${currency}** (${partyName} — ${itemName}). Click **"تأكيد وترحيل / Confirm & Execute"** to commit.`,
+        data: { preview: card, preFlightChecks: invPreFlight.checks },
+        summaryAr: invMsg.summaryAr,
+        summaryEn: invMsg.summaryEn,
       });
     }
 
@@ -1509,13 +1924,22 @@ export async function executeUasAgentTool(
     // 10. diagnose_system_health (Wired directly to Phase 3 diagnostic engine)
     // -----------------------------------------------------------------------
     case "diagnose_system_health": {
-      const report = diagnoseLiveSystemState(ctx.diagnostics);
+      const mergedDiagnostics: Partial<SupportSystemDiagnostics> = {
+        ...(ctx.diagnostics ?? {}),
+        offline_queue_count: ctx.workspaceContext?.offlineQueueCount ?? ctx.diagnostics?.offline_queue_count ?? 0,
+        pending_conflicts_count: ctx.workspaceContext?.pendingConflictsCount ?? ctx.diagnostics?.pending_conflicts_count ?? 0,
+        is_offline: ctx.workspaceContext?.isOffline ?? ctx.diagnostics?.is_offline ?? false,
+        tenant_slug: ctx.workspaceContext?.tenantSlug ?? ctx.diagnostics?.tenant_slug ?? null,
+        active_tab: ctx.workspaceContext?.activeTab ?? ctx.diagnostics?.active_tab ?? null,
+      };
+      const report = diagnoseLiveSystemState(mergedDiagnostics);
       return makeResult(lang, {
         ok: true,
         toolName,
         requiresConfirmation: false,
+        navigationTab: report.healthy ? "system" : undefined,
         openLicenseModal: !report.healthy,
-        data: { diagnosticReport: report, diagnostics: ctx.diagnostics },
+        data: { diagnosticReport: report, diagnostics: mergedDiagnostics },
         summaryAr:
           `🔍 **تشخيص حالة النظام والترخيص (${report.statusBadge}):**\n` +
           `**${report.headlineAr}**\n` +
@@ -2116,6 +2540,142 @@ export async function executeUasAgentTool(
         }
       }
 
+      // D0. Scope: Workers & Harvest Labor
+      if (
+        scope === "workers" ||
+        queryLower.includes("عامل") ||
+        queryLower.includes("عمال") ||
+        queryLower.includes("اجور") ||
+        queryLower.includes("أجور") ||
+        queryLower.includes("worker") ||
+        queryLower.includes("wage") ||
+        queryLower.includes("payroll")
+      ) {
+        const workers = ctx.state?.workers ?? [];
+        const matched = rawQuery
+          ? workers.filter(
+              (w) =>
+                w.name.toLowerCase().includes(queryLower) ||
+                (w.harvest || "").toLowerCase().includes(queryLower)
+            )
+          : workers;
+        const list = matched.length > 0 ? matched : workers;
+        const totalWages = list.reduce((s, w) => s + Number(w.total || 0), 0);
+        const totalPaid = list.reduce((s, w) => s + Number(w.credit || 0), 0);
+        const totalOwed = list.reduce((s, w) => s + Number(w.debit ?? Math.max(0, w.total - w.credit)), 0);
+
+        citations.push({
+          labelAr: "قسم أجور العمال والحصاد",
+          labelEn: "Workers & Field Payroll",
+          tab: "workers",
+          type: "tab",
+        });
+
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          navigationTab: "workers",
+          citations,
+          data: {
+            scope: "workers",
+            count: list.length,
+            totalWages,
+            totalPaid,
+            totalOwed,
+            workers: list.slice(-5),
+          },
+          summaryAr:
+            `👷 **ملخص أجور العمال والعمالة الزراعية:**\n` +
+            `- عدد السجلات: **${list.length}** قيد أجر • إجمالي المستحق: **${totalWages.toLocaleString()} YER**\n` +
+            `- المسدد فعلياً: **${totalPaid.toLocaleString()} YER** • المتبقي غير المدفوع: **${totalOwed.toLocaleString()} YER**\n` +
+            `*(يمكنك تسجيل أجر جديد بمجرد كتابة: سجل أجر للعامل فلان بمبلغ ...)*`,
+          summaryEn:
+            `👷 **Workers & Harvest Payroll Summary:**\n` +
+            `- Entries: **${list.length}** • Gross Wages: **${totalWages.toLocaleString()} YER**\n` +
+            `- Paid: **${totalPaid.toLocaleString()} YER** • Unpaid Payable Balance: **${totalOwed.toLocaleString()} YER**\n` +
+            `*(To post a wage via chat, ask: "record worker wage for <name> daily <amount>")*`,
+        }, ctx);
+      }
+
+      // D1. Scope: Audit Trail & Harvest Locks
+      if (
+        scope === "audit" ||
+        queryLower.includes("تدقيق") ||
+        queryLower.includes("اقفال") ||
+        queryLower.includes("إقفال") ||
+        queryLower.includes("مغلق") ||
+        queryLower.includes("audit") ||
+        queryLower.includes("lock")
+      ) {
+        const locks = Object.entries(ctx.state?.lockedPeriods ?? {}).filter(([, v]) => Boolean(v));
+        const allAudits = ctx.state?.auditLogs ?? [];
+        const audits = allAudits.slice(0, 5);
+        const qCount = ctx.workspaceContext?.offlineQueueCount ?? 0;
+        const cCount = ctx.workspaceContext?.pendingConflictsCount ?? 0;
+
+        citations.push({
+          labelAr: "سجل التدقيق وإقفال الفترات",
+          labelEn: "Audit Trail & Period Locks",
+          tab: "audit",
+          type: "tab",
+        });
+
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          navigationTab: "audit",
+          citations,
+          data: {
+            scope: "audit",
+            lockedPeriodsCount: locks.length,
+            lockedKeys: locks.map(([k]) => k),
+            recentAuditCount: audits.length,
+            offlineQueueCount: qCount,
+            pendingConflictsCount: cCount,
+          },
+          summaryAr:
+            `🔒 **تقرير التدقيق وإقفال الفترات:**\n` +
+            `- عدد القطفات المغلقة محاسبياً: **${locks.length}** ${locks.length > 0 ? `(${locks.slice(0, 3).map(([k]) => k).join("، ")})` : ""}\n` +
+            `- أحدث حركات التدقيق: **${allAudits.length}** حركة • طابور الأوفلاين: **${qCount}** • تعارضات المزامنة: **${cCount}**.\n` +
+            (audits.length > 0 ? `\n**آخر حركات التدقيق:**\n${audits.map((a) => `- [${a.user}] ${a.action} (${a.details})`).join("\n")}` : ""),
+          summaryEn:
+            `🔒 **Audit Trail & Period Lock Report:**\n` +
+            `- Locked Harvest Periods: **${locks.length}** ${locks.length > 0 ? `(${locks.slice(0, 3).map(([k]) => k).join(", ")})` : ""}\n` +
+            `- Audit Entries: **${allAudits.length}** • Offline Sync Queue: **${qCount}** • Pending Conflicts: **${cCount}**.\n` +
+            (audits.length > 0 ? `\n**Recent Audit Log:**\n${audits.map((a) => `- [${a.user}] ${a.action} (${a.details})`).join("\n")}` : ""),
+        }, ctx);
+      }
+
+      // D2. Scope: Treasury Accounts Balances
+      if (scope === "treasury") {
+        const accounts = ctx.state?.treasuryAccounts ?? [];
+        const totalYER = accounts.reduce((s, a) => s + Number(a.balanceYER || a.balance || 0), 0);
+        citations.push({
+          labelAr: "أرصدة الصناديق والبنوك",
+          labelEn: "Treasury & Bank Accounts",
+          tab: "treasury",
+          type: "tab",
+        });
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          navigationTab: "treasury",
+          citations,
+          data: { scope: "treasury", accountsCount: accounts.length, totalYER, accounts },
+          summaryAr:
+            `🏦 **أرصدة الخزينة والبنوك (${accounts.length} حساب):**\n` +
+            `- إجمالي السيولة المعادلة: **${totalYER.toLocaleString()} YER**\n` +
+            accounts.map((a) => `- \`${a.code || a.id}\` ${a.nameAr || a.name}: **${Number(a.balance || 0).toLocaleString()} ${a.currencyCode || "YER"}**`).join("\n"),
+          summaryEn:
+            `🏦 **Treasury & Bank Balances (${accounts.length} accounts):**\n` +
+            `- Total Base Liquidity: **${totalYER.toLocaleString()} YER**\n` +
+            accounts.map((a) => `- \`${a.code || a.id}\` ${a.nameEn || a.nameAr || a.name}: **${Number(a.balance || 0).toLocaleString()} ${a.currencyCode || "YER"}**`).join("\n"),
+        }, ctx);
+      }
+
       // D. Scope: Recent Vouchers / Treasury
       if (
         scope === "vouchers" ||
@@ -2217,6 +2777,858 @@ export async function executeUasAgentTool(
           `- Active Projects: **${activeProjectsCount}** • Sales Transactions: **${salesCount}**.\n\n` +
           `📖 **Knowledge & Policy Guidance:**\n${supportRes.answerEn}`,
       }, ctx);
+    }
+
+    // -----------------------------------------------------------------------
+    // 17. reconcile_harvest_inventory (CROSS-SECTION REASONING)
+    // -----------------------------------------------------------------------
+    case "reconcile_harvest_inventory": {
+      const targetProjectId = String(args.projectId ?? ctx.workspaceContext?.selectedProjectId ?? "").trim();
+      const targetHarvest = String(args.harvest ?? ctx.workspaceContext?.selectedHarvest ?? "").trim();
+      const targetGrade = String(args.grade ?? "").trim().toLowerCase();
+
+      const batches = (ctx.state?.inventoryBatches ?? []).filter((b) => {
+        if (targetProjectId && b.projectId !== targetProjectId) return false;
+        if (targetHarvest && b.harvest !== targetHarvest) return false;
+        if (targetGrade && !b.grade.toLowerCase().includes(targetGrade)) return false;
+        return true;
+      });
+      const sales = (ctx.state?.sales ?? []).filter((s) => {
+        if (targetProjectId && s.projectId !== targetProjectId) return false;
+        if (targetHarvest && s.harvest !== targetHarvest) return false;
+        if (targetGrade && !s.grade.toLowerCase().includes(targetGrade)) return false;
+        return true;
+      });
+
+      const report = reconcileHarvestInventory(batches, sales);
+      const totalHarvested = report.rows.reduce((s, r) => s + r.harvestedBundles, 0);
+      const totalShrinkage = report.rows.reduce((s, r) => s + r.shrinkageBundles, 0);
+      const totalSold = report.rows.reduce((s, r) => s + r.soldBundles, 0);
+      const totalRemaining = report.rows.reduce((s, r) => s + r.remainingBundles, 0);
+      const uncollectedAR = sales.reduce((s, r) => s + Number(r.debit ?? Math.max(0, r.total - r.credit)), 0);
+      const shrinkageRate = totalHarvested > 0 ? Math.round((totalShrinkage / totalHarvested) * 100) : 0;
+
+      const anomalyNotesAr: string[] = [];
+      const anomalyNotesEn: string[] = [];
+      const shortageCount = report.summary.shortageBatchCount;
+      if (shortageCount > 0) {
+        anomalyNotesAr.push(`🚨 توجد **${shortageCount}** دفعات بها عجز مخزون سالب (مباع أكبر من المتاح بعد التالف).`);
+        anomalyNotesEn.push(`🚨 **${shortageCount}** batches have negative stock shortage (sold exceeds net stock).`);
+      }
+      if (shrinkageRate >= 10) {
+        anomalyNotesAr.push(`⚠️ نسبة التالف/الفرز مرتفعة (**${shrinkageRate}%** من إجمالي المحصول).`);
+        anomalyNotesEn.push(`⚠️ Spoilage/shrinkage rate is elevated (**${shrinkageRate}%** of harvested yield).`);
+      }
+      if (uncollectedAR > 0) {
+        anomalyNotesAr.push(`💳 ذمم مبيعات غير محصلة ضمن هذه القطفات: **${uncollectedAR.toLocaleString()} YER**.`);
+        anomalyNotesEn.push(`💳 Uncollected receivables in scope: **${uncollectedAR.toLocaleString()} YER**.`);
+      }
+
+      const citations: CitationLink[] = [
+        { labelAr: "مطابقة المخزون والدفعات", labelEn: "Inventory & Batch Reconciliation", tab: "inventory", type: "tab" },
+        { labelAr: "سجل المبيعات والذمم", labelEn: "Sales & Receivables", tab: "sales", type: "tab" },
+      ];
+
+      return makeResult(lang, {
+        ok: true,
+        toolName,
+        requiresConfirmation: false,
+        navigationTab: "inventory",
+        citations,
+        data: {
+          scopeProjectId: targetProjectId || null,
+          scopeHarvest: targetHarvest || null,
+          rowsCount: report.rows.length,
+          shortageCount,
+          totalHarvested,
+          totalShrinkage,
+          totalSold,
+          totalRemaining,
+          shrinkageRate,
+          uncollectedAR,
+        },
+        summaryAr:
+          `🔍 **تقرير المطابقة المتقاطعة للحصاد والمخزون والمبيعات (${report.rows.length} سجل):**\n` +
+          `- إجمالي المقطوف: **${totalHarvested}** • التالف/الفاقد: **${totalShrinkage}** (${shrinkageRate}%) • المباع: **${totalSold}** • الصافي المتاح: **${totalRemaining}**\n` +
+          (anomalyNotesAr.length > 0 ? `\n**الملاحظات والمخاطر المكتشفة:**\n${anomalyNotesAr.map((n) => `- ${n}`).join("\n")}` : "\n✅ **النتيجة:** جميع الدفعات متطابقة بدون عجز مخزني."),
+        summaryEn:
+          `🔍 **Cross-Section Harvest, Inventory & Sales Reconciliation (${report.rows.length} rows):**\n` +
+          `- Harvested: **${totalHarvested}** • Shrinkage: **${totalShrinkage}** (${shrinkageRate}%) • Sold: **${totalSold}** • Net Available: **${totalRemaining}**\n` +
+          (anomalyNotesEn.length > 0 ? `\n**Detected Anomalies & Risks:**\n${anomalyNotesEn.map((n) => `- ${n}`).join("\n")}` : "\n✅ **Status:** All harvest batches reconcile cleanly with zero negative shortages."),
+      }, ctx);
+    }
+
+    // -----------------------------------------------------------------------
+    // 18. analyze_workspace_context (MULTI-SECTION CONTEXTUAL REASONING)
+    // -----------------------------------------------------------------------
+    case "analyze_workspace_context": {
+      const wCtx = ctx.workspaceContext ?? {};
+      const activeTab = (wCtx.activeTab || "dashboard") as TabId;
+      const { project, harvest } = resolveProjectAndHarvest(ctx, args);
+      const isOffline = Boolean(wCtx.isOffline || wCtx.offlineQueueCount);
+      const qCount = wCtx.offlineQueueCount ?? 0;
+      const cCount = wCtx.pendingConflictsCount ?? 0;
+
+      const projectSales = project ? (ctx.state?.sales ?? []).filter((s) => s.projectId === project.id) : (ctx.state?.sales ?? []);
+      const projectExpenses = project ? (ctx.state?.expenses ?? []).filter((e) => e.projectId === project.id) : (ctx.state?.expenses ?? []);
+      const projectWages = project ? (ctx.state?.workers ?? []).filter((w) => w.projectId === project.id) : (ctx.state?.workers ?? []);
+      const projectBatches = project ? (ctx.state?.inventoryBatches ?? []).filter((b) => b.projectId === project.id) : (ctx.state?.inventoryBatches ?? []);
+
+      const revenue = projectSales.reduce((s, r) => s + Number(r.total || 0), 0);
+      const arDue = projectSales.reduce((s, r) => s + Number(r.debit ?? Math.max(0, r.total - r.credit)), 0);
+      const spend = projectExpenses.reduce((s, r) => s + Number(r.total || 0), 0) + projectWages.reduce((s, w) => s + Number(w.total || 0), 0);
+      const cashBalance = (ctx.state?.treasuryAccounts ?? []).reduce((s, a) => s + Number(a.balanceYER || a.balance || 0), 0);
+      const recon = reconcileHarvestInventory(projectBatches, projectSales);
+      const isLocked = project ? Boolean(ctx.state?.lockedPeriods?.[`${project.id}::${harvest}`]) : false;
+
+      const insightsAr: string[] = [];
+      const insightsEn: string[] = [];
+
+      if (isOffline || qCount > 0 || cCount > 0) {
+        insightsAr.push(`📡 وضع التشغيل: ${isOffline ? "أوفلاين/محلي" : "متصل"} • طابور المزامنة: **${qCount}** • تعارضات: **${cCount}**.`);
+        insightsEn.push(`📡 Runtime: ${isOffline ? "Offline/Local" : "Online"} • Queued writes: **${qCount}** • Conflicts: **${cCount}**.`);
+      }
+      const shortageCount = recon.summary.shortageBatchCount;
+      if (shortageCount > 0) {
+        insightsAr.push(`📦 تنبيه: يوجد عجز مخزون في **${shortageCount}** دفعات حصاد يتطلب مراجعة.`);
+        insightsEn.push(`📦 Alert: **${shortageCount}** harvest batches show stock shortages.`);
+      }
+      if (arDue > 0) {
+        insightsAr.push(`💰 مستحقات تحصيل لدى العملاء: **${arDue.toLocaleString()} YER** — يمكنك إصدار سند قبض مباشرة.`);
+        insightsEn.push(`💰 Open customer receivables: **${arDue.toLocaleString()} YER** — you can draft a receipt voucher directly.`);
+      }
+      if (isLocked) {
+        insightsAr.push(`🔒 تنبيه: القطفة النشطة (**${harvest}**) مقفلة محاسبياً؛ أي قيد عليها سيتطلب فتح الفترة أولاً.`);
+        insightsEn.push(`🔒 Notice: Active harvest (**${harvest}**) is period-locked; new postings require unlocking first.`);
+      }
+      if (project && (project.budgetTotal || 0) > 0 && spend > (project.budgetTotal || 0)) {
+        insightsAr.push(`⚠️ الإنفاق الفعلي (**${spend.toLocaleString()} YER**) تجاوز موازنة المشروع (**${(project.budgetTotal || 0).toLocaleString()} YER**).`);
+        insightsEn.push(`⚠️ Actual spend (**${spend.toLocaleString()} YER**) exceeds project budget (**${(project.budgetTotal || 0).toLocaleString()} YER**).`);
+      }
+
+      const citations: CitationLink[] = [
+        { labelAr: `القسم النشط (${activeTab})`, labelEn: `Active Tab (${activeTab})`, tab: activeTab, type: "tab" },
+      ];
+      if (shortageCount > 0) {
+        citations.push({ labelAr: "فحص عجز المخزون", labelEn: "Inspect Stock Shortages", tab: "inventory", type: "tab" });
+      }
+
+      return makeResult(lang, {
+        ok: true,
+        toolName,
+        requiresConfirmation: false,
+        navigationTab: activeTab,
+        citations,
+        data: {
+          activeTab,
+          projectId: project?.id ?? null,
+          projectName: project?.name ?? null,
+          harvest,
+          isLocked,
+          revenue,
+          spend,
+          arDue,
+          cashBalance,
+          shortageCount,
+          offlineQueueCount: qCount,
+          pendingConflictsCount: cCount,
+        },
+        summaryAr:
+          `🧠 **تحليل السياق الذكي العابر للأقسام (${activeTab}):**\n` +
+          (project ? `- المشروع النشط: **${project.name}** • القطفة: **${harvest}** (${isLocked ? "مقفلة 🔒" : "مفتوحة 🔓"})\n` : "") +
+          `- الإيرادات: **${revenue.toLocaleString()} YER** • المصروفات والأجور: **${spend.toLocaleString()} YER** • صافي السيولة بالخزينة: **${cashBalance.toLocaleString()} YER**\n` +
+          (insightsAr.length > 0 ? `\n**النتائج والتوصيات العابرة للأقسام:**\n${insightsAr.map((i) => `- ${i}`).join("\n")}` : "\n✅ المؤشرات متوازنة ولا توجد مخاطر حرجة حالياً."),
+        summaryEn:
+          `🧠 **Cross-Section Workspace Briefing (${activeTab}):**\n` +
+          (project ? `- Active Project: **${project.name}** • Harvest: **${harvest}** (${isLocked ? "Locked 🔒" : "Open 🔓"})\n` : "") +
+          `- Revenue: **${revenue.toLocaleString()} YER** • Spend (Exp+Wages): **${spend.toLocaleString()} YER** • Cash On Hand: **${cashBalance.toLocaleString()} YER**\n` +
+          (insightsEn.length > 0 ? `\n**Cross-Section Insights & Recommendations:**\n${insightsEn.map((i) => `- ${i}`).join("\n")}` : "\n✅ Metrics are balanced with no critical warnings right now."),
+      }, ctx);
+    }
+
+    // -----------------------------------------------------------------------
+    // 19. draft_harvest_batch
+    // -----------------------------------------------------------------------
+    case "draft_harvest_batch": {
+      const perm = checkWritePermission(ctx.user, "inventory", false);
+      if (!perm.allowed) {
+        return makeResult(lang, { ok: false, toolName, code: "RBAC_FORBIDDEN", requiresConfirmation: false, summaryAr: perm.summaryAr, summaryEn: perm.summaryEn }, ctx);
+      }
+      const { project, harvest } = resolveProjectAndHarvest(ctx, args);
+      if (!project) {
+        return makeResult(lang, {
+          ok: false,
+          toolName,
+          code: "PROJECT_REQUIRED",
+          requiresConfirmation: false,
+          summaryAr: "يرجى إنشاء أو تحديد مشروع أولاً قبل تسجيل دفعة مخزون حصاد.",
+          summaryEn: "Please select or create a project before recording a harvest inventory batch.",
+        });
+      }
+      const grade = String(args.grade ?? "رقم 1").trim();
+      const harvestedBundles = Math.max(0, Math.round(Number(args.harvestedBundles ?? args.bundles ?? args.quantity ?? 0)));
+      const shrinkageBundles = Math.max(0, Math.round(Number(args.shrinkageBundles ?? args.shrinkage ?? 0)));
+      if (harvestedBundles <= 0) {
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          clarificationPrompt: {
+            questionAr: `كم عدد العلاقيات المقطوفة لتسجيلها في (${project.name} - ${harvest})؟`,
+            questionEn: `How many harvested bundles should be recorded for (${project.name} - ${harvest})?`,
+            missingFields: ["harvestedBundles"],
+            quickOptions: [
+              { labelAr: "50 علاقي رقم 1", labelEn: "50 bundles Grade 1", promptFill: `سجل دفعة حصاد 50 علاقي رقم 1 في ${harvest}` },
+              { labelAr: "100 علاقي رقم 1", labelEn: "100 bundles Grade 1", promptFill: `سجل دفعة حصاد 100 علاقي رقم 1 في ${harvest}` },
+            ],
+          },
+          summaryAr: "❓ يرجى تحديد كمية العلاقيات المقطوفة لتسجيل الدفعة.",
+          summaryEn: "❓ Please specify the harvested bundle count to record the batch.",
+        }, ctx);
+      }
+
+      const preFlight = buildCrossSectionPreFlightChecks({ ctx, project, harvest });
+      const card: ConfirmationPreviewCard = {
+        actionId: `ai-invlot-${Date.now()}`,
+        toolName: "draft_harvest_batch",
+        operationType: "RECORD_HARVEST_BATCH",
+        titleAr: `معاينة تسجيل دفعة حصاد (${harvest} - ${grade})`,
+        titleEn: `Harvest Batch Preview (${harvest} - ${grade})`,
+        narrationAr: `إضافة ${harvestedBundles} علاقي (${grade})${shrinkageBundles > 0 ? ` • تالف ${shrinkageBundles}` : ""} لمشروع ${project.name}`,
+        narrationEn: `Record ${harvestedBundles} bundles (${grade})${shrinkageBundles > 0 ? ` • shrinkage ${shrinkageBundles}` : ""} for ${project.name}`,
+        date: todayIso,
+        currency: "YER",
+        projectId: project.id,
+        totalDebit: 0,
+        totalCredit: 0,
+        isBalanced: true,
+        lines: [],
+        preFlightChecks: preFlight.checks,
+        warningsAr: preFlight.warningsAr,
+        warningsEn: preFlight.warningsEn,
+        endpoint: "/api/inventory",
+        httpMethod: "POST",
+        confirmButtonLabelAr: "تأكيد وتسجيل الدفعة",
+        confirmButtonLabelEn: "Confirm & Save Batch",
+        confirmButtonLabel: "تأكيد وتسجيل الدفعة / Confirm & Save Batch",
+        executionPayload: {
+          operationType: "RECORD_HARVEST_BATCH",
+          projectId: project.id,
+          subProjectId: ctx.workspaceContext?.selectedSubProjectId ?? null,
+          harvest,
+          grade,
+          harvestedBundles,
+          shrinkageBundles,
+          notes: String(args.notes ?? `تم التسجيل عبر المساعد الذكي`),
+          executed_by_ai: true,
+        },
+      };
+      const msg = appendWarningsText(
+        `🛡️ **بوابة التأكيد:** جاهز لتسجيل دفعة حصاد (**${harvestedBundles}** علاقي ${grade}) في مشروع **${project.name}** (${harvest}).`,
+        `🛡️ **Confirmation Gate:** Ready to record harvest batch (**${harvestedBundles}** bundles ${grade}) on **${project.name}** (${harvest}).`,
+        preFlight.warningsAr,
+        preFlight.warningsEn
+      );
+      return makeResult(lang, { ok: true, toolName, requiresConfirmation: true, confirmationCard: card, data: { preview: card }, ...msg });
+    }
+
+    // -----------------------------------------------------------------------
+    // 20. draft_sale_transaction
+    // -----------------------------------------------------------------------
+    case "draft_sale_transaction": {
+      const perm = checkWritePermission(ctx.user, "sales", false);
+      if (!perm.allowed) {
+        return makeResult(lang, { ok: false, toolName, code: "RBAC_FORBIDDEN", requiresConfirmation: false, summaryAr: perm.summaryAr, summaryEn: perm.summaryEn }, ctx);
+      }
+      const { project, harvest } = resolveProjectAndHarvest(ctx, args);
+      if (!project) {
+        return makeResult(lang, {
+          ok: false,
+          toolName,
+          code: "PROJECT_REQUIRED",
+          requiresConfirmation: false,
+          summaryAr: "يرجى اختيار مشروع قبل تسجيل عملية البيع.",
+          summaryEn: "Please select an active project before recording a sale.",
+        });
+      }
+      const customer = String(args.customer ?? args.partyName ?? "").trim();
+      const bundles = Math.max(0, Math.round(Number(args.bundles ?? args.quantity ?? 0)));
+      const price = Math.max(0, Number(args.price ?? args.unitPrice ?? 0));
+      const credit = Math.max(0, Number(args.credit ?? 0));
+      const grade = String(args.grade ?? "رقم 1").trim();
+
+      if (!customer || bundles <= 0 || price <= 0) {
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          clarificationPrompt: {
+            questionAr: "لتسجيل البيع، يرجى تحديد اسم العميل، عدد العلاقيات، وسعر الوحدة:",
+            questionEn: "To record a harvest sale, please provide customer name, bundle quantity, and unit price:",
+            missingFields: [!customer ? "customer" : "", bundles <= 0 ? "bundles" : "", price <= 0 ? "price" : ""].filter(Boolean),
+            quickOptions: [
+              { labelAr: "بيع 10 علاقي بسعر 5000 لعميل الأمل", labelEn: "Sell 10 @ 5000 to Al-Amal", promptFill: `سجل بيع 10 علاقي بسعر 5000 للعميل شركة الأمل في ${harvest}` },
+            ],
+          },
+          summaryAr: "❓ يرجى تحديد العميل والكمية وسعر العلاقية لإعداد عملية البيع وفحص المخزون.",
+          summaryEn: "❓ Please specify customer name, bundle count, and unit price to validate stock and draft the sale.",
+        }, ctx);
+      }
+
+      const total = bundles * price;
+      const treasuryAccountId = String(args.treasuryAccountId ?? ctx.state?.treasuryAccounts?.[0]?.id ?? "t1");
+      const preFlight = buildCrossSectionPreFlightChecks({
+        ctx,
+        project,
+        harvest,
+        customerName: customer,
+        grade,
+        requestedBundles: bundles,
+      });
+
+      const lines: PreviewLedgerLine[] = [
+        {
+          accountCode: credit >= total ? "111101" : "112101",
+          accountNameAr: credit >= total ? "الصندوق الرئيسي" : `العميل: ${customer}`,
+          accountNameEn: credit >= total ? "Main Treasury" : `Customer: ${customer}`,
+          debit: total,
+          credit: 0,
+        },
+        {
+          accountCode: "411101",
+          accountNameAr: `إيراد مبيعات (${harvest} - ${grade})`,
+          accountNameEn: `Harvest Sales Revenue (${harvest})`,
+          debit: 0,
+          credit: total,
+        },
+      ];
+
+      const card: ConfirmationPreviewCard = {
+        actionId: `ai-sale-${Date.now()}`,
+        toolName: "draft_sale_transaction",
+        operationType: "RECORD_SALE",
+        titleAr: `معاينة تسجيل عملية بيع (${customer})`,
+        titleEn: `Harvest Sale Preview (${customer})`,
+        narrationAr: `بيع ${bundles} علاقي ${grade} × ${price.toLocaleString()} = ${total.toLocaleString()} YER للعميل ${customer} (مدفوع: ${credit.toLocaleString()})`,
+        narrationEn: `Sale ${bundles} bundles (${grade}) × ${price.toLocaleString()} = ${total.toLocaleString()} YER to ${customer} (Paid: ${credit.toLocaleString()})`,
+        date: String(args.date ?? todayIso).slice(0, 10),
+        currency: "YER",
+        projectId: project.id,
+        partyName: customer,
+        totalDebit: total,
+        totalCredit: total,
+        isBalanced: true,
+        lines,
+        preFlightChecks: preFlight.checks,
+        warningsAr: preFlight.warningsAr,
+        warningsEn: preFlight.warningsEn,
+        endpoint: "/api/sales",
+        httpMethod: "POST",
+        confirmButtonLabelAr: "تأكيد وترحيل البيع",
+        confirmButtonLabelEn: "Confirm & Post Sale",
+        confirmButtonLabel: "تأكيد وترحيل البيع / Confirm & Post Sale",
+        executionPayload: {
+          operationType: "RECORD_SALE",
+          projectId: project.id,
+          subProjectId: ctx.workspaceContext?.selectedSubProjectId ?? null,
+          harvest,
+          grade,
+          customer,
+          phone: String(args.phone ?? ""),
+          bundles,
+          price,
+          credit,
+          date: String(args.date ?? todayIso).slice(0, 10),
+          treasuryAccountId,
+          allowNegativeStock: Boolean(args.allowNegativeStock),
+          notes: String(args.notes ?? `تسجيل عبر المساعد الذكي`),
+          executed_by_ai: true,
+        },
+      };
+
+      const msg = appendWarningsText(
+        `🛡️ **بوابة التأكيد:** جاهز لترحيل عملية بيع بمبلغ **${total.toLocaleString()} YER** للعميل **${customer}** (${bundles} × ${price.toLocaleString()}) من مخزون **${harvest}**.`,
+        `🛡️ **Confirmation Gate:** Ready to post sale of **${total.toLocaleString()} YER** to **${customer}** (${bundles} × ${price.toLocaleString()}) from **${harvest}**.`,
+        preFlight.warningsAr,
+        preFlight.warningsEn
+      );
+      return makeResult(lang, { ok: true, toolName, requiresConfirmation: true, confirmationCard: card, data: { preview: card, preFlightChecks: preFlight.checks }, ...msg });
+    }
+
+    // -----------------------------------------------------------------------
+    // 21. draft_operating_expense
+    // -----------------------------------------------------------------------
+    case "draft_operating_expense": {
+      const perm = checkWritePermission(ctx.user, "expenses", false);
+      if (!perm.allowed) {
+        return makeResult(lang, { ok: false, toolName, code: "RBAC_FORBIDDEN", requiresConfirmation: false, summaryAr: perm.summaryAr, summaryEn: perm.summaryEn }, ctx);
+      }
+      const { project, harvest } = resolveProjectAndHarvest(ctx, args);
+      if (!project) {
+        return makeResult(lang, {
+          ok: false,
+          toolName,
+          code: "PROJECT_REQUIRED",
+          requiresConfirmation: false,
+          summaryAr: "يرجى تحديد مشروع لتسجيل المصروف التشغيلي.",
+          summaryEn: "Please select a project before recording an operating expense.",
+        });
+      }
+      const category = String(args.category ?? "وقود/محروقات").trim();
+      const subType = String(args.subType ?? category).trim();
+      const qty = Math.max(1, Number(args.qty ?? args.quantity ?? 1));
+      const unitPrice = Math.max(0, Number(args.unitPrice ?? args.amount ?? 0));
+      const total = qty * unitPrice;
+      if (total <= 0) {
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          clarificationPrompt: {
+            questionAr: "ما هو نوع ومبلغ المصروف التشغيلي المطلوب تسجيله؟",
+            questionEn: "What is the expense category and amount?",
+            missingFields: ["unitPrice"],
+            quickOptions: [
+              { labelAr: "وقود/ديزل 25,000 YER", labelEn: "Fuel/Diesel 25,000 YER", promptFill: `سجل مصروف وقود بمبلغ 25000 YER في ${harvest}` },
+              { labelAr: "نقل/توريد 15,000 YER", labelEn: "Transport 15,000 YER", promptFill: `سجل مصروف نقل بمبلغ 15000 YER في ${harvest}` },
+            ],
+          },
+          summaryAr: "❓ يرجى تحديد مبلغ المصروف التشغيلي (مثال: سجل مصروف وقود بمبلغ 25000 YER).",
+          summaryEn: "❓ Please specify the expense amount (e.g. record fuel expense of 25000 YER).",
+        }, ctx);
+      }
+
+      const treasuryAccountId = String(args.treasuryAccountId ?? ctx.state?.treasuryAccounts?.[0]?.id ?? "t1");
+      const preFlight = buildCrossSectionPreFlightChecks({
+        ctx,
+        project,
+        harvest,
+        outflowAmount: total,
+        treasuryIdOrCode: treasuryAccountId,
+        checkBudgetSpend: total,
+      });
+
+      const card: ConfirmationPreviewCard = {
+        actionId: `ai-exp-${Date.now()}`,
+        toolName: "draft_operating_expense",
+        operationType: "RECORD_EXPENSE",
+        titleAr: `معاينة مصروف تشغيلي (${category})`,
+        titleEn: `Operating Expense Preview (${category})`,
+        narrationAr: `صرف ${total.toLocaleString()} YER (${category} — ${subType}) لمشروع ${project.name} (${harvest})`,
+        narrationEn: `Expense ${total.toLocaleString()} YER (${category} — ${subType}) on ${project.name} (${harvest})`,
+        date: String(args.date ?? todayIso).slice(0, 10),
+        currency: "YER",
+        projectId: project.id,
+        totalDebit: total,
+        totalCredit: total,
+        isBalanced: true,
+        lines: [
+          { accountCode: "524101", accountNameAr: `مصروف: ${category}`, accountNameEn: `Expense: ${category}`, debit: total, credit: 0 },
+          { accountCode: "111101", accountNameAr: "الخزينة/الصندوق", accountNameEn: "Treasury", debit: 0, credit: total },
+        ],
+        preFlightChecks: preFlight.checks,
+        warningsAr: preFlight.warningsAr,
+        warningsEn: preFlight.warningsEn,
+        endpoint: "/api/expenses",
+        httpMethod: "POST",
+        confirmButtonLabelAr: "تأكيد وترحيل المصروف",
+        confirmButtonLabelEn: "Confirm & Post Expense",
+        confirmButtonLabel: "تأكيد وترحيل المصروف / Confirm & Post Expense",
+        executionPayload: {
+          operationType: "RECORD_EXPENSE",
+          projectId: project.id,
+          subProjectId: ctx.workspaceContext?.selectedSubProjectId ?? null,
+          harvest,
+          category,
+          subType,
+          qty,
+          unitPrice,
+          date: String(args.date ?? todayIso).slice(0, 10),
+          treasuryAccountId,
+          notes: String(args.notes ?? `مصروف مسجل عبر المساعد الذكي`),
+          executed_by_ai: true,
+        },
+      };
+
+      const msg = appendWarningsText(
+        `🛡️ **بوابة التأكيد:** جاهز لترحيل مصروف **${category}** بمبلغ **${total.toLocaleString()} YER** على **${project.name}** (${harvest}).`,
+        `🛡️ **Confirmation Gate:** Ready to post expense **${category}** of **${total.toLocaleString()} YER** on **${project.name}** (${harvest}).`,
+        preFlight.warningsAr,
+        preFlight.warningsEn
+      );
+      return makeResult(lang, { ok: true, toolName, requiresConfirmation: true, confirmationCard: card, data: { preview: card, preFlightChecks: preFlight.checks }, ...msg });
+    }
+
+    // -----------------------------------------------------------------------
+    // 22. draft_worker_wage
+    // -----------------------------------------------------------------------
+    case "draft_worker_wage": {
+      const perm = checkWritePermission(ctx.user, "workers", false);
+      if (!perm.allowed) {
+        return makeResult(lang, { ok: false, toolName, code: "RBAC_FORBIDDEN", requiresConfirmation: false, summaryAr: perm.summaryAr, summaryEn: perm.summaryEn }, ctx);
+      }
+      const { project, harvest } = resolveProjectAndHarvest(ctx, args);
+      if (!project) {
+        return makeResult(lang, {
+          ok: false,
+          toolName,
+          code: "PROJECT_REQUIRED",
+          requiresConfirmation: false,
+          summaryAr: "يرجى اختيار مشروع قبل تسجيل أجر عامل.",
+          summaryEn: "Please select a project before recording worker wages.",
+        });
+      }
+      const name = String(args.name ?? args.workerName ?? "").trim();
+      const dailyWage = Math.max(0, Number(args.dailyWage ?? args.wage ?? args.amount ?? 0));
+      const days = Math.max(1, Number(args.days ?? 1));
+      const credit = Math.max(0, Number(args.credit ?? 0));
+      if (!name || dailyWage <= 0) {
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          clarificationPrompt: {
+            questionAr: "يرجى تحديد اسم العامل والأجر اليومي (وعدد الأيام):",
+            questionEn: "Please provide worker name, daily wage, and days worked:",
+            missingFields: [!name ? "name" : "", dailyWage <= 0 ? "dailyWage" : ""].filter(Boolean),
+            quickOptions: [
+              { labelAr: "أحمد علي — 5,000 × 1 يوم", labelEn: "Ahmed Ali — 5,000 × 1 day", promptFill: `سجل أجر العامل أحمد علي بمبلغ 5000 YER لمدة 1 يوم في ${harvest}` },
+            ],
+          },
+          summaryAr: "❓ يرجى تحديد اسم العامل وقيمة الأجر اليومي لتجهيز قيد الأجور.",
+          summaryEn: "❓ Please provide worker name and daily wage to prepare the payroll entry.",
+        }, ctx);
+      }
+
+      const total = dailyWage * days;
+      const preFlight = buildCrossSectionPreFlightChecks({
+        ctx,
+        project,
+        harvest,
+        outflowAmount: credit > 0 ? credit : undefined,
+        checkBudgetSpend: total,
+      });
+
+      const card: ConfirmationPreviewCard = {
+        actionId: `ai-wage-${Date.now()}`,
+        toolName: "draft_worker_wage",
+        operationType: "RECORD_WORKER_WAGE",
+        titleAr: `معاينة تسجيل أجر عامل (${name})`,
+        titleEn: `Worker Wage Preview (${name})`,
+        narrationAr: `أجر ${name}: ${dailyWage.toLocaleString()} × ${days} أيام = ${total.toLocaleString()} YER (مدفوع: ${credit.toLocaleString()})`,
+        narrationEn: `Wage ${name}: ${dailyWage.toLocaleString()} × ${days}d = ${total.toLocaleString()} YER (Paid: ${credit.toLocaleString()})`,
+        date: String(args.date ?? todayIso).slice(0, 10),
+        currency: "YER",
+        projectId: project.id,
+        partyName: name,
+        totalDebit: total,
+        totalCredit: total,
+        isBalanced: true,
+        lines: [
+          { accountCode: "511101", accountNameAr: `أجور عمال الحصاد (${name})`, accountNameEn: `Harvest Wages (${name})`, debit: total, credit: 0 },
+          { accountCode: credit >= total ? "111101" : "212101", accountNameAr: credit >= total ? "الخزينة" : `مستحقات العامل: ${name}`, accountNameEn: credit >= total ? "Treasury" : `Payable: ${name}`, debit: 0, credit: total },
+        ],
+        preFlightChecks: preFlight.checks,
+        warningsAr: preFlight.warningsAr,
+        warningsEn: preFlight.warningsEn,
+        endpoint: "/api/workers",
+        httpMethod: "POST",
+        confirmButtonLabelAr: "تأكيد وتسجيل الأجر",
+        confirmButtonLabelEn: "Confirm & Post Wage",
+        confirmButtonLabel: "تأكيد وتسجيل الأجر / Confirm & Post Wage",
+        executionPayload: {
+          operationType: "RECORD_WORKER_WAGE",
+          projectId: project.id,
+          subProjectId: ctx.workspaceContext?.selectedSubProjectId ?? null,
+          harvest,
+          name,
+          dailyWage,
+          days,
+          credit,
+          date: String(args.date ?? todayIso).slice(0, 10),
+          notes: String(args.notes ?? `أجر مسجل عبر المساعد الذكي`),
+          executed_by_ai: true,
+        },
+      };
+      const msg = appendWarningsText(
+        `🛡️ **بوابة التأكيد:** جاهز لتسجيل أجر العامل **${name}** بإجمالي **${total.toLocaleString()} YER** على **${project.name}** (${harvest}).`,
+        `🛡️ **Confirmation Gate:** Ready to record wage for **${name}** totaling **${total.toLocaleString()} YER** on **${project.name}** (${harvest}).`,
+        preFlight.warningsAr,
+        preFlight.warningsEn
+      );
+      return makeResult(lang, { ok: true, toolName, requiresConfirmation: true, confirmationCard: card, data: { preview: card, preFlightChecks: preFlight.checks }, ...msg });
+    }
+
+    // -----------------------------------------------------------------------
+    // 23. draft_treasury_transfer
+    // -----------------------------------------------------------------------
+    case "draft_treasury_transfer": {
+      const perm = checkWritePermission(ctx.user, "treasury", false);
+      if (!perm.allowed) {
+        return makeResult(lang, { ok: false, toolName, code: "RBAC_FORBIDDEN", requiresConfirmation: false, summaryAr: perm.summaryAr, summaryEn: perm.summaryEn }, ctx);
+      }
+      const accounts = ctx.state?.treasuryAccounts ?? [];
+      if (accounts.length < 2) {
+        return makeResult(lang, {
+          ok: false,
+          toolName,
+          code: "INSUFFICIENT_TREASURY_ACCOUNTS",
+          requiresConfirmation: false,
+          summaryAr: "تحتاج العملية إلى وجود حسابي خزينة/بنك على الأقل لإجراء التحويل الداخلي.",
+          summaryEn: "At least two treasury/bank accounts are required for an internal transfer.",
+        });
+      }
+      const fromKey = String(args.fromTreasuryId ?? "").trim().toLowerCase();
+      const toKey = String(args.toTreasuryId ?? "").trim().toLowerCase();
+      const matchAcc = (a: (typeof accounts)[number], key: string) =>
+        a.id.toLowerCase() === key ||
+        (a.code || "").toLowerCase() === key ||
+        (a.nameAr || a.name || "").toLowerCase().includes(key);
+      const fromAcc = (fromKey ? accounts.find((a) => matchAcc(a, fromKey)) : undefined) ?? accounts[0];
+      const toAcc =
+        (toKey ? accounts.find((a) => matchAcc(a, toKey)) : undefined) ??
+        accounts.find((a) => a.id !== fromAcc.id) ??
+        accounts[1];
+
+      const fromLabelAr = fromAcc.nameAr || fromAcc.name;
+      const fromLabelEn = fromAcc.nameEn || fromLabelAr;
+      const toLabelAr = toAcc.nameAr || toAcc.name;
+      const toLabelEn = toAcc.nameEn || toLabelAr;
+      const trfCurrency = fromAcc.currencyCode || "YER";
+
+      const amount = Math.max(0, Number(args.amount ?? 0));
+      if (amount <= 0 || fromAcc.id === toAcc.id) {
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          clarificationPrompt: {
+            questionAr: "يرجى تحديد مبلغ التحويل وحساب المصدر والوجهة:",
+            questionEn: "Please specify transfer amount and distinct source/destination treasury accounts:",
+            missingFields: ["amount"],
+            quickOptions: [
+              { labelAr: `تحويل 50,000 من ${fromLabelAr} إلى ${toLabelAr}`, labelEn: `Transfer 50,000`, promptFill: `تحويل 50000 من ${fromLabelAr} إلى ${toLabelAr}` },
+            ],
+          },
+          summaryAr: "❓ يرجى تحديد مبلغ التحويل المالي بين الحسابات.",
+          summaryEn: "❓ Please specify a valid transfer amount between distinct treasury accounts.",
+        }, ctx);
+      }
+
+      const preFlight = buildCrossSectionPreFlightChecks({
+        ctx,
+        outflowAmount: amount,
+        treasuryIdOrCode: fromAcc.id,
+      });
+
+      const card: ConfirmationPreviewCard = {
+        actionId: `ai-trf-${Date.now()}`,
+        toolName: "draft_treasury_transfer",
+        operationType: "TREASURY_TRANSFER",
+        titleAr: `تحويل مالي: ${fromLabelAr} ⬅️ ${toLabelAr}`,
+        titleEn: `Treasury Transfer: ${fromLabelEn} -> ${toLabelEn}`,
+        narrationAr: `تحويل ${amount.toLocaleString()} ${trfCurrency} من ${fromLabelAr} إلى ${toLabelAr}`,
+        narrationEn: `Transfer ${amount.toLocaleString()} ${trfCurrency} from ${fromLabelEn} to ${toLabelEn}`,
+        date: String(args.date ?? todayIso).slice(0, 10),
+        currency: trfCurrency,
+        totalDebit: amount,
+        totalCredit: amount,
+        isBalanced: true,
+        lines: [
+          { accountCode: toAcc.code || toAcc.id, accountNameAr: toLabelAr, accountNameEn: toLabelEn, debit: amount, credit: 0 },
+          { accountCode: fromAcc.code || fromAcc.id, accountNameAr: fromLabelAr, accountNameEn: fromLabelEn, debit: 0, credit: amount },
+        ],
+        preFlightChecks: preFlight.checks,
+        warningsAr: preFlight.warningsAr,
+        warningsEn: preFlight.warningsEn,
+        endpoint: "/api/treasury/transfer",
+        httpMethod: "POST",
+        confirmButtonLabelAr: "تأكيد التحويل المالي",
+        confirmButtonLabelEn: "Confirm Transfer",
+        confirmButtonLabel: "تأكيد التحويل المالي / Confirm Transfer",
+        executionPayload: {
+          operationType: "TREASURY_TRANSFER",
+          fromTreasuryId: fromAcc.id,
+          toTreasuryId: toAcc.id,
+          amount,
+          notes: String(args.notes ?? `تحويل داخلي عبر المساعد الذكي`),
+          date: String(args.date ?? todayIso).slice(0, 10),
+          executed_by_ai: true,
+        },
+      };
+      const msg = appendWarningsText(
+        `🛡️ **بوابة التأكيد:** جاهز لتحويل **${amount.toLocaleString()} ${trfCurrency}** من **${fromLabelAr}** إلى **${toLabelAr}**.`,
+        `🛡️ **Confirmation Gate:** Ready to transfer **${amount.toLocaleString()} ${trfCurrency}** from **${fromLabelEn}** to **${toLabelEn}**.`,
+        preFlight.warningsAr,
+        preFlight.warningsEn
+      );
+      return makeResult(lang, { ok: true, toolName, requiresConfirmation: true, confirmationCard: card, data: { preview: card, preFlightChecks: preFlight.checks }, ...msg });
+    }
+
+    // -----------------------------------------------------------------------
+    // 24. toggle_period_lock
+    // -----------------------------------------------------------------------
+    case "toggle_period_lock": {
+      const effectiveUser = ctx.user ?? "SUPER_ADMIN";
+      if (!canLockPeriod(effectiveUser)) {
+        const role = normalizeRole(effectiveUser);
+        return makeResult(lang, {
+          ok: false,
+          toolName,
+          code: "RBAC_FORBIDDEN",
+          requiresConfirmation: false,
+          summaryAr: `⛔ غير مصرح: إغلاق أو فتح فترات الحصاد محصور بالإدارة العليا ورئيس الحسابات (دورك: ${role}).`,
+          summaryEn: `⛔ RBAC Blocked: Locking/unlocking harvest periods requires SUPER_ADMIN or CHIEF_ACCOUNTANT (role: ${role}).`,
+        }, ctx);
+      }
+      const { project, harvest } = resolveProjectAndHarvest(ctx, args);
+      if (!project) {
+        return makeResult(lang, {
+          ok: false,
+          toolName,
+          code: "PROJECT_REQUIRED",
+          requiresConfirmation: false,
+          summaryAr: "يرجى اختيار مشروع لتعديل حالة إغلاق القطفة.",
+          summaryEn: "Please select a project to lock/unlock a harvest period.",
+        });
+      }
+      const key = `${project.id}::${harvest}`;
+      const currentlyLocked = Boolean(ctx.state?.lockedPeriods?.[key]);
+      const actionVerbAr = currentlyLocked ? "إعادة فتح" : "إغلاق محاسبي";
+      const actionVerbEn = currentlyLocked ? "Unlock" : "Lock";
+
+      // Audit stock & AR before locking
+      const harvestSales = (ctx.state?.sales ?? []).filter((s) => s.projectId === project.id && s.harvest === harvest);
+      const harvestBatches = (ctx.state?.inventoryBatches ?? []).filter((b) => b.projectId === project.id && b.harvest === harvest);
+      const recon = reconcileHarvestInventory(harvestBatches, harvestSales);
+      const periodShortages = recon.summary.shortageBatchCount;
+      const arDue = harvestSales.reduce((s, r) => s + Number(r.debit ?? Math.max(0, r.total - r.credit)), 0);
+      const checks: PreFlightCheckItem[] = [
+        {
+          key: "lock_audit",
+          status: periodShortages > 0 ? "warning" : "ok",
+          labelAr: `مخزون القطفة: ${recon.rows.reduce((s, r) => s + r.remainingBundles, 0)} متبقي • عجز: ${periodShortages}`,
+          labelEn: `Period Stock: ${recon.rows.reduce((s, r) => s + r.remainingBundles, 0)} left • shortages: ${periodShortages}`,
+        },
+        {
+          key: "open_ar",
+          status: arDue > 0 ? "warning" : "ok",
+          labelAr: `ذمم غير محصلة: ${arDue.toLocaleString()} YER`,
+          labelEn: `Open Receivables: ${arDue.toLocaleString()} YER`,
+        },
+      ];
+      const warningsAr: string[] = [];
+      const warningsEn: string[] = [];
+      if (!currentlyLocked && periodShortages > 0) {
+        warningsAr.push(`⚠️ يوجد عجز مخزون في ${harvest} قبل الإقفال.`);
+        warningsEn.push(`⚠️ Stock shortages exist in ${harvest} prior to locking.`);
+      }
+
+      const card: ConfirmationPreviewCard = {
+        actionId: `ai-lock-${Date.now()}`,
+        toolName: "toggle_period_lock",
+        operationType: "TOGGLE_PERIOD_LOCK",
+        titleAr: `${actionVerbAr} فترة (${harvest})`,
+        titleEn: `${actionVerbEn} Period (${harvest})`,
+        narrationAr: `${actionVerbAr} فترة "${harvest}" لمشروع ${project.name}`,
+        narrationEn: `${actionVerbEn} harvest period "${harvest}" for ${project.name}`,
+        date: todayIso,
+        currency: "YER",
+        projectId: project.id,
+        totalDebit: 0,
+        totalCredit: 0,
+        isBalanced: true,
+        lines: [],
+        preFlightChecks: checks,
+        warningsAr,
+        warningsEn,
+        endpoint: "/api/audit/lock",
+        httpMethod: "POST",
+        confirmButtonLabelAr: currentlyLocked ? "تأكيد إعادة الفتح 🔓" : "تأكيد الإغلاق المحاسبي 🔒",
+        confirmButtonLabelEn: currentlyLocked ? "Confirm Unlock 🔓" : "Confirm Period Lock 🔒",
+        confirmButtonLabel: currentlyLocked ? "تأكيد إعادة الفتح / Confirm Unlock" : "تأكيد الإغلاق / Confirm Lock",
+        executionPayload: {
+          operationType: "TOGGLE_PERIOD_LOCK",
+          key,
+          projectId: project.id,
+          harvest,
+          currentlyLocked,
+          executed_by_ai: true,
+        },
+      };
+      const msg = appendWarningsText(
+        `🛡️ **بوابة الاعتماد:** جاهز لتنفيذ **${actionVerbAr}** على (${project.name} — ${harvest}).`,
+        `🛡️ **Confirmation Gate:** Ready to **${actionVerbEn}** (${project.name} — ${harvest}).`,
+        warningsAr,
+        warningsEn
+      );
+      return makeResult(lang, { ok: true, toolName, requiresConfirmation: true, confirmationCard: card, data: { preview: card, preFlightChecks: checks }, ...msg });
+    }
+
+    // -----------------------------------------------------------------------
+    // 25. add_harvest_cycle
+    // -----------------------------------------------------------------------
+    case "add_harvest_cycle": {
+      const perm = checkWritePermission(ctx.user, "projects", false);
+      if (!perm.allowed) {
+        return makeResult(lang, { ok: false, toolName, code: "RBAC_FORBIDDEN", requiresConfirmation: false, summaryAr: perm.summaryAr, summaryEn: perm.summaryEn }, ctx);
+      }
+      const { project } = resolveProjectAndHarvest(ctx, args);
+      const name = String(args.name ?? args.harvest ?? "").trim();
+      if (!project || !name) {
+        return makeResult(lang, {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          clarificationPrompt: {
+            questionAr: "ما هو اسم القطفة أو المرشة الجديدة المراد إضافتها للمشروع؟",
+            questionEn: "What is the name of the new harvest cycle to add?",
+            missingFields: ["name"],
+            quickOptions: [
+              { labelAr: "القطفة الثالثة", labelEn: "Harvest 3", promptFill: "أضف قطفة جديدة باسم القطفة الثالثة" },
+            ],
+          },
+          summaryAr: "❓ يرجى تحديد اسم القطفة الجديدة لإضافتها للمشروع.",
+          summaryEn: "❓ Please specify the new harvest cycle name.",
+        }, ctx);
+      }
+
+      const card: ConfirmationPreviewCard = {
+        actionId: `ai-cyc-${Date.now()}`,
+        toolName: "add_harvest_cycle",
+        operationType: "ADD_HARVEST_CYCLE",
+        titleAr: `إضافة دورة حصاد جديدة (${name})`,
+        titleEn: `Add New Harvest Cycle (${name})`,
+        narrationAr: `إضافة "${name}" إلى مشروع ${project.name}`,
+        narrationEn: `Add harvest cycle "${name}" to ${project.name}`,
+        date: todayIso,
+        currency: "YER",
+        projectId: project.id,
+        totalDebit: 0,
+        totalCredit: 0,
+        isBalanced: true,
+        lines: [],
+        endpoint: "/api/projects/harvests",
+        httpMethod: "POST",
+        confirmButtonLabelAr: "تأكيد وإضافة القطفة",
+        confirmButtonLabelEn: "Confirm & Add Harvest",
+        confirmButtonLabel: "تأكيد وإضافة القطفة / Confirm & Add Harvest",
+        executionPayload: {
+          operationType: "ADD_HARVEST_CYCLE",
+          projectId: project.id,
+          name,
+          executed_by_ai: true,
+        },
+      };
+      return makeResult(lang, {
+        ok: true,
+        toolName,
+        requiresConfirmation: true,
+        confirmationCard: card,
+        data: { preview: card },
+        summaryAr: `🛡️ **بوابة التأكيد:** جاهز لإضافة القطفة الجديدة **(${name})** إلى مشروع **${project.name}**.`,
+        summaryEn: `🛡️ **Confirmation Gate:** Ready to add harvest cycle **(${name})** to project **${project.name}**.`,
+      });
     }
   }
 }

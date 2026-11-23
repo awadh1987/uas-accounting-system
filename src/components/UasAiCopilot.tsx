@@ -63,6 +63,7 @@ import type {
   ConfirmationPreviewCard,
   EscalationCardData,
   UasAgentToolResult,
+  UasWorkspaceContext,
 } from "@/lib/ai/uasAgentTools";
 import {
   type CopilotChatMessage,
@@ -78,7 +79,7 @@ import {
   saveActiveThreadMessages,
 } from "@/lib/ai/conversationArchiveEngine";
 import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
-import { safeFetchJson } from "@/lib/apiClient";
+import { executeMutation, safeFetchJson } from "@/lib/apiClient";
 import {
   checkMicrophoneDiagnostics,
   createSpeechTranscriptAccumulator,
@@ -161,9 +162,11 @@ export interface UasAiCopilotProps {
   state: UasBootstrapState;
   licenseStatus: LicenseStatusData | null;
   offlineMode: boolean;
+  workspaceContext?: UasWorkspaceContext | null;
   onNavigateTab: (tab: TabId) => void;
   onOpenLicenseModal: () => void;
   onRefreshState: () => Promise<void> | void;
+  onApplyState?: (nextState: UasBootstrapState, queueCount: number) => void;
   onToast: (msg: string) => void;
 }
 
@@ -173,9 +176,11 @@ export function UasAiCopilot({
   state,
   licenseStatus,
   offlineMode,
+  workspaceContext,
   onNavigateTab,
   onOpenLicenseModal,
   onRefreshState,
+  onApplyState,
   onToast,
 }: UasAiCopilotProps) {
   const [docRtl, setDocRtl] = useState<boolean>(() => {
@@ -285,6 +290,19 @@ export function UasAiCopilot({
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
+  const [isExpandedWidth, setIsExpandedWidth] = useState(false);
+
+  const mergedWorkspaceContext: UasWorkspaceContext = useMemo(
+    () => ({
+      ...(workspaceContext ?? {}),
+      isOffline:
+        workspaceContext?.isOffline ??
+        (offlineMode || (typeof navigator !== "undefined" && !navigator.onLine)),
+      currency: workspaceContext?.currency || state.settings.defaultCurrency,
+    }),
+    [workspaceContext, offlineMode, state.settings.defaultCurrency]
+  );
+
   const clientDiagnostics: Partial<SupportSystemDiagnostics> = useMemo(
     () => ({
       license_status: licenseStatus?.license_status ?? "UNLICENSED",
@@ -311,8 +329,13 @@ export function UasAiCopilot({
       request_code: licenseStatus?.request_code ?? null,
       license_id: licenseStatus?.license_id ?? null,
       error: licenseStatus?.error ?? null,
+      offline_queue_count: mergedWorkspaceContext.offlineQueueCount ?? 0,
+      pending_conflicts_count: mergedWorkspaceContext.pendingConflictsCount ?? 0,
+      is_offline: Boolean(mergedWorkspaceContext.isOffline),
+      tenant_slug: mergedWorkspaceContext.tenantSlug ?? null,
+      active_tab: mergedWorkspaceContext.activeTab ?? null,
     }),
-    [licenseStatus, state.enterpriseProfile]
+    [licenseStatus, state.enterpriseProfile, mergedWorkspaceContext]
   );
 
   const liveDiagnosticReport = useMemo(
@@ -525,7 +548,9 @@ export function UasAiCopilot({
 
       rec.onresult = (event: SpeechRecognitionEventLike) => {
         const resList = event?.results;
-        const { combined } = transcriptAccRef.current.ingestResults(resList as any);
+        const { combined } = transcriptAccRef.current.ingestResults(
+          resList as unknown as Parameters<typeof transcriptAccRef.current.ingestResults>[0]
+        );
         if (combined) {
           setInterimTranscript(combined);
           setInputPrompt(combined);
@@ -889,6 +914,7 @@ export function UasAiCopilot({
             body: JSON.stringify({
               prompt,
               lang,
+              workspaceContext: mergedWorkspaceContext,
               actor: currentUser
                 ? {
                     userId: currentUser.id,
@@ -911,6 +937,7 @@ export function UasAiCopilot({
           user: currentUser ?? "SUPER_ADMIN",
           lang,
           state,
+          workspaceContext: mergedWorkspaceContext,
           diagnostics: clientDiagnostics,
         });
       }
@@ -1004,34 +1031,64 @@ export function UasAiCopilot({
       }
 
       if (!handledByServer) {
-        if (card.operationType === "CREATE_CUSTOMER") {
-          entryNumber = `CUST-LOC-${getNextMsgId("e")}`;
-          summaryText = isAr
-            ? `✅ تم اعتماد وإنشاء العميل محلياً (${card.partyName || card.executionPayload?.name}) برمز (${entryNumber}) [executed_by_ai: true].`
-            : `✅ Confirmed & created client locally (${card.partyName || card.executionPayload?.name}) [executed_by_ai: true].`;
-          onNavigateTab("customers");
-        } else if (card.operationType === "CREATE_VENDOR") {
-          entryNumber = `VND-LOC-${getNextMsgId("e")}`;
-          summaryText = isAr
-            ? `✅ تم اعتماد وإنشاء المورد محلياً (${card.partyName || card.executionPayload?.nameAr}) برمز (${entryNumber}) [executed_by_ai: true].`
-            : `✅ Confirmed & created supplier locally (${card.partyName || card.executionPayload?.nameAr}) [executed_by_ai: true].`;
-          onNavigateTab("procurement");
-        } else if (card.operationType === "CREATE_PROJECT") {
-          entryNumber = `PRJ-LOC-${getNextMsgId("e")}`;
-          summaryText = isAr
-            ? `✅ تم اعتماد وإنشاء المشروع محلياً (${card.partyName || card.executionPayload?.name}) برمز (${entryNumber}) [executed_by_ai: true].`
-            : `✅ Confirmed & created project locally (${card.partyName || card.executionPayload?.name}) [executed_by_ai: true].`;
-          onNavigateTab("projects");
-        } else if (card.operationType === "EXPORT_CLIENT_REPORT") {
+        const p = (card.executionPayload || {}) as Record<string, unknown>;
+        const actorUser = currentUser || state.users[0] || null;
+        if (card.operationType === "EXPORT_CLIENT_REPORT") {
           entryNumber = `RPT-CUST-${getNextMsgId("e")}`;
           summaryText = isAr
             ? `📄 كشف حساب العميل (${card.partyName || "كافة العملاء"}) جاهز للطباعة وتصدير PDF.`
             : `📄 Client statement for (${card.partyName || "All Clients"}) is ready for export.`;
           onNavigateTab("customers");
-        } else {
+        } else if (actorUser) {
+          const endpointMap: Partial<Record<ConfirmationPreviewCard["operationType"], { endpoint: string; nav: TabId }>> = {
+            RECORD_HARVEST_BATCH: { endpoint: "/api/inventory", nav: "inventory" },
+            RECORD_SALE: { endpoint: "/api/sales", nav: "sales" },
+            RECORD_EXPENSE: { endpoint: "/api/expenses", nav: "expenses" },
+            RECORD_WORKER_WAGE: { endpoint: "/api/workers", nav: "workers" },
+            TREASURY_TRANSFER: { endpoint: "/api/treasury/transfer", nav: "treasury" },
+            TOGGLE_PERIOD_LOCK: { endpoint: "/api/audit/lock", nav: "audit" },
+            ADD_HARVEST_CYCLE: { endpoint: "/api/projects/harvests", nav: "projects" },
+            CREATE_PROJECT: { endpoint: "/api/projects", nav: "projects" },
+            CREATE_CUSTOMER: { endpoint: "/api/sales/customers", nav: "customers" },
+            CREATE_VENDOR: { endpoint: "/api/procurement/vendors", nav: "procurement" },
+            RECEIPT_VOUCHER: { endpoint: "/api/installments", nav: "treasury" },
+            PAYMENT_VOUCHER: { endpoint: "/api/installments", nav: "treasury" },
+            JOURNAL_ENTRY: { endpoint: "/api/accounting/journal", nav: "ledger" },
+            SALES_INVOICE: { endpoint: "/api/accounting/journal", nav: "sales" },
+            PURCHASE_BILL: { endpoint: "/api/accounting/journal", nav: "procurement" },
+          };
+          const targetRoute = endpointMap[card.operationType] || { endpoint: "/api/audit/log", nav: "audit" as TabId };
+          const mutPayload: Record<string, unknown> =
+            card.operationType === "RECEIPT_VOUCHER" || card.operationType === "PAYMENT_VOUCHER"
+              ? {
+                  voucherNo: entryNumber,
+                  type: card.operationType === "RECEIPT_VOUCHER" ? "تحصيل من عميل" : "دفع لمستفيد",
+                  targetName: card.partyName || String(p.partyName || "طرف"),
+                  amount: Number(p.amount ?? card.totalDebit ?? 0),
+                  date: card.date,
+                  notes: isAr ? card.narrationAr : card.narrationEn,
+                  executed_by_ai: true,
+                }
+              : { ...p, executed_by_ai: true };
+
+          const mutRes = await executeMutation({
+            endpoint: targetRoute.endpoint,
+            method: "POST",
+            payload: mutPayload,
+            label: isAr ? card.titleAr : card.titleEn,
+            currentState: state,
+            currentUser: actorUser,
+            offlineMode: true,
+          });
+          if (mutRes.error) {
+            throw new Error(mutRes.error);
+          }
+          onApplyState?.(mutRes.state, mutRes.queueCount);
+          onNavigateTab(targetRoute.nav);
+          entryNumber = `LOC-${getNextMsgId("e")}`;
           summaryText = isAr
-            ? `✅ تم اعتماد وترحيل القيد محلياً (${entryNumber}) بمبلغ ${card.totalDebit.toLocaleString()} ${card.currency} [executed_by_ai: true].`
-            : `✅ Confirmed & executed locally (${entryNumber}) for ${card.totalDebit.toLocaleString()} ${card.currency} [executed_by_ai: true].`;
+            ? `✅ تم التنفيذ والحفظ محلياً (${entryNumber}) — ${card.titleAr}${mutRes.queuedOffline ? ` [قائمة المزامنة #${mutRes.queueCount}]` : " [محفوظ محلياً]"}.`
+            : `✅ Executed & persisted locally (${entryNumber}) — ${card.titleEn}${mutRes.queuedOffline ? ` [Sync Queue #${mutRes.queueCount}]` : " [Local Store]"}.`;
         }
       }
 
@@ -1146,30 +1203,84 @@ export function UasAiCopilot({
     UAS_SUPPORT_CHAPTERS.find((c) => c.chapterNumber === selectedChapterNum) ||
     UAS_SUPPORT_CHAPTERS[0];
 
+  const activeTab = mergedWorkspaceContext.activeTab || "dashboard";
+  const tabQuickPromptsAr: Partial<Record<TabId, string[]>> = {
+    inventory: [
+      "مطابقة الحصاد والمخزون والفاقد",
+      "سجل دفعة حصاد 50 علاقي رقم 1",
+    ],
+    sales: [
+      "مطابقة الحصاد والمخزون والمبيعات",
+      "سند قبض من شركة الأمل بمبلغ 40000",
+    ],
+    expenses: [
+      "سجل مصروف وقود بمبلغ 25000",
+      "ملخص المشروع الحالي والموازنة",
+    ],
+    workers: [
+      "ملخص أجور العمال والمستحقات",
+      "سجل أجر للعامل أحمد بمبلغ 5000 لمدة 1 يوم",
+    ],
+    treasury: [
+      "أرصدة الخزائن والبنوك المتاحة",
+      "تحويل مالي 50000 من الصندوق إلى البنك",
+    ],
+    audit: [
+      "فحص الفترات المغلقة وسجل التدقيق",
+      "إغلاق القطفة محاسبياً",
+    ],
+    system: [
+      "تشخيص حالة الترخيص ومقاعد الـ 7 مستخدمين",
+      "كيف ألغي ربط جهاز مفقود؟",
+    ],
+  };
+  const tabQuickPromptsEn: Partial<Record<TabId, string[]>> = {
+    inventory: [
+      "Reconcile harvest inventory & shrinkage",
+      "Record harvest batch 50 bundles Grade 1",
+    ],
+    sales: [
+      "Reconcile harvest stock vs sales",
+      "Receipt voucher from Al-Amal Co for 40000",
+    ],
+    expenses: [
+      "Record fuel expense 25000 YER",
+      "Analyze current workspace & budget",
+    ],
+    workers: [
+      "Workers payroll summary",
+      "Record worker wage for Ahmed 5000 for 1 day",
+    ],
+    treasury: [
+      "Query treasury & bank balances",
+      "Treasury transfer 50000",
+    ],
+    audit: [
+      "Audit trail and locked periods",
+      "Lock current harvest period",
+    ],
+    system: [
+      "Diagnose system health and 7-user license seats",
+      "How do I release a lost device seat?",
+    ],
+  };
+
   const quickPrompts = isAr
     ? [
+        "تحليل الوضع الحالي عبر الأقسام",
+        ...(tabQuickPromptsAr[activeTab] || []),
         "أنشئ عميل جديد شركة النور هاتف 771234567 وحد ائتماني 500000",
-        "أنشئ مورد جديد مؤسسة البركة هاتف 777112233",
         "أنشئ مشروع جديد مزرعة الجوف بموازنة 3000000",
-        "تصدير كشف حساب العميل شركة الأمل مع تفاصيل المبيعات",
-        "كم رصيد حساب الصندوق الرئيسي 111101؟",
         "اعرض ملخص ميزان المراجعة وقائمة الدخل",
-        "سجل قيد يومية مدين 521101 ديزل بمبلغ 25000 ودائن 111101 بمبلغ 25000",
-        "سند قبض من شركة الأمل بمبلغ 40000",
         "تشخيص حالة الترخيص ومقاعد الـ 7 مستخدمين",
-        "كيف ألغي ربط جهاز مفقود؟",
       ]
     : [
+        "Analyze current workspace briefing",
+        ...(tabQuickPromptsEn[activeTab] || []),
         "Create customer Al-Noor Co phone 771234567 credit limit 500000",
-        "Create vendor Al-Baraka Trading phone 777112233",
         "Create project Al-Jawf Farm budget 3000000",
-        "Export client report for Al-Amal Co with sale details",
-        "Query account balance for 111101 Main Cash Vault",
         "Generate Trial Balance and P&L report summary",
-        "Draft journal entry debit 521101 25000 credit 111101 25000",
-        "Receipt voucher from Al-Amal Co for 40000",
         "Diagnose system health and 7-user license seats",
-        "How do I release a lost device seat?",
       ];
 
   return (
@@ -1265,11 +1376,11 @@ export function UasAiCopilot({
       {open && (
         <div
           dir={isAr ? "rtl" : "ltr"}
-          className={
-            isAr
-              ? "fixed bottom-20 md:bottom-6 left-3 sm:left-5 z-50 w-[calc(100vw-1.5rem)] sm:w-[470px] max-h-[82vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-900 dark:text-slate-100"
-              : "fixed bottom-20 md:bottom-6 right-3 sm:right-5 z-50 w-[calc(100vw-1.5rem)] sm:w-[470px] max-h-[82vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-900 dark:text-slate-100"
-          }
+          className={`${
+            isAr ? "left-3 sm:left-5" : "right-3 sm:right-5"
+          } fixed bottom-20 md:bottom-6 z-50 w-[calc(100vw-1.5rem)] ${
+            isExpandedWidth ? "sm:w-[640px]" : "sm:w-[470px]"
+          } max-h-[85vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-900 dark:text-slate-100 transition-all`}
         >
           {/* Header */}
           <div className="p-4 bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 text-white flex items-center justify-between gap-3">
@@ -1285,18 +1396,27 @@ export function UasAiCopilot({
                       : "UAS Reasoning ERP Copilot & Support"}
                   </span>
                   <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 font-mono text-[9px]">
-                    {offlineMode ? "OFFLINE NLP" : "HYBRID AI"}
+                    {mergedWorkspaceContext.isOffline ? "OFFLINE" : "ONLINE AI"}
                   </span>
                 </div>
                 <div className="text-[10px] text-slate-300">
                   {isAr
-                    ? `الدور: ${currentUser?.role || "زائر / خدمة العملاء"} • المقاعد: ${clientDiagnostics.used_users}/${clientDiagnostics.max_users}`
-                    : `Role: ${currentUser?.role || "Guest / Support"} • Seats: ${clientDiagnostics.used_users}/${clientDiagnostics.max_users}`}
+                    ? `الدور: ${currentUser?.role || "زائر"} • الشاشة: ${activeTab} • المقاعد: ${clientDiagnostics.used_users}/${clientDiagnostics.max_users}`
+                    : `Role: ${currentUser?.role || "Guest"} • Tab: ${activeTab} • Seats: ${clientDiagnostics.used_users}/${clientDiagnostics.max_users}`}
                 </div>
               </div>
             </div>
 
             <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                data-testid="uas-ai-copilot-expand-btn"
+                onClick={() => setIsExpandedWidth((v) => !v)}
+                className="hidden sm:inline-flex px-2 py-1 rounded-xl border border-white/10 text-[10px] font-bold text-slate-300 hover:text-emerald-300 hover:bg-white/10 transition"
+                title={isAr ? "توسيع / تضييق النافذة" : "Toggle Width"}
+              >
+                {isExpandedWidth ? (isAr ? "ضيق" : "Compact") : (isAr ? "توسيع" : "Wide")}
+              </button>
               <button
                 type="button"
                 data-testid="uas-ai-copilot-new-chat-btn"
@@ -1425,6 +1545,39 @@ export function UasAiCopilot({
           {/* =============================================================== */}
           {activePane === "copilot" && (
             <>
+              {/* Live Workspace Context & Sync Status Strip */}
+              <div className="px-3.5 py-2 bg-slate-100/80 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-[10px]">
+                <div className="flex flex-wrap items-center gap-1.5 text-slate-600 dark:text-slate-300 font-bold">
+                  <span className="px-2 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                    {isAr ? `القسم: ${activeTab}` : `Tab: ${activeTab}`}
+                  </span>
+                  {mergedWorkspaceContext.selectedHarvest && (
+                    <span className="px-2 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                      {mergedWorkspaceContext.selectedHarvest}
+                    </span>
+                  )}
+                  {(mergedWorkspaceContext.offlineQueueCount ?? 0) > 0 && (
+                    <span className="px-2 py-0.5 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-300 font-mono">
+                      {isAr
+                        ? `طابور: ${mergedWorkspaceContext.offlineQueueCount}`
+                        : `Queued: ${mergedWorkspaceContext.offlineQueueCount}`}
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  data-testid="copilot-analyze-context-btn"
+                  onClick={() =>
+                    handleSendPrompt(
+                      isAr ? "تحليل الوضع الحالي عبر الأقسام" : "Analyze current workspace briefing"
+                    )
+                  }
+                  className="px-2 py-0.5 rounded-lg bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-700 dark:text-emerald-300 font-black transition"
+                >
+                  {isAr ? "⚡ فحص ذكي للسياق" : "⚡ Analyze Context"}
+                </button>
+              </div>
+
               <div className="flex-1 overflow-y-auto p-3.5 space-y-3 max-h-[52vh]">
                 {/* Quick suggestion chips */}
                 <div className="flex flex-wrap gap-1.5">
@@ -1595,6 +1748,27 @@ export function UasAiCopilot({
                             • <span className="font-mono">{msg.confirmationCard.date}</span>
                           </div>
 
+                          {/* Cross-Section Pre-Flight Checks & Warnings */}
+                          {msg.confirmationCard.preFlightChecks &&
+                            msg.confirmationCard.preFlightChecks.length > 0 && (
+                              <div className="flex flex-wrap gap-1">
+                                {msg.confirmationCard.preFlightChecks.map((chk) => (
+                                  <span
+                                    key={chk.key}
+                                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
+                                      chk.status === "blocked"
+                                        ? "bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300"
+                                        : chk.status === "warning"
+                                        ? "bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300"
+                                        : "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
+                                    }`}
+                                  >
+                                    {isAr ? chk.labelAr : chk.labelEn}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
                           {/* Card Content: Master Records vs Financial Journal Tables */}
                           {msg.confirmationCard.operationType === "CREATE_CUSTOMER" ? (
                             <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-[11px] space-y-1.5">
@@ -1734,48 +1908,50 @@ export function UasAiCopilot({
                               </div>
 
                               {/* Debit / Credit Table */}
-                              <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
-                                <table className="w-full text-[11px]">
-                                  <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                                    <tr>
-                                      <th className="p-1.5 text-start">{isAr ? "الحساب" : "Account"}</th>
-                                      <th className="p-1.5 text-end">{isAr ? "مدين (Dr)" : "Debit"}</th>
-                                      <th className="p-1.5 text-end">{isAr ? "دائن (Cr)" : "Credit"}</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                                    {msg.confirmationCard.lines.map((line, i) => (
-                                      <tr key={i}>
-                                        <td className="p-1.5 font-bold">
-                                          <span className="font-mono text-emerald-600">
-                                            {line.accountCode}
-                                          </span>{" "}
-                                          — {isAr ? line.accountNameAr : line.accountNameEn}
+                              {msg.confirmationCard.lines.length > 0 && (
+                                <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+                                  <table className="w-full text-[11px]">
+                                    <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                                      <tr>
+                                        <th className="p-1.5 text-start">{isAr ? "الحساب" : "Account"}</th>
+                                        <th className="p-1.5 text-end">{isAr ? "مدين (Dr)" : "Debit"}</th>
+                                        <th className="p-1.5 text-end">{isAr ? "دائن (Cr)" : "Credit"}</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                      {msg.confirmationCard.lines.map((line, i) => (
+                                        <tr key={i}>
+                                          <td className="p-1.5 font-bold">
+                                            <span className="font-mono text-emerald-600">
+                                              {line.accountCode}
+                                            </span>{" "}
+                                            — {isAr ? line.accountNameAr : line.accountNameEn}
+                                          </td>
+                                          <td className="p-1.5 text-end font-mono font-bold text-sky-700 dark:text-sky-300">
+                                            {line.debit > 0 ? line.debit.toLocaleString() : "—"}
+                                          </td>
+                                          <td className="p-1.5 text-end font-mono font-bold text-amber-700 dark:text-amber-300">
+                                            {line.credit > 0 ? line.credit.toLocaleString() : "—"}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                    <tfoot className="bg-slate-50 dark:bg-slate-800/60 font-black">
+                                      <tr>
+                                        <td className="p-1.5">{isAr ? "الإجمالي" : "Total"}</td>
+                                        <td className="p-1.5 text-end font-mono">
+                                          {msg.confirmationCard.totalDebit.toLocaleString()}{" "}
+                                          {msg.confirmationCard.currency}
                                         </td>
-                                        <td className="p-1.5 text-end font-mono font-bold text-sky-700 dark:text-sky-300">
-                                          {line.debit > 0 ? line.debit.toLocaleString() : "—"}
-                                        </td>
-                                        <td className="p-1.5 text-end font-mono font-bold text-amber-700 dark:text-amber-300">
-                                          {line.credit > 0 ? line.credit.toLocaleString() : "—"}
+                                        <td className="p-1.5 text-end font-mono">
+                                          {msg.confirmationCard.totalCredit.toLocaleString()}{" "}
+                                          {msg.confirmationCard.currency}
                                         </td>
                                       </tr>
-                                    ))}
-                                  </tbody>
-                                  <tfoot className="bg-slate-50 dark:bg-slate-800/60 font-black">
-                                    <tr>
-                                      <td className="p-1.5">{isAr ? "الإجمالي" : "Total"}</td>
-                                      <td className="p-1.5 text-end font-mono">
-                                        {msg.confirmationCard.totalDebit.toLocaleString()}{" "}
-                                        {msg.confirmationCard.currency}
-                                      </td>
-                                      <td className="p-1.5 text-end font-mono">
-                                        {msg.confirmationCard.totalCredit.toLocaleString()}{" "}
-                                        {msg.confirmationCard.currency}
-                                      </td>
-                                    </tr>
-                                  </tfoot>
-                                </table>
-                              </div>
+                                    </tfoot>
+                                  </table>
+                                </div>
+                              )}
                             </>
                           )}
 

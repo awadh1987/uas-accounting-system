@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { NextRequest, NextResponse } from "next/server";
+import { isPlatformAdminSurfaceEnabled } from "@/lib/buildTarget";
 import { extractSessionTokenFromRequest } from "@/lib/authSession";
 import { forbiddenError, unauthorizedError } from "@/lib/apiHelpers";
 import { extractUasKeyToken, validateLicenseStructure } from "@/lib/licensing/licenseSchema";
@@ -107,6 +108,15 @@ function getRequestSubdomain(req: NextRequest): string | null {
 export async function requireSuperadminRootAuth(
   req: NextRequest
 ): Promise<{ ok: true; actor: SuperadminActor } | { ok: false; response: NextResponse }> {
+  if (!isPlatformAdminSurfaceEnabled()) {
+    return {
+      ok: false,
+      response: forbiddenError(
+        "⛔ لوحة تحكم المنصة ومولد التراخيص غير متاحين في نسخ التطبيق المستقلة / Platform control panel and license generator are excluded from standalone/mobile builds"
+      ),
+    };
+  }
+
   const subdomain = getRequestSubdomain(req);
   if (subdomain) {
     return {

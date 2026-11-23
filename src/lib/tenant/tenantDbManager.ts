@@ -496,7 +496,7 @@ async function executePostgresFallbackDdl(
       }
 
       const fkRegex =
-        /,\s*CONSTRAINT\s+"([^"]+)"\s+(FOREIGN\s+KEY\s*\([^)]+\)\s*REFERENCES\s+[^\n;]+?)(?=\s*(?:,\s*CONSTRAINT|\n\s*\)|\)))/gi;
+        /,\s*CONSTRAINT\s+"([^"]+)"\s+(FOREIGN\s+KEY\s*\([^)]+\)\s*REFERENCES\s+[^\n;]+?)(?=\s*(?:,\s*CONSTRAINT|\r?\n\s*\)))/gi;
       adjusted = adjusted.replace(fkRegex, (_match, name: string, def: string) => {
         deferredFks.push({ table: tableName, name: name.slice(0, 63), def: def.trim() });
         return "";

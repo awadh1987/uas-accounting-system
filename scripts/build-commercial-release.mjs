@@ -35,11 +35,19 @@ function copyRecursiveSync(src, dest, topLevelExcludes = new Set(), isRoot = tru
 // ---------------------------------------------------------------------------
 // STEP 1: Generate Authoritative SQLite Migration SQL (Pinned Prisma 6.19.3)
 // ---------------------------------------------------------------------------
+const skipWinCompileArg = process.argv.includes("--skip-win-compile") || process.platform !== "win32";
+const currentSchemaText = fs.readFileSync(path.join(projectRoot, "prisma", "schema.prisma"), "utf8");
+const isSqliteSchema = /^\s*provider\s*=\s*"sqlite"/m.test(currentSchemaText);
+
 console.log("\n[Step 1/8] Refreshing authoritative SQLite migration & embedded fallback...");
-execFileSync(process.execPath, [path.join(projectRoot, "scripts", "generate-sqlite-migration.mjs")], {
-  cwd: projectRoot,
-  stdio: "inherit",
-});
+if (isSqliteSchema) {
+  execFileSync(process.execPath, [path.join(projectRoot, "scripts", "generate-sqlite-migration.mjs")], {
+    cwd: projectRoot,
+    stdio: "inherit",
+  });
+} else {
+  console.log("[INFO] Schema provider is not sqlite (cloud postgresql); preserving checked-in SQLite migration & sqliteInitSql.ts.");
+}
 
 // Ensure Prisma Client is freshly generated with pinned 6.19.3 CLI (never `npx prisma`!)
 const prismaEntrypoint = path.join(projectRoot, "node_modules", "prisma", "build", "index.js");
@@ -49,22 +57,121 @@ execFileSync(process.execPath, [prismaEntrypoint, "generate"], {
 });
 
 // ---------------------------------------------------------------------------
-// STEP 2: Fresh Production Build (Next.js Standalone)
+// STEP 2: Fresh Production Build (Next.js Standalone - Desktop Target)
 // ---------------------------------------------------------------------------
-console.log("\n[Step 2/8] Building Next.js standalone production bundle (zero raw TS source)...");
+console.log("\n[Step 2/8] Building Next.js standalone production bundle (Desktop target, excluding Control Panel & Superadmin)...");
 const skipBuild = process.argv.includes("--skip-build");
 const standaloneDir = path.join(projectRoot, ".next", "standalone");
 
-if (!skipBuild || !fs.existsSync(standaloneDir)) {
-  execSync("npm run build", { stdio: "inherit", cwd: projectRoot });
-  for (const stray of ["android", "ios"]) {
-    const strayPath = path.join(standaloneDir, stray);
-    if (fs.existsSync(strayPath)) {
-      fs.rmSync(strayPath, { recursive: true, force: true });
+const desktopStashRoot = path.join(projectRoot, ".desktop-platform-backup");
+const excludedPlatformDirs = [
+  {
+    name: "control-panel",
+    src: path.join(projectRoot, "src", "app", "control-panel"),
+    bak: path.join(desktopStashRoot, "control-panel"),
+  },
+  {
+    name: "superadmin",
+    src: path.join(projectRoot, "src", "app", "superadmin"),
+    bak: path.join(desktopStashRoot, "superadmin"),
+  },
+  {
+    name: "api-control-panel",
+    src: path.join(projectRoot, "src", "app", "api", "control-panel"),
+    bak: path.join(desktopStashRoot, "api-control-panel"),
+  },
+  {
+    name: "api-superadmin",
+    src: path.join(projectRoot, "src", "app", "api", "superadmin"),
+    bak: path.join(desktopStashRoot, "api-superadmin"),
+  },
+];
+
+function moveDirSafe(src, dest) {
+  if (!fs.existsSync(src)) return false;
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  try {
+    fs.renameSync(src, dest);
+  } catch {
+    fs.cpSync(src, dest, { recursive: true });
+    fs.rmSync(src, { recursive: true, force: true });
+  }
+  return true;
+}
+
+let restoringDesktop = false;
+function restoreDesktopPlatformDirs() {
+  if (restoringDesktop) return;
+  restoringDesktop = true;
+  try {
+    for (const item of excludedPlatformDirs) {
+      if (!fs.existsSync(item.src) && fs.existsSync(item.bak)) {
+        moveDirSafe(item.bak, item.src);
+      }
     }
+    if (fs.existsSync(desktopStashRoot) && fs.readdirSync(desktopStashRoot).length === 0) {
+      fs.rmSync(desktopStashRoot, { recursive: true, force: true });
+    }
+  } finally {
+    restoringDesktop = false;
+  }
+}
+
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(sig, () => {
+    restoreDesktopPlatformDirs();
+    process.exit(1);
+  });
+}
+process.on("exit", () => restoreDesktopPlatformDirs());
+
+// Recover any leftover stashed dirs before checking build state
+restoreDesktopPlatformDirs();
+
+const standaloneServerAppDir = path.join(standaloneDir, ".next", "server", "app");
+const hasExcludedRoutesInStandalone = [
+  path.join(standaloneServerAppDir, "control-panel"),
+  path.join(standaloneServerAppDir, "superadmin"),
+  path.join(standaloneServerAppDir, "api", "control-panel"),
+  path.join(standaloneServerAppDir, "api", "superadmin"),
+].some((p) => fs.existsSync(p));
+
+if (!skipBuild || !fs.existsSync(standaloneDir) || hasExcludedRoutesInStandalone) {
+  if (hasExcludedRoutesInStandalone && skipBuild) {
+    console.log("[INFO] Existing standalone contains cloud admin routes; rebuilding clean desktop bundle...");
+  }
+  try {
+    if (fs.existsSync(desktopStashRoot)) {
+      fs.rmSync(desktopStashRoot, { recursive: true, force: true });
+    }
+    for (const item of excludedPlatformDirs) {
+      moveDirSafe(item.src, item.bak);
+    }
+    const nextDir = path.join(projectRoot, ".next");
+    if (fs.existsSync(nextDir)) {
+      fs.rmSync(nextDir, { recursive: true, force: true });
+    }
+    execSync("npm run build", {
+      stdio: "inherit",
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        UAS_BUILD_TARGET: "desktop",
+        NEXT_PUBLIC_UAS_BUILD_TARGET: "desktop",
+        NEXT_PUBLIC_ENABLE_PLATFORM_ADMIN: "0",
+      },
+    });
+    for (const stray of ["android", "ios"]) {
+      const strayPath = path.join(standaloneDir, stray);
+      if (fs.existsSync(strayPath)) {
+        fs.rmSync(strayPath, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    restoreDesktopPlatformDirs();
   }
 } else {
-  console.log("[OK] Using existing standalone build (--skip-build).");
+  console.log("[OK] Using existing desktop standalone build (--skip-build).");
 }
 
 if (!fs.existsSync(path.join(standaloneDir, "server.js"))) {
@@ -210,14 +317,18 @@ if (!fs.existsSync(queryEngineDest)) {
   );
   if (fs.existsSync(fallbackEngine)) {
     fs.copyFileSync(fallbackEngine, queryEngineDest);
+  } else if (skipWinCompileArg) {
+    console.warn("[WARN] query_engine-windows.dll.node not present on non-Windows host; run `npm run db:sqlite && npm run release:build` on Windows for final .exe packaging.");
   } else {
     console.error("[ERROR] Missing query_engine-windows.dll.node!");
     process.exit(1);
   }
 }
-console.log(
-  `[OK] Bundled query_engine-windows.dll.node (${(fs.statSync(queryEngineDest).size / 1024 / 1024).toFixed(2)} MB)`
-);
+if (fs.existsSync(queryEngineDest)) {
+  console.log(
+    `[OK] Bundled query_engine-windows.dll.node (${(fs.statSync(queryEngineDest).size / 1024 / 1024).toFixed(2)} MB)`
+  );
+}
 
 // Explicitly copy @prisma/client wrapper package
 copyRecursiveSync(
@@ -248,14 +359,21 @@ console.log("[OK] Bundled scripts/reset-admin-password.mjs for offline emergency
 // ---------------------------------------------------------------------------
 console.log("\n[Step 4/8] Generating clean pre-migrated & seeded template.db...");
 const templateDbDest = path.join(prismaDest, "template.db");
-execFileSync(
-  process.execPath,
-  [path.join(projectRoot, "scripts", "build-template-db.mjs"), templateDbDest],
-  {
-    cwd: projectRoot,
-    stdio: "inherit",
-  }
-);
+if (isSqliteSchema) {
+  execFileSync(
+    process.execPath,
+    [path.join(projectRoot, "scripts", "build-template-db.mjs"), templateDbDest],
+    {
+      cwd: projectRoot,
+      stdio: "inherit",
+    }
+  );
+} else if (skipWinCompileArg) {
+  console.log("[INFO] Skipping SQLite template.db seeding on non-sqlite staging host.");
+} else {
+  console.error("[ERROR] Switch to SQLite schema first (`npm run db:sqlite`) before building Windows template.db.");
+  process.exit(1);
+}
 
 // ---------------------------------------------------------------------------
 // STEP 5: Compile Native Self-Contained Launcher UAS.exe (Zero CLI / Zero npx)
@@ -384,6 +502,9 @@ public class UasLauncher
             psi.EnvironmentVariables["HOSTNAME"] = host;
             psi.EnvironmentVariables["DATABASE_URL"] = dbUrl;
             psi.EnvironmentVariables["UAS_LICENSE_PATH"] = licensePath;
+            psi.EnvironmentVariables["UAS_BUILD_TARGET"] = "desktop";
+            psi.EnvironmentVariables["NEXT_PUBLIC_UAS_BUILD_TARGET"] = "desktop";
+            psi.EnvironmentVariables["NEXT_PUBLIC_ENABLE_PLATFORM_ADMIN"] = "0";
 
             Process serverProc = new Process();
             serverProc.StartInfo = psi;
@@ -515,21 +636,29 @@ const cscCandidates = [
 ];
 const cscExe = cscCandidates.find((p) => fs.existsSync(p));
 
-try {
-  if (cscExe) {
-    const iconArg = fs.existsSync(iconWinPath) ? `/win32icon:"${iconWinPath}"` : "";
-    execSync(
-      `"${cscExe}" /nologo /optimize+ /target:winexe ${iconArg} /out:"${uasExePath}" "${uasLauncherCsPath}"`,
-      { stdio: "inherit" }
-    );
-  } else {
-    execSync(
-      `powershell -NoProfile -Command "Add-Type -TypeDefinition (Get-Content '${uasLauncherCsPath}' -Raw) -OutputAssembly '${uasExePath}' -OutputType WindowsApplication"`,
-      { stdio: "inherit" }
-    );
+const isWindowsHost = process.platform === "win32";
+const skipWinCompile = process.argv.includes("--skip-win-compile") || !isWindowsHost;
+
+if (!skipWinCompile) {
+  try {
+    if (cscExe) {
+      const iconArg = fs.existsSync(iconWinPath) ? `/win32icon:"${iconWinPath}"` : "";
+      execSync(
+        `"${cscExe}" /nologo /optimize+ /target:winexe ${iconArg} /out:"${uasExePath}" "${uasLauncherCsPath}"`,
+        { stdio: "inherit" }
+      );
+    } else {
+      execSync(
+        `powershell -NoProfile -Command "Add-Type -TypeDefinition (Get-Content '${uasLauncherCsPath}' -Raw) -OutputAssembly '${uasExePath}' -OutputType WindowsApplication"`,
+        { stdio: "inherit" }
+      );
+    }
+    console.log(`[OK] Compiled silent GUI launcher with brand icon: ${uasExePath}`);
+  } finally {
+    if (fs.existsSync(uasLauncherCsPath)) fs.unlinkSync(uasLauncherCsPath);
   }
-  console.log(`[OK] Compiled silent GUI launcher with brand icon: ${uasExePath}`);
-} finally {
+} else {
+  console.log("[INFO] Non-Windows host or --skip-win-compile: skipping csc.exe compilation of UAS.exe (run on Windows to compile binaries).");
   if (fs.existsSync(uasLauncherCsPath)) fs.unlinkSync(uasLauncherCsPath);
 }
 
@@ -709,14 +838,25 @@ const quickStartMd = `# دليل البدء والتشغيل التجاري لم
 `;
 fs.writeFileSync(path.join(releaseRoot, "QUICK-START-AR-EN.md"), quickStartMd, "utf8");
 
-// Pre-packaging audit gate: ZERO .apk files allowed inside Windows release bundle
+// Pre-packaging audit gate: ZERO .apk files and ZERO Control Panel / Superadmin routes inside Windows release bundle
 const allReleaseFiles = collectFilesRecursive(releaseRoot);
 const leakedApks = allReleaseFiles.filter((f) => f.toLowerCase().endsWith(".apk"));
 if (leakedApks.length > 0) {
   console.error("[ERROR] Found leaked .apk file(s) inside Windows release bundle:", leakedApks);
   process.exit(1);
 }
-console.log("[OK] Pre-installer audit passed: zero .apk files inside release/UAS-Commercial-Dist");
+const releaseServerAppDir = path.join(appDestDir, ".next", "server", "app");
+const leakedAdminRoutes = [
+  path.join(releaseServerAppDir, "control-panel"),
+  path.join(releaseServerAppDir, "superadmin"),
+  path.join(releaseServerAppDir, "api", "control-panel"),
+  path.join(releaseServerAppDir, "api", "superadmin"),
+].filter((p) => fs.existsSync(p));
+if (leakedAdminRoutes.length > 0) {
+  console.error("[ERROR] Found excluded Control Panel / Superadmin route(s) inside Windows release bundle:", leakedAdminRoutes);
+  process.exit(1);
+}
+console.log("[OK] Pre-installer audit passed: zero .apk files and zero Control Panel/Superadmin routes inside release/UAS-Commercial-Dist");
 
 // STEP 7: Compile Native Windows Installer (UAS-Setup-Win64.exe)
 // ---------------------------------------------------------------------------
@@ -916,30 +1056,35 @@ const isccCandidates = [
 
 const isccExe = isccCandidates.find((p) => fs.existsSync(p));
 
-try {
-  fs.mkdirSync(path.dirname(exeDownloadsPath), { recursive: true });
+if (!skipWinCompile) {
+  try {
+    fs.mkdirSync(path.dirname(exeDownloadsPath), { recursive: true });
 
-  if (isccExe && fs.existsSync(issScriptPath)) {
-    console.log(`[INFO] Found Inno Setup 6 compiler: ${isccExe}`);
-    execSync(`"${isccExe}" "${issScriptPath}"`, { stdio: "inherit" });
-    if (fs.existsSync(exeDownloadsPath)) {
-      fs.copyFileSync(exeDownloadsPath, exeReleasePath);
-    } else if (fs.existsSync(exeReleasePath)) {
+    if (isccExe && fs.existsSync(issScriptPath)) {
+      console.log(`[INFO] Found Inno Setup 6 compiler: ${isccExe}`);
+      execSync(`"${isccExe}" "${issScriptPath}"`, { stdio: "inherit" });
+      if (fs.existsSync(exeDownloadsPath)) {
+        fs.copyFileSync(exeDownloadsPath, exeReleasePath);
+      } else if (fs.existsSync(exeReleasePath)) {
+        fs.copyFileSync(exeReleasePath, exeDownloadsPath);
+      }
+      console.log(`[OK] Full Inno Setup self-extracting installer compiled: ${exeDownloadsPath}`);
+      console.log(`[OK] Synced full installer to release bundle: ${exeReleasePath}`);
+    } else {
+      console.warn("[WARN] Inno Setup 6 (ISCC.exe) not found; falling back to lightweight C# stub installer.");
+      execSync(
+        `powershell -NoProfile -Command "Add-Type -TypeDefinition (Get-Content '${csTempPath}' -Raw) -OutputAssembly '${exeReleasePath}' -OutputType ConsoleApplication"`,
+        { stdio: "inherit" }
+      );
       fs.copyFileSync(exeReleasePath, exeDownloadsPath);
+      console.log(`[OK] Native 64-bit stub installer compiled: ${exeReleasePath}`);
+      console.log(`[OK] Copied installer to web downloads: ${exeDownloadsPath}`);
     }
-    console.log(`[OK] Full Inno Setup self-extracting installer compiled: ${exeDownloadsPath}`);
-    console.log(`[OK] Synced full installer to release bundle: ${exeReleasePath}`);
-  } else {
-    console.warn("[WARN] Inno Setup 6 (ISCC.exe) not found; falling back to lightweight C# stub installer.");
-    execSync(
-      `powershell -NoProfile -Command "Add-Type -TypeDefinition (Get-Content '${csTempPath}' -Raw) -OutputAssembly '${exeReleasePath}' -OutputType ConsoleApplication"`,
-      { stdio: "inherit" }
-    );
-    fs.copyFileSync(exeReleasePath, exeDownloadsPath);
-    console.log(`[OK] Native 64-bit stub installer compiled: ${exeReleasePath}`);
-    console.log(`[OK] Copied installer to web downloads: ${exeDownloadsPath}`);
+  } finally {
+    if (fs.existsSync(csTempPath)) fs.unlinkSync(csTempPath);
   }
-} finally {
+} else {
+  console.log("[INFO] Non-Windows host or --skip-win-compile: skipping UAS-Setup-Win64.exe compilation (run on Windows to compile .exe installer).");
   if (fs.existsSync(csTempPath)) fs.unlinkSync(csTempPath);
 }
 
