@@ -23,6 +23,7 @@ import { createPrismaSeatStore } from "@/lib/licensing/prismaSeatStore";
 import { createPrismaProfileRepo } from "@/lib/licensing/companyLockServer";
 import { enforceActivationPolicy } from "@/lib/licensing/activationPolicy";
 import { normalizePlatform } from "@/lib/licensing/seatService";
+import { evaluateLicenseGovernance } from "@/lib/controlPanel/governanceStore";
 import {
   buildTenantWorkspaceUrl,
   ensureTenantRegistered,
@@ -214,6 +215,27 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
           error: verification.error || "فشل التحقق من صلاحية الترخيص / License verification failed",
         },
         { status: 400 }
+      );
+    }
+
+    const activeTenantIdPre = getActiveTenantId();
+    const slugForGov = licenseObj.tenant_slug || (activeTenantIdPre !== "default" ? activeTenantIdPre : null);
+    const existingMetaForGov = slugForGov ? findTenantBySlug(slugForGov) : null;
+    const govEval = evaluateLicenseGovernance({
+      licenseId: licenseObj.license_id,
+      slug: slugForGov,
+      registryStatus: existingMetaForGov?.status || null,
+      expiresAt: licenseObj.expires_at,
+    });
+    if (!govEval.allowed) {
+      return NextResponse.json(
+        {
+          success: false,
+          status: govEval.status,
+          code: govEval.code || `LICENSE_${govEval.status}`,
+          error: govEval.error,
+        },
+        { status: 403 }
       );
     }
 

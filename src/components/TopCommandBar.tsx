@@ -544,7 +544,13 @@ export function TopCommandBar({
             }}
             className="flex items-center gap-2 px-2 py-1 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
           >
-            <SvgAvatar char={currentUser.avatarChar} size={28} />
+            <SvgAvatar
+              char={currentUser.avatarChar}
+              avatarUrl={currentUser.avatarUrl}
+              color={currentUser.avatarColor}
+              size={28}
+              alt={currentUser.displayName || currentUser.name}
+            />
             <div className="hidden md:block text-start leading-tight max-w-[115px]">
               <div className="text-[11px] font-extrabold truncate">
                 {currentUser.displayName || currentUser.name}

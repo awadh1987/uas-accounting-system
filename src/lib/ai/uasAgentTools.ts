@@ -21,6 +21,7 @@ import {
   diagnoseLiveSystemState,
   type SupportSystemDiagnostics,
 } from "@/lib/localSupportEngine";
+import { reconcileHarvestInventory } from "@/lib/harvestReconciliation";
 import type {
   TabId,
   UasBootstrapState,
@@ -1345,18 +1346,21 @@ export async function executeUasAgentTool(
     case "check_item_stock": {
       const q = String(args.query ?? args.item ?? "").trim().toLowerCase();
       const batches = ctx.state?.inventoryBatches ?? [];
-      const filtered = q
-        ? batches.filter(
-            (b) =>
-              b.grade.toLowerCase().includes(q) ||
-              b.harvest.toLowerCase().includes(q) ||
-              b.notes.toLowerCase().includes(q)
+      const sales = ctx.state?.sales ?? [];
+      const report = reconcileHarvestInventory(batches, sales);
+      const filteredRows = q
+        ? report.rows.filter(
+            (r) =>
+              r.batch.grade.toLowerCase().includes(q) ||
+              r.batch.harvest.toLowerCase().includes(q) ||
+              r.batch.notes.toLowerCase().includes(q)
           )
-        : batches;
+        : report.rows;
 
-      const totalHarvested = filtered.reduce((s, b) => s + Number(b.harvestedBundles || 0), 0);
-      const totalShrinkage = filtered.reduce((s, b) => s + Number(b.shrinkageBundles || 0), 0);
-      const netAvailable = Math.max(0, totalHarvested - totalShrinkage);
+      const totalHarvested = filteredRows.reduce((s, r) => s + r.harvestedBundles, 0);
+      const totalShrinkage = filteredRows.reduce((s, r) => s + r.shrinkageBundles, 0);
+      const totalSold = filteredRows.reduce((s, r) => s + r.soldBundles, 0);
+      const netAvailable = filteredRows.reduce((s, r) => s + r.remainingBundles, 0);
 
       return makeResult(lang, {
         ok: true,
@@ -1364,19 +1368,20 @@ export async function executeUasAgentTool(
         requiresConfirmation: false,
         navigationTab: "inventory",
         data: {
-          batchCount: filtered.length,
+          batchCount: filteredRows.length,
           totalHarvested,
           totalShrinkage,
+          totalSold,
           netAvailable,
-          batches: filtered.slice(0, 10),
+          batches: filteredRows.slice(0, 10).map((r) => r.batch),
         },
         summaryAr:
-          filtered.length > 0
-            ? `📦 **فحص المخزون (${filtered.length} دفعة):** إجمالي الكمية المستلمة: **${totalHarvested}** • الفاقد/التالف: **${totalShrinkage}** • الرصيد الصافي المتاح: **${netAvailable} وحدة/علاقية**.`
+          filteredRows.length > 0
+            ? `📦 **فحص المخزون (${filteredRows.length} دفعة):** المقطوف: **${totalHarvested}** • المباع: **${totalSold}** • الفاقد/التالف: **${totalShrinkage}** • الرصيد المتبقي: **${netAvailable} وحدة/علاقية**.`
             : "📦 **حالة المخزون:** لا توجد دفعات مخزنية مسجلة حالياً (رصيد المخزون: 0).",
         summaryEn:
-          filtered.length > 0
-            ? `📦 **Inventory Stock (${filtered.length} batches):** Total Harvested: **${totalHarvested}** • Shrinkage: **${totalShrinkage}** • Net Available Stock: **${netAvailable} units**.`
+          filteredRows.length > 0
+            ? `📦 **Inventory Stock (${filteredRows.length} batches):** Total Harvested: **${totalHarvested}** • Sold: **${totalSold}** • Shrinkage: **${totalShrinkage}** • Net Available Stock: **${netAvailable} units**.`
             : "📦 **Inventory Status:** No inventory batches recorded yet (Available stock: 0).",
       });
     }

@@ -37,4 +37,7 @@ public/downloads/version.json
 backups/
 data/tenants/
 data/licenses/
+data/branding/
+data/control-panel/
+public/uploads/
 .env.production

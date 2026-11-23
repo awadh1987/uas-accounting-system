@@ -4634,6 +4634,8 @@ export async function updateSaleTransactionAtomic(input: {
   revenueAccountCode?: string;
   treasuryAccountId?: string;
   createdById?: string;
+  allowNegativeStock?: boolean;
+  actorRole?: string;
 }) {
   return prisma.$transaction(async (tx) => {
     const existing = await tx.saleTransaction.findUnique({ where: { id: input.id } });
@@ -4679,6 +4681,20 @@ export async function updateSaleTransactionAtomic(input: {
     const nextOfficerTitle = input.salesOfficerTitle?.trim() || existing.salesOfficerTitle;
     const nextRevenueCode = input.revenueAccountCode?.trim() || existing.revenueAccountCode;
     const nextTreasuryId = input.treasuryAccountId?.trim() || existing.treasuryAccountId || "t1";
+
+    if (nextBundles > 0) {
+      const { validateHarvestStockForSaleTx } = await import("@/lib/harvestStockGuard");
+      await validateHarvestStockForSaleTx(tx, {
+        projectId: nextProjectId,
+        subProjectId: nextSubProjectId,
+        harvestName: nextHarvest,
+        productGrade: nextGrade,
+        requestedBundles: nextBundles,
+        excludeSaleId: existing.id,
+        allowNegativeStock: input.allowNegativeStock,
+        actorRole: input.actorRole,
+      });
+    }
 
     const customer = await ensureCustomerWithAccountTx(tx, {
       name: nextCustomerName,

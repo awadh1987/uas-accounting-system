@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
-import { computeNetOperatingProfit, computeRemainingStock } from "@/lib/formulas";
+import { computeNetOperatingProfit } from "@/lib/formulas";
+import { reconcileHarvestInventory } from "@/lib/harvestReconciliation";
 import { exportOrShareBinaryFile } from "@/lib/nativeBridge";
 import type { UasBootstrapState } from "@/types/uas";
 
@@ -132,36 +133,39 @@ export function exportFullWorkbookToExcel(
       ? state.sales.filter((s) => s.customer === options.customerFilter)
       : state.sales;
 
-  const saleRows = filteredSales.map((s) => ({
-    "المشروع": projectNameById(s.projectId),
-    "القطاع الفرعي": subProjectNameById(s.projectId, s.subProjectId) || "—",
-    "مركز التكلفة / Cost Center":
-      (s as any).costCenterCode ||
-      (s as any).costCenterId ||
-      (s.subProjectId
-        ? state.projects.flatMap((p) => p.subProjects || []).find((sp) => sp.id === s.subProjectId)?.code || s.subProjectId
-        : "—"),
-    "العملة / Currency": (s as any).currencyCode || (s as any).currency || "YER",
-    "سعر الصرف / FX Rate": Number((s as any).exchangeRate || 1),
-    "القطفة": s.harvest,
-    "رقم العملية التسلسلي": s.sequenceNumber || s.batch,
-    "الوردية / الدفعة": s.dailyBatchLabel || s.batch,
-    "مسؤول المبيعات": s.salesOfficerTitle || "—",
-    "اسم العميل": s.customer,
-    "رقم الهاتف": s.phone,
-    "النوع / الدرجة": s.grade,
-    "الكمية": Number(s.bundles || 0),
-    "كود الوحدة / Unit Code": (s as any).unitCode || "BUNDLE",
-    "معامل التحويل / Factor": Number((s as any).factorToBase || 1),
-    "السعر": Number(s.price || 0),
-    "الإجمالي": Number(s.total || 0),
-    "دائن (مقبوض)": Number(s.credit || 0),
-    "مدين (متبقي)": Number(s.debit || 0),
-    "الحساب الإيرادي": s.revenueAccountCode || "411101",
-    "الخزينة": s.treasuryName || "—",
-    "التاريخ": s.date,
-    "رقم السند": s.voucherNo,
-  }));
+  const saleRows = filteredSales.map((s) => {
+    const ext = s as unknown as Record<string, unknown>;
+    return {
+      "المشروع": projectNameById(s.projectId),
+      "القطاع الفرعي": subProjectNameById(s.projectId, s.subProjectId) || "—",
+      "مركز التكلفة / Cost Center":
+        ext.costCenterCode ||
+        ext.costCenterId ||
+        (s.subProjectId
+          ? state.projects.flatMap((p) => p.subProjects || []).find((sp) => sp.id === s.subProjectId)?.code || s.subProjectId
+          : "—"),
+      "العملة / Currency": ext.currencyCode || ext.currency || "YER",
+      "سعر الصرف / FX Rate": Number(ext.exchangeRate || 1),
+      "القطفة": s.harvest,
+      "رقم العملية التسلسلي": s.sequenceNumber || s.batch,
+      "الوردية / الدفعة": s.dailyBatchLabel || s.batch,
+      "مسؤول المبيعات": s.salesOfficerTitle || "—",
+      "اسم العميل": s.customer,
+      "رقم الهاتف": s.phone,
+      "النوع / الدرجة": s.grade,
+      "الكمية": Number(s.bundles || 0),
+      "كود الوحدة / Unit Code": ext.unitCode || "BUNDLE",
+      "معامل التحويل / Factor": Number(ext.factorToBase || 1),
+      "السعر": Number(s.price || 0),
+      "الإجمالي": Number(s.total || 0),
+      "دائن (مقبوض)": Number(s.credit || 0),
+      "مدين (متبقي)": Number(s.debit || 0),
+      "الحساب الإيرادي": s.revenueAccountCode || "411101",
+      "الخزينة": s.treasuryName || "—",
+      "التاريخ": s.date,
+      "رقم السند": s.voucherNo,
+    };
+  });
   XLSX.utils.book_append_sheet(
     wb,
     createRtlSheet(saleRows, [
@@ -201,28 +205,31 @@ export function exportFullWorkbookToExcel(
   );
 
   // Sheet 4: Operating Expenses
-  const expRows = state.expenses.map((e) => ({
-    "المشروع": projectNameById(e.projectId),
-    "القطاع الفرعي": subProjectNameById(e.projectId, e.subProjectId) || "—",
-    "مركز التكلفة / Cost Center":
-      (e as any).costCenterCode ||
-      (e as any).costCenterId ||
-      (e.subProjectId
-        ? state.projects.flatMap((p) => p.subProjects || []).find((sp) => sp.id === e.subProjectId)?.code || e.subProjectId
-        : "—"),
-    "العملة / Currency": (e as any).currencyCode || (e as any).currency || "YER",
-    "سعر الصرف / FX Rate": Number((e as any).exchangeRate || 1),
-    "القطفة": e.harvest,
-    "الفئة": e.category,
-    "البيان": e.subType,
-    "الكمية": Number(e.qty || 0),
-    "كود الوحدة / Unit Code": (e as any).unitCode || "QTY",
-    "معامل التحويل / Factor": Number((e as any).factorToBase || 1),
-    "قيمة الوحدة": Number(e.unitPrice || 0),
-    "الإجمالي": Number(e.total || 0),
-    "التاريخ": e.date,
-    "ملاحظات": e.notes,
-  }));
+  const expRows = state.expenses.map((e) => {
+    const ext = e as unknown as Record<string, unknown>;
+    return {
+      "المشروع": projectNameById(e.projectId),
+      "القطاع الفرعي": subProjectNameById(e.projectId, e.subProjectId) || "—",
+      "مركز التكلفة / Cost Center":
+        ext.costCenterCode ||
+        ext.costCenterId ||
+        (e.subProjectId
+          ? state.projects.flatMap((p) => p.subProjects || []).find((sp) => sp.id === e.subProjectId)?.code || e.subProjectId
+          : "—"),
+      "العملة / Currency": ext.currencyCode || ext.currency || "YER",
+      "سعر الصرف / FX Rate": Number(ext.exchangeRate || 1),
+      "القطفة": e.harvest,
+      "الفئة": e.category,
+      "البيان": e.subType,
+      "الكمية": Number(e.qty || 0),
+      "كود الوحدة / Unit Code": ext.unitCode || "QTY",
+      "معامل التحويل / Factor": Number(ext.factorToBase || 1),
+      "قيمة الوحدة": Number(e.unitPrice || 0),
+      "الإجمالي": Number(e.total || 0),
+      "التاريخ": e.date,
+      "ملاحظات": e.notes,
+    };
+  });
   XLSX.utils.book_append_sheet(
     wb,
     createRtlSheet(expRows, [
@@ -253,20 +260,16 @@ export function exportFullWorkbookToExcel(
   );
 
   // Sheet 6: Inventory Reconciliation
-  const invRows = state.inventoryBatches.map((b) => {
-    const soldBundles = state.sales
-      .filter((s) => s.projectId === b.projectId && s.harvest === b.harvest && s.grade === b.grade)
-      .reduce((acc, s) => acc + (Number(s.bundles) || 0), 0);
-    return {
-      "المشروع": projectNameById(b.projectId),
-      "القطفة": b.harvest,
-      "الدرجة": b.grade,
-      "المقطوف": Number(b.harvestedBundles),
-      "المباع": soldBundles,
-      "الفاقد": Number(b.shrinkageBundles),
-      "المتبقي": computeRemainingStock(b.harvestedBundles, soldBundles, b.shrinkageBundles),
-    };
-  });
+  const invReport = reconcileHarvestInventory(state.inventoryBatches, state.sales);
+  const invRows = invReport.rows.map((r) => ({
+    "المشروع": projectNameById(r.batch.projectId),
+    "القطفة": r.batch.harvest,
+    "الدرجة": r.batch.grade,
+    "المقطوف": r.harvestedBundles,
+    "المباع": r.soldBundles,
+    "الفاقد": r.shrinkageBundles,
+    "المتبقي": r.remainingBundles,
+  }));
   XLSX.utils.book_append_sheet(
     wb,
     createRtlSheet(invRows, ["المقطوف", "المباع", "الفاقد", "المتبقي"]),
@@ -482,7 +485,7 @@ export async function exportUasModuleTemplate(module: TemplateModule): Promise<v
   wb.Workbook = { Views: [{ RTL: true }] };
 
   let sampleRows: Record<string, unknown>[] = [];
-  let filename = `UAS_Template_${module.toUpperCase()}.xlsx`;
+  const filename = `UAS_Template_${module.toUpperCase()}.xlsx`;
 
   if (module === "sales") {
     sampleRows = [

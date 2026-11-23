@@ -18,6 +18,8 @@ export interface SupportSystemDiagnostics {
     | "ACTIVE"
     | "UNLICENSED"
     | "EXPIRED"
+    | "SUSPENDED"
+    | "REVOKED"
     | "HWID_MISMATCH"
     | "INVALID_SIGNATURE"
     | "CORRUPT"

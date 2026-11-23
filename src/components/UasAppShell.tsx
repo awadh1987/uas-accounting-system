@@ -69,6 +69,7 @@ import {
   buildOfflineClientLicenseStatus,
   detectClientPlatform,
   getClientDeviceHwid,
+  recordOfflineLicenseGovernance,
 } from "@/lib/licensing";
 import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
 import { INITIAL_FALLBACK_STATE } from "@/lib/seedFallback";
@@ -187,7 +188,7 @@ export function UasAppShell() {
       currentUser,
       enabled: state.settings.autoSyncEnabled !== false,
       intervalSec: state.settings.autoSyncIntervalSec || 60,
-      onSyncComplete: (syncRes) => {
+      onSyncCompleteAction: (syncRes) => {
         setState(syncRes.state);
         setOfflineQueueCount(syncRes.remainingQueue);
         setPendingConflictsCount(syncRes.conflictCount);
@@ -242,6 +243,11 @@ export function UasAppShell() {
     try {
       const res = await safeFetchJson<LicenseStatusData>(`${base}/api/licensing/status`);
       if (res.ok && !res.isHtmlFallback && res.data) {
+        recordOfflineLicenseGovernance({
+          licenseId: res.data.license_id,
+          status: res.data.license_status,
+          reason: res.data.error,
+        });
         const merged: LicenseStatusData = onAndroid
           ? { ...res.data, active_mode: getStoredRuntimeMode() }
           : res.data;
@@ -1624,6 +1630,7 @@ export function UasAppShell() {
                 <SalesTab
                   projects={scopedProjects}
                   sales={filteredSales}
+                  inventoryBatches={state.inventoryBatches}
                   treasuryAccounts={state.treasuryAccounts}
                   currentUser={currentUser}
                   enterpriseProfile={state.enterpriseProfile}

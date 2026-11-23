@@ -7,6 +7,7 @@ import {
   computeWorkerWageTotals,
   formatAuditTimestamp,
 } from "@/lib/formulas";
+import { evaluateSaleAgainstHarvestStock } from "@/lib/harvestReconciliation";
 import {
   enqueueOfflineMutation,
   getOfflineQueue,
@@ -17,6 +18,7 @@ import {
 } from "@/lib/offlineDb";
 import { INITIAL_FALLBACK_STATE } from "@/lib/seedFallback";
 import {
+  getEndpointSyncPriority,
   getOfflineSyncQueue,
   handleOfflineAndroidApiRequest,
   loadOfflineAndroidState,
@@ -703,6 +705,28 @@ function applyLocalOptimistic(
     const bundles = Number(payload.bundles) || 0;
     const price = Number(payload.price) || 0;
     const credit = Number(payload.credit) || 0;
+    const grade = String(payload.grade || "رقم 1");
+    const subProjectId = payload.subProjectId ? String(payload.subProjectId) : undefined;
+    if (bundles > 0) {
+      const stockCheck = evaluateSaleAgainstHarvestStock({
+        batches: next.inventoryBatches,
+        sales: next.sales,
+        projectId,
+        subProjectId,
+        harvest,
+        grade,
+        requestedBundles: bundles,
+      });
+      const canOverride =
+        Boolean(payload.allowNegativeStock) &&
+        (currentUser.role === "SUPER_ADMIN" || currentUser.role === "CHIEF_ACCOUNTANT");
+      if (stockCheck.hasTrackedBatches && !stockCheck.withinStock && !canOverride) {
+        return {
+          next: prev,
+          error: `⛔ الكمية المطلوبة (${bundles}) تتجاوز المتاح بالمخزون (${Math.max(0, stockCheck.availableBundles)}) بعجز ${stockCheck.shortageBundles} علاقية`,
+        };
+      }
+    }
     const { totalAmount, debitReceivable } = computeSaleTotals(bundles, price, credit);
     const seq = String(
       payload.sequenceNumber ||
@@ -734,6 +758,39 @@ function applyLocalOptimistic(
       notes: String(payload.notes || ""),
     });
     addAudit("إضافة عملية بيع (محلي)", `${payload.customer} — ${totalAmount.toLocaleString("en-US")} ريال`);
+    return { next };
+  }
+
+  if (endpoint.startsWith("/api/sales/") && method === "PATCH") {
+    const id = endpoint.split("/").pop() || "";
+    const rec = next.sales.find((s) => s.id === id);
+    if (rec) {
+      if (next.lockedPeriods[`${rec.projectId}::${rec.harvest}`]) {
+        return { next: prev, error: "🔒 هذه القطفة مغلقة محاسبياً!" };
+      }
+      if (payload.projectId !== undefined) rec.projectId = String(payload.projectId);
+      if (payload.subProjectId !== undefined) {
+        rec.subProjectId = payload.subProjectId ? String(payload.subProjectId) : undefined;
+      }
+      if (payload.harvest !== undefined) rec.harvest = String(payload.harvest);
+      if (payload.batch !== undefined) rec.batch = String(payload.batch);
+      if (payload.customer !== undefined) rec.customer = String(payload.customer);
+      if (payload.phone !== undefined) rec.phone = String(payload.phone);
+      if (payload.grade !== undefined) rec.grade = String(payload.grade);
+      if (payload.date !== undefined) rec.date = String(payload.date);
+      if (payload.voucherNo !== undefined) rec.voucherNo = String(payload.voucherNo);
+      if (payload.notes !== undefined) rec.notes = String(payload.notes);
+      const nextBundles = payload.bundles !== undefined ? Number(payload.bundles) || 0 : rec.bundles;
+      const nextPrice = payload.price !== undefined ? Number(payload.price) || 0 : rec.price;
+      const nextCredit = payload.credit !== undefined ? Number(payload.credit) || 0 : rec.credit;
+      const { totalAmount, debitReceivable } = computeSaleTotals(nextBundles, nextPrice, nextCredit);
+      rec.bundles = nextBundles;
+      rec.price = nextPrice;
+      rec.credit = nextCredit;
+      rec.total = totalAmount;
+      rec.debit = debitReceivable;
+      addAudit("تعديل عملية بيع (محلي)", `${rec.customer} — ${totalAmount.toLocaleString("en-US")} ريال`);
+    }
     return { next };
   }
 
@@ -817,6 +874,7 @@ function applyLocalOptimistic(
     next.inventoryBatches.push({
       id: "inv" + Date.now(),
       projectId,
+      subProjectId: payload.subProjectId ? String(payload.subProjectId) : undefined,
       harvest,
       grade: String(payload.grade || "رقم 1"),
       harvestedBundles,
@@ -824,6 +882,31 @@ function applyLocalOptimistic(
       notes: String(payload.notes || ""),
     });
     addAudit("إضافة دفعة مخزون علاقيات (محلي)", `${harvest} — ${harvestedBundles} علاقية`);
+    return { next };
+  }
+
+  if ((endpoint === "/api/inventory" || endpoint.startsWith("/api/inventory/")) && method === "PATCH") {
+    const id = String(payload.id || endpoint.split("/").pop() || "").trim();
+    const rec = next.inventoryBatches.find((b) => b.id === id);
+    if (rec) {
+      if (next.lockedPeriods[`${rec.projectId}::${rec.harvest}`]) {
+        return { next: prev, error: "🔒 هذه القطفة مغلقة محاسبياً!" };
+      }
+      if (payload.projectId !== undefined) rec.projectId = String(payload.projectId);
+      if (payload.subProjectId !== undefined) {
+        rec.subProjectId = payload.subProjectId ? String(payload.subProjectId) : undefined;
+      }
+      if (payload.harvest !== undefined) rec.harvest = String(payload.harvest);
+      if (payload.grade !== undefined) rec.grade = String(payload.grade);
+      if (payload.harvestedBundles !== undefined) {
+        rec.harvestedBundles = Math.max(0, Math.round(Number(payload.harvestedBundles) || 0));
+      }
+      if (payload.shrinkageBundles !== undefined) {
+        rec.shrinkageBundles = Math.max(0, Math.round(Number(payload.shrinkageBundles) || 0));
+      }
+      if (payload.notes !== undefined) rec.notes = String(payload.notes);
+      addAudit("تعديل دفعة مخزون (محلي)", `${rec.harvest} (${rec.grade}) — ${rec.harvestedBundles} علاقية`);
+    }
     return { next };
   }
 
@@ -885,6 +968,26 @@ function applyLocalOptimistic(
     return { next };
   }
 
+  if (endpoint === "/api/users/me/profile" && method === "PATCH") {
+    const u = next.users.find((x) => x.id === currentUser.id);
+    if (u) {
+      if (payload.displayName !== undefined) u.displayName = String(payload.displayName).trim();
+      if (payload.phone !== undefined) u.phone = String(payload.phone).trim();
+      if (payload.email !== undefined) u.email = String(payload.email).trim().toLowerCase();
+      if (payload.avatarUrl !== undefined) u.avatarUrl = String(payload.avatarUrl).trim();
+      if (payload.avatarChar !== undefined) u.avatarChar = String(payload.avatarChar).slice(0, 2);
+      if (payload.avatarColor !== undefined) u.avatarColor = String(payload.avatarColor).trim();
+      if (payload.preferredLang === "ar" || payload.preferredLang === "en") u.preferredLang = payload.preferredLang;
+      if (payload.preferredCurrency === "YER" || payload.preferredCurrency === "SAR" || payload.preferredCurrency === "USD") {
+        u.preferredCurrency = payload.preferredCurrency;
+      }
+      if (payload.preferredTheme === "emerald" || payload.preferredTheme === "dark" || payload.preferredTheme === "royal") {
+        u.preferredTheme = payload.preferredTheme;
+      }
+    }
+    return { next };
+  }
+
   if (endpoint.startsWith("/api/users/") && method === "PATCH") {
     const id = endpoint.split("/").pop() || "";
     const u = next.users.find((x) => x.id === id);
@@ -892,6 +995,7 @@ function applyLocalOptimistic(
       if (payload.toggleActive === true) u.active = !u.active;
       if (payload.name) u.name = String(payload.name);
       if (payload.avatarChar) u.avatarChar = String(payload.avatarChar).slice(0, 2);
+      if (payload.avatarUrl !== undefined) u.avatarUrl = String(payload.avatarUrl).trim();
     }
     return { next };
   }
@@ -1042,7 +1146,12 @@ export async function syncQueuedOfflineMutations(currentUser: UasUser): Promise<
   state: UasBootstrapState;
   remainingQueue: number;
 }> {
-  const items = await getOfflineQueue();
+  const rawItems = await getOfflineQueue();
+  const items = [...rawItems].sort((a, b) => {
+    const prioDiff = getEndpointSyncPriority(a.endpoint) - getEndpointSyncPriority(b.endpoint);
+    if (prioDiff !== 0) return prioDiff;
+    return (a.createdAt || "").localeCompare(b.createdAt || "");
+  });
   let syncedCount = 0;
   let failedCount = 0;
 

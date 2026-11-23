@@ -16,7 +16,7 @@ export interface TenantMetadata {
   sqliteDbPath?: string;
   allowedModes?: ("local" | "lan" | "cloud")[];
   schemaOrDb: string;
-  status: "ACTIVE" | "SUSPENDED" | "ARCHIVED";
+  status: "ACTIVE" | "SUSPENDED" | "REVOKED" | "EXPIRED" | "ARCHIVED";
   createdAt: string;
   updatedAt: string;
   maxSeats?: number;
@@ -222,6 +222,55 @@ export function unregisterTenant(rawTenantId?: string | null): boolean {
     saveRegistryToDisk();
   }
   return existed;
+}
+
+export function updateTenantMetadata(
+  rawTenantIdOrSlug: string,
+  patch: Partial<
+    Pick<
+      TenantMetadata,
+      | "status"
+      | "plan"
+      | "maxSeats"
+      | "licenseId"
+      | "allowedModes"
+      | "companyName"
+      | "nameAr"
+      | "nameEn"
+    >
+  >
+): TenantMetadata | null {
+  ensureRegistryInitialized();
+  const clean = String(rawTenantIdOrSlug || "").trim().toLowerCase();
+  if (!clean) return null;
+  let existing = inMemoryRegistry.get(normalizeTenantId(clean)) || null;
+  if (!existing) {
+    for (const item of inMemoryRegistry.values()) {
+      if (item.slug?.toLowerCase() === clean) {
+        existing = item;
+        break;
+      }
+    }
+  }
+  if (!existing) return null;
+
+  const updated: TenantMetadata = {
+    ...existing,
+    ...(patch.status !== undefined ? { status: patch.status } : {}),
+    ...(patch.plan !== undefined ? { plan: patch.plan } : {}),
+    ...(patch.maxSeats !== undefined ? { maxSeats: patch.maxSeats } : {}),
+    ...(patch.licenseId !== undefined ? { licenseId: patch.licenseId } : {}),
+    ...(patch.allowedModes !== undefined ? { allowedModes: patch.allowedModes } : {}),
+    ...(patch.companyName !== undefined ? { companyName: patch.companyName } : {}),
+    ...(patch.nameAr !== undefined ? { nameAr: patch.nameAr } : {}),
+    ...(patch.nameEn !== undefined ? { nameEn: patch.nameEn } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const key = normalizeTenantId(updated.slug || updated.tenantId);
+  inMemoryRegistry.set(key, updated);
+  saveRegistryToDisk();
+  return updated;
 }
 
 export function getTenantMetadata(rawTenantId?: string | null): TenantMetadata | null {

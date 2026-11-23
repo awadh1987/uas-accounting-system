@@ -1,12 +1,13 @@
 "use client";
 
-import React, { useState } from "react";
-import { Pencil, Plus } from "lucide-react";
+import React, { useMemo, useState } from "react";
+import { AlertTriangle, Pencil, Plus } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { SelectWithOther } from "@/components/SelectWithOther";
 import { MultiUnitInventoryPanel } from "@/components/MultiUnitInventoryPanel";
-import { computeRemainingStock, fmtNum } from "@/lib/formulas";
+import { fmtNum } from "@/lib/formulas";
+import { reconcileHarvestInventory, type ReconciliationStatus } from "@/lib/harvestReconciliation";
 import type { UasInventoryBatch, UasProject, UasSaleTransaction } from "@/types/uas";
 
 type InventoryPayload = {
@@ -48,6 +49,36 @@ export function InventoryTab({
   const [notes, setNotes] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  const reconciliation = useMemo(
+    () => reconcileHarvestInventory(inventoryBatches, sales),
+    [inventoryBatches, sales]
+  );
+
+  function renderReconciliationBadge(status: ReconciliationStatus, remaining: number, shortage: number) {
+    if (status === "SHORTAGE") {
+      return (
+        <span className="inline-flex flex-wrap items-center gap-1 max-w-full px-2.5 py-1 rounded-lg bg-rose-100 dark:bg-rose-950/50 text-rose-800 dark:text-rose-200 border border-rose-200 dark:border-rose-800 font-bold text-[11px] leading-snug whitespace-normal break-words">
+          <span>عجز / تجاوز المقطوف</span>
+          <bdi dir="ltr" className="tabular-nums font-mono">(-{fmtNum(shortage)})</bdi>
+        </span>
+      );
+    }
+    if (status === "DEPLETED") {
+      return (
+        <span className="inline-flex flex-wrap items-center gap-1 max-w-full px-2.5 py-1 rounded-lg bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800 font-bold text-[11px] leading-snug whitespace-normal break-words">
+          <span>نفدت الكمية</span>
+          <bdi dir="ltr" className="tabular-nums font-mono">(0)</bdi>
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex flex-wrap items-center gap-1 max-w-full px-2.5 py-1 rounded-lg bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800 font-bold text-[11px] leading-snug whitespace-normal break-words">
+        <span>مطابق (متوفر:</span>
+        <bdi dir="ltr" className="tabular-nums font-mono">{fmtNum(remaining)})</bdi>
+      </span>
+    );
+  }
 
   function handleProjChange(nextPid: string) {
     setProjectId(nextPid);
@@ -247,98 +278,190 @@ export function InventoryTab({
           )}
         </div>
 
+        {inventoryBatches.length > 0 && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700/80 p-3 bg-slate-50/70 dark:bg-slate-900/40">
+              <div className="text-[11px] text-slate-500 font-semibold">إجمالي المقطوف</div>
+              <div className="text-sm font-black tabular-nums mt-0.5">{fmtNum(reconciliation.summary.totalHarvested)} علاقية</div>
+            </div>
+            <div className="rounded-xl border border-emerald-200 dark:border-emerald-800/60 p-3 bg-emerald-50/50 dark:bg-emerald-950/20">
+              <div className="text-[11px] text-emerald-700 dark:text-emerald-300 font-semibold">المباع للعملاء</div>
+              <div className="text-sm font-black text-emerald-700 dark:text-emerald-300 tabular-nums mt-0.5">{fmtNum(reconciliation.summary.totalMatchedSold)} علاقية</div>
+            </div>
+            <div className="rounded-xl border border-amber-200 dark:border-amber-800/60 p-3 bg-amber-50/50 dark:bg-amber-950/20">
+              <div className="text-[11px] text-amber-700 dark:text-amber-300 font-semibold">الفاقد / التالف</div>
+              <div className="text-sm font-black text-amber-700 dark:text-amber-300 tabular-nums mt-0.5">{fmtNum(reconciliation.summary.totalShrinkage)} علاقية</div>
+            </div>
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700/80 p-3 bg-slate-50/70 dark:bg-slate-900/40">
+              <div className="text-[11px] text-slate-500 font-semibold">الصافي المتبقي</div>
+              <div className={`text-sm font-black tabular-nums mt-0.5 ${reconciliation.summary.totalRemaining < 0 ? "text-rose-600" : ""}`}>
+                {fmtNum(reconciliation.summary.totalRemaining)} علاقية
+              </div>
+            </div>
+          </div>
+        )}
+
+        {reconciliation.unmatchedSalesGroups.length > 0 && (
+          <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/80 dark:bg-amber-950/30 p-3.5 text-xs space-y-1.5">
+            <div className="flex items-center gap-2 font-extrabold text-amber-800 dark:text-amber-200">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>
+                تنبيه مطابقة: توجد مبيعات مفتوحة (<bdi dir="ltr">{fmtNum(reconciliation.summary.totalUnmatchedSold)}</bdi> علاقية) بدون دفعة حصاد مسجلة ومطابقة
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2 pt-1">
+              {reconciliation.unmatchedSalesGroups.map((ug, idx) => {
+                const proj = projects.find((p) => p.id === ug.projectId);
+                return (
+                  <span
+                    key={`${ug.projectId}-${ug.harvest}-${ug.grade}-${idx}`}
+                    className="inline-flex flex-wrap items-center gap-1 px-2.5 py-1 rounded-lg bg-white/90 dark:bg-slate-900/70 border border-amber-200 dark:border-amber-800 text-[11px] font-semibold text-slate-700 dark:text-slate-200"
+                  >
+                    <span>{proj?.name || ug.projectId} — {ug.harvest} ({ug.grade}):</span>
+                    <strong className="text-amber-700 dark:text-amber-300 tabular-nums">
+                      {fmtNum(ug.soldBundles)} علاقية ({ug.saleCount} فواتير)
+                    </strong>
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {inventoryBatches.length === 0 ? (
           <EmptyState
             title="لا توجد دفعات حصاد مسجلة في المخزون"
             description="أضف دفعة حصاد جديدة لبدء مطابقة الإنتاج مع المبيعات والفاقد."
           />
         ) : (
-          <table className="w-full text-xs text-right border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/90 dark:bg-slate-800/90">
-                <th className="p-2.5">المشروع / القطفة</th>
-                <th className="p-2.5">الدرجة (النوع)</th>
-                <th className="p-2.5">المقطوف (إنتاج)</th>
-                <th className="p-2.5">المباع للعملاء</th>
-                <th className="p-2.5">الفاقد / التالف</th>
-                <th className="p-2.5">المتبقي بالمخزون</th>
-                <th className="p-2.5">حالة المطابقة</th>
-                {!readOnly && canEditRecords && onEditInventoryBatch && (
-                  <th className="p-2.5 no-print">إجراء</th>
-                )}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-              {inventoryBatches.map((b) => {
-                const proj = projects.find((p) => p.id === b.projectId);
-                const soldBundles = sales
-                  .filter(
-                    (s) =>
-                      s.projectId === b.projectId &&
-                      s.harvest === b.harvest &&
-                      s.grade === b.grade
-                  )
-                  .reduce((acc, s) => acc + (Number(s.bundles) || 0), 0);
-                const remaining = computeRemainingStock(
-                  b.harvestedBundles,
-                  soldBundles,
-                  b.shrinkageBundles
-                );
-
-                return (
-                  <tr key={b.id}>
-                    <td className="p-2.5 font-bold">
-                      <div>{proj ? proj.name : ""} — {b.harvest}</div>
-                      {b.subProjectId && (() => {
-                        const sp = proj?.subProjects?.find((x) => x.id === b.subProjectId);
-                        return sp ? (
-                          <span className="inline-block mt-0.5 text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                            {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
-                          </span>
-                        ) : null;
-                      })()}
-                    </td>
-                    <td className="p-2.5">
-                      <span className="accent-badge px-2 py-0.5 rounded font-semibold">
-                        {b.grade}
-                      </span>
-                    </td>
-                    <td className="p-2.5 font-extrabold tabular-nums">{fmtNum(b.harvestedBundles)} علاقية</td>
-                    <td className="p-2.5 text-emerald-600 font-bold tabular-nums">
-                      {fmtNum(soldBundles)} علاقية
-                    </td>
-                    <td className="p-2.5 text-amber-600 font-semibold tabular-nums">
-                      {fmtNum(b.shrinkageBundles)} علاقية
-                    </td>
-                    <td className="p-2.5 font-extrabold tabular-nums">{fmtNum(remaining)} علاقية</td>
-                    <td className="p-2.5">
-                      {remaining >= 0 ? (
-                        <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold text-[11px]">
-                          مطابق (متوفر: {fmtNum(remaining)})
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 font-bold text-[11px]">
-                          تجاوز المقطوف ({fmtNum(remaining)})
-                        </span>
-                      )}
-                    </td>
+          <>
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-xs text-right border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/90 dark:bg-slate-800/90">
+                    <th className="p-2.5">المشروع / القطفة</th>
+                    <th className="p-2.5">الدرجة (النوع)</th>
+                    <th className="p-2.5">المقطوف (إنتاج)</th>
+                    <th className="p-2.5">المباع للعملاء</th>
+                    <th className="p-2.5">الفاقد / التالف</th>
+                    <th className="p-2.5">المتبقي بالمخزون</th>
+                    <th className="p-2.5 min-w-[155px]">حالة المطابقة</th>
                     {!readOnly && canEditRecords && onEditInventoryBatch && (
-                      <td className="p-2.5 no-print">
+                      <th className="p-2.5 no-print">إجراء</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                  {reconciliation.rows.map((row) => {
+                    const b = row.batch;
+                    const proj = projects.find((p) => p.id === b.projectId);
+                    return (
+                      <tr key={b.id}>
+                        <td className="p-2.5 font-bold align-middle">
+                          <div>{proj ? proj.name : ""} — {b.harvest}</div>
+                          {b.subProjectId && (() => {
+                            const sp = proj?.subProjects?.find((x) => x.id === b.subProjectId);
+                            return sp ? (
+                              <span className="inline-block mt-0.5 text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                                {sp.code ? `${sp.code} • ${sp.nameAr}` : sp.nameAr}
+                              </span>
+                            ) : null;
+                          })()}
+                        </td>
+                        <td className="p-2.5 align-middle">
+                          <span className="accent-badge inline-flex flex-wrap max-w-full px-2 py-0.5 rounded font-semibold whitespace-normal break-words">
+                            {b.grade}
+                          </span>
+                        </td>
+                        <td className="p-2.5 font-extrabold tabular-nums align-middle">{fmtNum(row.harvestedBundles)} علاقية</td>
+                        <td className="p-2.5 text-emerald-600 font-bold tabular-nums align-middle">
+                          {fmtNum(row.soldBundles)} علاقية
+                        </td>
+                        <td className="p-2.5 text-amber-600 font-semibold tabular-nums align-middle">
+                          {fmtNum(row.shrinkageBundles)} علاقية
+                        </td>
+                        <td className="p-2.5 font-extrabold tabular-nums align-middle">{fmtNum(row.remainingBundles)} علاقية</td>
+                        <td className="p-2.5 align-middle min-w-[155px]">
+                          {renderReconciliationBadge(row.status, row.remainingBundles, row.shortageBundles)}
+                        </td>
+                        {!readOnly && canEditRecords && onEditInventoryBatch && (
+                          <td className="p-2.5 no-print align-middle">
+                            <button
+                              type="button"
+                              onClick={() => openEditDrawer(b)}
+                              className="inline-flex items-center gap-1 text-indigo-600 hover:underline font-bold"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              <span>تعديل</span>
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile RTL Cards — avoids horizontal clipping of status badges */}
+            <div className="md:hidden space-y-3">
+              {reconciliation.rows.map((row) => {
+                const b = row.batch;
+                const proj = projects.find((p) => p.id === b.projectId);
+                return (
+                  <div
+                    key={b.id}
+                    className="rounded-xl border border-slate-200 dark:border-slate-700 p-3.5 space-y-2.5 bg-slate-50/40 dark:bg-slate-900/30"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-extrabold text-xs text-slate-900 dark:text-slate-100 break-words">
+                          {proj ? proj.name : ""} — {b.harvest}
+                        </div>
+                        <span className="accent-badge inline-flex mt-1 px-2 py-0.5 rounded text-[11px] font-semibold">
+                          {b.grade}
+                        </span>
+                      </div>
+                      {!readOnly && canEditRecords && onEditInventoryBatch && (
                         <button
                           type="button"
                           onClick={() => openEditDrawer(b)}
-                          className="inline-flex items-center gap-1 text-indigo-600 hover:underline font-bold"
+                          className="shrink-0 inline-flex items-center gap-1 text-indigo-600 font-bold text-xs px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/40"
                         >
                           <Pencil className="w-3 h-3" />
                           <span>تعديل</span>
                         </button>
-                      </td>
-                    )}
-                  </tr>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[11px] border-y border-slate-200/80 dark:border-slate-700/80 py-2">
+                      <div>
+                        <span className="text-slate-500">المقطوف: </span>
+                        <strong className="tabular-nums">{fmtNum(row.harvestedBundles)}</strong>
+                      </div>
+                      <div>
+                        <span className="text-emerald-600">المباع: </span>
+                        <strong className="text-emerald-600 tabular-nums">{fmtNum(row.soldBundles)}</strong>
+                      </div>
+                      <div>
+                        <span className="text-amber-600">الفاقد: </span>
+                        <strong className="text-amber-600 tabular-nums">{fmtNum(row.shrinkageBundles)}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">المتبقي: </span>
+                        <strong className="tabular-nums">{fmtNum(row.remainingBundles)}</strong>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 pt-0.5">
+                      <span className="text-[11px] font-bold text-slate-500 shrink-0">حالة المطابقة:</span>
+                      {renderReconciliationBadge(row.status, row.remainingBundles, row.shortageBundles)}
+                    </div>
+                  </div>
                 );
               })}
-            </tbody>
-          </table>
+            </div>
+          </>
         )}
       </div>
     </section>

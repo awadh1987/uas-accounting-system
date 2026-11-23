@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   Briefcase,
+  Camera,
   Check,
   CheckCircle2,
   Clock,
@@ -18,11 +19,13 @@ import {
   Shield,
   ShieldAlert,
   Smartphone,
+  Trash2,
   User,
   XCircle,
 } from "lucide-react";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { SvgAvatar } from "@/components/SvgAvatar";
+import { isAndroidLocalIsolatedMode } from "@/lib/apiClient";
 import {
   canApprove,
   canCreate,
@@ -113,6 +116,8 @@ function UserProfileDrawerContent({
   const [avatarChar, setAvatarChar] = useState(currentUser.avatarChar || "م");
   const [avatarUrl, setAvatarUrl] = useState(currentUser.avatarUrl || "");
   const [savingProfile, setSavingProfile] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Preferences tab state
   const [prefLang, setPrefLang] = useState<LanguageCode>((currentUser.preferredLang as LanguageCode) || lang);
@@ -142,7 +147,7 @@ function UserProfileDrawerContent({
           email: email.trim(),
           avatarColor,
           avatarChar: avatarChar.trim() || currentUser.name.slice(0, 1),
-          avatarUrl: avatarUrl.trim() || undefined,
+          avatarUrl: avatarUrl.trim(),
           preferredLang: prefLang,
           preferredCurrency: prefCurrency,
           preferredTheme: prefTheme,
@@ -170,6 +175,110 @@ function UserProfileDrawerContent({
       onToast(isAr ? "خطأ في الاتصال بالخادم" : "Network error");
     } finally {
       setSavingProfile(false);
+    }
+  }
+
+  async function handleAvatarFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    const allowedTypes = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"];
+    if (file.type && !allowedTypes.includes(file.type.toLowerCase())) {
+      onToast(
+        isAr
+          ? "صيغة الملف غير مدعومة (المسموح: PNG, JPG, WEBP, GIF)"
+          : "Unsupported image format (allowed: PNG, JPG, WEBP, GIF)"
+      );
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      onToast(
+        isAr
+          ? "حجم الصورة يجب أن لا يتجاوز 2 ميجابايت"
+          : "Profile image must be <= 2 MB"
+      );
+      return;
+    }
+
+    setUploadingAvatar(true);
+    try {
+      let res: Response;
+      const sendDataUrlOffline =
+        isAndroidLocalIsolatedMode() || (typeof navigator !== "undefined" && !navigator.onLine);
+      if (sendDataUrlOffline) {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("Read error"));
+          reader.readAsDataURL(file);
+        });
+        res = await fetch("/api/users/me/avatar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            dataUrl,
+            actor: {
+              userId: currentUser.id,
+              userDisplay: displayName.trim() || currentUser.name,
+              userRole: currentUser.role,
+            },
+          }),
+        });
+      } else {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append(
+          "actor",
+          JSON.stringify({
+            userId: currentUser.id,
+            userDisplay: displayName.trim() || currentUser.name,
+            userRole: currentUser.role,
+          })
+        );
+        res = await fetch("/api/users/me/avatar", {
+          method: "POST",
+          body: formData,
+        });
+      }
+
+      const data = (await res.json()) as {
+        error?: string;
+        avatarUrl?: string;
+        user?: UasUser;
+      };
+      if (!res.ok || !data.user) {
+        onToast(data.error || (isAr ? "تعذر رفع الصورة الشخصية" : "Failed to upload photo"));
+        return;
+      }
+
+      const nextUrl = data.avatarUrl ?? data.user.avatarUrl ?? "";
+      setAvatarUrl(nextUrl);
+      onUserUpdated?.(data.user);
+      onToast(isAr ? "✅ تم تحديث الصورة الشخصية بنجاح" : "✅ Profile photo updated successfully");
+    } catch {
+      onToast(isAr ? "تعذر رفع الصورة الشخصية" : "Failed to upload photo");
+    } finally {
+      setUploadingAvatar(false);
+    }
+  }
+
+  async function handleRemoveAvatar() {
+    setUploadingAvatar(true);
+    try {
+      const res = await fetch("/api/users/me/avatar", { method: "DELETE" });
+      const data = (await res.json()) as { error?: string; user?: UasUser };
+      if (!res.ok || !data.user) {
+        onToast(data.error || (isAr ? "تعذر إزالة الصورة الشخصية" : "Failed to remove photo"));
+        return;
+      }
+      setAvatarUrl("");
+      onUserUpdated?.(data.user);
+      onToast(isAr ? "تمت إزالة الصورة الشخصية" : "Profile photo removed");
+    } catch {
+      onToast(isAr ? "خطأ في الاتصال بالخادم" : "Network error");
+    } finally {
+      setUploadingAvatar(false);
     }
   }
 
@@ -313,7 +422,13 @@ function UserProfileDrawerContent({
               className="relative p-1 rounded-2xl border-2 shadow-xs shrink-0"
               style={{ borderColor: avatarColor }}
             >
-              <SvgAvatar char={avatarChar} size={48} />
+              <SvgAvatar
+                char={avatarChar}
+                avatarUrl={avatarUrl}
+                color={avatarColor}
+                size={48}
+                alt={displayName || currentUser.name}
+              />
               <div
                 className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white dark:border-slate-900 shadow-xs"
                 style={{ backgroundColor: avatarColor }}
@@ -540,16 +655,78 @@ function UserProfileDrawerContent({
               </div>
             </div>
 
-            {/* Avatar Photo / URL */}
-            <div>
-              <label className="block font-bold mb-1 text-slate-700 dark:text-slate-300">
-                {isAr ? "رابط الصورة الشخصية (اختياري)" : "Avatar Photo URL (Optional)"}
+            {/* Avatar Photo Upload & Optional URL */}
+            <div className="space-y-2">
+              <label className="block font-bold text-slate-700 dark:text-slate-300">
+                {isAr ? "الصورة الشخصية الحقيقية (Profile Photo)" : "Profile Photo"}
               </label>
+              <div className="p-3 rounded-2xl border border-slate-200 dark:border-slate-700/80 bg-slate-50/70 dark:bg-slate-900/40 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <SvgAvatar
+                    char={avatarChar}
+                    avatarUrl={avatarUrl}
+                    color={avatarColor}
+                    size={44}
+                    alt={displayName || currentUser.name}
+                  />
+                  <div className="text-[11px] leading-relaxed">
+                    <div className="font-bold text-slate-700 dark:text-slate-200">
+                      {avatarUrl
+                        ? isAr
+                          ? "صورة شخصية مفعلة"
+                          : "Custom photo active"
+                        : isAr
+                        ? "الأحرف الافتراضية مفعلة حالياً"
+                        : "Using initials fallback"}
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      {isAr ? "PNG, JPG, WEBP, GIF — بحد أقصى 2MB" : "PNG, JPG, WEBP, GIF — max 2 MB"}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={avatarFileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    onChange={handleAvatarFileChange}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    disabled={uploadingAvatar}
+                    onClick={() => avatarFileInputRef.current?.click()}
+                    className="px-3 py-1.5 rounded-xl accent-bg font-bold text-[11px] inline-flex items-center gap-1.5 shadow-xs disabled:opacity-50"
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>
+                      {uploadingAvatar
+                        ? isAr
+                          ? "جاري الرفع..."
+                          : "Uploading..."
+                        : isAr
+                        ? "رفع صورة"
+                        : "Upload Photo"}
+                    </span>
+                  </button>
+                  {avatarUrl && (
+                    <button
+                      type="button"
+                      disabled={uploadingAvatar}
+                      onClick={handleRemoveAvatar}
+                      className="px-2.5 py-1.5 rounded-xl border border-rose-200 dark:border-rose-800 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 font-bold text-[11px] inline-flex items-center gap-1 disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>{isAr ? "إزالة" : "Remove"}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
               <input
                 type="text"
                 value={avatarUrl}
                 onChange={(e) => setAvatarUrl(e.target.value)}
-                placeholder="https://... أو مسار صورة"
+                placeholder={isAr ? "أو أدخل رابط صورة مباشر (https://... أو /api/...)" : "Or paste direct image URL (optional)"}
                 className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500"
               />
             </div>

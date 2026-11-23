@@ -1,16 +1,53 @@
 "use client";
 
-export function SvgAvatar({ char, size = 32 }: { char: string; size?: number }) {
+import { useState } from "react";
+
+export function SvgAvatar({
+  char,
+  avatarUrl,
+  color = "#059669",
+  size = 32,
+  alt,
+  className = "",
+}: {
+  char: string;
+  avatarUrl?: string | null;
+  color?: string | null;
+  size?: number;
+  alt?: string;
+  className?: string;
+}) {
   const letter = (char || "U").charAt(0);
+  const cleanUrl = (avatarUrl || "").trim();
+  const fillColor = (color || "").trim() || "#059669";
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const showImage = Boolean(cleanUrl) && failedUrl !== cleanUrl;
+
+  if (showImage) {
+    return (
+      /* eslint-disable-next-line @next/next/no-img-element */
+      <img
+        src={cleanUrl}
+        alt={alt || letter}
+        width={size}
+        height={size}
+        onError={() => setFailedUrl(cleanUrl)}
+        className={`rounded-full shrink-0 object-cover border ${className}`}
+        style={{ width: size, height: size, borderColor: fillColor }}
+      />
+    );
+  }
+
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 40 40"
-      className="rounded-full shrink-0 border border-emerald-500"
-      aria-label={letter}
+      className={`rounded-full shrink-0 border ${className}`}
+      style={{ borderColor: fillColor }}
+      aria-label={alt || letter}
     >
-      <rect width="40" height="40" rx="20" fill="#059669" />
+      <rect width="40" height="40" rx="20" fill={fillColor} />
       <text
         x="50%"
         y="55%"
@@ -26,4 +63,3 @@ export function SvgAvatar({ char, size = 32 }: { char: string; size?: number }) 
     </svg>
   );
 }
-

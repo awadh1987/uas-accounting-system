@@ -6,6 +6,8 @@ import { getMachineHwid } from "./hwid";
 import { isCompanyLockedPayload, type RuntimeMode, type UasSignedLicense } from "./licenseSchema";
 import { evaluateCompanyLock } from "./companyLock";
 import { createPrismaProfileRepo } from "./companyLockServer";
+import { evaluateLicenseGovernance } from "@/lib/controlPanel/governanceStore";
+import { getActiveTenantId, getTenantMetadata } from "@/lib/tenant";
 
 export interface ActiveSeatRecord {
   token: string;
@@ -20,6 +22,8 @@ export interface LicenseGuardCheck {
   | "ACTIVE"
   | "UNLICENSED"
   | "EXPIRED"
+  | "SUSPENDED"
+  | "REVOKED"
   | "HWID_MISMATCH"
   | "INVALID_SIGNATURE"
   | "CORRUPT"
@@ -70,6 +74,25 @@ export async function checkLicenseAndClock(
     };
   }
 
+  // 2a. Platform Control Panel Governance check (suspended / revoked / expired / rotated-revoked)
+  const activeTenantId = getActiveTenantId();
+  const activeMeta = getTenantMetadata(activeTenantId);
+  const govEval = evaluateLicenseGovernance({
+    licenseId: license.license_id,
+    slug: activeMeta?.slug || license.tenant_slug || (activeTenantId !== "default" ? activeTenantId : null),
+    registryStatus: activeMeta?.status,
+    expiresAt: license.expires_at,
+  });
+  if (!govEval.allowed) {
+    return {
+      allowed: false,
+      status: govEval.status,
+      code: govEval.code || `LICENSE_${govEval.status}`,
+      error: govEval.error,
+      license,
+    };
+  }
+
   // 2b. Company-name lock check against EnterpriseProfile (v2 company-locked licenses)
   if (isCompanyLockedPayload(license) && license.company_name) {
     try {
@@ -101,6 +124,18 @@ export async function checkLicenseAndClock(
   }
 
   if (dbState) {
+    if (dbState.status === "SUSPENDED" || dbState.status === "REVOKED") {
+      return {
+        allowed: false,
+        status: dbState.status,
+        code: `LICENSE_${dbState.status}`,
+        error:
+          dbState.status === "REVOKED"
+            ? "تم إلغاء ترخيص المنشأة من لوحة تحكم المنصة / Tenant license has been revoked."
+            : "تم تعليق ترخيص المنشأة مؤقتاً / Tenant license is suspended.",
+        license,
+      };
+    }
     // If flagged as CLOCK_TAMPER previously
     if (dbState.status === "CLOCK_TAMPER") {
       const last = new Date(dbState.lastVerifiedUtc);

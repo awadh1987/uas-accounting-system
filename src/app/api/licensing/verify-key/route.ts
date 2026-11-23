@@ -4,6 +4,8 @@ import { withTenantRoute } from "@/lib/prisma";
 import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import { createPrismaSeatStore } from "@/lib/licensing/prismaSeatStore";
 import { releaseKeySeat, verifyKeyRequest } from "@/lib/licensing/licenseAuthority";
+import { decodeLicenseInput, verifyLicenseSignature } from "@/lib/licensing/verifier";
+import { evaluateLicenseGovernance } from "@/lib/controlPanel/governanceStore";
 import {
   ensureTenantRegistered,
   findTenantBySlug,
@@ -81,6 +83,28 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       return NextResponse.json(out.body, { status: out.status });
     }
 
+    const decodedPre = typeof body.key === "string" ? decodeLicenseInput(body.key) : null;
+    if (decodedPre && verifyLicenseSignature(decodedPre)) {
+      const existingBySlugPre = decodedPre.tenant_slug ? findTenantBySlug(decodedPre.tenant_slug) : null;
+      const preGovCheck = evaluateLicenseGovernance({
+        licenseId: decodedPre.license_id,
+        slug: decodedPre.tenant_slug || existingBySlugPre?.slug || null,
+        registryStatus: existingBySlugPre?.status || null,
+        expiresAt: decodedPre.expires_at,
+      });
+      if (!preGovCheck.allowed) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: preGovCheck.code || `LICENSE_${preGovCheck.status}`,
+            status: preGovCheck.status,
+            error: preGovCheck.error,
+          },
+          { status: 403 }
+        );
+      }
+    }
+
     const out = await verifyKeyRequest(body, { store });
     if (out.status === 200 && out.body.success && out.body.license) {
       const lic = out.body.license as {
@@ -88,15 +112,33 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         customer_name?: string;
         license_id?: string;
         tenant_slug?: string;
+        expires_at?: string;
         name_ar?: string;
         name_en?: string;
         max_users?: number;
         allowed_modes?: ("local" | "lan" | "cloud")[];
       };
+      const existingBySlug = lic.tenant_slug ? findTenantBySlug(lic.tenant_slug) : null;
+      const govCheck = evaluateLicenseGovernance({
+        licenseId: lic.license_id,
+        slug: lic.tenant_slug || existingBySlug?.slug || null,
+        registryStatus: existingBySlug?.status || null,
+        expiresAt: lic.expires_at || null,
+      });
+      if (!govCheck.allowed) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: govCheck.code || `LICENSE_${govCheck.status}`,
+            status: govCheck.status,
+            error: govCheck.error,
+          },
+          { status: 403 }
+        );
+      }
       const companyName = (lic.company_name || lic.customer_name || "").trim();
       if (companyName) {
         try {
-          const existingBySlug = lic.tenant_slug ? findTenantBySlug(lic.tenant_slug) : null;
           const derivedSlug =
             lic.tenant_slug ||
             existingBySlug?.slug ||

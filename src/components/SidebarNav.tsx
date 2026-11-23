@@ -225,7 +225,13 @@ export function SidebarNav({
                 title={`${currentUser.name} — ${isAr ? roleMeta.labelAr : roleMeta.shortEn}`}
                 className="w-full flex justify-center py-1"
               >
-                <SvgAvatar char={currentUser.avatarChar} size={36} />
+                <SvgAvatar
+                  char={currentUser.avatarChar}
+                  avatarUrl={currentUser.avatarUrl}
+                  color={currentUser.avatarColor}
+                  size={36}
+                  alt={currentUser.displayName || currentUser.name}
+                />
               </button>
               {onLogout && (
                 <button
@@ -242,7 +248,13 @@ export function SidebarNav({
           ) : (
             <div className="p-2.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/70 space-y-2">
               <div className="flex items-center gap-2.5">
-                <SvgAvatar char={currentUser.avatarChar} size={36} />
+                <SvgAvatar
+                  char={currentUser.avatarChar}
+                  avatarUrl={currentUser.avatarUrl}
+                  color={currentUser.avatarColor}
+                  size={36}
+                  alt={currentUser.displayName || currentUser.name}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-extrabold truncate">{currentUser.name}</div>
                   <div className="text-[10px] text-slate-500 truncate">

@@ -18,6 +18,7 @@ import { parseAssignedProjects } from "@/lib/serverBootstrap";
 import { checkLicenseAndClock } from "@/lib/licensing/guard";
 import { getRuntimeConfig } from "@/lib/runtimeMode";
 import { extractSessionTokenFromRequest } from "@/lib/authSession";
+import { isUserSessionRevoked } from "@/lib/controlPanel/governanceStore";
 import { buildCorsHeaders, corsOptionsResponse } from "@/lib/cors";
 import type { UasUser, UserRole } from "@/types/uas";
 
@@ -37,9 +38,11 @@ export interface ResolvedActor {
   user?: UasUser | null;
   claimedRole?: UserRole;
   sessionTenantId?: string;
+  sessionIat?: number;
   sessionVerified?: boolean;
   authenticated?: boolean;
   invalidToken?: boolean;
+  sessionRevoked?: boolean;
   tenantMismatch?: boolean;
   inactive?: boolean;
   spoofAttempt?: boolean;
@@ -77,6 +80,7 @@ export function extractActor(
       userDisplay: session.payload.disp || `مستخدم النظام (${role})`,
       userRole: role,
       sessionTenantId: normalizeTenantId(session.payload.tid),
+      sessionIat: session.payload.iat,
       sessionVerified: true,
       authenticated: true,
     };
@@ -233,6 +237,19 @@ export async function resolveVerifiedActor(
   const role = normalizeRole(dbUser.role);
   const displayLabel = `${dbUser.displayName || dbUser.name} (${role})`;
 
+  if (actor.sessionVerified && isUserSessionRevoked(tokenTenantId, dbUser.id, actor.sessionIat)) {
+    return {
+      userId: null,
+      userDisplay: displayLabel,
+      userRole: role,
+      user: null,
+      sessionVerified: false,
+      authenticated: false,
+      invalidToken: true,
+      sessionRevoked: true,
+    };
+  }
+
   if (dbUser.active === false || dbUser.isActive === false || Boolean(dbUser.archivedAt)) {
     return {
       userId: dbUser.id,
@@ -338,6 +355,19 @@ export async function authorizeApiAction(
       ok: false,
       response: forbiddenError(
         "⛔ رفض أمني: الرمز غير مصرح للوصول إلى بيانات هذه المنشأة / Cross-tenant session denied"
+      ),
+    };
+  }
+
+  if (actor.sessionRevoked) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        {
+          error: "🔒 تم إنهاء الجلسة وإلغاء صلاحية الدخول لهذا الحساب / Session revoked by administrator",
+          code: "SESSION_REVOKED",
+        },
+        { status: 401 }
       ),
     };
   }

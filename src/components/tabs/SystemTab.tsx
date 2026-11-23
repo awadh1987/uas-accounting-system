@@ -52,6 +52,7 @@ import { ApprovalRulesMatrixPanel } from "@/components/ApprovalRulesMatrixPanel"
 import { TenantAdminConfigPanel } from "@/components/TenantAdminConfigPanel";
 import { TenantDevicesPanel } from "@/components/TenantDevicesPanel";
 import { SuperadminLicenseGeneratorPanel } from "@/components/SuperadminLicenseGeneratorPanel";
+import { PlatformControlPanel } from "@/components/PlatformControlPanel";
 import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
 import {
   ALL_USER_ROLES,
@@ -342,6 +343,7 @@ export function SystemTab({
     | "devices"
     | "security"
     | "superadmin-licenses"
+    | "control-panel"
   >("branding");
 
   React.useEffect(() => {
@@ -356,14 +358,15 @@ export function SystemTab({
       | "tenant-config"
       | "devices"
       | "security"
-      | "superadmin-licenses" =>
+      | "superadmin-licenses"
+      | "control-panel" =>
       s === "branding" ||
       s === "users" ||
       s === "accounting" ||
       s === "tenant-config" ||
       s === "devices" ||
       s === "security" ||
-      (s === "superadmin-licenses" && isPlatformSuperadmin);
+      ((s === "superadmin-licenses" || s === "control-panel") && isPlatformSuperadmin);
 
     const readInitialSubTab = () => {
       const rawHash = window.location.hash.replace(/^#\/?/, "");
@@ -406,6 +409,7 @@ export function SystemTab({
       | "devices"
       | "security"
       | "superadmin-licenses"
+      | "control-panel"
   ) {
     setActiveSubTab(subTab);
     if (typeof window !== "undefined") {
@@ -1331,22 +1335,40 @@ export function SystemTab({
           <span>{isAr ? "إعدادات النظام والأمان والربط (Settings & Connectivity)" : "System Settings & Connectivity"}</span>
         </button>
         {isPlatformSuperadmin && (
-          <button
-            type="button"
-            onClick={() => handleSelectSubTab("superadmin-licenses")}
-            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-              activeSubTab === "superadmin-licenses"
-                ? "accent-bg shadow-sm"
-                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
-            }`}
-          >
-            <KeyRound className="w-4 h-4" />
-            <span>
-              {isAr
-                ? "مولد التراخيص والمنشآت (Superadmin)"
-                : "Superadmin License Generator"}
-            </span>
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => handleSelectSubTab("superadmin-licenses")}
+              className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+                activeSubTab === "superadmin-licenses"
+                  ? "accent-bg shadow-sm"
+                  : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
+              }`}
+            >
+              <KeyRound className="w-4 h-4" />
+              <span>
+                {isAr
+                  ? "مولد التراخيص والمنشآت (Superadmin)"
+                  : "Superadmin License Generator"}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectSubTab("control-panel")}
+              className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+                activeSubTab === "control-panel"
+                  ? "accent-bg shadow-sm"
+                  : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30"
+              }`}
+            >
+              <ShieldCheck className="w-4 h-4" />
+              <span>
+                {isAr
+                  ? "لوحة تحكم المنصة (الحوكمة الكاملة)"
+                  : "Platform Control Panel"}
+              </span>
+            </button>
+          </>
         )}
       </div>
 
@@ -1355,6 +1377,14 @@ export function SystemTab({
           lang={lang}
           onToast={onToast}
           showStandaloneLink
+        />
+      )}
+
+      {isPlatformSuperadmin && activeSubTab === "control-panel" && (
+        <PlatformControlPanel
+          lang={lang}
+          onToast={onToast}
+          showStandaloneLinks
         />
       )}
 
@@ -2198,7 +2228,13 @@ export function SystemTab({
                   <tr key={u.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
                     <td className="p-2.5">
                       <div className="flex items-center gap-2.5">
-                        <SvgAvatar char={u.avatarChar} size={32} />
+                        <SvgAvatar
+                          char={u.avatarChar}
+                          avatarUrl={u.avatarUrl}
+                          color={u.avatarColor}
+                          size={32}
+                          alt={u.displayName || u.name}
+                        />
                         <div>
                           <div className="font-bold flex items-center gap-1.5">
                             <span>{u.displayName ? `${u.displayName} (${u.name})` : u.name}</span>
@@ -3117,7 +3153,13 @@ export function SystemTab({
             {/* User Banner */}
             <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <SvgAvatar char={permDrawerUser.avatarChar} size={40} />
+                <SvgAvatar
+                  char={permDrawerUser.avatarChar}
+                  avatarUrl={permDrawerUser.avatarUrl}
+                  color={permDrawerUser.avatarColor}
+                  size={40}
+                  alt={permDrawerUser.displayName || permDrawerUser.name}
+                />
                 <div>
                   <div className="font-extrabold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
                     <span>{permDrawerUser.displayName || permDrawerUser.name}</span>
@@ -3453,7 +3495,13 @@ export function SystemTab({
 
             {/* Target User Info */}
             <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-center gap-3">
-              <SvgAvatar char={resetModalUser.avatarChar} size={36} />
+              <SvgAvatar
+                char={resetModalUser.avatarChar}
+                avatarUrl={resetModalUser.avatarUrl}
+                color={resetModalUser.avatarColor}
+                size={36}
+                alt={resetModalUser.displayName || resetModalUser.name}
+              />
               <div>
                 <div className="font-bold text-slate-900 dark:text-slate-100">
                   {resetModalUser.displayName || resetModalUser.name}

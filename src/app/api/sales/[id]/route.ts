@@ -52,6 +52,8 @@ async function handleSaleByIdUpdate(
       revenueAccountCode: body.revenueAccountCode ? String(body.revenueAccountCode).trim() : undefined,
       treasuryAccountId: body.treasuryAccountId ? String(body.treasuryAccountId).trim() : undefined,
       createdById: auth.actor.userId ?? undefined,
+      allowNegativeStock: Boolean(body.allowNegativeStock),
+      actorRole: auth.actor.userRole ?? undefined,
     });
 
     const state = await getBootstrapState();
@@ -59,6 +61,7 @@ async function handleSaleByIdUpdate(
   } catch (error) {
     const msg = error instanceof Error ? error.message : "تعذر تعديل عملية البيع";
     if (msg.includes("HARVEST_LOCKED")) return lockedError();
+    if (msg.includes("NEGATIVE_STOCK_OVERRIDE_FORBIDDEN")) return jsonError(msg, 403);
     return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
   }
 }

@@ -155,6 +155,13 @@ export default function SuperadminLicensesPage() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <Link
+              href="/control-panel"
+              className="min-h-[38px] px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5"
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>{isAr ? "لوحة التحكم الكاملة" : "Control Panel"}</span>
+            </Link>
             <button
               type="button"
               onClick={() => setLang(isAr ? "en" : "ar")}

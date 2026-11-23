@@ -15,6 +15,7 @@ import {
 } from "@/lib/serverBootstrap";
 import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
 import { withIdempotency } from "@/lib/idempotencyGuard";
+import { validateHarvestStockForSaleTx } from "@/lib/harvestStockGuard";
 
 export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (r) => {
@@ -182,24 +183,18 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         }
       }
 
-      // Deduct HarvestInventoryBatch availability when a matching harvest batch exists & no Warehouse SKU was deducted
-      if (!itemId && bundlesCount > 0) {
-        const matchingBatch = await tx.harvestInventoryBatch.findFirst({
-          where: {
-            projectId,
-            harvestName,
-            productGrade,
-          },
-          orderBy: { createdAt: "desc" },
-        });
-        if (matchingBatch) {
-          const nextBundles = Math.max(0, matchingBatch.harvestedBundles - bundlesCount);
-          await tx.harvestInventoryBatch.update({
-            where: { id: matchingBatch.id },
-            data: { harvestedBundles: nextBundles },
-          });
-        }
-      }
+      const stockGuard =
+        bundlesCount > 0
+          ? await validateHarvestStockForSaleTx(tx, {
+              projectId,
+              subProjectId,
+              harvestName,
+              productGrade,
+              requestedBundles: bundlesCount,
+              allowNegativeStock: Boolean(body.allowNegativeStock),
+              actorRole: actor.userRole,
+            })
+          : { overridden: false, hasTrackedBatches: false, availableBundles: 0, shortageBundles: 0 };
 
       const sale = await tx.saleTransaction.create({
         data: {
@@ -230,6 +225,15 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         },
       });
 
+      if (stockGuard.overridden) {
+        await appendAuditLogTx(tx, {
+          ...actor,
+          actionType: "تجاوز رصيد مخزون الحصاد السالب (اعتماد محاسبي)",
+          entityReference: sale.id,
+          details: `${harvestName} (${productGrade}) — متاح ${stockGuard.availableBundles}، مباع ${bundlesCount}، عجز ${stockGuard.shortageBundles} ${body.negativeStockReason ? `(${String(body.negativeStockReason).trim()})` : ""}`,
+        });
+      }
+
       await appendAuditLogTx(tx, {
         ...actor,
         actionType: "إضافة عملية بيع",
@@ -246,6 +250,9 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     return NextResponse.json({ createdId: result.sale.id, state }, { status: 201 });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "تعذر حفظ عملية البيع";
+    if (msg.includes("NEGATIVE_STOCK_OVERRIDE_FORBIDDEN")) {
+      return jsonError(msg, 403);
+    }
     if (msg.includes("CREDIT_LIMIT_EXCEEDED") || msg.includes("NEGATIVE_STOCK_BLOCKED")) {
       return jsonError(msg, 400);
     }
@@ -299,6 +306,8 @@ async function handleSalePatch(req: NextRequest) {
       revenueAccountCode: body.revenueAccountCode ? String(body.revenueAccountCode).trim() : undefined,
       treasuryAccountId: body.treasuryAccountId ? String(body.treasuryAccountId).trim() : undefined,
       createdById: auth.actor.userId ?? undefined,
+      allowNegativeStock: Boolean(body.allowNegativeStock),
+      actorRole: auth.actor.userRole ?? undefined,
     });
 
     const state = await getBootstrapState();
@@ -306,6 +315,7 @@ async function handleSalePatch(req: NextRequest) {
   } catch (error) {
     const msg = error instanceof Error ? error.message : "تعذر تعديل عملية البيع";
     if (msg.includes("HARVEST_LOCKED")) return lockedError();
+    if (msg.includes("NEGATIVE_STOCK_OVERRIDE_FORBIDDEN")) return jsonError(msg, 403);
     return jsonError(msg, msg.includes("NOT_FOUND") ? 404 : 400);
   }
 }

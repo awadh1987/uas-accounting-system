@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
-import { getActiveTenantId } from "@/lib/tenant/tenantContext";
+import { getActiveTenantId, getTenantMetadata } from "@/lib/tenant";
 import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import {
   authenticateAndBuildSessionTx,
   verifyPassword,
 } from "@/lib/serverBootstrap";
 import { attachSessionCookie } from "@/lib/authSession";
+import {
+  evaluateLicenseGovernance,
+  getUserSessionRevocation,
+} from "@/lib/controlPanel/governanceStore";
 import { jsonError } from "@/lib/apiHelpers";
 
 export const POST = withTenantRoute(async function POST(req: NextRequest) {
@@ -62,11 +66,40 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       );
     }
 
+    const activeTenantId = getActiveTenantId();
+    const userRevocation = getUserSessionRevocation(activeTenantId, user.id);
+    if (userRevocation?.blockSignIn) {
+      return NextResponse.json(
+        {
+          error: "تم إلغاء صلاحية الدخول لهذا الحساب من لوحة تحكم المنصة / Account sign-in blocked by platform administrator",
+          code: "ACCOUNT_REVOKED",
+        },
+        { status: 403 }
+      );
+    }
+
+    if (activeTenantId !== "default") {
+      const tenantMeta = getTenantMetadata(activeTenantId);
+      const govCheck = evaluateLicenseGovernance({
+        slug: tenantMeta?.slug || activeTenantId,
+        licenseId: tenantMeta?.licenseId || null,
+        registryStatus: tenantMeta?.status || null,
+      });
+      if (!govCheck.allowed) {
+        return NextResponse.json(
+          {
+            error: govCheck.error,
+            code: govCheck.code || `LICENSE_${govCheck.status}`,
+          },
+          { status: 403 }
+        );
+      }
+    }
+
     if (!verifyPassword(password, user.passwordHash)) {
       return jsonError("كلمة المرور غير صحيحة", 401);
     }
 
-    const activeTenantId = getActiveTenantId();
     const sessionData = await authenticateAndBuildSessionTx(user, activeTenantId, {
       plainPassword: password,
     });

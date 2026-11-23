@@ -25,12 +25,14 @@ import {
   type AccountingDirectionValue,
 } from "@/components/AccountingDirectionSelector";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
+import { evaluateSaleAgainstHarvestStock } from "@/lib/harvestReconciliation";
 import {
   printUasDocument,
   resolveLetterheadFromProfile,
 } from "@/lib/print/uasDocumentPrinter";
 import type {
   UasEnterpriseProfile,
+  UasInventoryBatch,
   UasProject,
   UasSaleTransaction,
   UasTreasuryAccount,
@@ -66,11 +68,13 @@ export type SalePayload = {
   voucherNo: string;
   notes: string;
   costCenterId?: string | null;
+  allowNegativeStock?: boolean;
 };
 
 interface SalesTabProps {
   projects: UasProject[];
   sales: UasSaleTransaction[];
+  inventoryBatches?: UasInventoryBatch[];
   treasuryAccounts?: UasTreasuryAccount[];
   currentUser?: UasUser;
   enterpriseProfile?: UasEnterpriseProfile | null;
@@ -97,6 +101,7 @@ const PRESET_GRADES = [
 export function SalesTab({
   projects,
   sales,
+  inventoryBatches = [],
   treasuryAccounts = [],
   currentUser,
   enterpriseProfile,
@@ -140,6 +145,16 @@ export function SalesTab({
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [voucherNo, setVoucherNo] = useState("");
   const [notes, setNotes] = useState("");
+  const [allowNegativeStock, setAllowNegativeStock] = useState(false);
+
+  const canOverrideStock =
+    currentUser?.role === "SUPER_ADMIN" || currentUser?.role === "CHIEF_ACCOUNTANT";
+
+  const activeGradeForCheck =
+    selectedGradePreset === "أخرى (تحديد مخصص)"
+      ? customGradeText.trim() || "درجة مخصصة"
+      : selectedGradePreset;
+
   const [costCenterId, setCostCenterId] = useState("");
 
   // Filters
@@ -153,6 +168,32 @@ export function SalesTab({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [clientOptions, setClientOptions] = useState<QuickCustomerOption[]>([]);
   const [quickClientOpen, setQuickClientOpen] = useState(false);
+
+  const liveStockCheck = useMemo(() => {
+    const pid = activeProj?.id || projectId;
+    const harv =
+      activeProj?.harvests.includes(harvest) ? harvest : activeProj?.harvests[0] || "القطفة الأولى";
+    return evaluateSaleAgainstHarvestStock({
+      batches: inventoryBatches,
+      sales,
+      projectId: pid,
+      subProjectId: subProjectId || undefined,
+      harvest: harv,
+      grade: activeGradeForCheck,
+      requestedBundles: Number(bundles) || 0,
+      excludeSaleId: editingId || undefined,
+    });
+  }, [
+    inventoryBatches,
+    sales,
+    activeProj,
+    projectId,
+    subProjectId,
+    harvest,
+    activeGradeForCheck,
+    bundles,
+    editingId,
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -308,6 +349,7 @@ export function SalesTab({
       voucherNo: voucherNo.trim() || `RV-${Math.floor(100 + Math.random() * 900)}`,
       notes: notes.trim(),
       costCenterId: costCenterId || undefined,
+      allowNegativeStock: allowNegativeStock || undefined,
     };
 
     const ok =
@@ -320,6 +362,7 @@ export function SalesTab({
       setCustomer("");
       setNotes("");
       setCostCenterId("");
+      setAllowNegativeStock(false);
       setDrawerOpen(false);
     }
   }
@@ -694,6 +737,41 @@ export function SalesTab({
               />
             </div>
           </div>
+
+          {liveStockCheck.hasTrackedBatches && (
+            <div
+              className={`rounded-xl border p-2.5 text-[11px] space-y-1.5 ${
+                !liveStockCheck.withinStock && (Number(bundles) || 0) > 0
+                  ? "bg-rose-50 dark:bg-rose-950/30 border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200"
+                  : "bg-emerald-50/70 dark:bg-emerald-950/25 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200"
+              }`}
+            >
+              <div className="font-bold flex items-center justify-between gap-2 flex-wrap">
+                <span>المتاح بمخزون الحصاد لهذه القطفة والدرجة:</span>
+                <bdi dir="ltr" className="font-mono font-black">
+                  {fmtNum(liveStockCheck.availableBundles)} علاقية
+                </bdi>
+              </div>
+              {!liveStockCheck.withinStock && (Number(bundles) || 0) > 0 && (
+                <>
+                  <div className="font-semibold">
+                    ⚠️ الكمية المطلوبة تتجاوز الرصيد المتاح بعجز {fmtNum(liveStockCheck.shortageBundles)} علاقية.
+                  </div>
+                  {canOverrideStock && (
+                    <label className="flex items-center gap-2 pt-1 font-bold cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={allowNegativeStock}
+                        onChange={(e) => setAllowNegativeStock(e.target.checked)}
+                        className="rounded border-rose-400"
+                      />
+                      <span>اعتماد التجاوز المحاسبي والبيع على المكشوف (تسجيل بالرقابة)</span>
+                    </label>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           {/* Total, Credit (Cash), Debit (Receivable) */}
           <div className="grid grid-cols-3 gap-2">

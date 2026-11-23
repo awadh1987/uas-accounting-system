@@ -18,6 +18,7 @@ import {
   computeWorkerWageTotals,
   formatAuditTimestamp,
 } from "@/lib/formulas";
+import { evaluateSaleAgainstHarvestStock } from "@/lib/harvestReconciliation";
 import { INITIAL_FALLBACK_STATE } from "@/lib/seedFallback";
 import { normalizeRole, ROLE_DEFINITIONS } from "@/lib/permissions";
 import {
@@ -147,22 +148,37 @@ export function loadOfflineAndroidState(storage?: OfflineStorageLike | null): Ua
     }
     return st;
   };
+  const normalizeStateShape = (st: UasBootstrapState): UasBootstrapState => {
+    if (!Array.isArray(st.projects)) st.projects = [];
+    if (!Array.isArray(st.expenses)) st.expenses = [];
+    if (!Array.isArray(st.workers)) st.workers = [];
+    if (!Array.isArray(st.sales)) st.sales = [];
+    if (!Array.isArray(st.installments)) st.installments = [];
+    if (!Array.isArray(st.inventoryBatches)) st.inventoryBatches = [];
+    if (!Array.isArray(st.treasuryAccounts)) st.treasuryAccounts = [];
+    if (!Array.isArray(st.auditLogs)) st.auditLogs = [];
+    if (!st.lockedPeriods || typeof st.lockedPeriods !== "object") st.lockedPeriods = {};
+    if (!st.exchangeRates || typeof st.exchangeRates !== "object") {
+      st.exchangeRates = structuredClone(INITIAL_FALLBACK_STATE.exchangeRates);
+    }
+    return st;
+  };
   try {
     const raw = s.getItem(OFFLINE_DB_STATE_KEY);
     if (!raw) {
-      const clean = applyInstalledCreds(createCleanOfflineCompanyState());
+      const clean = normalizeStateShape(applyInstalledCreds(createCleanOfflineCompanyState()));
       s.setItem(OFFLINE_DB_STATE_KEY, JSON.stringify(clean));
       return clean;
     }
     const parsed = JSON.parse(raw) as UasBootstrapState;
     if (!parsed || !Array.isArray(parsed.users) || parsed.users.length === 0) {
-      const clean = applyInstalledCreds(createCleanOfflineCompanyState());
+      const clean = normalizeStateShape(applyInstalledCreds(createCleanOfflineCompanyState()));
       s.setItem(OFFLINE_DB_STATE_KEY, JSON.stringify(clean));
       return clean;
     }
-    return parsed;
+    return normalizeStateShape(parsed);
   } catch {
-    const clean = applyInstalledCreds(createCleanOfflineCompanyState());
+    const clean = normalizeStateShape(applyInstalledCreds(createCleanOfflineCompanyState()));
     try {
       s.setItem(OFFLINE_DB_STATE_KEY, JSON.stringify(clean));
     } catch {
@@ -254,19 +270,26 @@ export function getEndpointSyncPriority(endpoint: string): number {
     return 20;
   }
   // Tier 3: Inventory Lookups (UOMs, Categories, Warehouses)
-  if (ep.includes("/api/inventory/uoms") || ep.includes("/api/inventory/categories") || ep.includes("/api/inventory/warehouses")) {
+  if (
+    ep.includes("/api/inventory/uom") ||
+    ep.includes("/api/inventory/categories") ||
+    ep.includes("/api/inventory/warehouses")
+  ) {
     return 30;
   }
-  // Tier 4: Master Entities & Catalog (COA Accounts, Customers, Vendors, Workers, Projects, Items, Conversions)
+  // Tier 4: Master Entities & Catalog (COA Accounts, Customers, Vendors, Workers, Projects, Items, Conversions, Harvest Batches)
   if (
     ep.includes("/api/coa") ||
     ep.includes("/api/accounting/coa") ||
     ep.includes("/api/customers") ||
+    ep.includes("/api/sales/customers") ||
     ep.includes("/api/vendors") ||
+    ep.includes("/api/procurement/vendors") ||
     ep.includes("/api/workers") ||
     ep.includes("/api/projects") ||
     ep.includes("/api/inventory/items") ||
-    ep.includes("/api/inventory/conversions")
+    ep.includes("/api/inventory/conversions") ||
+    (ep.startsWith("/api/inventory") && !ep.includes("/movements"))
   ) {
     return 40;
   }
@@ -282,6 +305,7 @@ export function getEndpointSyncPriority(endpoint: string): number {
     ep.includes("/api/expenses") ||
     ep.includes("/api/inventory/movements") ||
     ep.includes("/api/ledger") ||
+    ep.includes("/api/accounting/journal") ||
     ep.includes("/api/installments") ||
     ep.includes("/api/installment-vouchers")
   ) {
@@ -1689,6 +1713,76 @@ async function handleOfflineAndroidApiRequestCore(
     );
   }
 
+  if (pathname === "/api/users/me/avatar") {
+    const state = loadOfflineAndroidState(s);
+    const currentUser =
+      state.users.find((u) => u.id === actor.userId) ||
+      state.users.find((u) => u.active && u.isActive !== false) ||
+      state.users[0];
+    if (!currentUser) {
+      return jsonResponse({ error: "المستخدم غير موجود" }, 404);
+    }
+    if (method === "POST") {
+      const dataUrl = typeof body.dataUrl === "string" ? body.dataUrl.trim() : "";
+      if (!/^data:image\/(?:png|jpeg|jpg|webp|gif);base64,/i.test(dataUrl)) {
+        return jsonResponse(
+          { error: "صيغة الصورة غير صالحة (المسموح: PNG, JPG, WEBP, GIF)" },
+          400
+        );
+      }
+      currentUser.avatarUrl = dataUrl;
+      addLocalAudit(state, actor.userDisplay, "تحديث الصورة الشخصية (محلي)", currentUser.displayName || currentUser.name);
+      saveOfflineAndroidState(state, s);
+      appendOfflineSyncQueue("/api/users/me/profile", "PATCH", { avatarUrl: dataUrl }, s);
+      return jsonResponse({ success: true, avatarUrl: dataUrl, user: currentUser, state, offline: true }, 200);
+    }
+    if (method === "DELETE") {
+      currentUser.avatarUrl = "";
+      addLocalAudit(state, actor.userDisplay, "إزالة الصورة الشخصية (محلي)", currentUser.displayName || currentUser.name);
+      saveOfflineAndroidState(state, s);
+      appendOfflineSyncQueue("/api/users/me/profile", "PATCH", { avatarUrl: "" }, s);
+      return jsonResponse({ success: true, avatarUrl: "", user: currentUser, state, offline: true }, 200);
+    }
+  }
+
+  if (pathname === "/api/users/me/profile") {
+    const state = loadOfflineAndroidState(s);
+    const currentUser =
+      state.users.find((u) => u.id === actor.userId) ||
+      state.users.find((u) => u.active && u.isActive !== false) ||
+      state.users[0];
+    if (!currentUser) {
+      return jsonResponse({ error: "المستخدم غير موجود" }, 404);
+    }
+    if (method === "GET") {
+      return jsonResponse({ user: currentUser, offline: true }, 200);
+    }
+    if (method === "PATCH" || method === "PUT") {
+      if (body.displayName !== undefined) currentUser.displayName = String(body.displayName).trim();
+      if (body.phone !== undefined) currentUser.phone = String(body.phone).trim();
+      if (body.email !== undefined && String(body.email).trim()) {
+        currentUser.email = String(body.email).trim().toLowerCase();
+      }
+      if (body.avatarUrl !== undefined) currentUser.avatarUrl = String(body.avatarUrl).trim();
+      if (body.avatarChar !== undefined) currentUser.avatarChar = String(body.avatarChar).slice(0, 2);
+      if (body.avatarColor !== undefined) currentUser.avatarColor = String(body.avatarColor).trim();
+      if (body.preferredLang === "ar" || body.preferredLang === "en") {
+        currentUser.preferredLang = body.preferredLang;
+      }
+      if (body.preferredCurrency === "YER" || body.preferredCurrency === "SAR" || body.preferredCurrency === "USD") {
+        currentUser.preferredCurrency = body.preferredCurrency;
+      }
+      if (body.preferredTheme === "emerald" || body.preferredTheme === "dark" || body.preferredTheme === "royal") {
+        currentUser.preferredTheme = body.preferredTheme;
+      }
+      if (body.defaultModule !== undefined) currentUser.defaultModule = String(body.defaultModule).trim();
+      addLocalAudit(state, actor.userDisplay, "تحديث الملف الشخصي (محلي)", currentUser.displayName || currentUser.name);
+      saveOfflineAndroidState(state, s);
+      appendOfflineSyncQueue(pathname, method, body, s);
+      return jsonResponse({ success: true, user: currentUser, state, offline: true }, 200);
+    }
+  }
+
   // -------------------------------------------------------------------------
   // 5. Projects, Expenses, Workers, Sales, Treasury, Inventory, Accounting
   // -------------------------------------------------------------------------
@@ -1996,15 +2090,47 @@ async function handleOfflineAndroidApiRequestCore(
     return jsonResponse({ success: true, state }, 201);
   }
 
+  if (pathname.startsWith("/api/projects/")) {
+    const id = decodeURIComponent(pathname.slice("/api/projects/".length));
+    const state = loadOfflineAndroidState(s);
+    const idx = state.projects.findIndex((p) => p.id === id);
+    if (idx >= 0) {
+      if (method === "PATCH" || method === "PUT") {
+        const target = state.projects[idx];
+        if (body.name !== undefined) target.name = String(body.name).trim();
+        if (body.type !== undefined) target.type = String(body.type);
+        if (body.estimatedValue !== undefined) target.estimatedValue = Number(body.estimatedValue) || 0;
+        if (body.notes !== undefined) target.notes = String(body.notes);
+        addLocalAudit(state, actor.userDisplay, "تعديل مشروع (محلي)", target.name);
+        saveOfflineAndroidState(state, s);
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, project: target, state, offline: true }, 200);
+      }
+      if (method === "DELETE") {
+        const [removed] = state.projects.splice(idx, 1);
+        addLocalAudit(state, actor.userDisplay, "حذف مشروع (محلي)", removed.name);
+        saveOfflineAndroidState(state, s);
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, state, offline: true }, 200);
+      }
+    }
+  }
+
   if (pathname === "/api/expenses" && method === "POST") {
     const state = loadOfflineAndroidState(s);
+    const projectId = String(body.projectId || "");
+    const harvest = String(body.harvest || "");
+    if (state.lockedPeriods[`${projectId}::${harvest}`]) {
+      return jsonResponse({ error: "🔒 هذه القطفة مغلقة محاسبياً!" }, 423);
+    }
     const qty = Number(body.qty) || 1;
     const unitPrice = Number(body.unitPrice) || 0;
     const total = computeOperatingExpenseTotal(qty, unitPrice);
     state.expenses.push({
       id: `e-${Date.now()}`,
-      projectId: String(body.projectId || ""),
-      harvest: String(body.harvest || ""),
+      projectId,
+      subProjectId: body.subProjectId ? String(body.subProjectId) : undefined,
+      harvest,
       category: String(body.category || "وقود/محروقات"),
       subType: String(body.subType || body.category || ""),
       qty,
@@ -2019,8 +2145,45 @@ async function handleOfflineAndroidApiRequestCore(
     return jsonResponse({ success: true, state }, 201);
   }
 
+  if (pathname.startsWith("/api/expenses/")) {
+    const id = decodeURIComponent(pathname.slice("/api/expenses/".length));
+    const state = loadOfflineAndroidState(s);
+    const idx = state.expenses.findIndex((e) => e.id === id);
+    if (idx >= 0) {
+      const existing = state.expenses[idx];
+      if (state.lockedPeriods[`${existing.projectId}::${existing.harvest}`]) {
+        return jsonResponse({ error: "🔒 هذه القطفة مغلقة محاسبياً!" }, 423);
+      }
+      if (method === "PATCH" || method === "PUT") {
+        if (body.category !== undefined) existing.category = String(body.category);
+        if (body.subType !== undefined) existing.subType = String(body.subType);
+        if (body.qty !== undefined) existing.qty = Number(body.qty) || 1;
+        if (body.unitPrice !== undefined) existing.unitPrice = Number(body.unitPrice) || 0;
+        existing.total = computeOperatingExpenseTotal(existing.qty, existing.unitPrice);
+        if (body.date !== undefined) existing.date = String(body.date);
+        if (body.notes !== undefined) existing.notes = String(body.notes);
+        addLocalAudit(state, actor.userDisplay, "تعديل مصروف (محلي)", `${existing.category} — ${existing.total}`);
+        saveOfflineAndroidState(state, s);
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, expense: existing, state, offline: true }, 200);
+      }
+      if (method === "DELETE") {
+        state.expenses.splice(idx, 1);
+        addLocalAudit(state, actor.userDisplay, "حذف مصروف (محلي)", `${existing.category} — ${existing.total}`);
+        saveOfflineAndroidState(state, s);
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, state, offline: true }, 200);
+      }
+    }
+  }
+
   if (pathname === "/api/workers" && method === "POST") {
     const state = loadOfflineAndroidState(s);
+    const projectId = String(body.projectId || "");
+    const harvest = String(body.harvest || "");
+    if (state.lockedPeriods[`${projectId}::${harvest}`]) {
+      return jsonResponse({ error: "🔒 هذه القطفة مغلقة محاسبياً!" }, 423);
+    }
     const dailyWage = Number(body.dailyWage) || 0;
     const days = Number(body.days) || 1;
     const credit = Number(body.credit) || 0;
@@ -2029,8 +2192,9 @@ async function handleOfflineAndroidApiRequestCore(
     const wrkProv = provisionLocalGen6AccountAndCostCenter("WORKER", { id: `worker:${String(body.name || "").trim()}`, nameAr: String(body.name || "").trim() }, s);
     state.workers.push({
       id: workerLocalId,
-      projectId: String(body.projectId || ""),
-      harvest: String(body.harvest || ""),
+      projectId,
+      subProjectId: body.subProjectId ? String(body.subProjectId) : undefined,
+      harvest,
       name: String(body.name || ""),
       dailyWage,
       days,
@@ -2047,17 +2211,91 @@ async function handleOfflineAndroidApiRequestCore(
     return jsonResponse({ success: true, state }, 201);
   }
 
+  if (pathname.startsWith("/api/workers/")) {
+    const id = decodeURIComponent(pathname.slice("/api/workers/".length));
+    const state = loadOfflineAndroidState(s);
+    const idx = state.workers.findIndex((w) => w.id === id);
+    if (idx >= 0) {
+      const existing = state.workers[idx];
+      if (state.lockedPeriods[`${existing.projectId}::${existing.harvest}`]) {
+        return jsonResponse({ error: "🔒 هذه القطفة مغلقة محاسبياً!" }, 423);
+      }
+      if (method === "PATCH" || method === "PUT") {
+        if (body.name !== undefined) existing.name = String(body.name);
+        if (body.dailyWage !== undefined) existing.dailyWage = Number(body.dailyWage) || 0;
+        if (body.days !== undefined) existing.days = Number(body.days) || 1;
+        if (body.credit !== undefined) existing.credit = Number(body.credit) || 0;
+        const { totalWage, debitBalance } = computeWorkerWageTotals(existing.dailyWage, existing.days, existing.credit);
+        existing.total = totalWage;
+        existing.debit = debitBalance;
+        if (body.date !== undefined) existing.date = String(body.date);
+        if (body.notes !== undefined) existing.notes = String(body.notes);
+        addLocalAudit(state, actor.userDisplay, "تعديل سجل عامل (محلي)", `${existing.name} — ${existing.total}`);
+        saveOfflineAndroidState(state, s);
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, worker: existing, state, offline: true }, 200);
+      }
+      if (method === "DELETE") {
+        state.workers.splice(idx, 1);
+        addLocalAudit(state, actor.userDisplay, "حذف سجل عامل (محلي)", `${existing.name} — ${existing.total}`);
+        saveOfflineAndroidState(state, s);
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, state, offline: true }, 200);
+      }
+    }
+  }
+
   if (pathname === "/api/sales" && method === "POST") {
     const state = loadOfflineAndroidState(s);
+    const projectId = String(body.projectId || "");
+    const harvest = String(body.harvest || "");
+    if (state.lockedPeriods[`${projectId}::${harvest}`]) {
+      return jsonResponse({ error: "🔒 هذه القطفة مغلقة محاسبياً!" }, 423);
+    }
     const bundles = Number(body.bundles) || 0;
     const price = Number(body.price) || 0;
     const credit = Number(body.credit) || 0;
+    const subProjectId = body.subProjectId ? String(body.subProjectId) : undefined;
+    const grade = String(body.grade || "رقم 1");
+    if (bundles > 0) {
+      const stockCheck = evaluateSaleAgainstHarvestStock({
+        batches: state.inventoryBatches,
+        sales: state.sales,
+        projectId,
+        subProjectId,
+        harvest,
+        grade,
+        requestedBundles: bundles,
+      });
+      const canOverride =
+        Boolean(body.allowNegativeStock) &&
+        (actor.userRole === "SUPER_ADMIN" || actor.userRole === "CHIEF_ACCOUNTANT");
+      if (stockCheck.hasTrackedBatches && !stockCheck.withinStock && !canOverride) {
+        return jsonResponse(
+          {
+            error: `الكمية المطلوبة (${bundles}) تتجاوز الرصيد المتاح في مخزون الحصاد (${Math.max(0, stockCheck.availableBundles)}) بعجز ${stockCheck.shortageBundles} علاقية.`,
+            code: "NEGATIVE_STOCK_BLOCKED",
+          },
+          400
+        );
+      }
+    }
     const { totalAmount, debitReceivable } = computeSaleTotals(bundles, price, credit);
+    const seq = String(
+      body.sequenceNumber || body.batch || `SO-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`
+    );
     state.sales.push({
       id: `s-${Date.now()}`,
-      projectId: String(body.projectId || ""),
-      harvest: String(body.harvest || ""),
-      batch: String(body.batch || `SO-${Date.now().toString().slice(-4)}`),
+      projectId,
+      subProjectId: body.subProjectId ? String(body.subProjectId) : undefined,
+      harvest,
+      batch: String(body.batch || seq),
+      sequenceNumber: seq,
+      dailyBatchLabel: String(body.dailyBatchLabel || "وردية مفتوحة"),
+      salesOfficerId: body.salesOfficerId ? String(body.salesOfficerId) : undefined,
+      salesOfficerTitle: body.salesOfficerTitle ? String(body.salesOfficerTitle) : undefined,
+      revenueAccountCode: String(body.revenueAccountCode || "411101"),
+      treasuryAccountId: body.treasuryAccountId ? String(body.treasuryAccountId) : undefined,
       customer: String(body.customer || ""),
       phone: String(body.phone || ""),
       grade: String(body.grade || "رقم 1"),
@@ -2074,6 +2312,129 @@ async function handleOfflineAndroidApiRequestCore(
     saveOfflineAndroidState(state, s);
     appendOfflineSyncQueue(pathname, method, body, s);
     return jsonResponse({ success: true, state }, 201);
+  }
+
+  if (pathname.startsWith("/api/sales/") && !pathname.startsWith("/api/sales/customers") && !pathname.startsWith("/api/sales/invoices") && !pathname.startsWith("/api/sales/receipts")) {
+    const id = decodeURIComponent(pathname.slice("/api/sales/".length));
+    const state = loadOfflineAndroidState(s);
+    const idx = state.sales.findIndex((x) => x.id === id);
+    if (idx >= 0) {
+      const existing = state.sales[idx];
+      if (state.lockedPeriods[`${existing.projectId}::${existing.harvest}`]) {
+        return jsonResponse({ error: "🔒 هذه القطفة مغلقة محاسبياً!" }, 423);
+      }
+      if (method === "PATCH" || method === "PUT") {
+        if (body.projectId !== undefined) existing.projectId = String(body.projectId);
+        if (body.subProjectId !== undefined) {
+          existing.subProjectId = body.subProjectId ? String(body.subProjectId) : undefined;
+        }
+        if (body.harvest !== undefined) existing.harvest = String(body.harvest);
+        if (body.batch !== undefined) existing.batch = String(body.batch);
+        if (body.customer !== undefined) existing.customer = String(body.customer);
+        if (body.phone !== undefined) existing.phone = String(body.phone);
+        if (body.grade !== undefined) existing.grade = String(body.grade);
+        if (body.date !== undefined) existing.date = String(body.date);
+        if (body.voucherNo !== undefined) existing.voucherNo = String(body.voucherNo);
+        if (body.notes !== undefined) existing.notes = String(body.notes);
+        const nextBundles = body.bundles !== undefined ? Number(body.bundles) || 0 : existing.bundles;
+        const nextPrice = body.price !== undefined ? Number(body.price) || 0 : existing.price;
+        const nextCredit = body.credit !== undefined ? Number(body.credit) || 0 : existing.credit;
+        const { totalAmount, debitReceivable } = computeSaleTotals(nextBundles, nextPrice, nextCredit);
+        existing.bundles = nextBundles;
+        existing.price = nextPrice;
+        existing.credit = nextCredit;
+        existing.total = totalAmount;
+        existing.debit = debitReceivable;
+        addLocalAudit(state, actor.userDisplay, "تعديل عملية بيع (محلي)", `${existing.customer} — ${totalAmount}`);
+        saveOfflineAndroidState(state, s);
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, sale: existing, state, offline: true }, 200);
+      }
+      if (method === "DELETE") {
+        state.sales.splice(idx, 1);
+        addLocalAudit(state, actor.userDisplay, "حذف عملية بيع (محلي)", `${existing.customer} — ${existing.total}`);
+        saveOfflineAndroidState(state, s);
+        appendOfflineSyncQueue(pathname, method, body, s);
+        return jsonResponse({ success: true, state, offline: true }, 200);
+      }
+    }
+  }
+
+  if (pathname === "/api/installments" && method === "POST") {
+    const state = loadOfflineAndroidState(s);
+    const type = (String(body.type || "CUSTOMER_RECEIPT") === "WORKER_PAYMENT" ? "WORKER_PAYMENT" : "CUSTOMER_RECEIPT") as
+      | "CUSTOMER_RECEIPT"
+      | "WORKER_PAYMENT";
+    const targetId = String(body.targetId || "");
+    const treasuryId = String(body.treasuryId || state.treasuryAccounts[0]?.id || "t1");
+    const amount = Number(body.amount) || 0;
+    const voucherNo = String(body.voucherNo || `RV-INST-${Date.now().toString().slice(-3)}`);
+    const date = String(body.date || new Date().toISOString().slice(0, 10));
+    const notes = String(body.notes || "دفعة مسجلة");
+    const treas = state.treasuryAccounts.find((t) => t.id === treasuryId);
+    let targetName = "";
+    let phone = "";
+
+    if (type === "CUSTOMER_RECEIPT") {
+      const sale = state.sales.find((x) => x.id === targetId);
+      if (!sale) return jsonResponse({ error: "الفاتورة غير موجودة" }, 404);
+      if (state.lockedPeriods[`${sale.projectId}::${sale.harvest}`]) {
+        return jsonResponse({ error: "🔒 القطفة مغلقة محاسبياً!" }, 423);
+      }
+      sale.credit += amount;
+      sale.debit = sale.total - sale.credit;
+      targetName = `${sale.customer} (${sale.batch})`;
+      phone = sale.phone || "";
+      if (treas) treas.balanceYER += amount;
+    } else {
+      const worker = state.workers.find((x) => x.id === targetId);
+      if (!worker) return jsonResponse({ error: "سجل العامل غير موجود" }, 404);
+      if (state.lockedPeriods[`${worker.projectId}::${worker.harvest}`]) {
+        return jsonResponse({ error: "🔒 القطفة مغلقة محاسبياً!" }, 423);
+      }
+      worker.credit += amount;
+      worker.debit = worker.total - worker.credit;
+      targetName = `${worker.name} (${worker.harvest})`;
+      if (treas) treas.balanceYER -= amount;
+    }
+    state.installments.unshift({
+      id: `inst-${Date.now()}`,
+      voucherNo,
+      type,
+      targetId,
+      targetName,
+      phone,
+      treasuryId,
+      amount,
+      date,
+      notes,
+    });
+    addLocalAudit(state, actor.userDisplay, type === "CUSTOMER_RECEIPT" ? "سند قبض دفعة عميل (محلي)" : "سند صرف دفعة عامل (محلي)", `${voucherNo} — ${amount}`);
+    saveOfflineAndroidState(state, s);
+    appendOfflineSyncQueue(pathname, method, body, s);
+    return jsonResponse({ success: true, state, offline: true }, 201);
+  }
+
+  if (pathname === "/api/audit/lock" && method === "POST") {
+    const state = loadOfflineAndroidState(s);
+    const key = String(body.key || "");
+    const nextLocked = !state.lockedPeriods[key];
+    state.lockedPeriods[key] = nextLocked;
+    addLocalAudit(state, actor.userDisplay, nextLocked ? "إغلاق فترة قطفة 🔒" : "إعادة فتح فترة قطفة 🔓", key);
+    saveOfflineAndroidState(state, s);
+    appendOfflineSyncQueue(pathname, method, body, s);
+    return jsonResponse({ success: true, locked: nextLocked, state, offline: true }, 200);
+  }
+
+  if (pathname === "/api/audit/adjustments" && method === "POST") {
+    const state = loadOfflineAndroidState(s);
+    const label = String(body.periodLabel || body.key || "");
+    const reason = String(body.reason || "");
+    const amount = Number(body.amount) || 0;
+    addLocalAudit(state, actor.userDisplay, "قيد تسوية محاسبي معتمد (محلي)", `[${label}] ${reason} — ${amount}`);
+    saveOfflineAndroidState(state, s);
+    appendOfflineSyncQueue(pathname, method, body, s);
+    return jsonResponse({ success: true, state, offline: true }, 200);
   }
 
   // Structured collection endpoints for Accounting, Procurement, Sales, Treasury, Inventory
@@ -2503,7 +2864,7 @@ async function handleOfflineAndroidApiRequestCore(
   }
 
   // Multi-Unit Inventory Lookups & Items (with default seeds + custom "Other" creation)
-  if (pathname === "/api/inventory/uom") {
+  if (pathname === "/api/inventory/uom" || pathname === "/api/inventory/uoms") {
     let units = readCollection<Record<string, unknown>>(OFFLINE_DB_UOMS_KEY, s);
     if (units.length === 0) {
       units = DEFAULT_UOMS.map((u) => ({ id: `uom-${u.code}`, ...u }));
@@ -2614,22 +2975,132 @@ async function handleOfflineAndroidApiRequestCore(
     }
   }
 
-  if (pathname.startsWith("/api/inventory")) {
+  if (pathname === "/api/inventory" || pathname.startsWith("/api/inventory/")) {
     const state = loadOfflineAndroidState(s);
+    const items = readCollection<Record<string, unknown>>(OFFLINE_DB_ITEMS_KEY, s);
     if (method === "GET") {
-      return jsonResponse({ inventoryBatches: state.inventoryBatches, items: [], offline: true }, 200);
+      return jsonResponse({ inventoryBatches: state.inventoryBatches, items, state, offline: true }, 200);
     }
-    appendOfflineSyncQueue(pathname, method, body, s);
-    saveOfflineAndroidState(state, s);
-    return jsonResponse({ success: true, inventoryBatches: state.inventoryBatches, state, offline: true }, 200);
+    if (method === "POST") {
+      const projectId = String(body.projectId || "");
+      const harvest = String(body.harvest || "");
+      if (state.lockedPeriods[`${projectId}::${harvest}`]) {
+        return jsonResponse({ error: "🔒 هذه القطفة مغلقة محاسبياً!" }, 423);
+      }
+      const batch = {
+        id: String(body.id || `inv-${Date.now()}`),
+        projectId,
+        subProjectId: body.subProjectId ? String(body.subProjectId) : undefined,
+        harvest,
+        grade: String(body.grade || "رقم 1"),
+        harvestedBundles: Math.max(0, Math.round(Number(body.harvestedBundles) || 0)),
+        shrinkageBundles: Math.max(0, Math.round(Number(body.shrinkageBundles) || 0)),
+        notes: String(body.notes || ""),
+      };
+      state.inventoryBatches.push(batch);
+      addLocalAudit(state, actor.userDisplay, "إضافة دفعة مخزون علاقيات (محلي)", `${harvest} (${batch.grade}) — ${batch.harvestedBundles} علاقية`);
+      saveOfflineAndroidState(state, s);
+      appendOfflineSyncQueue(pathname, method, body, s);
+      return jsonResponse({ success: true, createdId: batch.id, batch, inventoryBatches: state.inventoryBatches, items, state, offline: true }, 201);
+    }
+    if (method === "PATCH" || method === "PUT") {
+      const pathId = pathname.startsWith("/api/inventory/") ? decodeURIComponent(pathname.slice("/api/inventory/".length)) : "";
+      const id = String(body.id || pathId || "").trim();
+      const rec = state.inventoryBatches.find((b) => b.id === id);
+      if (!rec) {
+        return jsonResponse({ error: "دفعة المخزون غير موجودة" }, 404);
+      }
+      if (state.lockedPeriods[`${rec.projectId}::${rec.harvest}`]) {
+        return jsonResponse({ error: "🔒 هذه القطفة مغلقة محاسبياً!" }, 423);
+      }
+      if (body.projectId !== undefined) rec.projectId = String(body.projectId);
+      if (body.subProjectId !== undefined) {
+        rec.subProjectId = body.subProjectId ? String(body.subProjectId) : undefined;
+      }
+      if (body.harvest !== undefined) rec.harvest = String(body.harvest);
+      if (body.grade !== undefined) rec.grade = String(body.grade);
+      if (body.harvestedBundles !== undefined) {
+        rec.harvestedBundles = Math.max(0, Math.round(Number(body.harvestedBundles) || 0));
+      }
+      if (body.shrinkageBundles !== undefined) {
+        rec.shrinkageBundles = Math.max(0, Math.round(Number(body.shrinkageBundles) || 0));
+      }
+      if (body.notes !== undefined) rec.notes = String(body.notes);
+      addLocalAudit(state, actor.userDisplay, "تعديل دفعة مخزون (محلي)", `${rec.harvest} (${rec.grade}) — ${rec.harvestedBundles} علاقية`);
+      saveOfflineAndroidState(state, s);
+      appendOfflineSyncQueue(pathname, method, body, s);
+      return jsonResponse({ success: true, batch: rec, inventoryBatches: state.inventoryBatches, items, state, offline: true }, 200);
+    }
+    if (method === "DELETE") {
+      const pathId = pathname.startsWith("/api/inventory/") ? decodeURIComponent(pathname.slice("/api/inventory/".length)) : "";
+      const id = String(body.id || pathId || "").trim();
+      const idx = state.inventoryBatches.findIndex((b) => b.id === id);
+      if (idx >= 0) {
+        const existing = state.inventoryBatches[idx];
+        if (state.lockedPeriods[`${existing.projectId}::${existing.harvest}`]) {
+          return jsonResponse({ error: "🔒 هذه القطفة مغلقة محاسبياً!" }, 423);
+        }
+        state.inventoryBatches.splice(idx, 1);
+        addLocalAudit(state, actor.userDisplay, "حذف دفعة مخزون (محلي)", `${existing.harvest} (${existing.grade})`);
+      }
+      saveOfflineAndroidState(state, s);
+      appendOfflineSyncQueue(pathname, method, body, s);
+      return jsonResponse({ success: true, inventoryBatches: state.inventoryBatches, items, state, offline: true }, 200);
+    }
   }
 
   if (pathname === "/api/accounting/reports/cost-centers") {
-    return jsonResponse({ rows: [], totals: { revenue: 0, expense: 0, net: 0 }, offline: true }, 200);
+    const state = loadOfflineAndroidState(s);
+    const rows = state.projects.map((p) => {
+      const revenue = state.sales.filter((x) => x.projectId === p.id).reduce((sum, x) => sum + (Number(x.total) || 0), 0);
+      const opExp = state.expenses.filter((x) => x.projectId === p.id).reduce((sum, x) => sum + (Number(x.total) || 0), 0);
+      const wages = state.workers.filter((x) => x.projectId === p.id).reduce((sum, x) => sum + (Number(x.total) || 0), 0);
+      const expense = opExp + wages;
+      return {
+        id: p.id,
+        code: p.id,
+        nameAr: p.name,
+        nameEn: p.name,
+        revenue,
+        expense,
+        net: revenue - expense,
+      };
+    });
+    const totals = rows.reduce(
+      (acc, r) => ({
+        revenue: acc.revenue + r.revenue,
+        expense: acc.expense + r.expense,
+        net: acc.net + r.net,
+      }),
+      { revenue: 0, expense: 0, net: 0 }
+    );
+    return jsonResponse({ rows, totals, offline: true }, 200);
   }
 
   if (pathname.startsWith("/api/accounting/reports/")) {
-    return jsonResponse({ rows: [], totals: { debit: 0, credit: 0, netIncome: 0 }, offline: true }, 200);
+    const state = loadOfflineAndroidState(s);
+    const totalRevenue = state.sales.reduce((sum, x) => sum + (Number(x.total) || 0), 0);
+    const totalCollected = state.sales.reduce((sum, x) => sum + (Number(x.credit) || 0), 0);
+    const totalReceivables = state.sales.reduce((sum, x) => sum + (Number(x.debit) || 0), 0);
+    const totalExpenses = state.expenses.reduce((sum, x) => sum + (Number(x.total) || 0), 0);
+    const totalWages = state.workers.reduce((sum, x) => sum + (Number(x.total) || 0), 0);
+    const netIncome = totalRevenue - (totalExpenses + totalWages);
+    const rows = [
+      { code: "1101", nameAr: "الصناديق والخزائن", nameEn: "Treasury & Cash", type: "ASSET", debit: totalCollected, credit: 0 },
+      { code: "1120", nameAr: "الذمم المدينة (العملاء)", nameEn: "Accounts Receivable", type: "ASSET", debit: totalReceivables, credit: 0 },
+      { code: "4100", nameAr: "إيرادات المبيعات", nameEn: "Sales Revenue", type: "REVENUE", debit: 0, credit: totalRevenue },
+      { code: "5100", nameAr: "المصروفات التشغيلية", nameEn: "Operating Expenses", type: "EXPENSE", debit: totalExpenses, credit: 0 },
+      { code: "5200", nameAr: "أجور العمال والحصاد", nameEn: "Labor & Harvest Wages", type: "EXPENSE", debit: totalWages, credit: 0 },
+    ].filter((r) => r.debit > 0 || r.credit > 0);
+    const totals = rows.reduce(
+      (acc, r) => ({
+        debit: acc.debit + r.debit,
+        credit: acc.credit + r.credit,
+        netIncome,
+      }),
+      { debit: 0, credit: 0, netIncome }
+    );
+    return jsonResponse({ rows, totals, offline: true }, 200);
   }
 
   // Generic local fallback for any other `/api/*` write/read in Android Local Mode

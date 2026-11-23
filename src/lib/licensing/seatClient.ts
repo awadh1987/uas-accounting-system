@@ -37,6 +37,7 @@ import {
   type SeatUsage,
 } from "./seatService";
 import { enforceActivationPolicy } from "./activationPolicy";
+import { verifyEd25519SpkiPure } from "./ed25519Pure";
 
 export interface KeyValueStorage {
   getItem(key: string): string | null;
@@ -47,6 +48,8 @@ export interface KeyValueStorage {
 export const OFFLINE_LICENSE_STORAGE_KEY = "uas_offline_installed_license_v2";
 export const OFFLINE_SEATS_STORAGE_KEY = "uas_offline_seat_bindings_v2";
 export const OFFLINE_PROFILE_STORAGE_KEY = "uas_offline_enterprise_profile_v2";
+export const OFFLINE_LICENSE_GOVERNANCE_KEY = "uas_offline_license_governance_v1";
+export const OFFLINE_CLOCK_WATERMARK_KEY = "uas_offline_clock_watermark_v1";
 export const CLIENT_HWID_STORAGE_KEY = "uas_client_device_hwid";
 
 export function createMemoryStorage(initial: Record<string, string> = {}): KeyValueStorage {
@@ -76,7 +79,9 @@ function getDefaultStorage(): KeyValueStorage | null {
 // ---------------------------------------------------------------------------
 
 function base64ToBytes(b64: string): Uint8Array {
-  const clean = b64.replace(/[\r\n\s]/g, "");
+  const normalized = b64.replace(/[\r\n\s]/g, "").replace(/-/g, "+").replace(/_/g, "/");
+  const padLen = (4 - (normalized.length % 4)) % 4;
+  const clean = normalized + "=".repeat(padLen);
   if (typeof Buffer !== "undefined") {
     return new Uint8Array(Buffer.from(clean, "base64"));
   }
@@ -172,37 +177,142 @@ export function matchClientHwid(inputTarget: string, deviceHwid: string): boolea
   });
 }
 
+function parseSpkiBytesFromPem(publicKeyPem: string): Uint8Array {
+  const pemBody = publicKeyPem
+    .replace(/-----BEGIN PUBLIC KEY-----/g, "")
+    .replace(/-----END PUBLIC KEY-----/g, "")
+    .replace(/[\r\n\s]/g, "");
+  return base64ToBytes(pemBody);
+}
+
+/**
+ * Synchronous pure TypeScript RFC 8032 Ed25519 signature verifier.
+ * Works identically on HTTP LAN origins, Capacitor Android WebViews, Windows `.exe`,
+ * offline browsers, and Node.
+ */
+export function verifyLicenseSignaturePure(
+  license: UasSignedLicense,
+  publicKeyPem: string = UAS_LICENSE_PUBLIC_KEY
+): boolean {
+  try {
+    const spkiBytes = parseSpkiBytesFromPem(publicKeyPem);
+    const sigBytes = base64ToBytes(license.signature);
+    const canonical = canonicalizeLicensePayload(license);
+    const dataBytes = new TextEncoder().encode(canonical);
+    return verifyEd25519SpkiPure(spkiBytes, dataBytes, sigBytes);
+  } catch {
+    return false;
+  }
+}
+
 export async function verifyLicenseSignatureWebCrypto(
   license: UasSignedLicense,
   publicKeyPem: string = UAS_LICENSE_PUBLIC_KEY
 ): Promise<boolean> {
   try {
-    if (!globalThis.crypto?.subtle) return false;
-    const pemBody = publicKeyPem
-      .replace(/-----BEGIN PUBLIC KEY-----/g, "")
-      .replace(/-----END PUBLIC KEY-----/g, "")
-      .replace(/[\r\n\s]/g, "");
-    const spkiBytes = base64ToBytes(pemBody);
+    const spkiBytes = parseSpkiBytesFromPem(publicKeyPem);
     const sigBytes = base64ToBytes(license.signature);
     const canonical = canonicalizeLicensePayload(license);
     const dataBytes = new TextEncoder().encode(canonical);
 
-    const key = await globalThis.crypto.subtle.importKey(
-      "spki",
-      spkiBytes.buffer.slice(spkiBytes.byteOffset, spkiBytes.byteOffset + spkiBytes.byteLength) as ArrayBuffer,
-      { name: "Ed25519" },
-      false,
-      ["verify"]
-    );
-    return await globalThis.crypto.subtle.verify(
-      { name: "Ed25519" },
-      key,
-      sigBytes.buffer.slice(sigBytes.byteOffset, sigBytes.byteOffset + sigBytes.byteLength) as ArrayBuffer,
-      dataBytes.buffer.slice(dataBytes.byteOffset, dataBytes.byteOffset + dataBytes.byteLength) as ArrayBuffer
-    );
+    if (globalThis.crypto?.subtle) {
+      try {
+        const key = await globalThis.crypto.subtle.importKey(
+          "spki",
+          spkiBytes.buffer.slice(spkiBytes.byteOffset, spkiBytes.byteOffset + spkiBytes.byteLength) as ArrayBuffer,
+          { name: "Ed25519" },
+          false,
+          ["verify"]
+        );
+        return await globalThis.crypto.subtle.verify(
+          { name: "Ed25519" },
+          key,
+          sigBytes.buffer.slice(sigBytes.byteOffset, sigBytes.byteOffset + sigBytes.byteLength) as ArrayBuffer,
+          dataBytes.buffer.slice(dataBytes.byteOffset, dataBytes.byteOffset + dataBytes.byteLength) as ArrayBuffer
+        );
+      } catch {
+        // WebCrypto Ed25519 unsupported (e.g. Android WebView / older Chromium / desktop container);
+        // fall through to pure RFC 8032 verification below.
+      }
+    }
+
+    return verifyEd25519SpkiPure(spkiBytes, dataBytes, sigBytes);
   } catch {
     return false;
   }
+}
+
+export interface OfflineLicenseGovernanceRecord {
+  status: "ACTIVE" | "SUSPENDED" | "REVOKED";
+  reason?: string | null;
+  updatedAt: string;
+}
+
+export function recordOfflineLicenseGovernance(
+  input: { licenseId?: string | null; status?: string | null; reason?: string | null },
+  storage: KeyValueStorage | null = getDefaultStorage()
+): void {
+  if (!storage || !input.licenseId) return;
+  const lid = input.licenseId.trim().toUpperCase();
+  if (!lid) return;
+  const normalizedStatus = String(input.status || "").trim().toUpperCase();
+  try {
+    const raw = storage.getItem(OFFLINE_LICENSE_GOVERNANCE_KEY);
+    const map = raw ? (JSON.parse(raw) as Record<string, OfflineLicenseGovernanceRecord>) : {};
+    if (normalizedStatus === "ACTIVE") {
+      delete map[lid];
+    } else if (
+      normalizedStatus === "SUSPENDED" ||
+      normalizedStatus === "REVOKED" ||
+      normalizedStatus === "LICENSE_ROTATED_REVOKED"
+    ) {
+      map[lid] = {
+        status: normalizedStatus === "SUSPENDED" ? "SUSPENDED" : "REVOKED",
+        reason: input.reason ?? null,
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
+      return;
+    }
+    storage.setItem(OFFLINE_LICENSE_GOVERNANCE_KEY, JSON.stringify(map));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function getOfflineLicenseGovernance(
+  licenseId: string | null | undefined,
+  storage: KeyValueStorage | null = getDefaultStorage()
+): OfflineLicenseGovernanceRecord | null {
+  if (!storage || !licenseId) return null;
+  const lid = licenseId.trim().toUpperCase();
+  if (!lid) return null;
+  try {
+    const raw = storage.getItem(OFFLINE_LICENSE_GOVERNANCE_KEY);
+    if (!raw) return null;
+    const map = JSON.parse(raw) as Record<string, OfflineLicenseGovernanceRecord>;
+    return map?.[lid] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function checkOfflineClockTamper(storage: KeyValueStorage, now: Date): boolean {
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) return false;
+  try {
+    const raw = storage.getItem(OFFLINE_CLOCK_WATERMARK_KEY);
+    const prevMs = raw ? Number(raw) : NaN;
+    if (Number.isFinite(prevMs) && nowMs + 3_600_000 < prevMs) {
+      return true;
+    }
+    if (!Number.isFinite(prevMs) || nowMs > prevMs) {
+      storage.setItem(OFFLINE_CLOCK_WATERMARK_KEY, String(nowMs));
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -705,6 +815,19 @@ export async function activateOfflineClientLicense(
     };
   }
 
+  const govRecord = getOfflineLicenseGovernance(licenseObj.license_id, storage);
+  if (govRecord && (govRecord.status === "SUSPENDED" || govRecord.status === "REVOKED")) {
+    return {
+      success: false,
+      status: 403,
+      code: govRecord.status === "SUSPENDED" ? "LICENSE_SUSPENDED" : "LICENSE_REVOKED",
+      error:
+        govRecord.status === "SUSPENDED"
+          ? "تم تعليق هذا الترخيص من لوحة تحكم المنصة / This license is suspended."
+          : "تم إلغاء هذا الترخيص أو تدويره بمفتاح أحدث / This license has been revoked or rotated.",
+    };
+  }
+
   const expires = new Date(licenseObj.expires_at);
   if (Number.isNaN(expires.getTime()) || now.getTime() > expires.getTime()) {
     return {
@@ -925,6 +1048,9 @@ export async function buildOfflineClientLicenseStatus(
     | "ACTIVE"
     | "UNLICENSED"
     | "EXPIRED"
+    | "SUSPENDED"
+    | "REVOKED"
+    | "INVALID_SIGNATURE"
     | "HWID_MISMATCH"
     | "CLOCK_TAMPER"
     | "SEAT_LIMIT_REACHED"
@@ -1006,6 +1132,44 @@ export async function buildOfflineClientLicenseStatus(
     ? 0
     : Math.max(0, Math.floor((expires.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
 
+  const govRecord = getOfflineLicenseGovernance(license.license_id, storage);
+  const isSuspended = govRecord?.status === "SUSPENDED";
+  const isRevoked = govRecord?.status === "REVOKED";
+  const clockTamper = checkOfflineClockTamper(storage, now);
+  const platform = detectClientPlatform();
+  const hwidMismatch =
+    platform === "windows" && license.hwid !== "*" && !matchClientHwid(license.hwid, hwid);
+
+  let derivedStatus:
+    | "ACTIVE"
+    | "EXPIRED"
+    | "SUSPENDED"
+    | "REVOKED"
+    | "INVALID_SIGNATURE"
+    | "HWID_MISMATCH"
+    | "CLOCK_TAMPER" = "ACTIVE";
+  let statusError: string | null = null;
+
+  if (!sigOk) {
+    derivedStatus = "INVALID_SIGNATURE";
+    statusError = "التوقيع الرقمي للترخيص غير صحيح / Invalid cryptographic signature";
+  } else if (isRevoked) {
+    derivedStatus = "REVOKED";
+    statusError = "تم إلغاء هذا الترخيص أو تدويره بمفتاح أحدث / This license has been revoked or rotated";
+  } else if (isSuspended) {
+    derivedStatus = "SUSPENDED";
+    statusError = "تم تعليق هذا الترخيص من لوحة تحكم المنصة / This license has been suspended";
+  } else if (clockTamper) {
+    derivedStatus = "CLOCK_TAMPER";
+    statusError = "تم اكتشاف تلاعب بساعة النظام / System clock rollback detected";
+  } else if (hwidMismatch) {
+    derivedStatus = "HWID_MISMATCH";
+    statusError = "الترخيص مرتبط بجهاز آخر / Hardware fingerprint mismatch";
+  } else if (isExpired) {
+    derivedStatus = "EXPIRED";
+    statusError = "انتهت صلاحية هذا الترخيص / License has expired";
+  }
+
   const companyLocked = isCompanyLockedPayload(license);
   const policy = seatPolicyFromLicense(license);
   const usage = companyLocked
@@ -1016,13 +1180,9 @@ export async function buildOfflineClientLicenseStatus(
     request_code: requestCode,
     hwid,
     active_mode: activeMode,
-    license_status: !sigOk ? "HWID_MISMATCH" : isExpired ? "EXPIRED" : "ACTIVE",
-    is_valid: sigOk && !isExpired,
-    error: !sigOk
-      ? "التوقيع الرقمي للترخيص غير صحيح / Invalid cryptographic signature"
-      : isExpired
-      ? "انتهت صلاحية هذا الترخيص / License has expired"
-      : null,
+    license_status: derivedStatus,
+    is_valid: derivedStatus === "ACTIVE",
+    error: statusError,
     customer_name: license.customer_name,
     company_name: license.company_name ?? license.customer_name,
     company_locked: companyLocked,
@@ -1103,12 +1263,14 @@ export async function activateOnlineKeyOnClient(
 
   const fetchFn = opts.fetchImpl ?? (typeof fetch !== "undefined" ? fetch : undefined);
 
-  // Extract company_name from UASKEY-... payload if caller left it blank
+  // Extract company_name & license_id from UASKEY-... payload if present
   let decodedCompany = confirmCompanyName;
-  if (!decodedCompany && /^UASKEY-/i.test(key)) {
+  let decodedLicenseId: string | null = null;
+  if (/^UASKEY-/i.test(key)) {
     try {
       const parsed = validateLicenseStructure(JSON.parse(decodeBase64FlexibleUtf8(key.slice(7))));
-      if (parsed?.company_name) decodedCompany = parsed.company_name;
+      if (parsed?.license_id) decodedLicenseId = parsed.license_id;
+      if (!decodedCompany && parsed?.company_name) decodedCompany = parsed.company_name;
     } catch {
       // ignore
     }
@@ -1146,11 +1308,35 @@ export async function activateOnlineKeyOnClient(
           if (data.license) {
             serverLicenseObj = validateLicenseStructure(data.license);
           }
+          if (decodedLicenseId || serverLicenseObj?.license_id) {
+            recordOfflineLicenseGovernance(
+              { licenseId: serverLicenseObj?.license_id || decodedLicenseId, status: "ACTIVE" },
+              opts.storage ?? getDefaultStorage()
+            );
+          }
         } else if (res.status === 400 || res.status === 403 || res.status === 409) {
+          const codeStr = String(data.code || "CLOUD_REJECTED");
+          if (
+            decodedLicenseId &&
+            (codeStr === "LICENSE_SUSPENDED" ||
+              codeStr === "TENANT_SUSPENDED" ||
+              codeStr === "LICENSE_REVOKED" ||
+              codeStr === "TENANT_REVOKED" ||
+              codeStr === "LICENSE_ROTATED_REVOKED")
+          ) {
+            recordOfflineLicenseGovernance(
+              {
+                licenseId: decodedLicenseId,
+                status: codeStr.includes("SUSPENDED") ? "SUSPENDED" : "REVOKED",
+                reason: typeof data.error === "string" ? data.error : codeStr,
+              },
+              opts.storage ?? getDefaultStorage()
+            );
+          }
           return {
             success: false,
             status: res.status,
-            code: String(data.code || "CLOUD_REJECTED"),
+            code: codeStr,
             error: String(
               data.error ||
                 "رفض الخادم السحابي مفتاح التفعيل (تحقق من اسم المنشأة أو حد المقاعد). / Cloud server rejected activation key."

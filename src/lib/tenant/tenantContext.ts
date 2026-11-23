@@ -249,19 +249,21 @@ export function withTenantRoute<Args extends unknown[]>(
     const resolution = extractTenantResolutionFromRequest(req);
     const tenantId = resolution.tenantId;
     return runWithTenant(tenantId, async () => {
+      let pathname = "";
+      try {
+        pathname = req.nextUrl?.pathname || new URL(req.url, "http://localhost").pathname;
+      } catch {
+        pathname = "";
+      }
       const deviceId = (req.headers.get("x-uas-device-id") || "").trim();
       if (deviceId) {
-        let pathname = "";
-        try {
-          pathname = req.nextUrl?.pathname || new URL(req.url, "http://localhost").pathname;
-        } catch {
-          pathname = "";
-        }
         const isExempt =
           pathname.startsWith("/api/public/") ||
           pathname.startsWith("/api/auth/logout") ||
           pathname.startsWith("/api/devices") ||
-          pathname.startsWith("/api/licensing/");
+          pathname.startsWith("/api/licensing/") ||
+          pathname.startsWith("/api/control-panel/") ||
+          pathname.startsWith("/api/superadmin/");
         if (!isExempt) {
           try {
             const ctx = getTenantContext();
@@ -305,6 +307,46 @@ export function withTenantRoute<Args extends unknown[]>(
           } catch {
             // Do not break requests if TenantDevice table is unavailable during early bootstrap
           }
+        }
+      }
+
+      const isExemptForTenantStatus =
+        pathname.startsWith("/api/public/") ||
+        pathname.startsWith("/api/auth/logout") ||
+        pathname.startsWith("/api/licensing/") ||
+        pathname.startsWith("/api/control-panel/") ||
+        pathname.startsWith("/api/superadmin/");
+
+      if (tenantId !== "default" && !isExemptForTenantStatus) {
+        try {
+          const [{ getTenantMetadata }, { evaluateLicenseGovernance }] = await Promise.all([
+            import("./tenantRegistry"),
+            import("@/lib/controlPanel/governanceStore"),
+          ]);
+          const meta = getTenantMetadata(tenantId);
+          const gov = evaluateLicenseGovernance({
+            slug: meta?.slug || tenantId,
+            licenseId: meta?.licenseId || null,
+            registryStatus: meta?.status || null,
+          });
+          if (!gov.allowed && (gov.status === "SUSPENDED" || gov.status === "REVOKED")) {
+            return NextResponse.json(
+              {
+                error: gov.error,
+                code: gov.code || `TENANT_${gov.status}`,
+                status: gov.status,
+              },
+              {
+                status: 403,
+                headers: {
+                  "x-uas-tenant-id": tenantId,
+                  ...(resolution.slug ? { "x-uas-tenant-slug": resolution.slug } : {}),
+                },
+              }
+            );
+          }
+        } catch {
+          // Non-fatal fallback
         }
       }
 

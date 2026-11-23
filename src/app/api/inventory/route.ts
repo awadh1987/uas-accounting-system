@@ -8,6 +8,7 @@ import {
   isHarvestLockedTx,
 } from "@/lib/serverBootstrap";
 import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
+import { validateHarvestStockAfterBatchUpdateTx } from "@/lib/harvestStockGuard";
 
 export const dynamic = "force-dynamic";
 
@@ -111,26 +112,58 @@ async function handleInventoryUpdate(req: NextRequest) {
         return { status: "LOCKED" as const };
       }
 
+      const nextSubProjectId =
+        body.subProjectId !== undefined
+          ? body.subProjectId
+            ? String(body.subProjectId).trim()
+            : null
+          : existing.subProjectId;
+      const nextProductGrade =
+        body.grade !== undefined ? String(body.grade).trim() : existing.productGrade;
+      const nextHarvestedBundles =
+        body.harvestedBundles !== undefined
+          ? Math.max(0, Math.round(Number(body.harvestedBundles) || 0))
+          : existing.harvestedBundles;
+      const nextShrinkageBundles =
+        body.shrinkageBundles !== undefined
+          ? Math.max(0, Math.round(Number(body.shrinkageBundles) || 0))
+          : existing.shrinkageBundles;
+
+      const stockCheck = await validateHarvestStockAfterBatchUpdateTx(tx, {
+        batchId: id,
+        nextProjectId,
+        nextSubProjectId,
+        nextHarvestName,
+        nextProductGrade,
+        nextHarvestedBundles,
+        nextShrinkageBundles,
+        allowNegativeStock: Boolean(body.allowNegativeStock),
+        actorRole: auth.actor.userRole,
+      });
+
       const cycle = await findHarvestCycle(tx, nextProjectId, nextHarvestName);
       const updated = await tx.harvestInventoryBatch.update({
         where: { id },
         data: {
           projectId: nextProjectId,
-          ...(body.subProjectId !== undefined
-            ? { subProjectId: body.subProjectId ? String(body.subProjectId).trim() : null }
-            : {}),
+          ...(body.subProjectId !== undefined ? { subProjectId: nextSubProjectId } : {}),
           harvestCycleId: cycle?.id ?? existing.harvestCycleId,
           harvestName: nextHarvestName,
-          ...(body.grade !== undefined ? { productGrade: String(body.grade).trim() } : {}),
-          ...(body.harvestedBundles !== undefined
-            ? { harvestedBundles: Math.max(0, Math.round(Number(body.harvestedBundles) || 0)) }
-            : {}),
-          ...(body.shrinkageBundles !== undefined
-            ? { shrinkageBundles: Math.max(0, Math.round(Number(body.shrinkageBundles) || 0)) }
-            : {}),
+          ...(body.grade !== undefined ? { productGrade: nextProductGrade } : {}),
+          ...(body.harvestedBundles !== undefined ? { harvestedBundles: nextHarvestedBundles } : {}),
+          ...(body.shrinkageBundles !== undefined ? { shrinkageBundles: nextShrinkageBundles } : {}),
           ...(body.notes !== undefined ? { notes: String(body.notes).trim() } : {}),
         },
       });
+
+      if (stockCheck.overridden) {
+        await appendAuditLogTx(tx, {
+          ...auth.actor,
+          actionType: "تجاوز عجز مخزون دفعة حصاد (اعتماد محاسبي)",
+          entityReference: id,
+          details: `${nextHarvestName} (${nextProductGrade}) — عجز ${stockCheck.deficitBundles} علاقية`,
+        });
+      }
 
       await recordAuditDiffTx(tx, {
         userId: auth.actor.userId,
@@ -167,6 +200,13 @@ async function handleInventoryUpdate(req: NextRequest) {
     const state = await getBootstrapState();
     return NextResponse.json({ batch: result.batch, state });
   } catch (error) {
+    const msg = error instanceof Error ? error.message : "";
+    if (msg.includes("NEGATIVE_STOCK_OVERRIDE_FORBIDDEN")) {
+      return jsonError(msg, 403);
+    }
+    if (msg.includes("NEGATIVE_STOCK_BLOCKED")) {
+      return jsonError(msg, 400);
+    }
     console.error("PATCH /api/inventory error:", error);
     return jsonError("تعذر تعديل دفعة المخزون", 500);
   }

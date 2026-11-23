@@ -9,6 +9,7 @@ import {
   isAndroidLocalIsolatedMode,
   SESSION_TOKEN_STORAGE_KEY,
 } from "@/lib/apiClient";
+import { getEndpointSyncPriority } from "@/lib/offlineAndroidStore";
 import {
   getOfflineQueue,
   getSyncMeta,
@@ -174,8 +175,13 @@ export async function performManualSyncNow(currentUser: UasUser): Promise<Client
     // Continue sync attempt even if heartbeat fails transiently
   }
 
-  // 2. Push queued offline mutations
-  const queueItems = await getOfflineQueue();
+  // 2. Push queued offline mutations in topological dependency order
+  const rawQueueItems = await getOfflineQueue();
+  const queueItems = [...rawQueueItems].sort((a, b) => {
+    const prioDiff = getEndpointSyncPriority(a.endpoint) - getEndpointSyncPriority(b.endpoint);
+    if (prioDiff !== 0) return prioDiff;
+    return (a.createdAt || "").localeCompare(b.createdAt || "");
+  });
   for (const item of queueItems) {
     if (item.status === "CONFLICT_PENDING") {
       conflictCount++;
@@ -356,7 +362,7 @@ export function startAutoSyncController(opts: {
   currentUser: UasUser | null;
   enabled: boolean;
   intervalSec?: number;
-  onSyncComplete?: (result: ClientSyncResult) => void;
+  onSyncCompleteAction?: (result: ClientSyncResult) => void;
 }): () => void {
   if (typeof window === "undefined" || !opts.currentUser || !opts.enabled) {
     return () => {};
@@ -376,7 +382,7 @@ export function startAutoSyncController(opts: {
     running = true;
     try {
       const res = await performManualSyncNow(user);
-      if (!disposed) opts.onSyncComplete?.(res);
+      if (!disposed) opts.onSyncCompleteAction?.(res);
     } catch {
       // Silent background sync guard
     } finally {

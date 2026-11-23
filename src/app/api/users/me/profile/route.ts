@@ -8,6 +8,12 @@ import {
 } from "@/lib/apiHelpers";
 import { appendAuditLogTx, getBootstrapState, parseAssignedProjects } from "@/lib/serverBootstrap";
 import { getAccessibleGroups, getAccessibleTabs, normalizeRole } from "@/lib/permissions";
+import { getActiveTenantId } from "@/lib/tenant/tenantContext";
+import {
+  decodeAvatarDataUrl,
+  deleteUserAvatarFiles,
+  saveUserAvatarFile,
+} from "@/lib/avatarAssets";
 import type { UasUser } from "@/types/uas";
 
 export const dynamic = "force-dynamic";
@@ -132,10 +138,36 @@ export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
       body.phone !== undefined ? String(body.phone).trim() : existing.phone;
     const nextEmail =
       body.email !== undefined ? String(body.email).trim().toLowerCase() : existing.email;
-    const nextAvatarUrl =
+    let nextAvatarUrl =
       body.avatarUrl !== undefined
-        ? String(body.avatarUrl).trim()
+        ? String(body.avatarUrl ?? "").trim()
         : existing.avatarUrl;
+    if (body.avatarUrl !== undefined) {
+      const tenantKey = getActiveTenantId() || "default";
+      if (!nextAvatarUrl) {
+        deleteUserAvatarFiles(tenantKey, existing.id);
+        nextAvatarUrl = "";
+      } else if (nextAvatarUrl.startsWith("data:")) {
+        const decoded = decodeAvatarDataUrl(nextAvatarUrl);
+        if (!decoded) {
+          return jsonError(
+            "صيغة أو حجم الصورة غير صالح (PNG/JPG/WEBP/GIF بحد أقصى 2MB)",
+            400
+          );
+        }
+        const saved = saveUserAvatarFile({
+          tenantKey,
+          userId: existing.id,
+          buffer: decoded.buffer,
+          ext: decoded.ext,
+        });
+        nextAvatarUrl = saved.publicUrl;
+      } else if (
+        !/^(?:\/(?:api\/public\/avatar|uploads)\/|https?:\/\/)/i.test(nextAvatarUrl)
+      ) {
+        return jsonError("رابط الصورة الشخصية غير صالح", 400);
+      }
+    }
     const nextAvatarColor =
       body.avatarColor !== undefined
         ? String(body.avatarColor).trim()
