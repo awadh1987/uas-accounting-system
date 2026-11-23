@@ -10,6 +10,13 @@ import {
   selectGeminiModelForPrompt,
   type GeminiClientFactory,
 } from "../src/lib/ai/geminiCopilotEngine";
+import { runUasAiAgent } from "../src/lib/ai/offlineAgentEngine";
+import {
+  buildCopilotGreetingFallback,
+  buildGeminiDialectInstruction,
+  formatSpokenTextForGeminiTts,
+} from "../src/lib/ai/yemeniLocalization";
+import { POST as speakPost, synthesizeGeminiSpeechAudio } from "../src/app/api/ai/speak/route";
 import { INITIAL_FALLBACK_STATE } from "../src/lib/seedFallback";
 import type { UasBootstrapState } from "../src/types/uas";
 
@@ -317,6 +324,7 @@ test("Security: GEMINI_API_KEY & @google/genai stay strictly server-side and exc
     "src/components/UasAppShell.tsx",
     "src/lib/ai/offlineAgentEngine.ts",
     "src/lib/ai/uasAgentTools.ts",
+    "src/lib/ai/yemeniLocalization.ts",
     "src/lib/localSupportEngine.ts",
   ];
   for (const relPath of clientFiles) {
@@ -327,6 +335,11 @@ test("Security: GEMINI_API_KEY & @google/genai stay strictly server-side and exc
       `${relPath} must never import @google/genai or reference GEMINI_API_KEY`
     );
   }
+
+  // Ensure UasAiCopilot attaches stored auth token headers for online Gemini calls
+  const copilotSrc = fs.readFileSync(path.join(process.cwd(), "src/components/UasAiCopilot.tsx"), "utf8");
+  assert.ok(copilotSrc.includes("getStoredSessionToken"));
+  assert.ok(copilotSrc.includes("/api/ai/speak"));
 
   // Ensure no NEXT_PUBLIC_GEMINI_* anywhere in src/
   const srcRoot = path.join(process.cwd(), "src");
@@ -342,5 +355,99 @@ test("Security: GEMINI_API_KEY & @google/genai stay strictly server-side and exc
       false,
       `Disallowed NEXT_PUBLIC Gemini env ref found in ${file}`
     );
+  }
+});
+
+test("Model failover cascades from gemini-4-argon to gemini-3.8-flash before offline fallback", async () => {
+  const state = makeMockState();
+  const attemptedModels: string[] = [];
+
+  const cascadeFactory: GeminiClientFactory = () => ({
+    models: {
+      generateContent: async ({ model }) => {
+        attemptedModels.push(model);
+        if (model === DEFAULT_GEMINI_REASONING_MODEL) {
+          throw new Error("429 RESOURCE_EXHAUSTED on reasoning model");
+        }
+        return {
+          text: "حياك الله يا غالي! تمت المراجعة بنجاح على مشروع وادي حريب عبر النموذج السريع.",
+          candidates: [
+            {
+              content: {
+                role: "model",
+                parts: [{ text: "حياك الله يا غالي! تمت المراجعة بنجاح على مشروع وادي حريب عبر النموذج السريع." }],
+              },
+            },
+          ],
+        } as never;
+      },
+    },
+  });
+
+  const res = await runGeminiCopilotAgent("Reconcile harvest inventory discrepancies", {
+    lang: "ar",
+    user: "SUPER_ADMIN",
+    state,
+    geminiApiKey: "test-server-only-key",
+    clientFactory: cascadeFactory,
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.tierUsed, "tier1_cloud_llm");
+  assert.equal(res.modelUsed, "Gemini 3.8 Flash");
+  assert.equal(res.diagnostics?.retriedWithFast, true);
+  assert.equal(res.diagnostics?.primaryModel, DEFAULT_GEMINI_REASONING_MODEL);
+  assert.equal(res.diagnostics?.activeModel, DEFAULT_GEMINI_FAST_MODEL);
+  assert.ok(attemptedModels.includes(DEFAULT_GEMINI_REASONING_MODEL));
+  assert.ok(attemptedModels.includes(DEFAULT_GEMINI_FAST_MODEL));
+});
+
+test("Yemeni localization, rich greetings, spoken TTS formatting & /api/ai/speak graceful fallback", async () => {
+  const yemeniPrompt = buildGeminiDialectInstruction("ar", "yemeni");
+  assert.ok(yemeniPrompt.includes("حياك الله"));
+  assert.ok(yemeniPrompt.includes("القطفة"));
+  assert.ok(yemeniPrompt.includes("العلاقية"));
+
+  const msaPrompt = buildGeminiDialectInstruction("ar", "msa");
+  assert.ok(msaPrompt.includes("الفصحى"));
+
+  const greet = buildCopilotGreetingFallback({ lang: "ar", dialect: "yemeni", activeTab: "inventory", projectName: "مزرعة الجوف" });
+  assert.ok(greet.ar.includes("يا هلا") && greet.ar.includes("مزرعة الجوف"));
+
+  // Offline greeting should respond with full Yemeni welcome + live context rather than boilerplate
+  const offlineGreeting = await runUasAiAgent("مرحبا", {
+    lang: "ar",
+    state: makeMockState(),
+    workspaceContext: { activeTab: "sales", selectedProjectId: "prj-g1", dialect: "yemeni" },
+  });
+  assert.equal(offlineGreeting.ok, true);
+  assert.equal(offlineGreeting.toolName, "analyze_workspace_context");
+  assert.ok(offlineGreeting.replyAr.includes("حياك الله") && offlineGreeting.replyAr.includes("مشروع وادي حريب"));
+
+  // Spoken TTS prep strips markdown & expands currencies cleanly
+  const spoken = formatSpokenTextForGeminiTts("**تم ترحيل سند** RV-101 بمبلغ 5000 YER بنسبة 15%", { lang: "ar" });
+  assert.equal(spoken.includes("**"), false);
+  assert.ok(spoken.includes("ريال يمني"));
+  assert.ok(spoken.includes("15 في المية"));
+
+  // /api/ai/speak returns clean 503 fallback JSON when GEMINI_API_KEY is missing
+  const prevKey = process.env.GEMINI_API_KEY;
+  try {
+    delete process.env.GEMINI_API_KEY;
+    const ttsMissing = await synthesizeGeminiSpeechAudio({ text: "مرحبا بكم", lang: "ar", geminiApiKey: "" });
+    assert.equal(ttsMissing.ok, false);
+
+    const req = new Request("https://qat.world/api/ai/speak", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "مرحبا بكم", lang: "ar", dialect: "yemeni" }),
+    });
+    const res = await speakPost(req as never);
+    assert.equal(res.status, 503);
+    const body = await res.json();
+    assert.equal(body.fallback, true);
+  } finally {
+    if (prevKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = prevKey;
   }
 });

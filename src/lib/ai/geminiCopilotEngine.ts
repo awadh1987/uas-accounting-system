@@ -26,6 +26,10 @@ import {
 import { diagnoseLiveSystemState, normalizeSupportText } from "@/lib/localSupportEngine";
 import { normalizeRole } from "@/lib/permissions";
 import {
+  buildGeminiDialectInstruction,
+  type CopilotDialectMode,
+} from "./yemeniLocalization";
+import {
   UAS_AGENT_TOOL_SCHEMAS,
   executeUasAgentTool,
   type UasAgentExecutionContext,
@@ -240,14 +244,19 @@ function buildSystemGroundingPrompt(
     treasuryAccounts: treasuries,
   };
 
+  const dialect: CopilotDialectMode = wCtx.dialect === "msa" ? "msa" : "yemeni";
+  const dialectRules = buildGeminiDialectInstruction(lang, dialect);
+
   return [
     "You are the UAS Enterprise Reasoning ERP Copilot & Support Architect.",
     `Always respond in clear, humanized ${lang === "ar" ? "Arabic" : "English"} matching the user's locale unless asked otherwise.`,
-    "RULES:",
+    dialectRules,
+    "OPERATIONAL & ACCOUNTING RULES:",
     "1. Call UAS ERP tools to inspect live ledger balances, harvest reconciliation, workspace context, or system diagnostics before stating numbers or advising.",
     "2. Never invent account codes, balances, stock quantities, voucher numbers, or ledger figures.",
-    "3. All write / mutation / lock operations MUST go through the matching draft_* / create_* / toggle_period_lock tool, which returns a ConfirmationPreviewCard (`requiresConfirmation: true`). Never claim a financial mutation is already posted when the tool only prepared a confirmation preview—explain the pre-flight findings, risks/warnings, and instruct the user to click Confirm.",
-    "4. Respect RBAC blocks (`RBAC_FORBIDDEN`), closed fiscal periods, locked harvests, and stock deficit warnings honestly.",
+    "3. Explain numbers, context across tabs, risks (negative harvest stock, locked periods, low cash liquidity, budget pressure), and practical next steps thoroughly and clearly—avoid terse one-liners.",
+    "4. All write / mutation / lock operations MUST go through the matching draft_* / create_* / toggle_period_lock tool, which returns a ConfirmationPreviewCard (`requiresConfirmation: true`). Never claim a financial mutation is already posted when the tool only prepared a confirmation preview—explain the pre-flight findings, risks/warnings, and instruct the user to click Confirm.",
+    "5. Respect RBAC blocks (`RBAC_FORBIDDEN`), closed fiscal periods, locked harvests, and stock deficit warnings honestly.",
     `LIVE TENANT & WORKSPACE CONTEXT:\n${JSON.stringify(groundingSnapshot)}`,
   ].join("\n\n");
 }
@@ -278,11 +287,85 @@ function formatGeminiModelLabel(model: string): string {
   return model;
 }
 
+export interface GeminiConversationTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+
 export interface RunGeminiCopilotOptions extends RunUasAiAgentOptions {
   /** Explicit server-side API key override (defaults to `process.env.GEMINI_API_KEY`). */
   geminiApiKey?: string;
+  /** Recent conversation turns to preserve multi-turn continuity. */
+  conversationHistory?: GeminiConversationTurn[];
   /** Dependency injection hook for tests. */
   clientFactory?: GeminiClientFactory;
+}
+
+async function generateWithModelCascade(params: {
+  ai: GeminiClientLike;
+  primaryModel: string;
+  fastModel: string;
+  contents: Content[];
+  baseConfig: Record<string, unknown>;
+  includeThinking: boolean;
+}): Promise<{
+  response: GenerateContentResponse;
+  activeModel: string;
+  retriedWithFast: boolean;
+  fallbackReasons: string[];
+}> {
+  const { ai, primaryModel, fastModel, contents, baseConfig, includeThinking } = params;
+  const attempts: Array<{ model: string; thinking: boolean; isFastFallback: boolean }> = [
+    { model: primaryModel, thinking: includeThinking, isFastFallback: false },
+  ];
+  if (includeThinking) {
+    attempts.push({ model: primaryModel, thinking: false, isFastFallback: false });
+  }
+  if (fastModel && fastModel !== primaryModel) {
+    attempts.push({ model: fastModel, thinking: false, isFastFallback: true });
+  }
+
+  const fallbackReasons: string[] = [];
+  let lastErr: unknown = null;
+
+  for (const attempt of attempts) {
+    const config: Record<string, unknown> = { ...baseConfig };
+    if (attempt.thinking) {
+      config.thinkingConfig = {
+        includeThoughts: true,
+        thinkingBudget: 2048,
+      };
+    }
+
+    try {
+      const response = await ai.models.generateContent({
+        model: attempt.model,
+        contents,
+        config,
+      });
+      return {
+        response,
+        activeModel: attempt.model,
+        retriedWithFast: attempt.isFastFallback,
+        fallbackReasons,
+      };
+    } catch (err: unknown) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      fallbackReasons.push(`${attempt.model}(thinking=${attempt.thinking}): ${msg.slice(0, 180)}`);
+      console.warn(
+        `[GeminiCopilotEngine] Model attempt failed [${attempt.model}, thinking=${attempt.thinking}]:`,
+        msg.slice(0, 220)
+      );
+      // Only skip the thinking-off retry if error is clearly rate limit / not found and go straight to fastModel
+      const isQuotaOrNotFound = /429|RESOURCE_EXHAUSTED|404|NOT_FOUND/i.test(msg);
+      if (isQuotaOrNotFound && attempt.thinking && fastModel !== primaryModel) {
+        // Still allow next iteration if it's fastModel, or continue loop
+      }
+    }
+  }
+
+  throw lastErr ?? new Error(fallbackReasons.join(" | ") || "ALL_GEMINI_MODELS_FAILED");
 }
 
 export async function runGeminiCopilotAgent(
@@ -335,7 +418,16 @@ export async function runGeminiCopilotAgent(
       lang
     );
 
+    const historyContents: Content[] = (opts.conversationHistory ?? [])
+      .slice(-8)
+      .filter((h) => h && typeof h.text === "string" && h.text.trim().length > 0)
+      .map((h) => ({
+        role: h.role === "assistant" ? "model" : "user",
+        parts: [{ text: h.text.trim().slice(0, 1500) }],
+      }));
+
     const contents: Content[] = [
+      ...historyContents,
       {
         role: "user",
         parts: [{ text: cleanPrompt }],
@@ -353,27 +445,35 @@ export async function runGeminiCopilotAgent(
     let preservedOpenLicense = false;
     const collectedCitations: NonNullable<UasAiAgentResponse["citations"]> = [];
     let finalText = "";
+    let activeModelUsed = selection.model;
+    let retriedWithFastModel = false;
+    const allFallbackReasons: string[] = [];
 
     const MAX_TURNS = 4;
     for (let turn = 0; turn < MAX_TURNS; turn++) {
-      const config: Record<string, unknown> = {
+      const baseConfig: Record<string, unknown> = {
         systemInstruction,
-        temperature: selection.complexity === "deep_reasoning" ? 0.2 : 0.3,
+        temperature: selection.complexity === "deep_reasoning" ? 0.25 : 0.35,
         tools: [{ functionDeclarations: declarations }],
       };
 
-      if (selection.complexity === "deep_reasoning") {
-        config.thinkingConfig = {
-          includeThoughts: true,
-          thinkingBudget: 2048,
-        };
-      }
-
-      const response = await ai.models.generateContent({
-        model: selection.model,
+      const cascadeRes = await generateWithModelCascade({
+        ai,
+        primaryModel: turn === 0 ? selection.model : activeModelUsed,
+        fastModel: selection.fastModel,
         contents,
-        config,
+        baseConfig,
+        includeThinking:
+          selection.complexity === "deep_reasoning" &&
+          (turn === 0 ? selection.model : activeModelUsed) === selection.reasoningModel,
       });
+
+      const response = cascadeRes.response;
+      activeModelUsed = cascadeRes.activeModel;
+      if (cascadeRes.retriedWithFast) retriedWithFastModel = true;
+      if (cascadeRes.fallbackReasons.length > 0) {
+        allFallbackReasons.push(...cascadeRes.fallbackReasons);
+      }
 
       const candidateContent = response.candidates?.[0]?.content;
       const thoughtSummaries = (candidateContent?.parts ?? [])
@@ -508,25 +608,33 @@ export async function runGeminiCopilotAgent(
       };
     }
 
+    const effectiveModelLabel = formatGeminiModelLabel(activeModelUsed);
     const effectiveReply =
       finalText || (lang === "ar" ? lastToolResult.summaryAr : lastToolResult.summaryEn);
 
     reasoningTrace.push({
       step: stepNum,
       type: "response",
-      titleAr: `الاستجابة النهائية (${modelLabel})`,
-      titleEn: `Final Response (${modelLabel})`,
-      detailAr: `تمت الصياغة بواسطة ${modelLabel} (${selection.complexity}).`,
-      detailEn: `Synthesized by ${modelLabel} (${selection.complexity}).`,
+      titleAr: `الاستجابة النهائية (${effectiveModelLabel})`,
+      titleEn: `Final Response (${effectiveModelLabel})`,
+      detailAr: `تمت الصياغة بواسطة ${effectiveModelLabel} (${selection.complexity})${retriedWithFastModel ? " بعد التحويل التلقائي للنموذج السريع" : ""}.`,
+      detailEn: `Synthesized by ${effectiveModelLabel} (${selection.complexity})${retriedWithFastModel ? " via fast-model failover" : ""}.`,
     });
 
     return {
       ok: lastToolResult.ok,
       lang,
       tierUsed: "tier1_cloud_llm",
-      modelUsed: modelLabel,
-      modelId: selection.model,
+      modelUsed: effectiveModelLabel,
+      modelId: activeModelUsed,
       taskComplexity: selection.complexity,
+      fallbackReason: allFallbackReasons.length > 0 ? allFallbackReasons.join(" | ") : undefined,
+      diagnostics: {
+        primaryModel: selection.model,
+        activeModel: activeModelUsed,
+        retriedWithFast: retriedWithFastModel,
+        fallbackReason: allFallbackReasons.length > 0 ? allFallbackReasons.join(" | ") : undefined,
+      },
       prompt: cleanPrompt,
       reply: effectiveReply,
       replyAr: finalText || lastToolResult.summaryAr,
@@ -551,6 +659,12 @@ export async function runGeminiCopilotAgent(
       ...fallback,
       modelUsed: "Offline Local Engine",
       fallbackReason: errMsg || "GEMINI_ERROR",
+      diagnostics: {
+        primaryModel: selection.model,
+        activeModel: "offline_deterministic",
+        retriedWithFast: selection.model !== selection.fastModel,
+        fallbackReason: errMsg || "GEMINI_ERROR",
+      },
     };
   }
 }
@@ -558,6 +672,7 @@ export async function runGeminiCopilotAgent(
 export async function runGeminiSupportSynthesis(params: {
   query: string;
   lang: "ar" | "en";
+  dialect?: CopilotDialectMode;
   baselineAnswerAr: string;
   baselineAnswerEn: string;
   diagnosticsSummary: string;
@@ -570,14 +685,17 @@ export async function runGeminiSupportSynthesis(params: {
   if (!apiKey || !params.query.trim()) return null;
 
   const selection = selectGeminiModelForPrompt(params.query);
+  const dialectRules = buildGeminiDialectInstruction(params.lang, params.dialect ?? "yemeni");
   try {
     const ai: GeminiClientLike = params.clientFactory
       ? params.clientFactory(apiKey)
       : new GoogleGenAI({ apiKey });
 
     const baseline = params.lang === "ar" ? params.baselineAnswerAr : params.baselineAnswerEn;
-    const res = await ai.models.generateContent({
-      model: selection.model,
+    const cascadeRes = await generateWithModelCascade({
+      ai,
+      primaryModel: selection.model,
+      fastModel: selection.fastModel,
       contents: [
         {
           role: "user",
@@ -591,20 +709,20 @@ export async function runGeminiSupportSynthesis(params: {
           ],
         },
       ],
-      config: {
-        systemInstruction:
-          `You are UAS Customer Support. Write a concise, helpful, humanized response in ${params.lang === "ar" ? "Arabic" : "English"} grounded strictly in the provided Live Diagnostics Summary and Verified Knowledge Base Answer. Preserve exact error codes, seat limits (7 users × 1 Win + 1 Android), and remediation steps.`,
-        temperature: 0.25,
-        ...(selection.complexity === "deep_reasoning"
-          ? { thinkingConfig: { includeThoughts: false, thinkingBudget: 1024 } }
-          : {}),
+      baseConfig: {
+        systemInstruction: [
+          `You are UAS Customer Support & ERP Guide. Respond naturally and warmly in ${params.lang === "ar" ? "Arabic" : "English"} grounded in the provided Live Diagnostics Summary and Verified Knowledge Base Answer. Preserve exact error codes, seat limits (7 users × 1 Win + 1 Android), and clear step-by-step instructions.`,
+          dialectRules,
+        ].join("\n\n"),
+        temperature: 0.3,
       },
+      includeThinking: false,
     });
-    const text = (res.text || "").trim();
+    const text = (cascadeRes.response.text || "").trim();
     if (!text) return null;
     return {
       text,
-      modelUsed: formatGeminiModelLabel(selection.model),
+      modelUsed: formatGeminiModelLabel(cascadeRes.activeModel),
     };
   } catch (err: unknown) {
     console.warn("[GeminiSupportSynthesis] Falling back to offline KB answer:", err instanceof Error ? err.message : err);

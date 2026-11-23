@@ -55,6 +55,12 @@ export interface UasAiAgentResponse {
   modelId?: string;
   taskComplexity?: "operational" | "deep_reasoning";
   fallbackReason?: string;
+  diagnostics?: {
+    primaryModel: string;
+    activeModel: string;
+    retriedWithFast: boolean;
+    fallbackReason?: string;
+  };
   prompt: string;
   reply: string;
   replyAr: string;
@@ -886,6 +892,20 @@ export function parseBilingualAgentIntent(
       args: {},
       thoughtAr: "تحليل النية: تشغيل التشخيص الفوري لحالة الترخيص، تطابق اسم المنشأة، ومقاعد الـ 7 مستخدمين.",
       thoughtEn: "Intent parsed: Run live diagnostics on license status, company lock, and 7-user device seats.",
+    };
+  }
+
+  // 10.5 Warm conversational greeting / capability overview (Yemeni or English)
+  if (
+    /^(?:مرحبا|اهلا|أهلا|هلا|حياك|السلام عليكم|صباح الخير|مساء الخير|كيف حالك|ايش تقدر|وش تقدر|من انت|hello|hi|hey|good morning|good evening|who are you)/i.test(
+      norm
+    )
+  ) {
+    return {
+      toolName: "analyze_workspace_context",
+      args: { focus: "greeting" },
+      thoughtAr: "تحليل النية: ترحيب وتقديم مساعدة مخصصة حسب القسم والمشروع النشط.",
+      thoughtEn: "Intent parsed: Conversational greeting and context-grounded assistance overview.",
     };
   }
 

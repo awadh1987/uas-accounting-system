@@ -72,9 +72,11 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     });
 
     const resolvedLang = lang ?? result.lang;
+    const dialect = body.dialect === "msa" ? "msa" : "yemeni";
     const synthesized = await runGeminiSupportSynthesis({
       query,
       lang: resolvedLang,
+      dialect,
       baselineAnswerAr: result.answerAr,
       baselineAnswerEn: result.answerEn,
       diagnosticsSummary: `${result.diagnosticReport.statusBadge}: ${(resolvedLang === "ar" ? result.diagnosticReport.findingsAr : result.diagnosticReport.findingsEn).join(" | ")}`,

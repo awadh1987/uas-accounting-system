@@ -22,6 +22,7 @@ import {
   diagnoseLiveSystemState,
   type SupportSystemDiagnostics,
 } from "@/lib/localSupportEngine";
+import { buildCopilotGreetingFallback } from "./yemeniLocalization";
 import {
   evaluateSaleAgainstHarvestStock,
   reconcileHarvestInventory,
@@ -73,6 +74,7 @@ export interface UasWorkspaceContext {
   pendingConflictsCount?: number;
   isOffline?: boolean;
   currency?: string;
+  dialect?: "yemeni" | "msa";
 }
 
 export interface PreFlightCheckItem {
@@ -2913,6 +2915,16 @@ export async function executeUasAgentTool(
         citations.push({ labelAr: "فحص عجز المخزون", labelEn: "Inspect Stock Shortages", tab: "inventory", type: "tab" });
       }
 
+      const isGreeting = String(args.focus ?? "").toLowerCase() === "greeting";
+      const greeting = isGreeting
+        ? buildCopilotGreetingFallback({
+            lang,
+            dialect: wCtx.dialect ?? "yemeni",
+            activeTab,
+            projectName: project?.name ?? null,
+          })
+        : null;
+
       return makeResult(lang, {
         ok: true,
         toolName,
@@ -2934,11 +2946,13 @@ export async function executeUasAgentTool(
           pendingConflictsCount: cCount,
         },
         summaryAr:
-          `🧠 **تحليل السياق الذكي العابر للأقسام (${activeTab}):**\n` +
+          (greeting ? `${greeting.ar}\n\n` : "") +
+          `🧠 **ملخص السياق الحالي (${activeTab}):**\n` +
           (project ? `- المشروع النشط: **${project.name}** • القطفة: **${harvest}** (${isLocked ? "مقفلة 🔒" : "مفتوحة 🔓"})\n` : "") +
           `- الإيرادات: **${revenue.toLocaleString()} YER** • المصروفات والأجور: **${spend.toLocaleString()} YER** • صافي السيولة بالخزينة: **${cashBalance.toLocaleString()} YER**\n` +
-          (insightsAr.length > 0 ? `\n**النتائج والتوصيات العابرة للأقسام:**\n${insightsAr.map((i) => `- ${i}`).join("\n")}` : "\n✅ المؤشرات متوازنة ولا توجد مخاطر حرجة حالياً."),
+          (insightsAr.length > 0 ? `\n**تنبيهات وتوصيات تهمك:**\n${insightsAr.map((i) => `- ${i}`).join("\n")}` : "\n✅ المؤشرات متوازنة والأمور طيبة، ما في أي عجز أو تنبيهات حرجة حالياً."),
         summaryEn:
+          (greeting ? `${greeting.en}\n\n` : "") +
           `🧠 **Cross-Section Workspace Briefing (${activeTab}):**\n` +
           (project ? `- Active Project: **${project.name}** • Harvest: **${harvest}** (${isLocked ? "Locked 🔒" : "Open 🔓"})\n` : "") +
           `- Revenue: **${revenue.toLocaleString()} YER** • Spend (Exp+Wages): **${spend.toLocaleString()} YER** • Cash On Hand: **${cashBalance.toLocaleString()} YER**\n` +

@@ -80,10 +80,15 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         ? (body.explicitTool as { toolName: UasAgentToolName; args: Record<string, unknown> })
         : undefined;
 
+    const conversationHistory = Array.isArray(body.conversationHistory)
+      ? (body.conversationHistory as Array<{ role: "user" | "assistant"; text: string }>)
+      : undefined;
+
     const agentResponse = await runGeminiCopilotAgent(prompt, {
       ...serverCtx,
       workspaceContext,
       explicitTool,
+      conversationHistory,
       enableLocalOllamaProbe: body.enableLocalOllamaProbe === true,
     });
 

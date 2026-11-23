@@ -78,8 +78,19 @@ import {
   restoreThread,
   saveActiveThreadMessages,
 } from "@/lib/ai/conversationArchiveEngine";
+import {
+  buildCopilotGreetingFallback,
+  formatSpokenTextForGeminiTts,
+  type CopilotDialectMode,
+} from "@/lib/ai/yemeniLocalization";
 import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
-import { executeMutation, safeFetchJson } from "@/lib/apiClient";
+import {
+  executeMutation,
+  getStoredSessionToken,
+  getStoredTenantId,
+  isAndroidLocalIsolatedMode,
+  safeFetchJson,
+} from "@/lib/apiClient";
 import {
   checkMicrophoneDiagnostics,
   createSpeechTranscriptAccumulator,
@@ -293,16 +304,40 @@ export function UasAiCopilot({
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   const [isExpandedWidth, setIsExpandedWidth] = useState(false);
+  const [dialect, setDialect] = useState<CopilotDialectMode>(() => {
+    if (typeof window !== "undefined") {
+      const saved = window.localStorage.getItem("uas_copilot_dialect");
+      if (saved === "msa" || saved === "yemeni") return saved;
+    }
+    return "yemeni";
+  });
+  const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
+  const [audioLoadingMsgId, setAudioLoadingMsgId] = useState<string | null>(null);
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const activeAudioUrlRef = useRef<string | null>(null);
+
+  const handleToggleDialect = () => {
+    setDialect((prev) => {
+      const next: CopilotDialectMode = prev === "yemeni" ? "msa" : "yemeni";
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("uas_copilot_dialect", next);
+      }
+      return next;
+    });
+  };
 
   const mergedWorkspaceContext: UasWorkspaceContext = useMemo(
     () => ({
       ...(workspaceContext ?? {}),
       isOffline:
         workspaceContext?.isOffline ??
-        (offlineMode || (typeof navigator !== "undefined" && !navigator.onLine)),
+        (offlineMode ||
+          isAndroidLocalIsolatedMode() ||
+          (typeof navigator !== "undefined" && !navigator.onLine)),
       currency: workspaceContext?.currency || state.settings.defaultCurrency,
+      dialect: isAr ? dialect : undefined,
     }),
-    [workspaceContext, offlineMode, state.settings.defaultCurrency]
+    [workspaceContext, offlineMode, state.settings.defaultCurrency, isAr, dialect]
   );
 
   const clientDiagnostics: Partial<SupportSystemDiagnostics> = useMemo(
@@ -348,15 +383,24 @@ export function UasAiCopilot({
   const historyStorageKey = `uas_copilot_history_${currentUser?.id || "guest"}`;
 
   const welcomeMessage: CopilotChatMessage = useMemo(
-    () => ({
-      id: "welcome-1",
-      role: "assistant",
-      text: isAr
-        ? "مرحباً بك في **المساعد المحاسبي الذكي وخدمة العملاء (UAS AI Copilot)** 🤖.\nيمكنك التحدث بالصوت أو الكتابة بالعربية والإنجليزية لتنفيذ العمليات المحاسبية (مسودة قيد مزدوج، سند قبض/صرف، فاتورة، استعلام عن رصيد حساب، تقارير مالية، فحص المخزون، أو تشخيص الترخيص والمقاعد) — ويعمل بالكامل متصلاً ودون إنترنت!"
-        : "Welcome to the **UAS Enterprise Bilingual Voice + Text ERP Copilot & Support Assistant** 🤖.\nSpeak or type in Arabic or English to query account balances, generate Trial Balance / P&L summaries, draft balanced journal entries or vouchers with Confirmation Preview Cards, diagnose 7-user license seats, or search the 7-chapter User Manual — both online and 100% offline!",
-      timestamp: "—",
-    }),
-    [isAr]
+    () => {
+      const greet = buildCopilotGreetingFallback({
+        lang: isAr ? "ar" : "en",
+        dialect,
+        activeTab: mergedWorkspaceContext.activeTab,
+        projectName:
+          mergedWorkspaceContext.selectedProjectId
+            ? state.projects.find((p) => p.id === mergedWorkspaceContext.selectedProjectId)?.name
+            : null,
+      });
+      return {
+        id: "welcome-1",
+        role: "assistant",
+        text: isAr ? greet.ar : greet.en,
+        timestamp: "—",
+      };
+    },
+    [isAr, dialect, mergedWorkspaceContext.activeTab, mergedWorkspaceContext.selectedProjectId, state.projects]
   );
 
   const [messages, setMessages] = useState<CopilotChatMessage[]>(() => {
@@ -440,17 +484,121 @@ export function UasAiCopilot({
     }
   }, [displayedMessages, open]);
 
-  function speakText(text: string) {
-    if (!ttsEnabled || typeof window === "undefined" || !("speechSynthesis" in window)) return;
+  function stopSpeechPlayback() {
+    if (activeAudioRef.current) {
+      try {
+        activeAudioRef.current.pause();
+        activeAudioRef.current.currentTime = 0;
+      } catch {
+        // ignore
+      }
+      activeAudioRef.current = null;
+    }
+    if (activeAudioUrlRef.current) {
+      try {
+        URL.revokeObjectURL(activeAudioUrlRef.current);
+      } catch {
+        // ignore
+      }
+      activeAudioUrlRef.current = null;
+    }
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // ignore
+      }
+    }
+    setSpeakingMsgId(null);
+    setAudioLoadingMsgId(null);
+  }
+
+  function speakViaBrowserFallback(text: string, msgId?: string) {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setSpeakingMsgId(null);
+      return;
+    }
     try {
       window.speechSynthesis.cancel();
-      const clean = text.replace(/[#*`_~>-]/g, " ").replace(/\s+/g, " ").trim();
-      const utterance = new SpeechSynthesisUtterance(clean.slice(0, 420));
-      utterance.lang = isAr ? "ar-SA" : "en-US";
+      const spoken = formatSpokenTextForGeminiTts(text, {
+        lang: isAr ? "ar" : "en",
+        dialect,
+        maxChars: 500,
+      });
+      if (!spoken) return;
+      const utterance = new SpeechSynthesisUtterance(spoken);
+      utterance.lang = isAr ? "ar-YE" : "en-US";
+      utterance.rate = isAr ? 0.96 : 1.0;
+      const voices = window.speechSynthesis.getVoices?.() ?? [];
+      const preferredVoice = isAr
+        ? voices.find((v) => /ar-ye/i.test(v.lang)) ||
+          voices.find((v) => /ar-sa|ar-ae|ar-/i.test(v.lang))
+        : voices.find((v) => /en-/i.test(v.lang));
+      if (preferredVoice) utterance.voice = preferredVoice;
+      if (msgId) setSpeakingMsgId(msgId);
+      utterance.onend = () => setSpeakingMsgId(null);
+      utterance.onerror = () => setSpeakingMsgId(null);
       window.speechSynthesis.speak(utterance);
     } catch {
-      // ignore TTS errors
+      setSpeakingMsgId(null);
     }
+  }
+
+  async function speakText(text: string, msgId?: string, forcePlay = false) {
+    if (!forcePlay && !ttsEnabled) return;
+    if (typeof window === "undefined") return;
+
+    if (msgId && speakingMsgId === msgId) {
+      stopSpeechPlayback();
+      return;
+    }
+
+    stopSpeechPlayback();
+
+    const clean = formatSpokenTextForGeminiTts(text, {
+      lang: isAr ? "ar" : "en",
+      dialect,
+      maxChars: 680,
+    });
+    if (!clean) return;
+
+    if (!isOfflineClientContext()) {
+      try {
+        if (msgId) setAudioLoadingMsgId(msgId);
+        const res = await fetch("/api/ai/speak", {
+          method: "POST",
+          headers: buildCopilotRequestHeaders(),
+          body: JSON.stringify({
+            text: clean,
+            lang: isAr ? "ar" : "en",
+            dialect,
+          }),
+        });
+
+        if (res.ok && (res.headers.get("content-type") || "").includes("audio/")) {
+          const blob = await res.blob();
+          const objectUrl = URL.createObjectURL(blob);
+          activeAudioUrlRef.current = objectUrl;
+          const audio = new Audio(objectUrl);
+          activeAudioRef.current = audio;
+          if (msgId) setSpeakingMsgId(msgId);
+          setAudioLoadingMsgId(null);
+          audio.onended = () => stopSpeechPlayback();
+          audio.onerror = () => {
+            stopSpeechPlayback();
+            speakViaBrowserFallback(clean, msgId);
+          };
+          await audio.play();
+          return;
+        }
+      } catch {
+        // Fallback smoothly to browser speechSynthesis
+      } finally {
+        setAudioLoadingMsgId(null);
+      }
+    }
+
+    speakViaBrowserFallback(clean, msgId);
   }
 
   async function toggleVoiceListening() {
@@ -881,9 +1029,26 @@ export function UasAiCopilot({
       (window.location.protocol === "capacitor:" || window.location.protocol === "file:");
     return (
       offlineMode ||
+      isAndroidLocalIsolatedMode() ||
       isPackagedStaticOrigin ||
       (typeof navigator !== "undefined" && !navigator.onLine)
     );
+  }
+
+  function buildCopilotRequestHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const token = getStoredSessionToken();
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+      headers["x-uas-session-token"] = token;
+    }
+    const tenantId = getStoredTenantId();
+    if (tenantId && tenantId !== "default") {
+      headers["x-uas-tenant-id"] = tenantId;
+    }
+    if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
+    if (currentUser?.role) headers["x-uas-role"] = String(currentUser.role);
+    return headers;
   }
 
   async function handleSendPrompt(overrideText?: string, baseMessages?: CopilotChatMessage[]) {
@@ -895,6 +1060,11 @@ export function UasAiCopilot({
       setActiveThreadId(newTh.id);
       setAllThreads(loadAllThreads(currentUser?.id));
     }
+
+    const historySnapshot = (baseMessages ?? messages)
+      .filter((m) => m.id !== "welcome-1" && m.text.trim().length > 0)
+      .slice(-6)
+      .map((m) => ({ role: m.role, text: m.text }));
 
     const userMsg: CopilotChatMessage = {
       id: getNextMsgId("u"),
@@ -916,10 +1086,7 @@ export function UasAiCopilot({
 
       if (!shouldUseOfflineDirectly) {
         try {
-          const headers: Record<string, string> = { "Content-Type": "application/json" };
-          if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
-          if (currentUser?.role) headers["x-uas-role"] = String(currentUser.role);
-
+          const headers = buildCopilotRequestHeaders();
           const res = await fetch("/api/ai/agent", {
             method: "POST",
             headers,
@@ -927,6 +1094,7 @@ export function UasAiCopilot({
               prompt,
               lang,
               workspaceContext: mergedWorkspaceContext,
+              conversationHistory: historySnapshot,
               actor: currentUser
                 ? {
                     userId: currentUser.id,
@@ -938,6 +1106,35 @@ export function UasAiCopilot({
           });
           if (res.ok) {
             agentRes = await res.json();
+          } else if (res.status === 401) {
+            // Guest / pre-login chat on landing or login screen -> route to public Gemini Support API
+            const supportRes = await fetch("/api/support/chat", {
+              method: "POST",
+              headers,
+              body: JSON.stringify({
+                query: prompt,
+                lang,
+                dialect,
+                diagnostics: clientDiagnostics,
+              }),
+            });
+            if (supportRes.ok) {
+              const sData = (await supportRes.json()) as {
+                answer?: string;
+                answerAr?: string;
+                answerEn?: string;
+                modelUsed?: string;
+              };
+              agentRes = {
+                ok: true,
+                tierUsed: sData.modelUsed && sData.modelUsed !== "Offline Local Engine" ? "tier1_cloud_llm" : "tier3_offline_deterministic",
+                modelUsed: sData.modelUsed || "Offline Local Engine",
+                reply: sData.answer,
+                replyAr: sData.answerAr || sData.answer,
+                replyEn: sData.answerEn || sData.answer,
+                requiresConfirmation: false,
+              };
+            }
           }
         } catch {
           // Network or static Capacitor export fallback -> run offline deterministic engine directly
@@ -959,8 +1156,9 @@ export function UasAiCopilot({
           ? agentRes.replyAr || agentRes.reply || ""
           : agentRes.replyEn || agentRes.reply || "";
 
+      const assistantId = getNextMsgId("a");
       const assistantMsg: CopilotChatMessage = {
-        id: getNextMsgId("a"),
+        id: assistantId,
         role: "assistant",
         text: replyText,
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
@@ -979,7 +1177,7 @@ export function UasAiCopilot({
       };
 
       setMessages((prev) => [...prev, assistantMsg]);
-      speakText(replyText);
+      void speakText(replyText, assistantId);
 
       // Immediate execution for read-only navigation intent
       if (agentRes.toolName === "navigate_to_module" && agentRes.navigationTab && agentRes.ok) {
@@ -1014,9 +1212,7 @@ export function UasAiCopilot({
 
       if (!isOfflineClientContext()) {
         try {
-          const headers: Record<string, string> = { "Content-Type": "application/json" };
-          if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
-          if (currentUser?.role) headers["x-uas-role"] = String(currentUser.role);
+          const headers = buildCopilotRequestHeaders();
 
           const res = await fetch("/api/ai/agent", {
             method: "POST",
@@ -1147,9 +1343,7 @@ export function UasAiCopilot({
 
       if (!isOfflineClientContext()) {
         try {
-          const headers: Record<string, string> = { "Content-Type": "application/json" };
-          if (currentUser?.id) headers["x-uas-user-id"] = currentUser.id;
-          if (currentUser?.role) headers["x-uas-role"] = String(currentUser.role);
+          const headers = buildCopilotRequestHeaders();
 
           const res = await fetch("/api/ai/agent", {
             method: "POST",
@@ -1429,6 +1623,17 @@ export function UasAiCopilot({
             </div>
 
             <div className="flex items-center gap-1.5">
+              {isAr && (
+                <button
+                  type="button"
+                  data-testid="uas-ai-copilot-dialect-btn"
+                  onClick={handleToggleDialect}
+                  className="px-2 py-1 rounded-xl border border-white/15 bg-white/5 hover:bg-white/15 text-[10px] font-bold text-amber-200 transition"
+                  title="التبديل بين اللهجة اليمنية والعربية الفصحى"
+                >
+                  {dialect === "yemeni" ? "🇾🇪 يمني" : "📖 فصحى"}
+                </button>
+              )}
               <button
                 type="button"
                 data-testid="uas-ai-copilot-expand-btn"
@@ -1692,14 +1897,46 @@ export function UasAiCopilot({
                         </div>
                       ) : (
                         <div className="space-y-1">
-                          {msg.role === "assistant" && msg.modelUsed && (
-                            <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-400">
-                              <span
-                                data-testid={`msg-model-badge-${msg.id}`}
-                                className="px-1.5 py-0.5 rounded bg-slate-200/70 dark:bg-slate-700/70 text-slate-700 dark:text-slate-200"
+                          {msg.role === "assistant" && (
+                            <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-slate-400">
+                              <div className="flex items-center gap-1.5">
+                                {msg.modelUsed && (
+                                  <span
+                                    data-testid={`msg-model-badge-${msg.id}`}
+                                    className="px-1.5 py-0.5 rounded bg-slate-200/70 dark:bg-slate-700/70 text-slate-700 dark:text-slate-200"
+                                  >
+                                    {msg.modelUsed}
+                                  </span>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                data-testid={`msg-speak-btn-${msg.id}`}
+                                onClick={() => void speakText(msg.text, msg.id, true)}
+                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-sans text-[10px] font-bold transition ${
+                                  speakingMsgId === msg.id
+                                    ? "bg-rose-500/15 text-rose-600 dark:text-rose-300"
+                                    : "bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+                                }`}
+                                title={
+                                  speakingMsgId === msg.id
+                                    ? isAr ? "إيقاف القراءة الصوتية" : "Stop Audio"
+                                    : isAr ? "استماع بصوت Gemini الطبيعي" : "Listen with Gemini Voice"
+                                }
                               >
-                                {msg.modelUsed}
-                              </span>
+                                {speakingMsgId === msg.id ? (
+                                  <VolumeX className="w-3 h-3" />
+                                ) : (
+                                  <Volume2 className="w-3 h-3" />
+                                )}
+                                <span>
+                                  {audioLoadingMsgId === msg.id
+                                    ? isAr ? "جاري التوليد..." : "Loading..."
+                                    : speakingMsgId === msg.id
+                                    ? isAr ? "إيقاف" : "Stop"
+                                    : isAr ? "استماع" : "Listen"}
+                                </span>
+                              </button>
                             </div>
                           )}
                           <div className="whitespace-pre-line leading-relaxed">{msg.text}</div>
