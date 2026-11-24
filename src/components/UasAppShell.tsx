@@ -5,6 +5,7 @@ import { Eye, Lock, Receipt, Users } from "lucide-react";
 import { CoaTreeTab } from "@/components/CoaTreeTab";
 import { CommandSearchModal } from "@/components/CommandSearchModal";
 import { FinancialReportsTab } from "@/components/FinancialReportsTab";
+import { ForcePasswordChangeModal } from "@/components/ForcePasswordChangeModal";
 import { GeneralLedgerTab } from "@/components/GeneralLedgerTab";
 import { LandingPage } from "@/components/LandingPage";
 import { LicenseActivationModal, type LicenseStatusData } from "@/components/LicenseActivationModal";
@@ -329,11 +330,17 @@ export function UasAppShell() {
         }
       }
 
-      const matchedUser = savedUserId
-        ? res.state.users.find(
-            (u) => u.id === savedUserId && u.active && (u.isActive ?? true)
-          )
-        : null;
+      const matchedUser =
+        (res.state.sessionUser &&
+        res.state.sessionUser.active &&
+        (res.state.sessionUser.isActive ?? true)
+          ? res.state.sessionUser
+          : null) ||
+        (savedUserId
+          ? res.state.users.find(
+              (u) => u.id === savedUserId && u.active && (u.isActive ?? true)
+            )
+          : null);
 
       if (matchedUser) {
         setCurrentUser(matchedUser);
@@ -612,7 +619,7 @@ export function UasAppShell() {
 
   // Global Ctrl+K / Cmd+K Quick Search shortcut in ERP view
   useEffect(() => {
-    if (viewMode !== "erp") return;
+    if (viewMode !== "erp" || currentUser?.mustChangePassword) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -621,7 +628,7 @@ export function UasAppShell() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [viewMode]);
+  }, [viewMode, currentUser?.mustChangePassword]);
 
   const activeUser = currentUser ?? INITIAL_FALLBACK_STATE.users[0];
   const userReadOnly = isReadOnly(activeUser);
@@ -748,6 +755,13 @@ export function UasAppShell() {
     const res = await fetchBootstrapState();
     setState(res.state);
     setOfflineQueueCount(res.queueCount);
+    setCurrentUser((prev) => {
+      if (res.state.sessionUser) {
+        return res.state.sessionUser;
+      }
+      if (!prev) return prev;
+      return res.state.users.find((u) => u.id === prev.id) || prev;
+    });
   }, []);
 
   async function handleSyncQueue() {
@@ -890,6 +904,9 @@ export function UasAppShell() {
 
   const navigateToTab = useCallback(
     (nextTab: TabId) => {
+      if (currentUser?.mustChangePassword) {
+        return;
+      }
       if (nextTab === "customers") {
         if (!canAccessModule(activeUser, "customers")) {
           const fallback = getAccessibleTabs(activeUser)[0] || "dashboard";
@@ -922,7 +939,7 @@ export function UasAppShell() {
       }
       setActiveTab(resolved);
     },
-    [activeUser, lang, showToast]
+    [activeUser, currentUser?.mustChangePassword, lang, showToast]
   );
 
   function handleQuickJump(tab: TabId, targetId: string) {
@@ -939,6 +956,13 @@ export function UasAppShell() {
 
   function handleLoginUser(u: UasUser) {
     setCurrentUser(u);
+    setState((prev) => {
+      const exists = prev.users.some((item) => item.id === u.id);
+      return {
+        ...prev,
+        users: exists ? prev.users.map((item) => (item.id === u.id ? u : item)) : [...prev.users, u],
+      };
+    });
     const userTenant = (u as UasUser & { tenantId?: string }).tenantId;
     if (userTenant) {
       setStoredTenantId(userTenant);
@@ -946,6 +970,16 @@ export function UasAppShell() {
     if (typeof window !== "undefined") {
       window.localStorage.setItem("uas_user", u.id);
       window.localStorage.setItem("uas_view_mode", "erp");
+    }
+    if (u.mustChangePassword) {
+      setPendingProjectId(null);
+      setViewMode("erp");
+      showToast(
+        lang === "ar"
+          ? "🔒 يلزم تعيين كلمة مرور جديدة قبل المتابعة إلى مساحة العمل"
+          : "🔒 Please set a new password before entering the workspace"
+      );
+      return;
     }
     // Bind or refresh this user's device seat (7 users × [1 Windows + 1 Android])
     if (u.email) {
@@ -1125,7 +1159,7 @@ export function UasAppShell() {
       />
 
       <CommandSearchModal
-        open={searchModalOpen && viewMode === "erp" && Boolean(currentUser)}
+        open={searchModalOpen && viewMode === "erp" && Boolean(currentUser) && !currentUser?.mustChangePassword}
         onClose={() => setSearchModalOpen(false)}
         state={state}
         lang={lang}
@@ -1196,6 +1230,24 @@ export function UasAppShell() {
           licenseStatus={licenseStatus}
           onOpenLicenseModal={() => setLicenseModalOpen(true)}
           onLoginSuccess={(u) => handleLoginUser(u)}
+          onToast={showToast}
+        />
+      ) : currentUser.mustChangePassword ? (
+        <ForcePasswordChangeModal
+          currentUser={currentUser}
+          lang={lang}
+          logoText={state.settings.logoText}
+          enterpriseProfile={state.enterpriseProfile}
+          onPasswordChanged={async (updatedUser) => {
+            setCurrentUser(updatedUser);
+            setState((prev) => ({
+              ...prev,
+              users: prev.users.map((item) => (item.id === updatedUser.id ? updatedUser : item)),
+            }));
+            await refreshFromServer();
+            void checkLicensingStatus();
+          }}
+          onLogout={handleLogout}
           onToast={showToast}
         />
       ) : (
@@ -2080,38 +2132,40 @@ export function UasAppShell() {
         onToast={showToast}
       />
 
-      <UasAiCopilot
-        lang={lang}
-        currentUser={currentUser}
-        state={state}
-        licenseStatus={licenseStatus}
-        offlineMode={offlineMode}
-        workspaceContext={{
-          activeTab,
-          selectedProjectId: selectedProjectId === "ALL" ? null : selectedProjectId,
-          selectedSubProjectId: selectedSubProjectId === "ALL" ? null : selectedSubProjectId,
-          selectedHarvest: selectedHarvest === "ALL" ? null : selectedHarvest,
-          tenantSlug: state.enterpriseProfile?.tenantSlug ?? null,
-          runtimeMode: getStoredRuntimeMode(),
-          offlineQueueCount,
-          pendingConflictsCount,
-          isOffline: offlineMode,
-          currency,
-        }}
-        onNavigateTab={(tab) => {
-          if (currentUser && viewMode !== "erp") {
-            setViewMode("erp");
-          }
-          navigateToTab(tab);
-        }}
-        onOpenLicenseModal={() => setLicenseModalOpen(true)}
-        onRefreshState={refreshFromServer}
-        onApplyState={(nextState, qCount) => {
-          setState(nextState);
-          setOfflineQueueCount(qCount);
-        }}
-        onToast={showToast}
-      />
+      {!currentUser?.mustChangePassword && (
+        <UasAiCopilot
+          lang={lang}
+          currentUser={currentUser}
+          state={state}
+          licenseStatus={licenseStatus}
+          offlineMode={offlineMode}
+          workspaceContext={{
+            activeTab,
+            selectedProjectId: selectedProjectId === "ALL" ? null : selectedProjectId,
+            selectedSubProjectId: selectedSubProjectId === "ALL" ? null : selectedSubProjectId,
+            selectedHarvest: selectedHarvest === "ALL" ? null : selectedHarvest,
+            tenantSlug: state.enterpriseProfile?.tenantSlug ?? null,
+            runtimeMode: getStoredRuntimeMode(),
+            offlineQueueCount,
+            pendingConflictsCount,
+            isOffline: offlineMode,
+            currency,
+          }}
+          onNavigateTab={(tab) => {
+            if (currentUser && viewMode !== "erp") {
+              setViewMode("erp");
+            }
+            navigateToTab(tab);
+          }}
+          onOpenLicenseModal={() => setLicenseModalOpen(true)}
+          onRefreshState={refreshFromServer}
+          onApplyState={(nextState, qCount) => {
+            setState(nextState);
+            setOfflineQueueCount(qCount);
+          }}
+          onToast={showToast}
+        />
+      )}
     </div>
   );
 }

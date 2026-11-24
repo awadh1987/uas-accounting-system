@@ -540,6 +540,15 @@ function parseJsonBody(init?: RequestInit): Record<string, unknown> {
   return {};
 }
 
+function safeDecodeHeader(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 function extractActorFromReq(body: Record<string, unknown>, init?: RequestInit) {
   const headers = new Headers(init?.headers || undefined);
   const actorObj =
@@ -547,7 +556,10 @@ function extractActorFromReq(body: Record<string, unknown>, init?: RequestInit) 
   const userId = String(actorObj.userId || body.userId || headers.get("x-uas-user-id") || "u1");
   const userRole = String(actorObj.userRole || body.userRole || headers.get("x-uas-role") || "SUPER_ADMIN");
   const userDisplay = String(
-    actorObj.userDisplay || body.userDisplay || headers.get("x-uas-user-display") || "مدير النظام العام (SUPER_ADMIN)"
+    actorObj.userDisplay ||
+      body.userDisplay ||
+      safeDecodeHeader(headers.get("x-uas-user-display")) ||
+      "مدير النظام العام (SUPER_ADMIN)"
   );
   return { userId, userRole, userDisplay };
 }
@@ -1317,6 +1329,30 @@ async function handleOfflineAndroidApiRequestCore(
     pathname = rawUrl.split("?")[0];
   }
 
+  // Enforce mandatory password change on offline mutations
+  const isMutationMethod = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
+  const isMustChangeExempt =
+    pathname === "/api/auth/login" ||
+    pathname === "/api/auth/logout" ||
+    pathname === "/api/auth/change-password" ||
+    pathname === "/api/users/me/password" ||
+    pathname.startsWith("/api/licensing/");
+  if (isMutationMethod && !isMustChangeExempt) {
+    const stateCheck = loadOfflineAndroidState(s);
+    const actingUser = stateCheck.users.find((u) => u.id === actor.userId);
+    if (actingUser?.mustChangePassword) {
+      return jsonResponse(
+        {
+          error:
+            "🔒 يجب تغيير كلمة المرور المؤقتة أولاً قبل الوصول إلى عمليات النظام / Mandatory password change required before accessing workspace",
+          code: "MUST_CHANGE_PASSWORD",
+          mustChangePassword: true,
+        },
+        403
+      );
+    }
+  }
+
   if (pathname === "/api/system/lifecycle" && method === "POST") {
     const entityType = String(body.entityType || "");
     const id = String(body.id || "");
@@ -1401,7 +1437,15 @@ async function handleOfflineAndroidApiRequestCore(
     }
     found.lastLoginAt = new Date().toISOString();
     saveOfflineAndroidState(state, s);
-    return jsonResponse({ success: true, user: found, state }, 200);
+    return jsonResponse(
+      {
+        success: true,
+        user: found,
+        mustChangePassword: Boolean(found.mustChangePassword),
+        state,
+      },
+      200
+    );
   }
 
   if (pathname === "/api/auth/logout" && method === "POST") {
@@ -1516,7 +1560,7 @@ async function handleOfflineAndroidApiRequestCore(
         useCustomPermissions: false,
         customAllowedGroups: [],
         customPermissionsJson: {},
-        mustChangePassword: false,
+        mustChangePassword: body.mustChangePassword !== undefined ? Boolean(body.mustChangePassword) : false,
         assignedProjects: Array.isArray(body.assignedProjects) ? body.assignedProjects.map(String) : [],
       };
       state.users.push(newUser);
@@ -1710,7 +1754,9 @@ async function handleOfflineAndroidApiRequestCore(
     const passwords = readPasswordMap(s);
     passwords[existing.email.toLowerCase()] = newPass;
     writePasswordMap(passwords, s);
-    existing.mustChangePassword = Boolean(body.mustChangePassword);
+    const mustChangePassword =
+      body.mustChangePassword === false || body.mustChangePassword === "false" ? false : true;
+    existing.mustChangePassword = mustChangePassword;
     existing.passwordUpdatedAt = new Date().toISOString();
     addLocalAudit(state, actor.userDisplay, "إعادة تعيين كلمة مرور (محلي)", existing.email);
     saveOfflineAndroidState(state, s);
@@ -1719,7 +1765,73 @@ async function handleOfflineAndroidApiRequestCore(
       {
         success: true,
         message: `تمت إعادة تعيين كلمة مرور ${existing.name} بنجاح`,
+        mustChangePassword,
+        passwordUpdatedAt: existing.passwordUpdatedAt,
+        user: existing,
         state,
+      },
+      200
+    );
+  }
+
+  if ((pathname === "/api/users/me/password" || pathname === "/api/auth/change-password") && method === "POST") {
+    const state = loadOfflineAndroidState(s);
+    const currentUser =
+      state.users.find((u) => u.id === actor.userId) ||
+      state.users.find((u) => u.active && u.isActive !== false) ||
+      state.users[0];
+    if (!currentUser) {
+      return jsonResponse({ error: "المستخدم غير موجود" }, 404);
+    }
+    if (currentUser.active === false || currentUser.isActive === false) {
+      return jsonResponse({ error: "الحساب موقوف. يرجى التواصل مع الإدارة" }, 403);
+    }
+
+    const currentPassword = String(body.currentPassword || "");
+    const newPassword = String(body.newPassword || "").trim();
+    const confirmPassword = body.confirmPassword !== undefined ? String(body.confirmPassword).trim() : "";
+
+    if (!currentPassword) {
+      return jsonResponse({ error: "يرجى إدخال كلمة المرور الحالية" }, 400);
+    }
+    if (!newPassword || newPassword.length < 6) {
+      return jsonResponse({ error: "يجب أن تتكون كلمة المرور الجديدة من 6 خانات على الأقل" }, 400);
+    }
+    if (confirmPassword && confirmPassword !== newPassword) {
+      return jsonResponse({ error: "كلمة المرور الجديدة وتأكيدها غير متطابقين" }, 400);
+    }
+
+    const passwords = readPasswordMap(s);
+    const expectedPass = passwords[currentUser.email.toLowerCase()] ?? DEFAULT_LOCAL_ADMIN_PASSWORD;
+    if (currentPassword !== expectedPass) {
+      return jsonResponse({ error: "كلمة المرور الحالية غير صحيحة" }, 400);
+    }
+    if (currentUser.mustChangePassword && newPassword === currentPassword) {
+      return jsonResponse({ error: "يجب أن تختلف كلمة المرور الجديدة عن كلمة المرور المؤقتة الحالية" }, 400);
+    }
+
+    const nowIso = new Date().toISOString();
+    passwords[currentUser.email.toLowerCase()] = newPassword;
+    writePasswordMap(passwords, s);
+    currentUser.mustChangePassword = false;
+    currentUser.passwordUpdatedAt = nowIso;
+    addLocalAudit(
+      state,
+      actor.userDisplay,
+      "تغيير كلمة المرور (محلي)",
+      currentUser.displayName || currentUser.name
+    );
+    saveOfflineAndroidState(state, s);
+    appendOfflineSyncQueue("/api/users/me/password", "POST", body, s);
+    return jsonResponse(
+      {
+        success: true,
+        message: "تم تغيير كلمة المرور بنجاح",
+        mustChangePassword: false,
+        passwordUpdatedAt: nowIso,
+        user: currentUser,
+        state,
+        offline: true,
       },
       200
     );

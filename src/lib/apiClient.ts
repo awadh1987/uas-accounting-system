@@ -330,6 +330,33 @@ export interface SafeFetchJsonResult<T = Record<string, unknown>> {
  * (e.g. `<!DOCTYPE html>...` returned with HTTP 200 on `https://localhost`)
  * so callers never throw `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`.
  */
+export function sanitizeHeaderValue(value: string): string {
+  // Web Fetch `Headers` only permits ISO-8859-1 (ByteString, code points <= 0xff).
+  // Encode values containing non-Latin1 characters (e.g. Arabic display names) so Headers() never throws.
+  return /[^\u0000-\u00FF]/.test(value) ? encodeURIComponent(value) : value;
+}
+
+export function sanitizeHeadersInit(initHeaders?: HeadersInit): Headers {
+  const headers = new Headers();
+  if (!initHeaders) return headers;
+  if (initHeaders instanceof Headers) {
+    initHeaders.forEach((v, k) => headers.set(k, sanitizeHeaderValue(v)));
+    return headers;
+  }
+  if (Array.isArray(initHeaders)) {
+    for (const [k, v] of initHeaders) {
+      headers.set(k, sanitizeHeaderValue(String(v)));
+    }
+    return headers;
+  }
+  for (const [k, v] of Object.entries(initHeaders)) {
+    if (v !== undefined) {
+      headers.set(k, sanitizeHeaderValue(String(v)));
+    }
+  }
+  return headers;
+}
+
 export async function safeFetchJson<T = Record<string, unknown>>(
   url: string,
   init?: RequestInit,
@@ -348,7 +375,7 @@ export async function safeFetchJson<T = Record<string, unknown>>(
   try {
     const method = (init?.method || "GET").toUpperCase();
     const isMutating = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
-    const headers = new Headers(init?.headers || {});
+    const headers = sanitizeHeadersInit(init?.headers);
 
     if (isMutating) {
       if (!headers.has("x-idempotency-key") && !headers.has("X-Idempotency-Key")) {
@@ -447,7 +474,7 @@ export function installGlobalApiFetchInterceptor(): void {
 
     if (isRelativeApi || isLocalhostApi) {
       const method = (init?.method || "GET").toUpperCase();
-      const headers = new Headers(init?.headers || {});
+      const headers = sanitizeHeadersInit(init?.headers);
       if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
         if (!headers.has("x-idempotency-key") && !headers.has("X-Idempotency-Key")) {
           headers.set("X-Idempotency-Key", generateClientUuid());

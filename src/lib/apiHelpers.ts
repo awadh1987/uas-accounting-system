@@ -65,8 +65,20 @@ const USER_AUTH_SELECT = {
   useCustomPermissions: true,
   customAllowedGroups: true,
   customPermissionsJson: true,
+  mustChangePassword: true,
+  passwordUpdatedAt: true,
   assignedProjects: true,
 } as const;
+
+function safeDecodeHeaderValue(raw?: string | null): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) return undefined;
+  try {
+    return decodeURIComponent(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
 
 export function extractActor(
   body: Record<string, unknown>,
@@ -99,7 +111,7 @@ export function extractActor(
   const actor = (body?.actor as ActorPayload | undefined) || {};
   const headerUserId = req?.headers.get("x-uas-user-id")?.trim() || undefined;
   const headerRole = req?.headers.get("x-uas-role")?.trim() || undefined;
-  const headerDisplay = req?.headers.get("x-uas-user-display")?.trim() || undefined;
+  const headerDisplay = safeDecodeHeaderValue(req?.headers.get("x-uas-user-display"));
 
   const rawBodyUserId =
     typeof actor.userId === "string"
@@ -312,6 +324,8 @@ export async function resolveVerifiedActor(
     useCustomPermissions: Boolean(dbUser.useCustomPermissions),
     customAllowedGroups,
     customPermissionsJson,
+    mustChangePassword: Boolean(dbUser.mustChangePassword),
+    passwordUpdatedAt: dbUser.passwordUpdatedAt ? dbUser.passwordUpdatedAt.toISOString() : null,
     assignedProjects: parseAssignedProjects(dbUser.assignedProjects),
   };
 
@@ -384,6 +398,35 @@ export async function authorizeApiAction(
       ok: false,
       response: unauthorizedError(),
     };
+  }
+
+  if (actor.user.mustChangePassword) {
+    let pathname = "";
+    try {
+      pathname = req?.nextUrl?.pathname || (req?.url ? new URL(req.url, "http://localhost").pathname : "");
+    } catch {
+      pathname = "";
+    }
+    const isPasswordChangeExempt =
+      pathname === "/api/users/me/password" ||
+      pathname === "/api/auth/change-password" ||
+      pathname === "/api/auth/logout" ||
+      pathname === "/api/auth/login" ||
+      pathname.startsWith("/api/licensing/");
+    if (!isPasswordChangeExempt) {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          {
+            error:
+              "🔒 يجب تغيير كلمة المرور المؤقتة أولاً قبل الوصول إلى عمليات النظام / Mandatory password change required before accessing workspace",
+            code: "MUST_CHANGE_PASSWORD",
+            mustChangePassword: true,
+          },
+          { status: 403 }
+        ),
+      };
+    }
   }
 
   // Licensing & Monotonic Clock & LAN Seat check on mutations (Fail Closed)

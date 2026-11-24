@@ -14,7 +14,7 @@ import {
   Smartphone,
   Trash2,
 } from "lucide-react";
-import { safeFetchJson } from "@/lib/apiClient";
+import { safeFetchJson, sanitizeHeaderValue } from "@/lib/apiClient";
 import type { UasTenantDevice, UasUser } from "@/types/uas";
 
 interface TenantDevicesPanelProps {
@@ -54,8 +54,25 @@ export function TenantDevicesPanel({
   }, []);
 
   useEffect(() => {
-    void loadDevices();
-  }, [loadDevices]);
+    let active = true;
+    safeFetchJson<{
+      success?: boolean;
+      devices?: UasTenantDevice[];
+      latestCursor?: number;
+    }>("/api/devices", { cache: "no-store" })
+      .then((res) => {
+        if (active && res.ok && res.data?.devices) {
+          setDevices(res.data.devices);
+          setLatestCursor(res.data.latestCursor ?? 0);
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function runGovernanceAction(
     device: UasTenantDevice,
@@ -82,7 +99,7 @@ export function TenantDevicesPanel({
             "Content-Type": "application/json",
             "x-uas-user-id": currentUser.id,
             "x-uas-role": String(currentUser.role),
-            "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+            "x-uas-user-display": sanitizeHeaderValue(`${currentUser.name} (${currentUser.role})`),
           },
           body: JSON.stringify({
             action,
@@ -120,7 +137,7 @@ export function TenantDevicesPanel({
             "Content-Type": "application/json",
             "x-uas-user-id": currentUser.id,
             "x-uas-role": String(currentUser.role),
-            "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+            "x-uas-user-display": sanitizeHeaderValue(`${currentUser.name} (${currentUser.role})`),
           },
           body: JSON.stringify({
             actor: {

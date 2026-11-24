@@ -75,7 +75,13 @@ export function LoginView({
   const activeUsers = users.filter((u) => u.active);
 
   useEffect(() => {
-    setIsInstalledApp(isInstalledClientApp());
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) setIsInstalledApp(isInstalledClientApp());
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   const [identifier, setIdentifier] = useState(() => {
@@ -146,7 +152,7 @@ export function LoginView({
       const baseUrl = getApiBaseUrl();
       const endpoint = baseUrl ? `${baseUrl}/api/auth/recover-admin` : "/api/auth/recover-admin";
 
-      let licensePayload: Record<string, unknown> = {};
+      const licensePayload: Record<string, unknown> = {};
       const trimmedKey = recoveryKeyOrJson.trim();
       if (trimmedKey.startsWith("UASKEY-")) {
         licensePayload.activationKey = trimmedKey;
@@ -247,7 +253,7 @@ export function LoginView({
         return;
       }
       if (typeof window !== "undefined") {
-        const localTenant = (localMatch as any)?.tenantId;
+        const localTenant = (localMatch as UasUser & { tenantId?: string })?.tenantId;
         if (localTenant) {
           setStoredTenantId(localTenant);
         }
@@ -272,6 +278,7 @@ export function LoginView({
       const data = (await res.json().catch(() => ({}))) as {
         user?: UasUser;
         sessionToken?: string;
+        mustChangePassword?: boolean;
         error?: string;
         tenantId?: string;
       };
@@ -286,19 +293,26 @@ export function LoginView({
         onToast(msg);
         return;
       }
+      const loggedInUser: UasUser = {
+        ...data.user,
+        mustChangePassword: Boolean(data.mustChangePassword ?? data.user.mustChangePassword),
+      };
       if (typeof window !== "undefined") {
         if (data.sessionToken) {
           setStoredSessionToken(data.sessionToken);
         }
         if (data.tenantId) {
           setStoredTenantId(data.tenantId);
-        } else if ((data.user as any)?.tenantId) {
-          setStoredTenantId((data.user as any).tenantId);
+        } else {
+          const userTenant = (loggedInUser as UasUser & { tenantId?: string })?.tenantId;
+          if (userTenant) {
+            setStoredTenantId(userTenant);
+          }
         }
-        if (rememberDevice) window.localStorage.setItem(REMEMBER_KEY, data.user.email);
+        if (rememberDevice) window.localStorage.setItem(REMEMBER_KEY, loggedInUser.email);
         else window.localStorage.removeItem(REMEMBER_KEY);
       }
-      onLoginSuccess(data.user, rememberDevice);
+      onLoginSuccess(loggedInUser, rememberDevice);
     } catch {
       if (localMatch) {
         onLoginSuccess(localMatch, rememberDevice);

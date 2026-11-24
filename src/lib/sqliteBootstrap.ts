@@ -568,6 +568,28 @@ async function ensureAdditiveColumns(client: {
         { name: "documentStatus", ddl: 'ALTER TABLE "WorkerWageEntry" ADD COLUMN "documentStatus" TEXT NOT NULL DEFAULT \'POSTED\'' },
       ],
     },
+    {
+      table: "User",
+      columns: [
+        { name: "displayName", ddl: 'ALTER TABLE "User" ADD COLUMN "displayName" TEXT' },
+        { name: "phone", ddl: 'ALTER TABLE "User" ADD COLUMN "phone" TEXT' },
+        { name: "isActive", ddl: 'ALTER TABLE "User" ADD COLUMN "isActive" INTEGER NOT NULL DEFAULT 1' },
+        { name: "archivedAt", ddl: 'ALTER TABLE "User" ADD COLUMN "archivedAt" DATETIME' },
+        { name: "avatarUrl", ddl: 'ALTER TABLE "User" ADD COLUMN "avatarUrl" TEXT' },
+        { name: "avatarColor", ddl: 'ALTER TABLE "User" ADD COLUMN "avatarColor" TEXT NOT NULL DEFAULT \'#059669\'' },
+        { name: "preferredLang", ddl: 'ALTER TABLE "User" ADD COLUMN "preferredLang" TEXT NOT NULL DEFAULT \'ar\'' },
+        { name: "preferredCurrency", ddl: 'ALTER TABLE "User" ADD COLUMN "preferredCurrency" TEXT NOT NULL DEFAULT \'YER\'' },
+        { name: "preferredTheme", ddl: 'ALTER TABLE "User" ADD COLUMN "preferredTheme" TEXT NOT NULL DEFAULT \'emerald\'' },
+        { name: "defaultModule", ddl: 'ALTER TABLE "User" ADD COLUMN "defaultModule" TEXT' },
+        { name: "lastLoginAt", ddl: 'ALTER TABLE "User" ADD COLUMN "lastLoginAt" DATETIME' },
+        { name: "useCustomPermissions", ddl: 'ALTER TABLE "User" ADD COLUMN "useCustomPermissions" INTEGER NOT NULL DEFAULT 0' },
+        { name: "customAllowedGroups", ddl: 'ALTER TABLE "User" ADD COLUMN "customAllowedGroups" TEXT NOT NULL DEFAULT \'[]\'' },
+        { name: "customPermissionsJson", ddl: 'ALTER TABLE "User" ADD COLUMN "customPermissionsJson" TEXT NOT NULL DEFAULT \'{}\'' },
+        { name: "mustChangePassword", ddl: 'ALTER TABLE "User" ADD COLUMN "mustChangePassword" INTEGER NOT NULL DEFAULT 0' },
+        { name: "passwordUpdatedAt", ddl: 'ALTER TABLE "User" ADD COLUMN "passwordUpdatedAt" DATETIME' },
+        { name: "assignedProjects", ddl: 'ALTER TABLE "User" ADD COLUMN "assignedProjects" TEXT NOT NULL DEFAULT \'[]\'' },
+      ],
+    },
   ];
 
   const additiveTables = [

@@ -13,7 +13,7 @@ import {
   Sliders,
   Upload,
 } from "lucide-react";
-import { safeFetchJson } from "@/lib/apiClient";
+import { safeFetchJson, sanitizeHeaderValue } from "@/lib/apiClient";
 import {
   DEFAULT_TAGLINE_AR,
   DEFAULT_TAGLINE_EN,
@@ -58,8 +58,22 @@ export function TenantAdminConfigPanel({
   }, []);
 
   useEffect(() => {
-    void loadConfig();
-  }, [loadConfig]);
+    let active = true;
+    safeFetchJson<{ success?: boolean; config?: UasTenantAdminConfig }>("/api/tenant/config", {
+      cache: "no-store",
+    })
+      .then((res) => {
+        if (active && res.ok && res.data?.config) {
+          setConfig(res.data.config);
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -76,7 +90,7 @@ export function TenantAdminConfigPanel({
           "Content-Type": "application/json",
           "x-uas-user-id": currentUser.id,
           "x-uas-role": String(currentUser.role),
-          "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+          "x-uas-user-display": sanitizeHeaderValue(`${currentUser.name} (${currentUser.role})`),
         },
         body: JSON.stringify({
           ...config,
@@ -130,7 +144,7 @@ export function TenantAdminConfigPanel({
         headers: {
           "x-uas-user-id": currentUser.id,
           "x-uas-role": String(currentUser.role),
-          "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+          "x-uas-user-display": sanitizeHeaderValue(`${currentUser.name} (${currentUser.role})`),
         },
         body: formData,
       });
@@ -180,7 +194,7 @@ export function TenantAdminConfigPanel({
           "Content-Type": "application/json",
           "x-uas-user-id": currentUser.id,
           "x-uas-role": String(currentUser.role),
-          "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+          "x-uas-user-display": sanitizeHeaderValue(`${currentUser.name} (${currentUser.role})`),
         },
         body: JSON.stringify({
           resetToDefaultBrand: true,

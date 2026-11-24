@@ -7,6 +7,7 @@ import {
   getStoredSessionToken,
   getStoredTenantId,
   isAndroidLocalIsolatedMode,
+  sanitizeHeaderValue,
   SESSION_TOKEN_STORAGE_KEY,
 } from "@/lib/apiClient";
 import { getEndpointSyncPriority } from "@/lib/offlineAndroidStore";
@@ -97,7 +98,7 @@ export async function performManualSyncNow(currentUser: UasUser): Promise<Client
     "x-uas-device-id": deviceId,
     "x-uas-user-id": currentUser.id,
     "x-uas-role": String(currentUser.role),
-    "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+    "x-uas-user-display": sanitizeHeaderValue(`${currentUser.name} (${currentUser.role})`),
     ...(sessionToken ? { "x-uas-session-token": sessionToken } : {}),
   };
   if (tenantId && tenantId !== "default") {

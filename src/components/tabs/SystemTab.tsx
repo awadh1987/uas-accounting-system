@@ -40,7 +40,15 @@ import {
   RotateCcw,
   Trash2,
 } from "lucide-react";
-import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl, safeFetchJson, getStoredTenantId } from "@/lib/apiClient";
+import {
+  getApiBaseUrl,
+  setApiBaseUrl,
+  resetApiBaseUrl,
+  safeFetchJson,
+  sanitizeHeaderValue,
+  setStoredSessionToken,
+  getStoredTenantId,
+} from "@/lib/apiClient";
 import {
   DEFAULT_TAGLINE_AR,
   DEFAULT_TAGLINE_EN,
@@ -472,7 +480,7 @@ export function SystemTab({
             "Content-Type": "application/json",
             "x-uas-user-id": currentUser.id,
             "x-uas-role": String(currentUser.role),
-            "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+            "x-uas-user-display": sanitizeHeaderValue(`${currentUser.name} (${currentUser.role})`),
           },
           body: JSON.stringify({
             action,
@@ -528,7 +536,7 @@ export function SystemTab({
           "x-uas-tenant-id": activeTenantId,
           "x-uas-user-id": currentUser.id,
           "x-uas-role": String(currentUser.role),
-          "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+          "x-uas-user-display": sanitizeHeaderValue(`${currentUser.name} (${currentUser.role})`),
         },
         body: JSON.stringify({
           targetUserId: user.id,
@@ -941,6 +949,7 @@ export function SystemTab({
   const [resetMustChange, setResetMustChange] = useState(true);
   const [resetCopied, setResetCopied] = useState(false);
   const [resettingPass, setResettingPass] = useState(false);
+  const [resetErrorMsg, setResetErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!resetModalUser) return;
@@ -1066,6 +1075,7 @@ export function SystemTab({
     setResetNewPass(generateRandomPass());
     setResetMustChange(true);
     setResetCopied(false);
+    setResetErrorMsg(null);
   }
 
   async function copyPassword() {
@@ -1083,23 +1093,35 @@ export function SystemTab({
   async function handleExecutePasswordReset(e: React.FormEvent) {
     e.preventDefault();
     if (!resetModalUser || !resetNewPass) return;
+    setResetErrorMsg(null);
+    if (resetNewPass.trim().length < 6) {
+      const shortMsg = isAr
+        ? "يجب أن تتكون كلمة المرور الجديدة من 6 أحرف/أرقام على الأقل"
+        : "Password must be at least 6 characters";
+      setResetErrorMsg(shortMsg);
+      onToast(shortMsg);
+      return;
+    }
     setResettingPass(true);
     try {
       const res = await safeFetchJson<{
         success?: boolean;
         message?: string;
         error?: string;
+        sessionToken?: string;
       }>(`/api/users/${encodeURIComponent(resetModalUser.id)}/reset-password`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "x-uas-user-id": currentUser.id,
           "x-uas-role": String(currentUser.role),
-          "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+          "x-uas-user-display": sanitizeHeaderValue(`${currentUser.name} (${currentUser.role})`),
         },
         body: JSON.stringify({
-          newPassword: resetNewPass,
+          newPassword: resetNewPass.trim(),
           mustChangePassword: resetMustChange,
+          targetUserId: resetModalUser.id,
+          targetUserEmail: resetModalUser.email,
           actor: {
             userId: currentUser.id,
             userDisplay: `${currentUser.name} (${currentUser.role})`,
@@ -1109,7 +1131,16 @@ export function SystemTab({
       });
 
       if (!res.ok || !res.data?.success) {
-        throw new Error(res.data?.error || (isAr ? "تعذر إعادة تعيين كلمة المرور" : "Failed to reset password"));
+        throw new Error(
+          res.data?.error ||
+            res.data?.message ||
+            res.error ||
+            (isAr ? "تعذر إعادة تعيين كلمة المرور" : "Failed to reset password")
+        );
+      }
+
+      if (res.data.sessionToken) {
+        setStoredSessionToken(res.data.sessionToken);
       }
 
       onToast(
@@ -1120,11 +1151,13 @@ export function SystemTab({
       );
       setResetModalUser(null);
       setResetNewPass("");
+      setResetErrorMsg(null);
       if (onRefreshState) {
         await onRefreshState();
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      setResetErrorMsg(msg);
       onToast(msg);
     } finally {
       setResettingPass(false);
@@ -1184,7 +1217,7 @@ export function SystemTab({
           headers: {
             "x-uas-user-id": currentUser.id,
             "x-uas-role": String(currentUser.role),
-            "x-uas-user-display": `${currentUser.name} (${currentUser.role})`,
+            "x-uas-user-display": sanitizeHeaderValue(`${currentUser.name} (${currentUser.role})`),
           },
           body: formData,
         });
@@ -3580,6 +3613,15 @@ export function SystemTab({
             </div>
 
             <form onSubmit={handleExecutePasswordReset} className="space-y-4">
+              {resetErrorMsg && (
+                <div
+                  role="alert"
+                  className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-bold text-xs flex items-start gap-2"
+                >
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{resetErrorMsg}</span>
+                </div>
+              )}
               <div>
                 <label className="block font-extrabold text-xs mb-1.5 text-slate-700 dark:text-slate-300">
                   كلمة المرور الجديدة (New Password):
@@ -3588,7 +3630,10 @@ export function SystemTab({
                   <input
                     type="text"
                     value={resetNewPass}
-                    onChange={(e) => setResetNewPass(e.target.value)}
+                    onChange={(e) => {
+                      setResetNewPass(e.target.value);
+                      setResetErrorMsg(null);
+                    }}
                     required
                     placeholder="أدخل كلمة مرور قوية..."
                     className="flex-1 rounded-xl border border-slate-300 dark:border-slate-600 bg-transparent px-3 py-2 font-mono text-xs font-bold"

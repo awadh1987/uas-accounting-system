@@ -462,6 +462,8 @@ export interface UasBootstrapState {
   expenses: UasOperatingExpense[];
   workers: UasWorkerWage[];
   sales: UasSaleTransaction[];
+  sessionUser?: UasUser | null;
+  mustChangePassword?: boolean;
 }
 
 export interface VoucherModalPayload {
