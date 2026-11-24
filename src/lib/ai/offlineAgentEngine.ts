@@ -35,7 +35,11 @@ import {
   type CopilotMemoryEntry,
   type MemoryMutationEvent,
 } from "./copilotMemoryTypes";
-import type { VisionExtractionMetadata } from "./copilotVisionTypes";
+import {
+  filterVisionArchiveAttachments,
+  loadLocalVisionArchive,
+  type VisionExtractionMetadata,
+} from "./copilotVisionTypes";
 import type { TabId } from "@/types/uas";
 
 export type ReasoningTier =
@@ -333,6 +337,27 @@ export function parseBilingualAgentIntent(
           : focus === "overdue_receivables"
           ? "Intent parsed: Inspect overdue customer receivables and aging priority."
           : "Intent parsed: Generate Daily Executive Briefing with low-stock and overdue-receivable alerts.",
+    };
+  }
+
+  // 0.1 Search Archived Scans / Vision Documents
+  if (
+    /(?:ارشيف\s+المسح|أرشيف\s+المسح|ارشيف\s+الصور|أرشيف\s+الصور|المستندات\s+المؤرشف|الصور\s+المؤرشف|كشوفات\s+القطف[هة]\s+المؤرشف|search\s+archived\s+scans|vision\s+archive|archived\s+receipts)/i.test(
+      norm
+    )
+  ) {
+    const documentType = /(?:قطف|حصاد|tally|harvest)/i.test(norm)
+      ? "harvest_tally_sheet"
+      : /(?:مصروف|مورد|expense|supplier)/i.test(norm)
+      ? "expense_or_supplier_receipt"
+      : /(?:بيع|مبيع|عميل|sales|customer)/i.test(norm)
+      ? "sales_or_customer_slip"
+      : "all";
+    return {
+      toolName: "search_archived_scans",
+      args: { documentType, q: "" },
+      thoughtAr: "تحليل النية: البحث في أرشيف الصور والمستندات الممسوحة لهذه المنشأة.",
+      thoughtEn: "Intent parsed: Search tenant-scoped archived vision scans and linked documents.",
     };
   }
 
@@ -1182,10 +1207,15 @@ export async function runUasAiAgent(
   }
 
   // Execute tool through RBAC & Financial Guardrail Registry
+  const localVisionEntries =
+    opts.visionArchiveEntries ??
+    (typeof window !== "undefined" ? loadLocalVisionArchive(tenantSlug) : []);
+  void filterVisionArchiveAttachments;
   const toolResult = await executeUasAgentTool(intent.toolName, intent.args, {
     ...opts,
     lang,
     memories: appliedMemories,
+    visionArchiveEntries: localVisionEntries,
   });
 
   const wCtx = opts.workspaceContext;

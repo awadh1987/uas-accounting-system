@@ -43,6 +43,10 @@ import {
   type CopilotMemoryEntry,
   type CopilotMemoryScope,
 } from "@/lib/ai/copilotMemoryTypes";
+import {
+  filterVisionArchiveAttachments,
+  type VisionSourceAttachment,
+} from "@/lib/ai/copilotVisionTypes";
 import { generateExecutiveBriefing } from "@/lib/ai/executiveBriefingEngine";
 import type {
   UasBootstrapState,
@@ -3130,6 +3134,36 @@ async function handleOfflineAndroidApiRequestCore(
       { debit: 0, credit: 0, netIncome }
     );
     return jsonResponse({ rows, totals, offline: true }, 200);
+  }
+
+  if (pathname === "/api/ai/vision/archive") {
+    const state = loadOfflineAndroidState(s);
+    const tenantSlug = normalizeMemoryTenantSlug(
+      state.enterpriseProfile?.tenantSlug || "default"
+    );
+    let entries: VisionSourceAttachment[] = [];
+    try {
+      const rawAtt = s?.getItem(`uas_pending_vision_attachments_v1_${tenantSlug}`);
+      if (rawAtt) {
+        const parsed = JSON.parse(rawAtt);
+        if (Array.isArray(parsed)) entries = parsed as VisionSourceAttachment[];
+      }
+    } catch {
+      entries = [];
+    }
+    const reqUrl = new URL(rawUrl, "https://localhost");
+    const attachments = filterVisionArchiveAttachments(entries, {
+      documentType: reqUrl.searchParams.get("documentType") || "all",
+      dateFrom: reqUrl.searchParams.get("dateFrom") || undefined,
+      dateTo: reqUrl.searchParams.get("dateTo") || undefined,
+      linkedRecordId: reqUrl.searchParams.get("linkedRecordId") || undefined,
+      linkedCode: reqUrl.searchParams.get("linkedCode") || undefined,
+      q: reqUrl.searchParams.get("q") || undefined,
+    });
+    return jsonResponse(
+      { success: true, tenantSlug, count: attachments.length, attachments, offline: true },
+      200
+    );
   }
 
   if (pathname === "/api/ai/vision") {

@@ -470,6 +470,13 @@ export async function extractDocumentFromVisionImage(input: {
           mimeType: validated.mimeType,
           fileName: input.fileName,
           documentType: check.docType,
+          documentDate: parsed.date || new Date().toISOString().slice(0, 10),
+          partyName: parsed.partyName,
+          projectName: parsed.projectName,
+          totalAmount: check.handwrittenTotal,
+          totalBundles: parsed.totalBundles,
+          currency,
+          notes: parsed.notes,
         });
       } catch {
         // Non-fatal archive error

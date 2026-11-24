@@ -41,6 +41,13 @@ export interface VisionMappedDraftCall {
   args: Record<string, unknown>;
 }
 
+export interface VisionLinkedRecord {
+  kind: "voucher" | "expense" | "sale" | "harvest_batch" | "journal";
+  id: string;
+  code: string;
+  label?: string;
+}
+
 export interface VisionSourceAttachment {
   attachmentId: string;
   attachmentUrl: string;
@@ -48,13 +55,135 @@ export interface VisionSourceAttachment {
   mimeType: SupportedVisionMimeType;
   fileName: string;
   documentType?: VisionDocumentType;
+  documentDate?: string;
+  partyName?: string;
+  projectName?: string;
+  totalAmount?: number;
+  totalBundles?: number;
+  currency?: string;
+  notes?: string;
   checksum: string;
   byteLength: number;
   extractedAt: string;
   linkedRecordType?: string;
   linkedRecordId?: string;
   linkedEntryNumber?: string;
+  linkedRecord?: VisionLinkedRecord | null;
   linkedAt?: string;
+}
+
+export interface VisionArchiveFilter {
+  documentType?: "all" | VisionDocumentType | string;
+  dateFrom?: string;
+  dateTo?: string;
+  linkedRecordId?: string;
+  linkedCode?: string;
+  q?: string;
+}
+
+function normalizeSearchText(raw: string): string {
+  return String(raw || "")
+    .toLowerCase()
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, "")
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/ى/g, "ي")
+    .trim();
+}
+
+export function filterVisionArchiveAttachments(
+  entries: VisionSourceAttachment[],
+  filter: VisionArchiveFilter = {}
+): VisionSourceAttachment[] {
+  const docType = String(filter.documentType || "all").trim();
+  const dateFrom = String(filter.dateFrom || "").trim().slice(0, 10);
+  const dateTo = String(filter.dateTo || "").trim().slice(0, 10);
+  const linkedTarget = normalizeSearchText(
+    String(filter.linkedRecordId || filter.linkedCode || "")
+  );
+  const rawQ = normalizeSearchText(String(filter.q || ""));
+  const qTokens = rawQ
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((t) => (t.startsWith("ال") && t.length > 3 ? t.slice(2) : t));
+
+  return entries.filter((item) => {
+    if (docType && docType !== "all" && item.documentType !== docType) {
+      return false;
+    }
+    const itemDate = (item.documentDate || item.extractedAt || "").slice(0, 10);
+    if (dateFrom && itemDate && itemDate < dateFrom) return false;
+    if (dateTo && itemDate && itemDate > dateTo) return false;
+
+    if (linkedTarget) {
+      const linkedHay = normalizeSearchText(
+        [
+          item.linkedRecordId,
+          item.linkedEntryNumber,
+          item.linkedRecord?.id,
+          item.linkedRecord?.code,
+          item.linkedRecord?.label,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      );
+      if (!linkedHay.includes(linkedTarget)) return false;
+    }
+
+    if (qTokens.length > 0) {
+      const hay = normalizeSearchText(
+        [
+          item.attachmentId,
+          item.fileName,
+          item.documentType,
+          item.documentDate,
+          item.partyName,
+          item.projectName,
+          item.notes,
+          item.linkedEntryNumber,
+          item.linkedRecordId,
+          item.linkedRecord?.code,
+          item.linkedRecord?.label,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      );
+      if (!qTokens.every((tk) => hay.includes(tk))) return false;
+    }
+
+    return true;
+  });
+}
+
+const LOCAL_VISION_ARCHIVE_PREFIX = "uas_pending_vision_attachments_v1_";
+
+export function loadLocalVisionArchive(tenantSlug: string): VisionSourceAttachment[] {
+  if (typeof window === "undefined") return [];
+  const norm = String(tenantSlug || "default").trim().toLowerCase() || "default";
+  try {
+    const raw = window.localStorage.getItem(`${LOCAL_VISION_ARCHIVE_PREFIX}${norm}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as VisionSourceAttachment[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalVisionArchive(
+  tenantSlug: string,
+  entries: VisionSourceAttachment[]
+): void {
+  if (typeof window === "undefined") return;
+  const norm = String(tenantSlug || "default").trim().toLowerCase() || "default";
+  try {
+    window.localStorage.setItem(
+      `${LOCAL_VISION_ARCHIVE_PREFIX}${norm}`,
+      JSON.stringify(entries.slice(0, 100))
+    );
+  } catch {
+    // ignore quota
+  }
 }
 
 export interface VisionExtractionMetadata {

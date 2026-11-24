@@ -28,7 +28,10 @@ import {
   reconcileHarvestInventory,
 } from "@/lib/harvestReconciliation";
 import type { CopilotMemoryEntry } from "./copilotMemoryTypes";
-import type { VisionSourceAttachment } from "./copilotVisionTypes";
+import {
+  filterVisionArchiveAttachments,
+  type VisionSourceAttachment,
+} from "./copilotVisionTypes";
 import {
   generateExecutiveBriefing,
   type BriefingInventoryItemInput,
@@ -69,7 +72,8 @@ export type UasAgentToolName =
   | "draft_treasury_transfer"
   | "toggle_period_lock"
   | "add_harvest_cycle"
-  | "get_daily_executive_briefing";
+  | "get_daily_executive_briefing"
+  | "search_archived_scans";
 
 export interface UasWorkspaceContext {
   activeTab?: TabId;
@@ -245,6 +249,7 @@ export interface UasAgentExecutionContext {
   briefingSalesInvoices?: BriefingSalesInvoiceInput[];
   pendingConflictsCount?: number;
   sourceAttachment?: VisionSourceAttachment | null;
+  visionArchiveEntries?: VisionSourceAttachment[];
   qrLookupHook?: (code: string) => Promise<{
     verified: boolean;
     documentType?: string;
@@ -567,6 +572,21 @@ export const UAS_AGENT_TOOL_SCHEMAS: UasAgentToolSchema[] = [
       focus: "optional all|low_stock|overdue_receivables",
       lowStockThreshold: "optional numeric bundle threshold override",
       defaultCreditTermDays: "optional overdue credit days threshold override",
+    },
+  },
+  {
+    name: "search_archived_scans",
+    isWriteTool: false,
+    descriptionAr:
+      "البحث وتصفية الصور والمستندات الممسوحة ضوئياً (كشوف القطفات، سندات المصروفات، فواتير المبيعات) حسب النوع أو التاريخ أو رقم القيد/القطفة.",
+    descriptionEn:
+      "Search and filter archived receipt/tally scans for the active tenant by documentType, date range, linked voucher/batch code, or keyword.",
+    parameters: {
+      documentType: "optional all|harvest_tally_sheet|expense_or_supplier_receipt|sales_or_customer_slip",
+      dateFrom: "optional start date YYYY-MM-DD",
+      dateTo: "optional end date YYYY-MM-DD",
+      linkedCode: "optional linked voucher number or harvest batch ID",
+      q: "optional search keyword",
     },
   },
 ];
@@ -3740,6 +3760,66 @@ export async function executeUasAgentTool(
           },
           summaryAr: report.briefingAr,
           summaryEn: report.briefingEn,
+        },
+        ctx
+      );
+    }
+
+    // -----------------------------------------------------------------------
+    // 27. search_archived_scans
+    // -----------------------------------------------------------------------
+    case "search_archived_scans": {
+      const entries = ctx.visionArchiveEntries ?? [];
+      const matches = filterVisionArchiveAttachments(entries, {
+        documentType: args.documentType ? String(args.documentType) : "all",
+        dateFrom: args.dateFrom ? String(args.dateFrom) : undefined,
+        dateTo: args.dateTo ? String(args.dateTo) : undefined,
+        linkedCode: args.linkedCode ? String(args.linkedCode) : undefined,
+        q: args.q ? String(args.q) : undefined,
+      });
+
+      const listAr = matches
+        .slice(0, 6)
+        .map(
+          (m) =>
+            `- 📸 **${m.fileName}** (${m.documentType || "scan"} • ${m.documentDate || m.extractedAt.slice(0, 10)})` +
+            (m.linkedRecord
+              ? ` — 🔗 مرتبط بـ \`${m.linkedRecord.code}\``
+              : " — *غير مرتبط بسجل بعد*") +
+            ` — [عرض الصورة](${m.attachmentUrl})`
+        )
+        .join("\n");
+
+      const listEn = matches
+        .slice(0, 6)
+        .map(
+          (m) =>
+            `- 📸 **${m.fileName}** (${m.documentType || "scan"} • ${m.documentDate || m.extractedAt.slice(0, 10)})` +
+            (m.linkedRecord
+              ? ` — 🔗 Linked: \`${m.linkedRecord.code}\``
+              : " — *Unlinked*") +
+            ` — [View Image](${m.attachmentUrl})`
+        )
+        .join("\n");
+
+      return makeResult(
+        lang,
+        {
+          ok: true,
+          toolName,
+          requiresConfirmation: false,
+          data: {
+            count: matches.length,
+            attachments: matches.slice(0, 10),
+          },
+          summaryAr:
+            matches.length > 0
+              ? `🗂️ **نتائج أرشيف المسح (${matches.length} مستند):**\n${listAr}`
+              : "🗂️ **أرشيف المسح:** لا توجد صور مستندات مطابقة لمعايير البحث الحالية لهذه المنشأة.",
+          summaryEn:
+            matches.length > 0
+              ? `🗂️ **Archived Scans (${matches.length} matched):**\n${listEn}`
+              : "🗂️ **Scans Archive:** No archived scans matched the current filter for this tenant.",
         },
         ctx
       );

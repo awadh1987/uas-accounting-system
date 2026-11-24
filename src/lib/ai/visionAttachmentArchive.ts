@@ -14,10 +14,13 @@ import { sanitizeTenantAssetKey } from "@/lib/brandingAssets";
 import { getDynamicDataDirectory } from "@/lib/tenant/tenantRegistry";
 import { normalizeMemoryTenantSlug } from "./copilotMemoryTypes";
 import {
+  filterVisionArchiveAttachments,
   MAX_VISION_IMAGE_BYTES,
   validateVisionImagePayload,
   type SupportedVisionMimeType,
+  type VisionArchiveFilter,
   type VisionDocumentType,
+  type VisionLinkedRecord,
   type VisionSourceAttachment,
 } from "./copilotVisionTypes";
 
@@ -94,25 +97,49 @@ function detectImageMagic(buf: Buffer): SupportedVisionMimeType | null {
   return null;
 }
 
+function resolveArchiveJsonDir(): string {
+  const explicitDataDir = (process.env.UAS_DATA_DIR || "").trim();
+  if (explicitDataDir) {
+    return path.join(/*turbopackIgnore: true*/ explicitDataDir, "vision-archive");
+  }
+  const baseDir = getDynamicDataDirectory();
+  const normalized = baseDir.replace(/\\/g, "/").replace(/\/+$/, "");
+  const root = normalized.endsWith("/.next/standalone")
+    ? path.resolve(/*turbopackIgnore: true*/ baseDir, "..", "..")
+    : baseDir;
+  return path.join(/*turbopackIgnore: true*/ root, "data", "vision-archive");
+}
+
+function resolveTenantArchiveJsonPath(tenantSlug: string): string {
+  const safeSlug = sanitizeTenantAssetKey(normalizeMemoryTenantSlug(tenantSlug));
+  return path.join(/*turbopackIgnore: true*/ resolveArchiveJsonDir(), `${safeSlug}.json`);
+}
+
 function readTenantIndex(tenantSlug: string): VisionSourceAttachment[] {
   const safeSlug = normalizeMemoryTenantSlug(tenantSlug);
-  const indexPath = path.join(/*turbopackIgnore: true*/ resolveTenantUploadsDir(safeSlug), "index.json");
-  try {
-    if (!fs.existsSync(/*turbopackIgnore: true*/ indexPath)) return [];
-    const raw = fs.readFileSync(/*turbopackIgnore: true*/ indexPath, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item): item is VisionSourceAttachment =>
-        Boolean(
-          item &&
-            typeof item.attachmentId === "string" &&
-            normalizeMemoryTenantSlug(item.tenantSlug) === safeSlug
-        )
-    );
-  } catch {
-    return [];
+  const candidates = [
+    resolveTenantArchiveJsonPath(safeSlug),
+    path.join(/*turbopackIgnore: true*/ resolveTenantUploadsDir(safeSlug), "index.json"),
+  ];
+  for (const indexPath of candidates) {
+    try {
+      if (!fs.existsSync(/*turbopackIgnore: true*/ indexPath)) continue;
+      const raw = fs.readFileSync(/*turbopackIgnore: true*/ indexPath, "utf8");
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) continue;
+      return parsed.filter(
+        (item): item is VisionSourceAttachment =>
+          Boolean(
+            item &&
+              typeof item.attachmentId === "string" &&
+              normalizeMemoryTenantSlug(item.tenantSlug) === safeSlug
+          )
+      );
+    } catch {
+      // try next candidate
+    }
   }
+  return [];
 }
 
 function writeTenantIndex(tenantSlug: string, entries: VisionSourceAttachment[]): void {
@@ -121,11 +148,18 @@ function writeTenantIndex(tenantSlug: string, entries: VisionSourceAttachment[])
     (e) => normalizeMemoryTenantSlug(e.tenantSlug) === safeSlug
   );
   const dir = resolveTenantUploadsDir(safeSlug);
+  const archiveJsonPath = resolveTenantArchiveJsonPath(safeSlug);
   if (!fs.existsSync(/*turbopackIgnore: true*/ dir)) {
     fs.mkdirSync(/*turbopackIgnore: true*/ dir, { recursive: true });
   }
+  if (!fs.existsSync(/*turbopackIgnore: true*/ path.dirname(archiveJsonPath))) {
+    fs.mkdirSync(/*turbopackIgnore: true*/ path.dirname(archiveJsonPath), {
+      recursive: true,
+    });
+  }
   const serialized = JSON.stringify(isolated, null, 2);
   fs.writeFileSync(/*turbopackIgnore: true*/ path.join(dir, "index.json"), serialized, "utf8");
+  fs.writeFileSync(/*turbopackIgnore: true*/ archiveJsonPath, serialized, "utf8");
 
   const mirrorDir = resolveStandaloneTenantUploadsDir(safeSlug);
   if (mirrorDir) {
@@ -136,6 +170,17 @@ function writeTenantIndex(tenantSlug: string, entries: VisionSourceAttachment[])
         serialized,
         "utf8"
       );
+      const standaloneArchiveJson = path.resolve(
+        /*turbopackIgnore: true*/ mirrorDir,
+        "..",
+        "..",
+        "vision-archive",
+        `${sanitizeTenantAssetKey(safeSlug)}.json`
+      );
+      fs.mkdirSync(/*turbopackIgnore: true*/ path.dirname(standaloneArchiveJson), {
+        recursive: true,
+      });
+      fs.writeFileSync(/*turbopackIgnore: true*/ standaloneArchiveJson, serialized, "utf8");
     } catch {
       // non-fatal mirror
     }
@@ -148,6 +193,13 @@ export function archiveVisionAttachment(input: {
   mimeType: string;
   fileName?: string;
   documentType?: VisionDocumentType;
+  documentDate?: string;
+  partyName?: string;
+  projectName?: string;
+  totalAmount?: number;
+  totalBundles?: number;
+  currency?: string;
+  notes?: string;
 }): VisionSourceAttachment {
   const safeSlug = normalizeMemoryTenantSlug(input.tenantSlug);
   const validated = validateVisionImagePayload({
@@ -192,6 +244,13 @@ export function archiveVisionAttachment(input: {
     mimeType: detectedMime,
     fileName: (input.fileName || storedFileName).replace(/[^\w.\-\u0600-\u06FF ]+/g, "_").slice(0, 80),
     documentType: input.documentType,
+    documentDate: input.documentDate ? input.documentDate.slice(0, 10) : undefined,
+    partyName: input.partyName,
+    projectName: input.projectName,
+    totalAmount: input.totalAmount,
+    totalBundles: input.totalBundles,
+    currency: input.currency,
+    notes: input.notes,
     checksum,
     byteLength: buffer.length,
     extractedAt: new Date().toISOString(),
@@ -235,12 +294,22 @@ export function readVisionAttachmentFile(
   return null;
 }
 
+function mapRecordKind(recordType: string): VisionLinkedRecord["kind"] {
+  const t = recordType.toUpperCase();
+  if (t.includes("HARVEST")) return "harvest_batch";
+  if (t.includes("EXPENSE")) return "expense";
+  if (t.includes("SALE")) return "sale";
+  if (t.includes("JOURNAL")) return "journal";
+  return "voucher";
+}
+
 export function linkArchivedAttachmentToRecord(params: {
   tenantSlug: string;
   attachmentId: string;
   recordType: string;
   recordId: string;
   entryNumber?: string;
+  label?: string;
 }): VisionSourceAttachment | null {
   const safeSlug = normalizeMemoryTenantSlug(params.tenantSlug);
   const list = readTenantIndex(safeSlug);
@@ -252,6 +321,12 @@ export function linkArchivedAttachmentToRecord(params: {
     linkedRecordType: params.recordType,
     linkedRecordId: params.recordId,
     linkedEntryNumber: params.entryNumber,
+    linkedRecord: {
+      kind: mapRecordKind(params.recordType),
+      id: params.recordId,
+      code: params.entryNumber || params.recordId,
+      label: params.label,
+    },
     linkedAt: new Date().toISOString(),
   };
   list[idx] = updated;
@@ -268,8 +343,17 @@ export function listTenantVisionAttachments(params: {
     return list.filter(
       (a) =>
         a.linkedRecordId === params.recordId ||
-        a.linkedEntryNumber === params.recordId
+        a.linkedEntryNumber === params.recordId ||
+        a.linkedRecord?.id === params.recordId ||
+        a.linkedRecord?.code === params.recordId
     );
   }
   return list;
+}
+
+export function searchTenantVisionArchive(
+  params: { tenantSlug: string } & VisionArchiveFilter
+): VisionSourceAttachment[] {
+  const list = readTenantIndex(params.tenantSlug);
+  return filterVisionArchiveAttachments(list, params);
 }

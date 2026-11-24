@@ -4,15 +4,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { validateVisionImagePayload } from "../src/lib/ai/copilotVisionTypes";
+import {
+  filterVisionArchiveAttachments,
+  validateVisionImagePayload,
+} from "../src/lib/ai/copilotVisionTypes";
 import { extractDocumentFromVisionImage } from "../src/lib/ai/copilotVisionExtractor";
 import {
   archiveVisionAttachment,
   linkArchivedAttachmentToRecord,
   listTenantVisionAttachments,
   readVisionAttachmentFile,
+  searchTenantVisionArchive,
 } from "../src/lib/ai/visionAttachmentArchive";
 import { executeConfirmedAiAction } from "../src/lib/ai/agentServerExecutor";
+import { runUasAiAgent } from "../src/lib/ai/offlineAgentEngine";
 import { prisma } from "../src/lib/prisma";
 import {
   runGeminiCopilotAgent,
@@ -452,6 +457,92 @@ test(
       });
       assert.equal(manualLinked?.linkedRecordId, "batch-demo-1");
     }
+
+    // Archive searchable filtering by documentType, date range, linked code, and tenant isolation
+    const expAtt = archiveVisionAttachment({
+      tenantSlug: "tenant-alpha",
+      imageBase64: TINY_PNG_BASE64,
+      mimeType: "image/jpeg",
+      fileName: "fuel-voucher-nov.jpg",
+      documentType: "expense_or_supplier_receipt",
+      documentDate: "2026-11-18",
+      partyName: "محطة الأمل للديزل",
+      totalAmount: 35000,
+      currency: "YER",
+      notes: "تعبئة ديزل المولد",
+    });
+    linkArchivedAttachmentToRecord({
+      tenantSlug: "tenant-alpha",
+      attachmentId: expAtt.attachmentId,
+      recordType: "RECORD_EXPENSE",
+      recordId: "exp-101",
+      entryNumber: "JV-2026-0099",
+    });
+
+    const slipAtt = archiveVisionAttachment({
+      tenantSlug: "tenant-alpha",
+      imageBase64: TINY_PNG_BASE64,
+      mimeType: "image/png",
+      fileName: "customer-sale-dec.png",
+      documentType: "sales_or_customer_slip",
+      documentDate: "2026-12-02",
+      partyName: "تاجر الحديدة",
+      totalAmount: 180000,
+      currency: "YER",
+    });
+    assert.ok(slipAtt.attachmentId);
+
+    const byType = searchTenantVisionArchive({
+      tenantSlug: "tenant-alpha",
+      documentType: "expense_or_supplier_receipt",
+    });
+    assert.equal(byType.length, 1);
+    assert.equal(byType[0].attachmentId, expAtt.attachmentId);
+
+    const byDate = searchTenantVisionArchive({
+      tenantSlug: "tenant-alpha",
+      dateFrom: "2026-11-15",
+      dateTo: "2026-11-25",
+    });
+    assert.equal(
+      byDate.some((a) => a.attachmentId === expAtt.attachmentId),
+      true
+    );
+    assert.equal(
+      byDate.some((a) => a.attachmentId === slipAtt.attachmentId),
+      false
+    );
+
+    const byLinkedVoucher = searchTenantVisionArchive({
+      tenantSlug: "tenant-alpha",
+      linkedCode: "JV-2026-0099",
+    });
+    assert.equal(byLinkedVoucher.length, 1);
+    assert.equal(byLinkedVoucher[0].linkedRecord?.code, "JV-2026-0099");
+
+    // Cross-tenant search remains empty for tenant-beta
+    assert.equal(
+      searchTenantVisionArchive({
+        tenantSlug: "tenant-beta",
+        linkedCode: "JV-2026-0099",
+      }).length,
+      0
+    );
+
+    // Offline Copilot search_archived_scans tool returns filtered results cleanly
+    const archiveEntries = listTenantVisionAttachments({ tenantSlug: "tenant-alpha" });
+    const searchToolRes = await runUasAiAgent("ابحث في أرشيف المسح عن المصروفات", {
+      user: "SUPER_ADMIN",
+      lang: "ar",
+      state: INITIAL_FALLBACK_STATE,
+      visionArchiveEntries: archiveEntries,
+    });
+    assert.equal(searchToolRes.ok, true);
+    assert.equal(searchToolRes.toolName, "search_archived_scans");
+    assert.equal(
+      filterVisionArchiveAttachments(archiveEntries, { q: "الديزل" }).length,
+      1
+    );
   })
 );
 

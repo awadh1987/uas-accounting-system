@@ -71,7 +71,11 @@ import {
   type CompressedVisionImage,
 } from "@/lib/ai/clientImageCompression";
 import {
+  filterVisionArchiveAttachments,
+  loadLocalVisionArchive,
   MAX_VISION_IMAGE_BYTES,
+  saveLocalVisionArchive,
+  type VisionDocumentType,
   type VisionExtractionMetadata,
   type VisionSourceAttachment,
 } from "@/lib/ai/copilotVisionTypes";
@@ -253,7 +257,7 @@ export function UasAiCopilot({
 
   const isAr = lang === "ar" || (lang !== "en" && docRtl);
   const [open, setOpen] = useState(false);
-  const [activePane, setActivePane] = useState<"copilot" | "threads" | "support" | "manual" | "memory">("copilot");
+  const [activePane, setActivePane] = useState<"copilot" | "threads" | "support" | "manual" | "memory" | "archive">("copilot");
   const [inputPrompt, setInputPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -404,6 +408,22 @@ export function UasAiCopilot({
   });
   const [briefingExpanded, setBriefingExpanded] = useState(false);
   const [briefingBusy, setBriefingBusy] = useState(false);
+  const [archiveScans, setArchiveScans] = useState<VisionSourceAttachment[]>(() => {
+    if (typeof window !== "undefined") {
+      return loadLocalVisionArchive(
+        normalizeMemoryTenantSlug(
+          workspaceContext?.tenantSlug || state.enterpriseProfile?.tenantSlug || getStoredTenantId() || "default"
+        )
+      );
+    }
+    return [];
+  });
+  const [archiveDocType, setArchiveDocType] = useState<"all" | VisionDocumentType>("all");
+  const [archiveDateFrom, setArchiveDateFrom] = useState("");
+  const [archiveDateTo, setArchiveDateTo] = useState("");
+  const [archiveLinkedCode, setArchiveLinkedCode] = useState("");
+  const [archiveSearch, setArchiveSearch] = useState("");
+  const [archiveBusy, setArchiveBusy] = useState(false);
 
   const liveFallbackBriefing = useMemo(
     () =>
@@ -1248,7 +1268,7 @@ export function UasAiCopilot({
           tenantSlug: activeTenantSlug,
           lang: isAr ? "ar" : "en",
           dialect,
-          user: currentUser ?? "VIEWER",
+          user: currentUser ?? "EXTERNAL_AUDITOR",
           userId: currentUser?.id,
           state,
           memories,
@@ -1308,6 +1328,66 @@ export function UasAiCopilot({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeTenantSlug, isAr, dialect, offlineMode, currentUser?.id]
   );
+
+  const refreshVisionArchive = useCallback(async () => {
+    const localSnapshot = loadLocalVisionArchive(activeTenantSlug);
+    const filterArgs = {
+      documentType: archiveDocType,
+      dateFrom: archiveDateFrom,
+      dateTo: archiveDateTo,
+      linkedCode: archiveLinkedCode,
+      q: archiveSearch,
+    };
+
+    if (isOfflineClientContext()) {
+      setArchiveScans(filterVisionArchiveAttachments(localSnapshot, filterArgs));
+      return;
+    }
+
+    setArchiveBusy(true);
+    try {
+      const qs = new URLSearchParams();
+      if (archiveDocType !== "all") qs.set("documentType", archiveDocType);
+      if (archiveDateFrom.trim()) qs.set("dateFrom", archiveDateFrom.trim());
+      if (archiveDateTo.trim()) qs.set("dateTo", archiveDateTo.trim());
+      if (archiveLinkedCode.trim()) qs.set("linkedCode", archiveLinkedCode.trim());
+      if (archiveSearch.trim()) qs.set("q", archiveSearch.trim());
+
+      const res = await fetch(`/api/ai/vision/archive?${qs.toString()}`, {
+        headers: buildCopilotRequestHeaders(),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { attachments?: VisionSourceAttachment[] };
+        if (Array.isArray(data.attachments)) {
+          setArchiveScans(data.attachments);
+          if (
+            archiveDocType === "all" &&
+            !archiveDateFrom &&
+            !archiveDateTo &&
+            !archiveLinkedCode &&
+            !archiveSearch
+          ) {
+            saveLocalVisionArchive(activeTenantSlug, data.attachments);
+          }
+          return;
+        }
+      }
+      setArchiveScans(filterVisionArchiveAttachments(localSnapshot, filterArgs));
+    } catch {
+      setArchiveScans(filterVisionArchiveAttachments(localSnapshot, filterArgs));
+    } finally {
+      setArchiveBusy(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    activeTenantSlug,
+    offlineMode,
+    archiveDocType,
+    archiveDateFrom,
+    archiveDateTo,
+    archiveLinkedCode,
+    archiveSearch,
+  ]);
 
   useEffect(() => {
     if (!open) return;
@@ -2300,6 +2380,23 @@ export function UasAiCopilot({
                   ? `ذاكرة المساعد (${memories.filter((m) => m.active).length})`
                   : `Memory (${memories.filter((m) => m.active).length})`}
               </span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="copilot-archive-tab"
+              onClick={() => {
+                setActivePane("archive");
+                void refreshVisionArchive();
+              }}
+              className={`flex-1 py-2.5 px-2 border-b-2 flex items-center justify-center gap-1.5 transition ${
+                activePane === "archive"
+                  ? "border-emerald-600 text-emerald-600 dark:text-emerald-400 bg-white dark:bg-slate-900"
+                  : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+              }`}
+            >
+              <ImageIcon className="w-3.5 h-3.5" />
+              <span>{isAr ? "أرشيف المسح" : "Scans"}</span>
             </button>
           </div>
 
@@ -4177,6 +4274,172 @@ export function UasAiCopilot({
                         </div>
                       </div>
                     ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* =============================================================== */}
+          {/* PANE 5: TENANT-SCOPED SEARCHABLE VISION SCANS ARCHIVE           */}
+          {/* =============================================================== */}
+          {activePane === "archive" && (
+            <div className="p-3.5 space-y-3 overflow-y-auto max-h-[62vh] text-xs">
+              <div className="p-3 rounded-2xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-between gap-2">
+                <div>
+                  <div className="font-black text-sky-900 dark:text-sky-200 flex items-center gap-1.5">
+                    <ImageIcon className="w-4 h-4" />
+                    <span>{isAr ? "أرشيف الصور والمستندات الممسوحة" : "Tenant Scans & Attachments Archive"}</span>
+                  </div>
+                  <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                    {isAr
+                      ? `تصفية حسب نوع المستند، التاريخ، أو القيد/القطفة المرتبطة (${activeTenantSlug}).`
+                      : `Filter by document type, date range, or linked voucher / harvest batch (${activeTenantSlug}).`}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={archiveBusy}
+                  onClick={() => void refreshVisionArchive()}
+                  className="px-2.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-[10px] inline-flex items-center gap-1 shrink-0"
+                >
+                  <RefreshCw className={`w-3 h-3 ${archiveBusy ? "animate-spin" : ""}`} />
+                  <span>{isAr ? "تحديث" : "Search"}</span>
+                </button>
+              </div>
+
+              {/* Archive Filters */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-[11px]">
+                <select
+                  data-testid="archive-filter-doctype"
+                  value={archiveDocType}
+                  onChange={(e) => setArchiveDocType(e.target.value as "all" | VisionDocumentType)}
+                  className="rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-1.5"
+                >
+                  <option value="all">{isAr ? "كل أنواع المستندات" : "All Document Types"}</option>
+                  <option value="harvest_tally_sheet">{isAr ? "كشف قطفات / حصاد" : "Harvest Tally Sheet"}</option>
+                  <option value="expense_or_supplier_receipt">{isAr ? "سند مصروف / فاتورة مورد" : "Expense / Supplier Receipt"}</option>
+                  <option value="sales_or_customer_slip">{isAr ? "بيان بيع / سند عميل" : "Sales / Customer Slip"}</option>
+                </select>
+                <input
+                  type="text"
+                  data-testid="archive-filter-linked"
+                  value={archiveLinkedCode}
+                  onChange={(e) => setArchiveLinkedCode(e.target.value)}
+                  placeholder={isAr ? "رقم القيد / السند / الدفعة المرتبطة..." : "Linked voucher / batch code..."}
+                  className="rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-1.5"
+                />
+                <input
+                  type="date"
+                  data-testid="archive-filter-datefrom"
+                  value={archiveDateFrom}
+                  onChange={(e) => setArchiveDateFrom(e.target.value)}
+                  className="rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-1.5"
+                />
+                <input
+                  type="date"
+                  data-testid="archive-filter-dateto"
+                  value={archiveDateTo}
+                  onChange={(e) => setArchiveDateTo(e.target.value)}
+                  className="rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-1.5"
+                />
+                <div className="sm:col-span-2 flex gap-1.5">
+                  <input
+                    type="text"
+                    data-testid="archive-filter-query"
+                    value={archiveSearch}
+                    onChange={(e) => setArchiveSearch(e.target.value)}
+                    placeholder={isAr ? "بحث باسم المورد، العميل، المشروع، أو الملاحظات..." : "Keyword (party, project, notes)..."}
+                    className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-1.5"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void refreshVisionArchive()}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+                  >
+                    {isAr ? "تصفية" : "Filter"}
+                  </button>
+                </div>
+              </div>
+
+              {archiveScans.length === 0 ? (
+                <div className="p-4 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 text-center text-slate-500 text-[11px]">
+                  {isAr
+                    ? "لا توجد مستندات ممسوحة مطابقة حالياً. استخدم زر الكاميرا أو الصورة في المحادثة لأرشفة السندات وكشوف القطفات."
+                    : "No archived scans found matching the filters. Capture or upload a receipt/harvest sheet in Copilot chat to archive it."}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {archiveScans.map((att) => (
+                    <div
+                      key={att.attachmentId}
+                      data-testid="archive-scan-card"
+                      className="p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-start gap-2.5"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={att.attachmentUrl}
+                        alt={att.fileName}
+                        className="w-12 h-12 rounded-xl object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                      />
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-black text-slate-800 dark:text-slate-100 truncate">
+                            {att.partyName || att.projectName || att.fileName}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[9px] font-mono shrink-0">
+                            {att.documentDate || att.extractedAt.slice(0, 10)}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                          {att.documentType && (
+                            <span className="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-700 dark:text-sky-300 font-bold">
+                              {att.documentType}
+                            </span>
+                          )}
+                          {att.totalAmount !== undefined && att.totalAmount > 0 && (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-mono font-bold">
+                              {att.totalAmount.toLocaleString()} {att.currency || "YER"}
+                            </span>
+                          )}
+                          {att.totalBundles !== undefined && att.totalBundles > 0 && (
+                            <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-800 dark:text-amber-300 font-bold">
+                              {att.totalBundles} {isAr ? "علاقية" : "bundles"}
+                            </span>
+                          )}
+                          {(att.linkedRecord || att.linkedEntryNumber) && (
+                            <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-700 dark:text-purple-300 font-mono font-bold">
+                              🔗 {att.linkedRecord?.code || att.linkedEntryNumber}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[10px]">
+                          <a
+                            href={att.attachmentUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300 font-bold hover:underline"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            <span>{isAr ? "فتح الصورة" : "Open Scan"}</span>
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActivePane("copilot");
+                              void handleSendPrompt(
+                                isAr
+                                  ? `ابحث في أرشيف المسح عن المستند ${att.linkedRecord?.code || att.attachmentId}`
+                                  : `Search archived scans for ${att.linkedRecord?.code || att.attachmentId}`
+                              );
+                            }}
+                            className="text-sky-700 dark:text-sky-300 font-bold hover:underline"
+                          >
+                            {isAr ? "عرض التفاصيل بالمحادثة" : "Inspect in Chat"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

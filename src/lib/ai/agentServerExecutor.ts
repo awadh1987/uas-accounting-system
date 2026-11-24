@@ -33,7 +33,10 @@ import {
 import { collectServerSupportDiagnostics } from "@/lib/supportDiagnosticsServer";
 import { collectServerBriefingInputs } from "./executiveBriefingServer";
 import { normalizeMemoryTenantSlug } from "./copilotMemoryTypes";
-import { linkArchivedAttachmentToRecord } from "./visionAttachmentArchive";
+import {
+  linkArchivedAttachmentToRecord,
+  listTenantVisionAttachments,
+} from "./visionAttachmentArchive";
 import type { VisionSourceAttachment } from "./copilotVisionTypes";
 import {
   canCreate,
@@ -216,6 +219,9 @@ export async function buildServerAgentContext(
     briefingInventoryItems: briefingInputs.inventoryItems,
     briefingSalesInvoices: briefingInputs.salesInvoices,
     pendingConflictsCount: briefingInputs.pendingConflictsCount,
+    visionArchiveEntries: listTenantVisionAttachments({
+      tenantSlug: normalizeMemoryTenantSlug(getActiveTenantId()),
+    }),
     qrLookupHook,
   };
 }
