@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { getActiveTenantId } from "@/lib/tenant/tenantContext";
 import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
 import {
   createVendorWithAccountTx,
@@ -31,6 +32,9 @@ import {
 } from "@/lib/serverBootstrap";
 import { collectServerSupportDiagnostics } from "@/lib/supportDiagnosticsServer";
 import { collectServerBriefingInputs } from "./executiveBriefingServer";
+import { normalizeMemoryTenantSlug } from "./copilotMemoryTypes";
+import { linkArchivedAttachmentToRecord } from "./visionAttachmentArchive";
+import type { VisionSourceAttachment } from "./copilotVisionTypes";
 import {
   canCreate,
   canLockPeriod,
@@ -226,16 +230,41 @@ export interface ConfirmedExecutionResult {
   approvalRequired?: boolean;
   approvalRequestNumber?: string;
   draftId?: string;
+  sourceAttachment?: VisionSourceAttachment | null;
   summaryAr: string;
   summaryEn: string;
+}
+
+function appendAttachmentReference(
+  baseNotes: string,
+  att: VisionSourceAttachment | null | undefined
+): string {
+  if (!att?.attachmentId || !att?.attachmentUrl) return baseNotes;
+  const tag = `[source_doc:${att.attachmentId} | ${att.attachmentUrl}]`;
+  return baseNotes.includes(att.attachmentId) ? baseNotes : `${baseNotes} ${tag}`.trim();
 }
 
 export async function executeConfirmedAiAction(input: {
   confirmationCard: ConfirmationPreviewCard;
   actor: ResolvedActor;
+  tenantSlug?: string | null;
 }): Promise<ConfirmedExecutionResult> {
   await ensureSqliteDatabaseReady();
   const { confirmationCard, actor } = input;
+  const resolvedTenantSlug = normalizeMemoryTenantSlug(
+    input.tenantSlug ||
+      confirmationCard.sourceAttachment?.tenantSlug ||
+      getActiveTenantId()
+  );
+  const rawAttachment =
+    confirmationCard.sourceAttachment ||
+    ((confirmationCard.executionPayload?.sourceAttachment as VisionSourceAttachment | undefined) ??
+      null);
+  const sourceAttachment =
+    rawAttachment &&
+    normalizeMemoryTenantSlug(rawAttachment.tenantSlug) === resolvedTenantSlug
+      ? rawAttachment
+      : null;
   const targetUser = actor.user ?? actor.userRole;
   const role = normalizeRole(targetUser);
 
@@ -517,7 +546,10 @@ export async function executeConfirmedAiAction(input: {
     const harvestedBundles = Math.max(0, Math.round(Number(p.harvestedBundles) || 0));
     const shrinkageBundles = Math.max(0, Math.round(Number(p.shrinkageBundles) || 0));
     const subProjectId = p.subProjectId ? String(p.subProjectId).trim() : null;
-    const notes = String(p.notes || "تسجيل عبر المساعد الذكي").trim();
+    const notes = appendAttachmentReference(
+      String(p.notes || "تسجيل عبر المساعد الذكي").trim(),
+      sourceAttachment
+    );
 
     const res = await prisma.$transaction(async (tx) => {
       if (await isHarvestLockedTx(tx, projectId, harvestName)) {
@@ -540,7 +572,7 @@ export async function executeConfirmedAiAction(input: {
         ...actor,
         actionType: "إضافة دفعة مخزون عبر المساعد الذكي [executed_by_ai: true]",
         entityReference: batch.id,
-        details: `${harvestName} (${productGrade}) — ${harvestedBundles} علاقية`,
+        details: `${harvestName} (${productGrade}) — ${harvestedBundles} علاقية${sourceAttachment ? ` • [source_doc:${sourceAttachment.attachmentId} | ${sourceAttachment.attachmentUrl}]` : ""}`,
       });
       return { locked: false as const, batch };
     });
@@ -556,11 +588,22 @@ export async function executeConfirmedAiAction(input: {
       };
     }
 
+    const linkedAttachment = sourceAttachment
+      ? linkArchivedAttachmentToRecord({
+          tenantSlug: resolvedTenantSlug,
+          attachmentId: sourceAttachment.attachmentId,
+          recordType: "RECORD_HARVEST_BATCH",
+          recordId: res.batch.id,
+          entryNumber: res.batch.id,
+        }) || sourceAttachment
+      : null;
+
     return {
       ok: true,
       status: 201,
       executed_by_ai: true,
       entryNumber: res.batch.id,
+      ...(linkedAttachment ? { sourceAttachment: linkedAttachment } : {}),
       summaryAr: `✅ **تم تسجيل دفعة مخزون الحصاد بنجاح!** الكمية: **${harvestedBundles}** (${productGrade}) في **${harvestName}** [executed_by_ai: true].`,
       summaryEn: `✅ **Harvest Inventory Batch Recorded!** Qty: **${harvestedBundles}** (${productGrade}) in **${harvestName}** [executed_by_ai: true].`,
     };
@@ -579,7 +622,10 @@ export async function executeConfirmedAiAction(input: {
     const creditPaid = Number(p.credit) || 0;
     const saleDate = String(p.date || confirmationCard.date || new Date().toISOString().slice(0, 10));
     const treasuryAccountId = p.treasuryAccountId ? String(p.treasuryAccountId).trim() : "t1";
-    const notes = String(p.notes || "تسجيل بيع عبر المساعد الذكي").trim();
+    const notes = appendAttachmentReference(
+      String(p.notes || "تسجيل بيع عبر المساعد الذكي").trim(),
+      sourceAttachment
+    );
 
     const { totalAmount, debitReceivable } = computeSaleTotals(bundlesCount, unitPrice, creditPaid);
     const res = await prisma.$transaction(async (tx) => {
@@ -697,11 +743,22 @@ export async function executeConfirmedAiAction(input: {
       };
     }
 
+    const linkedSaleAttachment = sourceAttachment
+      ? linkArchivedAttachmentToRecord({
+          tenantSlug: resolvedTenantSlug,
+          attachmentId: sourceAttachment.attachmentId,
+          recordType: "RECORD_SALE",
+          recordId: res.sequenceNumber,
+          entryNumber: res.sequenceNumber,
+        }) || sourceAttachment
+      : null;
+
     return {
       ok: true,
       status: 201,
       executed_by_ai: true,
       entryNumber: res.sequenceNumber,
+      ...(linkedSaleAttachment ? { sourceAttachment: linkedSaleAttachment } : {}),
       summaryAr: `✅ **تم تسجيل وترحيل عملية البيع بنجاح (${res.sequenceNumber})!** العميل: **${customerName}** • الإجمالي: **${totalAmount.toLocaleString()} YER** [executed_by_ai: true].`,
       summaryEn: `✅ **Harvest Sale Posted (${res.sequenceNumber})!** Customer: **${customerName}** • Total: **${totalAmount.toLocaleString()} YER** [executed_by_ai: true].`,
     };
@@ -718,7 +775,10 @@ export async function executeConfirmedAiAction(input: {
     const unitPrice = Number(p.unitPrice) || 0;
     const expenseDate = String(p.date || confirmationCard.date || new Date().toISOString().slice(0, 10));
     const treasuryAccountId = p.treasuryAccountId ? String(p.treasuryAccountId).trim() : undefined;
-    const notes = String(p.notes || "مصروف تشغيلي عبر المساعد الذكي").trim();
+    const notes = appendAttachmentReference(
+      String(p.notes || "مصروف تشغيلي عبر المساعد الذكي").trim(),
+      sourceAttachment
+    );
     const totalAmount = computeOperatingExpenseTotal(quantity, unitPrice);
 
     const res = await prisma.$transaction(async (tx) => {
@@ -760,7 +820,7 @@ export async function executeConfirmedAiAction(input: {
         ...actor,
         actionType: "ترحيل مصروف تشغيلي عبر المساعد الذكي [executed_by_ai: true]",
         entityReference: expense.id,
-        details: `${category} — ${totalAmount.toLocaleString()} YER (${harvestName})`,
+        details: `${category} — ${totalAmount.toLocaleString()} YER (${harvestName})${sourceAttachment ? ` • [source_doc:${sourceAttachment.attachmentId} | ${sourceAttachment.attachmentUrl}]` : ""}`,
       });
       return { locked: false as const, expense, entryNumber: je?.entryNumber || expense.id };
     });
@@ -776,11 +836,22 @@ export async function executeConfirmedAiAction(input: {
       };
     }
 
+    const linkedExpenseAttachment = sourceAttachment
+      ? linkArchivedAttachmentToRecord({
+          tenantSlug: resolvedTenantSlug,
+          attachmentId: sourceAttachment.attachmentId,
+          recordType: "RECORD_EXPENSE",
+          recordId: res.expense.id,
+          entryNumber: res.entryNumber,
+        }) || sourceAttachment
+      : null;
+
     return {
       ok: true,
       status: 201,
       executed_by_ai: true,
       entryNumber: res.entryNumber,
+      ...(linkedExpenseAttachment ? { sourceAttachment: linkedExpenseAttachment } : {}),
       summaryAr: `✅ **تم تسجيل وترحيل المصروف التشغيلي (${res.entryNumber})!** الفئة: **${category}** • المبلغ: **${totalAmount.toLocaleString()} YER** [executed_by_ai: true].`,
       summaryEn: `✅ **Operating Expense Posted (${res.entryNumber})!** Category: **${category}** • Amount: **${totalAmount.toLocaleString()} YER** [executed_by_ai: true].`,
     };
@@ -1193,6 +1264,12 @@ export async function executeConfirmedAiAction(input: {
           currency: confirmationCard.currency || "YER",
           exchangeRate,
           costCenterId: confirmationCard.costCenterId,
+          ...(sourceAttachment
+            ? {
+                sourceAttachmentId: sourceAttachment.attachmentId,
+                sourceAttachmentUrl: sourceAttachment.attachmentUrl,
+              }
+            : {}),
           executed_by_ai: true,
         }),
       });
@@ -1200,12 +1277,23 @@ export async function executeConfirmedAiAction(input: {
       return entry;
     });
 
+    const linkedGlAttachment = sourceAttachment
+      ? linkArchivedAttachmentToRecord({
+          tenantSlug: resolvedTenantSlug,
+          attachmentId: sourceAttachment.attachmentId,
+          recordType: op,
+          recordId: posted.id,
+          entryNumber: posted.entryNumber,
+        }) || sourceAttachment
+      : null;
+
     return {
       ok: true,
       status: 200,
       executed_by_ai: true,
       entryNumber: posted.entryNumber,
       journalEntryId: posted.id,
+      ...(linkedGlAttachment ? { sourceAttachment: linkedGlAttachment } : {}),
       summaryAr: `✅ **تم التأكيد والترحيل بنجاح!** رقم القيد في دفتر الأستاذ: **${posted.entryNumber}** بمبلغ **${totalDr.toLocaleString()} ${confirmationCard.currency}** (موثق في سجل التدقيق بعلامة \`executed_by_ai: true\`).`,
       summaryEn: `✅ **Confirmed & Posted to General Ledger!** Entry Number: **${posted.entryNumber}** for **${totalDr.toLocaleString()} ${confirmationCard.currency}** (recorded in the audit trail with \`executed_by_ai: true\`).`,
     };

@@ -28,6 +28,7 @@ import {
   reconcileHarvestInventory,
 } from "@/lib/harvestReconciliation";
 import type { CopilotMemoryEntry } from "./copilotMemoryTypes";
+import type { VisionSourceAttachment } from "./copilotVisionTypes";
 import {
   generateExecutiveBriefing,
   type BriefingInventoryItemInput,
@@ -203,6 +204,7 @@ export interface ConfirmationPreviewCard {
   confirmButtonLabelAr: string;
   confirmButtonLabelEn: string;
   confirmButtonLabel: string;
+  sourceAttachment?: VisionSourceAttachment | null;
   executionPayload: Record<string, unknown>;
 }
 
@@ -242,6 +244,7 @@ export interface UasAgentExecutionContext {
   briefingInventoryItems?: BriefingInventoryItemInput[];
   briefingSalesInvoices?: BriefingSalesInvoiceInput[];
   pendingConflictsCount?: number;
+  sourceAttachment?: VisionSourceAttachment | null;
   qrLookupHook?: (code: string) => Promise<{
     verified: boolean;
     documentType?: string;
@@ -789,6 +792,17 @@ function makeResult(
       referenceId: partial.code,
       ctx,
     });
+  }
+
+  if (partial.confirmationCard && ctx?.sourceAttachment) {
+    partial.confirmationCard = {
+      ...partial.confirmationCard,
+      sourceAttachment: ctx.sourceAttachment,
+      executionPayload: {
+        ...(partial.confirmationCard.executionPayload || {}),
+        sourceAttachment: ctx.sourceAttachment,
+      },
+    };
   }
 
   return {
@@ -3067,7 +3081,7 @@ export async function executeUasAgentTool(
         preFlight.warningsAr,
         preFlight.warningsEn
       );
-      return makeResult(lang, { ok: true, toolName, requiresConfirmation: true, confirmationCard: card, data: { preview: card }, ...msg });
+      return makeResult(lang, { ok: true, toolName, requiresConfirmation: true, confirmationCard: card, data: { preview: card }, ...msg }, ctx);
     }
 
     // -----------------------------------------------------------------------
@@ -3190,7 +3204,7 @@ export async function executeUasAgentTool(
         preFlight.warningsAr,
         preFlight.warningsEn
       );
-      return makeResult(lang, { ok: true, toolName, requiresConfirmation: true, confirmationCard: card, data: { preview: card, preFlightChecks: preFlight.checks }, ...msg });
+      return makeResult(lang, { ok: true, toolName, requiresConfirmation: true, confirmationCard: card, data: { preview: card, preFlightChecks: preFlight.checks }, ...msg }, ctx);
     }
 
     // -----------------------------------------------------------------------
@@ -3294,7 +3308,7 @@ export async function executeUasAgentTool(
         preFlight.warningsAr,
         preFlight.warningsEn
       );
-      return makeResult(lang, { ok: true, toolName, requiresConfirmation: true, confirmationCard: card, data: { preview: card, preFlightChecks: preFlight.checks }, ...msg });
+      return makeResult(lang, { ok: true, toolName, requiresConfirmation: true, confirmationCard: card, data: { preview: card, preFlightChecks: preFlight.checks }, ...msg }, ctx);
     }
 
     // -----------------------------------------------------------------------

@@ -16,9 +16,26 @@ import { retrieveServerCopilotMemories } from "@/lib/ai/copilotMemoryStore";
 import { buildServerAgentContext } from "@/lib/ai/agentServerExecutor";
 import { extractDocumentFromVisionImage } from "@/lib/ai/copilotVisionExtractor";
 import { executeUasAgentTool, type UasWorkspaceContext } from "@/lib/ai/uasAgentTools";
+import {
+  archiveVisionAttachment,
+  listTenantVisionAttachments,
+} from "@/lib/ai/visionAttachmentArchive";
 import type { CopilotDialectMode } from "@/lib/ai/yemeniLocalization";
 
 export const dynamic = "force-dynamic";
+
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
+  const auth = await authorizeApiAction({}, req, {});
+  if (!auth.ok) return auth.response;
+  const tenantSlug = normalizeMemoryTenantSlug(getActiveTenantId());
+  const recordId = req.nextUrl?.searchParams.get("recordId") || undefined;
+  const attachments = listTenantVisionAttachments({ tenantSlug, recordId });
+  return NextResponse.json({
+    success: true,
+    tenantSlug,
+    attachments,
+  });
+});
 
 export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
@@ -27,6 +44,8 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     let imageBase64 = "";
     let mimeType = "";
 
+    let fileName = typeof bodyObj.fileName === "string" ? bodyObj.fileName : undefined;
+
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
       const file = formData.get("file");
@@ -34,6 +53,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         const buf = Buffer.from(await file.arrayBuffer());
         imageBase64 = buf.toString("base64");
         mimeType = file.type || "";
+        fileName = file.name || fileName;
       }
       bodyObj = {
         prompt: formData.get("prompt") ? String(formData.get("prompt")) : "",
@@ -77,6 +97,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     const visionRes = await extractDocumentFromVisionImage({
       imageBase64,
       mimeType,
+      fileName,
       prompt,
       lang,
       dialect,
@@ -101,6 +122,16 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     }
 
     const { extraction } = visionRes;
+    const sourceAttachment =
+      extraction.sourceAttachment ??
+      archiveVisionAttachment({
+        tenantSlug,
+        imageBase64,
+        mimeType,
+        fileName,
+        documentType: extraction.documentType,
+      });
+
     const toolResult = await executeUasAgentTool(
       extraction.mappedToolCall.toolName,
       extraction.mappedToolCall.args,
@@ -109,6 +140,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         lang,
         workspaceContext,
         memories: activeMemories,
+        sourceAttachment,
       }
     );
 
@@ -119,6 +151,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       success: true,
       tenantSlug,
       extraction,
+      sourceAttachment,
       toolName: extraction.mappedToolCall.toolName,
       toolArgs: extraction.mappedToolCall.args,
       toolResult,

@@ -29,7 +29,9 @@ import {
   type VisionDocumentType,
   type VisionExtractionMetadata,
   type VisionLineItem,
+  type VisionSourceAttachment,
 } from "./copilotVisionTypes";
+import { archiveVisionAttachment } from "./visionAttachmentArchive";
 import type { UasBootstrapState } from "@/types/uas";
 
 const VISION_EXTRACTION_SCHEMA: Schema = {
@@ -276,6 +278,7 @@ async function runVisionModelPass(params: {
 export async function extractDocumentFromVisionImage(input: {
   imageBase64: string;
   mimeType: string;
+  fileName?: string;
   prompt?: string;
   lang?: "ar" | "en";
   dialect?: CopilotDialectMode;
@@ -284,6 +287,7 @@ export async function extractDocumentFromVisionImage(input: {
   memories?: CopilotMemoryEntry[];
   selectedProjectId?: string | null;
   selectedHarvest?: string | null;
+  archiveAttachment?: boolean;
   geminiApiKey?: string;
   clientFactory?: GeminiClientFactory;
 }): Promise<
@@ -454,6 +458,24 @@ export async function extractDocumentFromVisionImage(input: {
       .filter(Boolean)
       .join("\n");
 
+    let sourceAttachment: VisionSourceAttachment | null = null;
+    if (input.archiveAttachment !== false) {
+      try {
+        sourceAttachment = archiveVisionAttachment({
+          tenantSlug:
+            input.tenantSlug ||
+            input.state?.enterpriseProfile?.tenantSlug ||
+            "default",
+          imageBase64: validated.cleanBase64,
+          mimeType: validated.mimeType,
+          fileName: input.fileName,
+          documentType: check.docType,
+        });
+      } catch {
+        // Non-fatal archive error
+      }
+    }
+
     return {
       ok: true,
       extraction: {
@@ -486,6 +508,7 @@ export async function extractDocumentFromVisionImage(input: {
         notes: parsed.notes,
         lineItems: check.lineItems,
         mappedToolCall,
+        sourceAttachment,
         summaryAr,
         summaryEn,
       },

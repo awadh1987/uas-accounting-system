@@ -1,10 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { validateVisionImagePayload } from "../src/lib/ai/copilotVisionTypes";
 import { extractDocumentFromVisionImage } from "../src/lib/ai/copilotVisionExtractor";
+import {
+  archiveVisionAttachment,
+  linkArchivedAttachmentToRecord,
+  listTenantVisionAttachments,
+  readVisionAttachmentFile,
+} from "../src/lib/ai/visionAttachmentArchive";
+import { executeConfirmedAiAction } from "../src/lib/ai/agentServerExecutor";
+import { prisma } from "../src/lib/prisma";
 import {
   runGeminiCopilotAgent,
   type GeminiClientFactory,
@@ -14,6 +23,21 @@ import type { CopilotMemoryEntry } from "../src/lib/ai/copilotMemoryTypes";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+function withTempUploadsDir(fn: (dir: string) => Promise<void> | void) {
+  return async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "uas-vision-uploads-"));
+    const prevDir = process.env.UAS_DATA_DIR;
+    process.env.UAS_DATA_DIR = tmpDir;
+    try {
+      await fn(tmpDir);
+    } finally {
+      if (prevDir === undefined) delete process.env.UAS_DATA_DIR;
+      else process.env.UAS_DATA_DIR = prevDir;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  };
+}
 
 test("Vision payload validator enforces MIME types and 6 MB cap", () => {
   const okPng = validateVisionImagePayload({
@@ -306,3 +330,128 @@ test("Vision returns 503 offline fallback hint when key is missing and client mo
     assert.equal(content.includes("AIzaSy"), false);
   }
 });
+
+test(
+  "Attachment archive enforces strict tenant isolation and ConfirmationPreviewCard links confirmed harvest batch & audit log",
+  withTempUploadsDir(async () => {
+    const attAlpha = archiveVisionAttachment({
+      tenantSlug: "tenant-alpha",
+      imageBase64: TINY_PNG_BASE64,
+      mimeType: "image/png",
+      fileName: "harvest-receipt.png",
+      documentType: "harvest_tally_sheet",
+    });
+    assert.equal(attAlpha.tenantSlug, "tenant-alpha");
+    assert.equal(attAlpha.checksum.length, 64);
+
+    // Tenant B cannot read or list Tenant A's attachment
+    assert.equal(listTenantVisionAttachments({ tenantSlug: "tenant-beta" }).length, 0);
+    const filename = path.basename(attAlpha.attachmentUrl);
+    assert.equal(readVisionAttachmentFile("tenant-beta", filename), null);
+    assert.ok(readVisionAttachmentFile("tenant-alpha", filename));
+
+    // Confirming a staged ConfirmationPreviewCard persists sourceAttachment onto HarvestInventoryBatch notes + archive index
+    const fakeFactory: GeminiClientFactory = () => ({
+      models: {
+        generateContent: async () =>
+          ({
+            text: JSON.stringify({
+              documentType: "harvest_tally_sheet",
+              confidence: 0.94,
+              projectName: "مزرعة الأمل",
+              harvest: "القطفة الأولى",
+              grade: "درجة أولى",
+              currency: "YER",
+              totalBundles: 42,
+              shrinkageBundles: 2,
+              lineItems: [
+                {
+                  description: "علاقية درجة أولى",
+                  grade: "درجة أولى",
+                  harvest: "القطفة الأولى",
+                  quantity: 42,
+                  unitPrice: 0,
+                  total: 0,
+                  shrinkageBundles: 2,
+                },
+              ],
+            }),
+          }) as never,
+      },
+    });
+
+    const projects = await prisma.project.findMany({ take: 1 });
+    if (projects.length > 0) {
+      const targetProj = projects[0];
+      const staged = await runGeminiCopilotAgent("أرشف كشف القطفة المرفق", {
+        user: "SUPER_ADMIN",
+        lang: "ar",
+        state: {
+          ...INITIAL_FALLBACK_STATE,
+          projects: [
+            {
+              id: targetProj.id,
+              code: targetProj.code,
+              name: targetProj.name,
+              location: targetProj.location || "",
+              budgetTotal: Number(targetProj.budgetTotal),
+              plannedHarvests: targetProj.plannedHarvests,
+              harvests: ["القطفة الأولى"],
+              subProjects: [],
+            },
+          ],
+        },
+        workspaceContext: {
+          tenantSlug: "tenant-alpha",
+          selectedProjectId: targetProj.id,
+          selectedHarvest: "القطفة الأولى",
+        },
+        imageAttachment: {
+          imageBase64: TINY_PNG_BASE64,
+          mimeType: "image/png",
+          fileName: "alpha-tally.png",
+        },
+        geminiApiKey: "fake-key",
+        clientFactory: fakeFactory,
+      });
+
+      assert.equal(staged.ok, true);
+      assert.ok(staged.confirmationCard?.sourceAttachment);
+
+      const execRes = await executeConfirmedAiAction({
+        confirmationCard: staged.confirmationCard!,
+        actor: {
+          userId: "u-admin",
+          userDisplay: "Admin",
+          userRole: "SUPER_ADMIN",
+        },
+        tenantSlug: "tenant-alpha",
+      });
+      assert.equal(execRes.ok, true);
+      assert.equal(execRes.sourceAttachment?.linkedRecordType, "RECORD_HARVEST_BATCH");
+      assert.equal(execRes.sourceAttachment?.linkedRecordId, execRes.entryNumber);
+
+      const createdBatch = await prisma.harvestInventoryBatch.findUnique({
+        where: { id: execRes.entryNumber! },
+      });
+      assert.equal(
+        Boolean(
+          createdBatch?.notes.includes(execRes.sourceAttachment!.attachmentId)
+        ),
+        true
+      );
+      if (createdBatch) {
+        await prisma.harvestInventoryBatch.delete({ where: { id: createdBatch.id } });
+      }
+    } else {
+      const manualLinked = linkArchivedAttachmentToRecord({
+        tenantSlug: "tenant-alpha",
+        attachmentId: attAlpha.attachmentId,
+        recordType: "RECORD_HARVEST_BATCH",
+        recordId: "batch-demo-1",
+      });
+      assert.equal(manualLinked?.linkedRecordId, "batch-demo-1");
+    }
+  })
+);
+

@@ -41,6 +41,22 @@ export interface VisionMappedDraftCall {
   args: Record<string, unknown>;
 }
 
+export interface VisionSourceAttachment {
+  attachmentId: string;
+  attachmentUrl: string;
+  tenantSlug: string;
+  mimeType: SupportedVisionMimeType;
+  fileName: string;
+  documentType?: VisionDocumentType;
+  checksum: string;
+  byteLength: number;
+  extractedAt: string;
+  linkedRecordType?: string;
+  linkedRecordId?: string;
+  linkedEntryNumber?: string;
+  linkedAt?: string;
+}
+
 export interface VisionExtractionMetadata {
   documentType: VisionDocumentType;
   modelUsed: string;
@@ -68,6 +84,7 @@ export interface VisionExtractionMetadata {
   notes?: string;
   lineItems: VisionLineItem[];
   mappedToolCall: VisionMappedDraftCall;
+  sourceAttachment?: VisionSourceAttachment | null;
   summaryAr: string;
   summaryEn: string;
 }

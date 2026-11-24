@@ -18,7 +18,7 @@ import type {
 } from "./uasAgentTools";
 import type { AgentReasoningStep, ReasoningTier } from "./offlineAgentEngine";
 import type { MemoryMutationEvent } from "./copilotMemoryTypes";
-import type { VisionExtractionMetadata } from "./copilotVisionTypes";
+import type { VisionExtractionMetadata, VisionSourceAttachment } from "./copilotVisionTypes";
 import type { TabId, UasEnterpriseProfile, UasUser } from "@/types/uas";
 import {
   resolveLetterheadFromProfile,
@@ -42,6 +42,7 @@ export interface CopilotChatMessage {
     executed: boolean;
     entryNumber?: string;
     summary: string;
+    sourceAttachment?: VisionSourceAttachment | null;
   };
   citations?: CitationLink[];
   clarificationPrompt?: ClarificationPromptData;

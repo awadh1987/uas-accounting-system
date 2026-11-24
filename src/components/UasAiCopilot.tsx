@@ -73,6 +73,7 @@ import {
 import {
   MAX_VISION_IMAGE_BYTES,
   type VisionExtractionMetadata,
+  type VisionSourceAttachment,
 } from "@/lib/ai/copilotVisionTypes";
 import {
   UAS_SUPPORT_CHAPTERS,
@@ -1511,27 +1512,52 @@ export function UasAiCopilot({
       const shouldUseOfflineDirectly = isOfflineClientContext();
 
       if (shouldUseOfflineDirectly && attachedImage) {
+        const offlineAtt: VisionSourceAttachment = {
+          attachmentId: `loc-att-${Date.now().toString(36)}`,
+          attachmentUrl: attachedImage.previewDataUrl,
+          tenantSlug: activeTenantSlug,
+          mimeType: attachedImage.mimeType,
+          fileName: attachedImage.fileName,
+          checksum: `local-${attachedImage.compressedBytes}`,
+          byteLength: attachedImage.compressedBytes,
+          extractedAt: new Date().toISOString(),
+        };
+        try {
+          const storeKey = `uas_pending_vision_attachments_v1_${activeTenantSlug}`;
+          const prevRaw = window.localStorage.getItem(storeKey);
+          const prevList = prevRaw ? (JSON.parse(prevRaw) as VisionSourceAttachment[]) : [];
+          window.localStorage.setItem(
+            storeKey,
+            JSON.stringify([offlineAtt, ...(Array.isArray(prevList) ? prevList : [])].slice(0, 50))
+          );
+        } catch {
+          // ignore storage quota
+        }
+
         const offlineVisionNoticeAr =
-          "📵 **ملاحظة وضع الأوفلاين:** تحليل الصور بالذكاء الاصطناعي (Vision OCR) يتطلب اتصالاً بالإنترنت مع خادم `qat.world`. تم حفظ ملاحظة الصورة في المحادثة، ويمكنك كتابة بيانات القطفة أو السند مباشرةً في الدردشة لتجهيزها محلياً دون إنترنت.";
+          "📵 **ملاحظة وضع الأوفلاين:** تحليل الصور بالذكاء الاصطناعي (Vision OCR) يتطلب اتصالاً بالإنترنت مع خادم `qat.world`. تم حفظ الصورة المرفقة محلياً لهذه المنشأة لربطها عند المزامنة، ويمكنك كتابة بيانات القطفة أو السند مباشرةً في الدردشة لتجهيزها محلياً دون إنترنت.";
         const offlineVisionNoticeEn =
-          "📵 **Offline Notice:** Multimodal Vision OCR requires an online connection to `qat.world`. Your image attachment note was kept locally, and you can type the receipt or harvest details directly in chat to stage a local draft.";
-        agentRes = rawTypedPrompt
-          ? await runUasAiAgent(rawTypedPrompt, {
-              user: currentUser ?? "SUPER_ADMIN",
-              lang,
-              state,
-              workspaceContext: mergedWorkspaceContext,
-              diagnostics: clientDiagnostics,
-            })
-          : {
-              ok: false,
-              tierUsed: "tier3_offline_deterministic",
-              modelUsed: "Offline Local Engine",
-              reply: isAr ? offlineVisionNoticeAr : offlineVisionNoticeEn,
-              replyAr: offlineVisionNoticeAr,
-              replyEn: offlineVisionNoticeEn,
-              requiresConfirmation: false,
-            };
+          "📵 **Offline Notice:** Multimodal Vision OCR requires an online connection to `qat.world`. Your image reference was saved locally for linking upon sync, and you can type the receipt or harvest details directly in chat to stage a local draft.";
+        if (rawTypedPrompt) {
+          agentRes = await runUasAiAgent(rawTypedPrompt, {
+            user: currentUser ?? "SUPER_ADMIN",
+            lang,
+            state,
+            workspaceContext: mergedWorkspaceContext,
+            diagnostics: clientDiagnostics,
+            sourceAttachment: offlineAtt,
+          });
+        } else {
+          agentRes = {
+            ok: false,
+            tierUsed: "tier3_offline_deterministic",
+            modelUsed: "Offline Local Engine",
+            reply: isAr ? offlineVisionNoticeAr : offlineVisionNoticeEn,
+            replyAr: offlineVisionNoticeAr,
+            replyEn: offlineVisionNoticeEn,
+            requiresConfirmation: false,
+          };
+        }
       } else if (!shouldUseOfflineDirectly) {
         try {
           const headers = buildCopilotRequestHeaders();
@@ -1672,6 +1698,7 @@ export function UasAiCopilot({
     try {
       let summaryText = "";
       let entryNumber = `JV-AI-${getNextMsgId("e")}`;
+      let linkedAttachment: VisionSourceAttachment | null = card.sourceAttachment ?? null;
       let handledByServer = false;
 
       if (!isOfflineClientContext()) {
@@ -1700,6 +1727,9 @@ export function UasAiCopilot({
           }
           entryNumber = data.entryNumber || entryNumber;
           summaryText = isAr ? data.summaryAr : data.summaryEn;
+          if (data.sourceAttachment) {
+            linkedAttachment = data.sourceAttachment as VisionSourceAttachment;
+          }
           await onRefreshState();
         } catch (serverErr: unknown) {
           if (handledByServer) throw serverErr;
@@ -1742,10 +1772,20 @@ export function UasAiCopilot({
                   targetName: card.partyName || String(p.partyName || "طرف"),
                   amount: Number(p.amount ?? card.totalDebit ?? 0),
                   date: card.date,
-                  notes: isAr ? card.narrationAr : card.narrationEn,
+                  notes: `${isAr ? card.narrationAr : card.narrationEn}${card.sourceAttachment ? ` [source_doc:${card.sourceAttachment.attachmentId} | ${card.sourceAttachment.attachmentUrl}]` : ""}`,
+                  ...(card.sourceAttachment ? { sourceAttachment: card.sourceAttachment } : {}),
                   executed_by_ai: true,
                 }
-              : { ...p, executed_by_ai: true };
+              : {
+                  ...p,
+                  ...(card.sourceAttachment
+                    ? {
+                        notes: `${String(p.notes || "")} [source_doc:${card.sourceAttachment.attachmentId} | ${card.sourceAttachment.attachmentUrl}]`.trim(),
+                        sourceAttachment: card.sourceAttachment,
+                      }
+                    : {}),
+                  executed_by_ai: true,
+                };
 
           const mutRes = await executeMutation({
             endpoint: targetRoute.endpoint,
@@ -1777,6 +1817,7 @@ export function UasAiCopilot({
                   executed: true,
                   entryNumber,
                   summary: summaryText,
+                  ...(linkedAttachment ? { sourceAttachment: linkedAttachment } : {}),
                 },
               }
             : m
@@ -2735,6 +2776,40 @@ export function UasAiCopilot({
                             • <span className="font-mono">{msg.confirmationCard.date}</span>
                           </div>
 
+                          {/* Archived Vision Document Link & Thumbnail */}
+                          {msg.confirmationCard.sourceAttachment && (
+                            <div
+                              data-testid="card-source-attachment-preview"
+                              className="flex items-center justify-between gap-2 p-2 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-[10px]"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={msg.confirmationCard.sourceAttachment.attachmentUrl}
+                                  alt={msg.confirmationCard.sourceAttachment.fileName}
+                                  className="w-9 h-9 rounded-lg object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                                />
+                                <div className="min-w-0">
+                                  <div className="font-bold text-slate-800 dark:text-slate-100 truncate">
+                                    {msg.confirmationCard.sourceAttachment.fileName}
+                                  </div>
+                                  <div className="text-slate-500 font-mono truncate">
+                                    {msg.confirmationCard.sourceAttachment.attachmentId}
+                                  </div>
+                                </div>
+                              </div>
+                              <a
+                                href={msg.confirmationCard.sourceAttachment.attachmentUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-700 dark:text-emerald-300 font-bold shrink-0"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                <span>{isAr ? "عرض المستند" : "View Image"}</span>
+                              </a>
+                            </div>
+                          )}
+
                           {/* Cross-Section Pre-Flight Checks & Warnings */}
                           {msg.confirmationCard.preFlightChecks &&
                             msg.confirmationCard.preFlightChecks.length > 0 && (
@@ -2952,9 +3027,29 @@ export function UasAiCopilot({
                               </span>
                             </div>
                           ) : msg.confirmedResult?.executed ? (
-                            <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-[11px] font-bold flex items-center gap-1.5">
-                              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-                              <span>{msg.confirmedResult.summary}</span>
+                            <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-[11px] font-bold space-y-1">
+                              <div className="flex items-center gap-1.5">
+                                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+                                <span>{msg.confirmedResult.summary}</span>
+                              </div>
+                              {msg.confirmedResult.sourceAttachment && (
+                                <div className="flex items-center justify-between gap-2 pt-1 border-t border-emerald-200/60 dark:border-emerald-800/60 text-[10px]">
+                                  <span>
+                                    {isAr
+                                      ? `📎 تم أرشفة وربط الصورة بالسجل (${msg.confirmedResult.entryNumber})`
+                                      : `📎 Source image archived & linked to record (${msg.confirmedResult.entryNumber})`}
+                                  </span>
+                                  <a
+                                    href={msg.confirmedResult.sourceAttachment.attachmentUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 underline font-mono"
+                                  >
+                                    {msg.confirmedResult.sourceAttachment.attachmentId}
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <div className="flex flex-col sm:flex-row gap-2 pt-1">

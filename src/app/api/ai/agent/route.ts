@@ -59,6 +59,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       const execRes = await executeConfirmedAiAction({
         confirmationCard: card,
         actor,
+        tenantSlug: getActiveTenantId(),
       });
 
       const state = execRes.ok ? await getBootstrapState() : undefined;

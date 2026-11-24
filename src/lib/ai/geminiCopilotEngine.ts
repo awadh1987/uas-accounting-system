@@ -403,6 +403,7 @@ export async function runGeminiCopilotAgent(
     const visionRes = await extractDocumentFromVisionImage({
       imageBase64: opts.imageAttachment.imageBase64,
       mimeType: opts.imageAttachment.mimeType,
+      fileName: opts.imageAttachment.fileName,
       prompt: cleanPrompt,
       lang,
       dialect: opts.workspaceContext?.dialect ?? "yemeni",
@@ -455,7 +456,11 @@ export async function runGeminiCopilotAgent(
     const toolResult = await executeUasAgentTool(
       extraction.mappedToolCall.toolName,
       extraction.mappedToolCall.args,
-      { ...opts, lang }
+      {
+        ...opts,
+        lang,
+        sourceAttachment: extraction.sourceAttachment ?? opts.sourceAttachment,
+      }
     );
     const replyAr = `${extraction.summaryAr}\n\n${toolResult.summaryAr}`;
     const replyEn = `${extraction.summaryEn}\n\n${toolResult.summaryEn}`;
