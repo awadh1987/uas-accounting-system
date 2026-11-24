@@ -159,7 +159,17 @@ describe("Phase 1 — Accounting-Core: 6-Generation COA & Cost Centers", () => {
     ] as const;
 
     for (const c of cases) {
-      const fresh = await (prisma as any)[c.type.toLowerCase()].findUniqueOrThrow({ where: { id: c.row.id } });
+      type ProvisionedEntityRow = {
+        glAccountId: string | null;
+        costCenterId: string | null;
+        accountId?: string | null;
+      };
+      const fresh: ProvisionedEntityRow =
+        c.type === "CUSTOMER"
+          ? await prisma.customer.findUniqueOrThrow({ where: { id: c.row.id } })
+          : c.type === "VENDOR"
+          ? await prisma.vendor.findUniqueOrThrow({ where: { id: c.row.id } })
+          : await prisma.worker.findUniqueOrThrow({ where: { id: c.row.id } });
       assert.ok(fresh.glAccountId, `${c.type} has glAccountId`);
       assert.ok(fresh.costCenterId, `${c.type} has costCenterId`);
       const account = await prisma.account.findUniqueOrThrow({ where: { id: fresh.glAccountId } });
