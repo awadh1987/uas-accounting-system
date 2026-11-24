@@ -11,6 +11,7 @@ import type {
   UasBankPaymentDispatch,
 } from "@/types/uas";
 import * as XLSX from "xlsx";
+import { resolveExportSignature, type ExportActorMeta } from "@/lib/uiFormatters";
 
 // ---------------------------------------------------------------------------
 // Provider Constants & Sandbox Simulation Identifiers
@@ -135,7 +136,7 @@ export interface StatementReconcileResult {
 }
 
 async function resolveExistingUserId(
-  tx: any,
+  tx: Pick<typeof prisma, "user">,
   candidateUserId?: string,
   candidateUserName?: string
 ): Promise<string> {
@@ -328,10 +329,11 @@ export async function executeBankOrWalletPayout(
           externalReferenceId = data.referenceId || data.transactionId || `${providerMeta.prefix}-LIVE-${Date.now()}`;
           status = res.ok ? "EXECUTED" : "FAILED";
           rawResponseJson = JSON.stringify(data);
-        } catch (apiErr: any) {
+        } catch (apiErr: unknown) {
           externalReferenceId = `${providerMeta.prefix}-ERR-${Date.now()}`;
           status = "FAILED";
-          rawResponseJson = JSON.stringify({ error: apiErr?.message || "Gateway API timeout" });
+          const errMsg = apiErr instanceof Error ? apiErr.message : "Gateway API timeout";
+          rawResponseJson = JSON.stringify({ error: errMsg });
         }
       } else {
         const timeSlice = Date.now().toString().slice(-6);
@@ -611,7 +613,7 @@ export async function processInboundCollectionWebhook(
     const baseAmount = dMul(amount, fxRate, 4);
 
     // Match SalesInvoice / Customer if supplied, otherwise post to Customer Advances (213101)
-    let matchedInvoice = payload.invoiceNumber
+    const matchedInvoice = payload.invoiceNumber
       ? await tx.salesInvoice.findFirst({
           where: { invoiceNumber: payload.invoiceNumber },
           include: { customer: true },
@@ -749,9 +751,15 @@ export function exportBulkBankTransferFile(input: {
     notes?: string;
   }>;
   format?: "xlsx" | "csv";
+  tenantSlug?: string | null;
+  exportedBy?: ExportActorMeta | null;
 }): { filename: string; buffer: Buffer; count: number; totalAmount: number } {
   const { treasuryName = "UAS Bank", provider = "BANK", items, format = "xlsx" } = input;
   void treasuryName;
+  const sig = resolveExportSignature({
+    actor: input.exportedBy,
+    tenantSlug: input.tenantSlug ?? input.exportedBy?.tenantSlug,
+  });
 
   const rows = items.map((it, idx) => ({
     "رقم التسلسل / Serial": idx + 1,
@@ -780,14 +788,51 @@ export function exportBulkBankTransferFile(input: {
     }
   }
 
-  XLSX.utils.book_append_sheet(wb, ws, "Payout Batch");
-
   const timestamp = new Date().toISOString().slice(0, 10);
   const ext = format === "csv" ? "csv" : "xlsx";
-  const filename = `UAS_Payout_Batch_${provider}_${timestamp}.${ext}`;
-  const bookType = format === "csv" ? "csv" : "xlsx";
-  const buf = XLSX.write(wb, { bookType, type: "buffer" }) as Buffer;
+  const filename = `UAS-${sig.tenantSlug}-PayoutBatch-${provider}-${timestamp}.${ext}`;
 
+  if (format === "csv") {
+    XLSX.utils.book_append_sheet(wb, ws, "Payout Batch");
+    const csvBody = XLSX.utils.sheet_to_csv(ws);
+    const footer = [
+      "",
+      "",
+      `"توقيع وبيانات المُصدِر / Export Issuer Signature"`,
+      `"اسم المستخدم / Username","${sig.username.replace(/"/g, '""')}","الاسم / Display Name","${sig.displayName.replace(/"/g, '""')}"`,
+      `"المسمى / Title","${sig.titleAr.replace(/"/g, '""')} (${sig.titleEn})"`,
+      `"مساحة العمل / Workspace","${sig.tenantName.replace(/"/g, '""')} (${sig.tenantSlug})"`,
+      `"تاريخ ووقت التصدير / Exported At","${sig.exportedAtDisplay}"`,
+    ].join("\n");
+    const buf = Buffer.from(`\uFEFF${csvBody}\n${footer}\n`, "utf8");
+    const totalAmount = items.reduce((acc, it) => acc + (Number(it.amount) || 0), 0);
+    return { filename, buffer: buf, count: items.length, totalAmount };
+  }
+
+  XLSX.utils.sheet_add_aoa(
+    ws,
+    [
+      ["توقيع وبيانات المُصدِر / Export Issuer Signature"],
+      ["اسم المستخدم / Username", sig.username, "الاسم / Display Name", sig.displayName],
+      ["المسمى / Title", `${sig.titleAr} (${sig.titleEn})`],
+      ["مساحة العمل / Workspace", `${sig.tenantName} (${sig.tenantSlug})`],
+      ["تاريخ ووقت التصدير / Exported At", sig.exportedAtDisplay],
+    ],
+    { origin: { r: Math.max(2, rows.length + 3), c: 0 } }
+  );
+  XLSX.utils.book_append_sheet(wb, ws, "Payout Batch");
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet([
+      { "الحقل": "اسم المستخدم / Username", "القيمة": sig.username },
+      { "الحقل": "الاسم / Display Name", "القيمة": sig.displayName },
+      { "الحقل": "المسمى / Title", "القيمة": `${sig.titleAr} (${sig.titleEn})` },
+      { "الحقل": "مساحة العمل / Workspace", "القيمة": `${sig.tenantName} (${sig.tenantSlug})` },
+      { "الحقل": "تاريخ التصدير", "القيمة": sig.exportedAtDisplay },
+    ]),
+    "توقيع المُصدِر"
+  );
+  const buf = XLSX.write(wb, { bookType: "xlsx", type: "buffer" }) as Buffer;
   const totalAmount = items.reduce((acc, it) => acc + (Number(it.amount) || 0), 0);
 
   return {

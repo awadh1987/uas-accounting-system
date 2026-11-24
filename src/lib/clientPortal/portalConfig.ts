@@ -11,6 +11,7 @@ export interface PortalUnitOption {
   code: string;
   labelAr: string;
   labelEn?: string;
+  defaultUnitPrice?: number;
 }
 
 export interface PortalClientTypeOption {
@@ -113,7 +114,15 @@ function sanitizeUnitOptions(input: unknown): PortalUnitOption[] {
     const code = String(obj.code || "").trim().toUpperCase() || `UNIT_${clean.length + 1}`;
     const labelAr = String(obj.labelAr || "").trim();
     if (!labelAr) continue;
-    clean.push({ code, labelAr, labelEn: obj.labelEn ? String(obj.labelEn).trim() : undefined });
+    const rawPrice = Number(obj.defaultUnitPrice);
+    const defaultUnitPrice =
+      Number.isFinite(rawPrice) && rawPrice > 0 ? Math.round(rawPrice * 10000) / 10000 : undefined;
+    clean.push({
+      code,
+      labelAr,
+      labelEn: obj.labelEn ? String(obj.labelEn).trim() : undefined,
+      ...(defaultUnitPrice !== undefined ? { defaultUnitPrice } : {}),
+    });
   }
   if (!clean.some((u) => u.code === "QAT_BUNCH" || u.labelAr.includes("علاقية قات"))) {
     clean.unshift({ code: "QAT_BUNCH", labelAr: "علاقية قات", labelEn: "Qat Bunch" });

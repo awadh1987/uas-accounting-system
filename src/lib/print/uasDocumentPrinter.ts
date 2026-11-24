@@ -16,6 +16,11 @@ import {
   resolveEffectiveBrandInfo,
   resolveEffectiveTagline,
 } from "@/lib/branding";
+import {
+  getActiveClientExportActor,
+  resolveExportSignature,
+  type ExportActorMeta,
+} from "@/lib/uiFormatters";
 import type { UasEnterpriseProfile } from "@/types/uas";
 
 export type PrintPaperFormat = "A4_PORTRAIT" | "A4_LANDSCAPE" | "THERMAL_80MM";
@@ -85,6 +90,7 @@ export interface UasPrintDocumentSpec {
   notes?: string;
   qrHash?: string;
   printedBy?: string;
+  exportedBy?: ExportActorMeta;
   preparedBy?: string;
   reviewedBy?: string;
   approvedBy?: string;
@@ -220,6 +226,7 @@ export function resolveLetterheadFromProfile(
     taglineEn,
     slogan: taglineAr,
     tenantUrl: hasSlug ? `https://${profile!.tenantSlug}.qat.world` : undefined,
+    tenantSlug: hasSlug ? profile!.tenantSlug : "default",
     isCustomTenantBrand,
   };
 }
@@ -293,6 +300,7 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
     taglineEn: spec.letterhead?.taglineEn ?? defaultResolved?.taglineEn,
     slogan: spec.letterhead?.slogan ?? defaultResolved?.slogan,
     tenantUrl: spec.letterhead?.tenantUrl ?? defaultResolved?.tenantUrl,
+    tenantSlug: spec.letterhead?.tenantSlug ?? defaultResolved?.tenantSlug ?? activePrintProfile?.tenantSlug,
     isCustomTenantBrand:
       spec.letterhead?.isCustomTenantBrand ?? defaultResolved?.isCustomTenantBrand ?? false,
   };
@@ -301,8 +309,14 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
   const docNumber = spec.documentNumber || `RPT-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
   const currency = (spec.currency || "YER").toUpperCase();
   const fiscalYear = spec.fiscalYear || `FY-${new Date().getFullYear()}`;
-  const printedAt = new Date().toISOString().slice(0, 16).replace("T", " ");
-  const printedBy = spec.printedBy || "مستخدم النظام / System User";
+  const sig = resolveExportSignature({
+    actor: spec.exportedBy ?? getActiveClientExportActor(),
+    fallbackPrintedBy: spec.printedBy,
+    tenantSlug: lh.tenantSlug,
+    tenantName: lh.companyNameAr,
+  });
+  const printedAt = sig.exportedAtDisplay;
+  const printedBy = spec.printedBy || `${sig.displayName} (${sig.username})`;
 
   const logoHtml = lh.logoUrl
     ? `<img src="${escapeHtml(lh.logoUrl)}" alt="${escapeHtml(lh.companyNameAr)}" class="uas-logo-img" />`
@@ -634,6 +648,22 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
       border-radius: 6px;
       padding: 6px 10px;
     }
+    .uas-export-issuer {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px 16px;
+      font-size: 9.5px;
+      color: #0F172A;
+      background: #F1F5F9;
+      border: 1px solid #CBD5E1;
+      border-radius: 6px;
+      padding: 6px 10px;
+      margin-bottom: 8px;
+      break-inside: avoid;
+    }
+    .uas-export-issuer strong { color: #0F172A; }
     .uas-powered-badge {
       display: inline-flex;
       align-items: center;
@@ -682,7 +712,7 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
         <div class="uas-signatures">
           <div class="uas-sig-box">
             <div class="uas-sig-title">أعده / ${isolateBdi("Prepared By")}</div>
-            <div class="uas-sig-name">${escapeHtml(spec.preparedBy || printedBy)}</div>
+            <div class="uas-sig-name">${escapeHtml(spec.preparedBy || `${sig.displayName} (${sig.titleAr})`)}</div>
           </div>
           <div class="uas-sig-box">
             <div class="uas-sig-title">راجعه / ${isolateBdi("Reviewed By")}</div>
@@ -694,8 +724,15 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
           </div>
         </div>
 
+        <div class="uas-export-issuer" data-testid="uas-export-signature-block">
+          <span>مُصدِر المستند / ${isolateBdi("Exported By")}: <strong>${escapeHtml(sig.displayName)}</strong> (${isolateBdi(sig.username)})</span>
+          <span>الصفة / ${isolateBdi("Title")}: <strong>${escapeHtml(sig.titleAr)}</strong> — ${isolateBdi(sig.titleEn)}</span>
+          <span>مساحة العمل / ${isolateBdi("Workspace")}: <strong>${escapeHtml(sig.tenantName)}</strong> (${isolateBdi(sig.tenantSlug)})</span>
+          <span>تاريخ التصدير: ${isolateBdi(sig.exportedAtDisplay)}</span>
+        </div>
+
         <div class="uas-audit-strip">
-          <span>طُبع بواسطة: <strong>${escapeHtml(printedBy)}</strong> • ${isolateBdi(printedAt)}</span>
+          <span>طُبع بواسطة: <strong>${escapeHtml(printedBy)}</strong> • ${escapeHtml(sig.titleAr)} • ${isolateBdi(printedAt)}</span>
           <span class="uas-page-num">صفحة ${isolateBdi("1")} من ${isolateBdi("1")}</span>
           <span class="uas-powered-badge">
             <span class="uas-powered-dot"></span>

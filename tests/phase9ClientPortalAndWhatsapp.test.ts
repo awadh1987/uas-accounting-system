@@ -362,7 +362,7 @@ describe("Phase 9 — External Client Portal, Requests, Accounting Handover & Wh
     );
     assert.equal(missingOther.status, 400);
 
-    // Valid multi-line request with علاقية قات + أخرى -> اخرى: صندوق خشبي
+    // Valid multi-line request with علاقية قات + أخرى -> اخرى: صندوق خشبي + pricing (P x Q)
     const createReq = await portalRequestsPOST(
       makePortalReq(TENANT_A, "/api/client-portal/requests", "POST", {
         clientToken: client1Token,
@@ -371,19 +371,24 @@ describe("Phase 9 — External Client Portal, Requests, Accounting Handover & Wh
           pickupLocation: "أخرى",
           customPickupLocation: "نقطة تسليم شعوب",
           lines: [
-            { itemTitle: "صوطي درجة أولى", requestedQty: 10, unitCode: "QAT_BUNCH", unitLabel: "علاقية قات" },
-            { itemTitle: "عنسي فاخر", requestedQty: 2, unitCode: "OTHER", unitLabel: "أخرى", customUnitLabel: "صندوق خشبي" },
+            { itemTitle: "صوطي درجة أولى", requestedQty: 10, unitCode: "QAT_BUNCH", unitLabel: "علاقية قات", unitPrice: 4500 },
+            { itemTitle: "عنسي فاخر", requestedQty: 2, unitCode: "OTHER", unitLabel: "أخرى", customUnitLabel: "صندوق خشبي", unitPrice: 12000 },
           ],
         },
       })
     );
-    assert.equal(createReq.status, 201);
+    assert.equal(createReq.status, 201, createReq.status !== 201 ? await createReq.clone().text() : undefined);
     const reqData = await createReq.json();
     assert.equal(reqData.receiptTitle, "تم استلام طلبك");
     assert.equal(reqData.request.status, "PENDING_REVIEW");
     assert.equal(reqData.request.statusLabelAr, "قيد المراجعة");
     assert.equal(reqData.request.pickupLocation, "نقطة تسليم شعوب");
     assert.equal(reqData.request.lines[1].displayUnitLabel, "صندوق خشبي");
+    // P x Q verification on client receipt: (10 * 4500) + (2 * 12000) = 69,000
+    assert.equal(reqData.request.lines[0].unitPrice, 4500);
+    assert.equal(reqData.request.lines[0].lineTotal, 45000);
+    assert.equal(reqData.request.lines[1].lineTotal, 24000);
+    assert.equal(reqData.request.totalEstimated, 69000);
     request1Id = reqData.request.id;
 
     // Client 2 cannot see Client 1's request!
@@ -394,7 +399,7 @@ describe("Phase 9 — External Client Portal, Requests, Accounting Handover & Wh
     ).json();
     assert.equal(c2Reqs.requests.length, 0);
 
-    // Staff lists incoming requests, confirms with unit prices, marks READY_FOR_PICKUP, and completes HANDOVER
+    // Staff lists incoming requests, confirms with adjusted unit prices & immediate payment -> opens Sales Cycle draft idempotently!
     const adminListRes = await (
       await adminRequestsGET(
         makePortalReq(TENANT_A, "/api/portal-admin/requests", "GET", { staffToken: staffTokenA })
@@ -409,6 +414,9 @@ describe("Phase 9 — External Client Portal, Requests, Accounting Handover & Wh
         body: {
           requestId: request1Id,
           action: "CONFIRM",
+          projectId: projectIdA,
+          treasuryId: treasuryIdA,
+          immediatePaidAmount: 30000,
           lines: [
             { id: targetReq.lines[0].id, confirmedQty: 10, unitPrice: 5000 },
             { id: targetReq.lines[1].id, confirmedQty: 2, unitPrice: 15000 },
@@ -417,7 +425,44 @@ describe("Phase 9 — External Client Portal, Requests, Accounting Handover & Wh
       })
     );
     assert.equal(confirmRes.status, 200);
-    assert.equal((await confirmRes.json()).request.totalConfirmed, 80000);
+    const confirmData = await confirmRes.json();
+    assert.equal(confirmData.request.totalConfirmed, 80000);
+    assert.equal(confirmData.request.creditPaidPlanned, 30000);
+    assert.equal(confirmData.request.debitPlanned, 50000);
+    assert.ok(confirmData.request.linkedSalesRecordId, "CONFIRM must set linkedSalesRecordId");
+    assert.ok(confirmData.request.linkedDraftId, "CONFIRM must create pre-populated Sales WorkspaceDraft");
+    assert.ok(confirmData.request.approvedByUserId, "CONFIRM must store approvedByUserId");
+
+    // Repeated CONFIRM click MUST be idempotent and never create a duplicate draft/sale!
+    const dupConfirmRes = await adminRequestsPOST(
+      makePortalReq(TENANT_A, "/api/portal-admin/requests", "POST", {
+        staffToken: staffTokenA,
+        body: {
+          requestId: request1Id,
+          action: "CONFIRM",
+          projectId: projectIdA,
+          immediatePaidAmount: 30000,
+        },
+      })
+    );
+    assert.equal(dupConfirmRes.status, 200);
+    const dupConfirmData = await dupConfirmRes.json();
+    assert.equal(dupConfirmData.idempotentReplay, true);
+    assert.equal(dupConfirmData.request.linkedSalesRecordId, confirmData.request.linkedSalesRecordId);
+
+    await runWithTenant(TENANT_A, async () => {
+      const salesDrafts = await prisma.workspaceDraft.findMany({
+        where: { module: "SALES", entityId: request1Id },
+      });
+      assert.equal(salesDrafts.length, 1, "Idempotent CONFIRM must create exactly ONE sales draft");
+      const draftPayload = JSON.parse(salesDrafts[0].payloadJson);
+      assert.equal(draftPayload.requestNumber, reqData.request.requestNumber);
+      assert.equal(draftPayload.pickupLocation, "نقطة تسليم شعوب");
+      assert.ok(String(draftPayload.customerAccountCode || "").startsWith("1121"), "Must carry customer COA");
+      assert.equal(draftPayload.totalAmount, 80000);
+      assert.equal(draftPayload.credit, 30000);
+      assert.equal(draftPayload.debitReceivable, 50000);
+    });
 
     const readyRes = await adminRequestsPOST(
       makePortalReq(TENANT_A, "/api/portal-admin/requests", "POST", {
@@ -428,7 +473,7 @@ describe("Phase 9 — External Client Portal, Requests, Accounting Handover & Wh
     assert.equal(readyRes.status, 200);
     assert.equal((await readyRes.json()).request.status, "READY_FOR_PICKUP");
 
-    // Complete handover with partial payment 30,000 (leaving 50,000 receivable)
+    // Complete handover ("تم الاستلام") with partial payment 30,000 (leaving 50,000 receivable)
     const handoverRes = await adminRequestsPOST(
       makePortalReq(TENANT_A, "/api/portal-admin/requests", "POST", {
         staffToken: staffTokenA,
@@ -444,9 +489,27 @@ describe("Phase 9 — External Client Portal, Requests, Accounting Handover & Wh
     assert.equal(handoverRes.status, 200);
     const handoverData = await handoverRes.json();
     assert.equal(handoverData.request.status, "COMPLETED");
+    assert.equal(handoverData.request.statusLabelAr, "تم الاستلام");
     assert.ok(handoverData.request.linkedInvoiceId);
     assert.ok(handoverData.request.linkedSaleId);
+    assert.equal(handoverData.request.linkedSalesRecordId, handoverData.request.linkedSaleId);
     assert.ok(handoverData.request.linkedReceiptId);
+
+    await runWithTenant(TENANT_A, async () => {
+      const convertedDraft = await prisma.workspaceDraft.findFirst({
+        where: { module: "SALES", entityId: request1Id },
+      });
+      assert.equal(convertedDraft?.status, "CONVERTED");
+      assert.equal(convertedDraft?.convertedEntityId, handoverData.request.linkedSaleId);
+
+      const audits = await prisma.immutableAuditLog.findMany({
+        where: { entityReference: reqData.request.requestNumber },
+      });
+      assert.ok(
+        audits.some((a) => a.details.includes(`[tenant:${TENANT_A}]`)),
+        "Audit log must record tenantSlug"
+      );
+    });
 
     // Repeat handover blocked cleanly
     const dupHandover = await adminRequestsPOST(
@@ -557,7 +620,13 @@ describe("Phase 9 — External Client Portal, Requests, Accounting Handover & Wh
     const cfgPut = await adminFormConfigPUT(
       makePortalReq(TENANT_A, "/api/portal-admin/form-config", "PUT", {
         staffToken: staffTokenA,
-        body: { requestHeadingAr: "طلب استلام" },
+        body: {
+          requestHeadingAr: "طلب استلام",
+          unitOptions: [
+            { code: "QAT_BUNCH", labelAr: "علاقية قات", defaultUnitPrice: 6000 },
+            { code: "OTHER", labelAr: "أخرى" },
+          ],
+        },
       })
     );
     assert.equal(cfgPut.status, 200);
@@ -567,5 +636,37 @@ describe("Phase 9 — External Client Portal, Requests, Accounting Handover & Wh
       )
     ).json();
     assert.equal(cfgGet.formConfig.requestHeadingAr, "طلب استلام");
+
+    // Fractional partial quantity (2.5) auto-priced via tenant unit pricing (2.5 * 6000 = 15,000)
+    const partialReqRes = await portalRequestsPOST(
+      makePortalReq(TENANT_A, "/api/client-portal/requests", "POST", {
+        clientToken: client2Token,
+        body: {
+          pickupLocation: "السوق",
+          lines: [{ itemTitle: "قات بلدي", requestedQty: 2.5, unitCode: "QAT_BUNCH", unitLabel: "علاقية قات" }],
+        },
+      })
+    );
+    assert.equal(partialReqRes.status, 201);
+    const partialData = await partialReqRes.json();
+    assert.equal(partialData.request.lines[0].unitPrice, 6000);
+    assert.equal(partialData.request.lines[0].lineTotal, 15000);
+    assert.equal(partialData.request.totalEstimated, 15000);
+
+    // Credit limit guard on CONFIRM (client2 has 100,000 limit; confirming 200,000 credit must reject!)
+    const overCreditConfirm = await adminRequestsPOST(
+      makePortalReq(TENANT_A, "/api/portal-admin/requests", "POST", {
+        staffToken: staffTokenA,
+        body: {
+          requestId: partialData.request.id,
+          action: "CONFIRM",
+          immediatePaidAmount: 0,
+          lines: [{ id: partialData.request.lines[0].id, confirmedQty: 10, unitPrice: 20000 }],
+        },
+      })
+    );
+    assert.equal(overCreditConfirm.status, 400);
+    const overCreditData = await overCreditConfirm.json();
+    assert.ok(String(overCreditData.error || "").includes("CREDIT_LIMIT_EXCEEDED"));
   });
 });

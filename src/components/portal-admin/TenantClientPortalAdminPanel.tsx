@@ -14,7 +14,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
-import { fmtNum } from "@/lib/formulas";
+import { computeSaleTotals, fmtNum } from "@/lib/formulas";
 import { formatIsoToDmy, formatMoney, formatRefreshTimestamp } from "@/lib/uiFormatters";
 import type { TenantFormConfig } from "@/lib/clientPortal/portalConfig";
 import type { TenantWhatsAppSettingsPublic } from "@/lib/whatsapp/outboxService";
@@ -46,6 +46,13 @@ interface StaffRequestItem {
   totalEstimated: number;
   totalConfirmed: number;
   linkedInvoiceId: string | null;
+  linkedSaleId?: string | null;
+  linkedSalesRecordId?: string | null;
+  linkedDraftId?: string | null;
+  creditPaidPlanned?: number;
+  debitPlanned?: number;
+  approvedByName?: string | null;
+  approvedAt?: string | null;
   createdAt: string;
   clientAccount?: {
     id: string;
@@ -228,7 +235,10 @@ export function TenantClientPortalAdminPanel({
         action,
         projectId: reqProjectChoice[reqItem.id] || projects[0]?.id,
         treasuryId: reqTreasuryChoice[reqItem.id] || treasuries[0]?.id,
-        immediatePaidAmount: Number(reqPaidNow[reqItem.id] || 0),
+        immediatePaidAmount:
+          reqPaidNow[reqItem.id] !== undefined
+            ? Number(reqPaidNow[reqItem.id] || 0)
+            : Number(reqItem.creditPaidPlanned || 0),
         reserveStock: reqReserveFlag[reqItem.id] ?? reqItem.reserveStock,
         lines: linePayload,
       }),
@@ -348,7 +358,28 @@ export function TenantClientPortalAdminPanel({
               لا توجد طلبات واردة من بوابة العملاء حالياً.
             </div>
           ) : (
-            requests.map((r) => (
+            requests.map((r) => {
+              const liveLines = r.lines.map((l) => {
+                const q =
+                  lineQtyEdits[l.id] !== undefined
+                    ? Math.max(0, Number(lineQtyEdits[l.id]) || 0)
+                    : Math.max(0, Number(l.confirmedQty ?? l.requestedQty ?? 0));
+                const p =
+                  linePriceEdits[l.id] !== undefined
+                    ? Math.max(0, Number(linePriceEdits[l.id]) || 0)
+                    : Math.max(0, Number(l.unitPrice || 0));
+                const { totalAmount } = computeSaleTotals(q, p, 0);
+                return { line: l, qty: q, price: p, total: totalAmount };
+              });
+              const liveOrderTotal = liveLines.reduce((s, x) => s + x.total, 0);
+              const livePaid =
+                reqPaidNow[r.id] !== undefined
+                  ? Math.max(0, Number(reqPaidNow[r.id]) || 0)
+                  : Number(r.creditPaidPlanned || 0);
+              const { debitReceivable: liveDebit } = computeSaleTotals(liveOrderTotal, 1, livePaid);
+              const activeSalesLink = r.linkedSalesRecordId || r.linkedSaleId || r.linkedDraftId;
+
+              return (
               <div
                 key={r.id}
                 className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 space-y-3"
@@ -363,10 +394,18 @@ export function TenantClientPortalAdminPanel({
                     <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-200 font-bold">
                       {r.statusLabelAr}
                     </span>
+                    {activeSalesLink && (
+                      <span className="px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-200 font-bold font-mono text-[10px]">
+                        مرتبط بالمبيعات (<bdi dir="ltr">{activeSalesLink.slice(0, 8)}</bdi>)
+                      </span>
+                    )}
                     <span className="text-slate-500">• استلام من: <strong>{r.pickupLocation}</strong></span>
                     <span className="font-mono text-slate-400">
                       <bdi dir="ltr">{formatIsoToDmy(r.createdAt.slice(0, 10))}</bdi>
                     </span>
+                  </div>
+                  <div className="text-[11px] font-black text-emerald-700 dark:text-emerald-300">
+                    الإجمالي: {formatMoney(liveOrderTotal)}
                   </div>
                 </div>
 
@@ -379,11 +418,12 @@ export function TenantClientPortalAdminPanel({
                         <th className="p-2">الوحدة</th>
                         <th className="p-2">المطلوب</th>
                         <th className="p-2">المؤكد</th>
-                        <th className="p-2">السعر (ريال)</th>
+                        <th className="p-2">سعر الوحدة (ريال)</th>
+                        <th className="p-2">الإجمالي (P×Q)</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                      {r.lines.map((l) => (
+                      {liveLines.map(({ line: l, total }) => (
                         <tr key={l.id}>
                           <td className="p-2 font-bold">{l.itemTitle}</td>
                           <td className="p-2">{l.displayUnitLabel}</td>
@@ -412,6 +452,9 @@ export function TenantClientPortalAdminPanel({
                               className="w-28 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 font-mono"
                             />
                           </td>
+                          <td className="p-2 font-mono font-extrabold text-emerald-700 dark:text-emerald-300">
+                            {formatMoney(total)}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -419,7 +462,13 @@ export function TenantClientPortalAdminPanel({
                 </div>
 
                 {r.status !== "COMPLETED" && r.status !== "REJECTED" && r.status !== "CANCELLED" && (
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] bg-slate-50 dark:bg-slate-800/50 rounded-xl px-3 py-2">
+                      <span>الإجمالي (= P×Q): <strong className="text-slate-900 dark:text-white">{formatMoney(liveOrderTotal)}</strong></span>
+                      <span>دائن (مقبوض نقد/بنك): <strong className="text-emerald-700 dark:text-emerald-300">{formatMoney(livePaid)}</strong></span>
+                      <span>مدين (متبقي آجل): <strong className="text-rose-600 dark:text-rose-400">{formatMoney(liveDebit)}</strong></span>
+                    </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <select
                         value={reqProjectChoice[r.id] || projects[0]?.id || ""}
@@ -451,12 +500,12 @@ export function TenantClientPortalAdminPanel({
                         type="number"
                         step="any"
                         min="0"
-                        placeholder="مدفوع عند التسليم"
-                        value={reqPaidNow[r.id] || ""}
+                        placeholder="دائن / مدفوع الآن"
+                        value={reqPaidNow[r.id] ?? (r.creditPaidPlanned ? String(r.creditPaidPlanned) : "")}
                         onChange={(e) =>
                           setReqPaidNow((prev) => ({ ...prev, [r.id]: e.target.value }))
                         }
-                        className="w-32 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 font-mono"
+                        className="w-36 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 font-mono"
                       />
                       <label className="inline-flex items-center gap-1 cursor-pointer">
                         <input
@@ -478,7 +527,7 @@ export function TenantClientPortalAdminPanel({
                           className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white font-bold inline-flex items-center gap-1"
                         >
                           <ClipboardCheck className="w-3.5 h-3.5" />
-                          <span>تأكيد الطلب</span>
+                          <span>اعتماد وفتح أمر بيع</span>
                         </button>
                       )}
                       {(r.status === "PENDING_REVIEW" || r.status === "CONFIRMED") && (
@@ -507,9 +556,11 @@ export function TenantClientPortalAdminPanel({
                       </button>
                     </div>
                   </div>
+                  </div>
                 )}
               </div>
-            ))
+              );
+            })
           )}
         </div>
       )}
@@ -767,6 +818,36 @@ export function TenantClientPortalAdminPanel({
                 />
                 <span>السماح بطلب أصناف غير مدرجة بالكتالوج</span>
               </label>
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
+                <div className="font-bold">تسعير الوحدات الافتراضي في البوابة (اختياري)</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {formCfg.unitOptions.map((u, idx) => (
+                    <div
+                      key={u.code}
+                      className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 dark:border-slate-700 px-2.5 py-1.5"
+                    >
+                      <span className="font-bold truncate">{u.labelAr}</span>
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        placeholder="السعر الافتراضي"
+                        value={u.defaultUnitPrice ? String(u.defaultUnitPrice) : ""}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          const nextUnits = formCfg.unitOptions.map((item, i) =>
+                            i === idx
+                              ? { ...item, defaultUnitPrice: Number.isFinite(v) && v > 0 ? v : undefined }
+                              : item
+                          );
+                          setFormCfg({ ...formCfg, unitOptions: nextUnits });
+                        }}
+                        className="w-28 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 font-mono text-xs"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
               <div>
                 <button type="submit" className="px-4 py-2 rounded-xl accent-bg font-extrabold inline-flex items-center gap-1.5">
                   <Save className="w-3.5 h-3.5" />

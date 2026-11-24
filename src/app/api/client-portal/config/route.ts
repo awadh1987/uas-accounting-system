@@ -36,6 +36,13 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
           wholesalePrice: true,
           retailPrice: true,
           baseUnit: { select: { code: true, nameAr: true, nameEn: true } },
+          conversions: {
+            select: {
+              sellPrice: true,
+              factorToBase: true,
+              unit: { select: { code: true, nameAr: true, nameEn: true } },
+            },
+          },
         },
         orderBy: { nameAr: "asc" },
         take: 150,
@@ -54,16 +61,33 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
       contactPhone: profile?.contactPhone || "",
       contactAddress: profile?.contactAddress || "",
       formConfig,
-      items: catalogItems.map((it) => ({
-        id: it.id,
-        sku: it.sku,
-        nameAr: it.nameAr,
-        nameEn: it.nameEn,
-        grade: it.grade,
-        origin: it.origin,
-        unitPrice: Number(it.wholesalePrice || it.retailPrice || 0),
-        baseUnit: it.baseUnit,
-      })),
+      items: catalogItems.map((it) => {
+        const basePrice = Number(it.wholesalePrice || it.retailPrice || 0);
+        const unitPrices: Record<string, number> = {};
+        if (it.baseUnit?.code && basePrice > 0) {
+          unitPrices[it.baseUnit.code.toUpperCase()] = basePrice;
+        }
+        for (const c of it.conversions || []) {
+          const uCode = c.unit?.code?.toUpperCase();
+          const cPrice = Number(c.sellPrice || 0);
+          if (uCode && cPrice > 0) {
+            unitPrices[uCode] = cPrice;
+          } else if (uCode && basePrice > 0 && Number(c.factorToBase || 0) > 0) {
+            unitPrices[uCode] = Math.round(basePrice * Number(c.factorToBase) * 10000) / 10000;
+          }
+        }
+        return {
+          id: it.id,
+          sku: it.sku,
+          nameAr: it.nameAr,
+          nameEn: it.nameEn,
+          grade: it.grade,
+          origin: it.origin,
+          unitPrice: basePrice,
+          baseUnit: it.baseUnit,
+          unitPrices,
+        };
+      }),
     });
   } catch (err) {
     console.error("GET /api/client-portal/config error:", err);

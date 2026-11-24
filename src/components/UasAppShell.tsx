@@ -82,6 +82,7 @@ import { resolveTransportTarget } from "@/lib/transportResolver";
 import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
 import { resolveEffectiveBrandInfo } from "@/lib/branding";
 import { setActivePrintEnterpriseProfile } from "@/lib/print/uasDocumentPrinter";
+import { resolveExportSignature, setActiveClientExportActor } from "@/lib/uiFormatters";
 import {
   ensureNotificationChannelsAndPermission,
   flushQueuedNotifications,
@@ -595,10 +596,39 @@ export function UasAppShell() {
   // Sync strictly English-only browser tab <title> and dynamic tenant/UAS favicon & apple-touch-icon
   useEffect(() => {
     setActivePrintEnterpriseProfile(state.enterpriseProfile);
-    if (typeof document === "undefined" || typeof window === "undefined") return;
+    if (typeof window === "undefined") {
+      setActiveClientExportActor(null);
+      return;
+    }
     const hostSlug = extractSubdomainSlugFromHost(window.location.host);
-    const effectiveSlug = hostSlug || state.enterpriseProfile?.tenantSlug || null;
-    const brand = resolveEffectiveBrandInfo(state.enterpriseProfile, effectiveSlug);
+    const effectiveSlug = hostSlug || state.enterpriseProfile?.tenantSlug || "default";
+    if (currentUser) {
+      const resolved = resolveExportSignature({
+        user: currentUser,
+        tenantSlug: effectiveSlug,
+        tenantName: state.enterpriseProfile?.legalNameAr,
+      });
+      setActiveClientExportActor({
+        username: resolved.username,
+        displayName: resolved.displayName,
+        titleAr: resolved.titleAr,
+        titleEn: resolved.titleEn,
+        tenantSlug: resolved.tenantSlug,
+        tenantName: resolved.tenantName,
+      });
+      try {
+        window.localStorage.setItem("uas_current_username", resolved.username);
+      } catch {
+        // ignore storage errors
+      }
+    } else {
+      setActiveClientExportActor(null);
+    }
+    if (typeof document === "undefined") return;
+    const brand = resolveEffectiveBrandInfo(
+      state.enterpriseProfile,
+      effectiveSlug === "default" ? null : effectiveSlug
+    );
 
     document.title = brand.tabTitleEn;
 
@@ -628,7 +658,7 @@ export function UasAppShell() {
       appendIconLink("shortcut icon", "/favicon-32x32.png", "image/png");
       appendIconLink("apple-touch-icon", "/apple-touch-icon.png", "image/png");
     }
-  }, [state.enterpriseProfile, lang, viewMode]);
+  }, [state.enterpriseProfile, lang, viewMode, currentUser]);
 
   useEffect(() => {
     document.body.classList.remove("theme-dark", "theme-royal");

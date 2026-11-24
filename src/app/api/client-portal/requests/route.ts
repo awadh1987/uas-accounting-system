@@ -93,6 +93,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         unitCode: String(l.unitCode || "QAT_BUNCH"),
         unitLabel: String(l.unitLabel || "علاقية قات"),
         customUnitLabel: l.customUnitLabel ? String(l.customUnitLabel) : null,
+        unitPrice: l.unitPrice !== undefined ? Number(l.unitPrice) : undefined,
         notes: l.notes ? String(l.notes) : null,
       })),
     });

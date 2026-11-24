@@ -25,8 +25,19 @@ import {
 } from "lucide-react";
 import { UasDateInput } from "@/components/UasDateInput";
 import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
-import { fmtNum } from "@/lib/formulas";
-import { formatIsoToDmy, formatMoney, formatRefreshTimestamp, buildTenantExportFilename } from "@/lib/uiFormatters";
+import { computeSaleTotals, fmtNum } from "@/lib/formulas";
+import {
+  appendExportSignatureSheet,
+  appendExportSignatureToWorksheet,
+} from "@/lib/excelExport";
+import {
+  buildTenantExportFilename,
+  formatIsoToDmy,
+  formatMoney,
+  formatRefreshTimestamp,
+  resolveExportSignature,
+  setActiveClientExportActor,
+} from "@/lib/uiFormatters";
 import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
 import { exportOrShareBinaryFile } from "@/lib/nativeBridge";
 import { getStoredTenantId, getStoredTenantSlug, resolveApiBaseUrl } from "@/lib/apiClient";
@@ -60,6 +71,7 @@ interface CatalogItemOption {
   origin?: string | null;
   unitPrice: number;
   baseUnit?: { code: string; nameAr: string; nameEn: string } | null;
+  unitPrices?: Record<string, number>;
 }
 
 interface ClientRequestLineView {
@@ -127,7 +139,28 @@ interface DraftLineRow {
   requestedQty: string;
   unitCode: string;
   customUnitLabel: string;
+  unitPrice: string;
   notes: string;
+}
+
+function resolveLineDefaultUnitPrice(
+  itemId: string,
+  unitCode: string,
+  catalog: CatalogItemOption[],
+  cfg: TenantFormConfig | null
+): string {
+  const code = String(unitCode || "QAT_BUNCH").toUpperCase();
+  const cat = catalog.find((c) => c.id === itemId);
+  if (cat) {
+    const byUnit = cat.unitPrices?.[code];
+    if (byUnit && byUnit > 0) return String(byUnit);
+    if (cat.unitPrice > 0) return String(cat.unitPrice);
+  }
+  const uOpt = cfg?.unitOptions.find((u) => u.code === code);
+  if (uOpt?.defaultUnitPrice && uOpt.defaultUnitPrice > 0) {
+    return String(uOpt.defaultUnitPrice);
+  }
+  return "";
 }
 
 function getClientToken(): string {
@@ -215,6 +248,7 @@ export function ClientPortalApp({
       requestedQty: "1",
       unitCode: "QAT_BUNCH",
       customUnitLabel: "",
+      unitPrice: "",
       notes: "",
     },
   ]);
@@ -433,6 +467,34 @@ export function ClientPortalApp({
     [tenantNameAr, tenantSlug, logoUrl, contactPhone]
   );
 
+  const portalExportActor = useMemo(() => {
+    if (!account) {
+      return {
+        username: "portal_guest",
+        displayName: "عميل البوابة",
+        titleAr: "عميل بوابة إلكترونية",
+        titleEn: "Client Portal User",
+        tenantSlug,
+        tenantName: tenantNameAr,
+      };
+    }
+    return {
+      username: account.phone || account.email,
+      displayName: account.fullName,
+      titleAr: "عميل بوابة إلكترونية",
+      titleEn: "Client Portal User",
+      tenantSlug,
+      tenantName: tenantNameAr,
+    };
+  }, [account, tenantSlug, tenantNameAr]);
+
+  useEffect(() => {
+    setActiveClientExportActor(portalExportActor);
+    return () => {
+      setActiveClientExportActor(null);
+    };
+  }, [portalExportActor]);
+
   async function handleLoginSubmit(e: React.FormEvent) {
     e.preventDefault();
     setAuthError(null);
@@ -562,6 +624,7 @@ export function ClientPortalApp({
           customData: reqCustomData,
           lines: lines.map((l) => {
             const uOpt = formConfig?.unitOptions.find((u) => u.code === l.unitCode);
+            const pNum = Number(l.unitPrice);
             return {
               itemId: l.itemId && l.itemId !== "__CUSTOM__" ? l.itemId : null,
               itemTitle: l.itemTitle.trim(),
@@ -569,6 +632,7 @@ export function ClientPortalApp({
               unitCode: l.unitCode,
               unitLabel: uOpt?.labelAr || "علاقية قات",
               customUnitLabel: l.unitCode === "OTHER" ? l.customUnitLabel.trim() : null,
+              unitPrice: Number.isFinite(pNum) && pNum > 0 ? pNum : undefined,
               notes: l.notes.trim() || null,
             };
           }),
@@ -593,6 +657,7 @@ export function ClientPortalApp({
           requestedQty: "1",
           unitCode: "QAT_BUNCH",
           customUnitLabel: "",
+          unitPrice: "",
           notes: "",
         },
       ]);
@@ -627,6 +692,11 @@ export function ClientPortalApp({
   function handleExportStatementExcel() {
     const wb = XLSX.utils.book_new();
     wb.Workbook = { Views: [{ RTL: true }] };
+    const sig = resolveExportSignature({
+      actor: portalExportActor,
+      tenantSlug,
+      tenantName: tenantNameAr,
+    });
 
     const billRows = billsList.map((b) => ({
       "رقم الفاتورة": b.invoiceNumber,
@@ -639,6 +709,7 @@ export function ClientPortalApp({
     }));
     const wsBills = XLSX.utils.json_to_sheet(billRows.length > 0 ? billRows : [{ "الحالة": "لا توجد فواتير" }]);
     wsBills["!views"] = [{ rightToLeft: true }];
+    appendExportSignatureToWorksheet(wsBills, Math.max(1, billRows.length), sig);
     XLSX.utils.book_append_sheet(wb, wsBills, "الفواتير");
 
     const stmtSheetRows = statementRows.map((r) => ({
@@ -654,7 +725,9 @@ export function ClientPortalApp({
       stmtSheetRows.length > 0 ? stmtSheetRows : [{ "الحالة": "لا توجد حركات" }]
     );
     wsStmt["!views"] = [{ rightToLeft: true }];
+    appendExportSignatureToWorksheet(wsStmt, Math.max(1, stmtSheetRows.length), sig);
     XLSX.utils.book_append_sheet(wb, wsStmt, "كشف الحساب");
+    appendExportSignatureSheet(wb, sig);
 
     const filename = buildTenantExportFilename({
       tenantSlug,
@@ -674,6 +747,7 @@ export function ClientPortalApp({
   }
 
   function printReceiptSpec(req: ClientRequestView) {
+    const orderTotal = req.totalConfirmed > 0 ? req.totalConfirmed : req.totalEstimated;
     void printUasDocument({
       titleAr: "إيصال استلام طلب عميل — تم استلام طلبك",
       titleEn: "Client Pickup Request Confirmation",
@@ -684,6 +758,7 @@ export function ClientPortalApp({
       format: "A4_PORTRAIT",
       letterhead: portalLetterhead,
       printedBy: account?.fullName || "بوابة العملاء",
+      exportedBy: portalExportActor,
       metadata: [
         { labelAr: "العميل", labelEn: "Client", value: account?.fullName || "" },
         { labelAr: "الجوال", labelEn: "Phone", value: account?.phone || "" },
@@ -692,20 +767,28 @@ export function ClientPortalApp({
       ],
       tables: [
         {
-          headingAr: "الأصناف المطلوبة",
-          headingEn: "Requested Items",
+          headingAr: "الأصناف المطلوبة والتسعير",
+          headingEn: "Requested Items & Pricing",
           columns: [
             { key: "title", labelAr: "الصنف", labelEn: "Item" },
             { key: "qty", labelAr: "الكمية المطلوبة", labelEn: "Requested Qty", numeric: true },
             { key: "unit", labelAr: "الوحدة", labelEn: "Unit" },
+            { key: "price", labelAr: "سعر الوحدة", labelEn: "Unit Price", numeric: true },
+            { key: "total", labelAr: "الإجمالي (P×Q)", labelEn: "Total", numeric: true },
             { key: "notes", labelAr: "ملاحظات", labelEn: "Notes" },
           ],
           rows: req.lines.map((l) => ({
             title: l.itemTitle,
-            qty: fmtNum(l.requestedQty),
+            qty: fmtNum(l.confirmedQty ?? l.requestedQty),
             unit: l.displayUnitLabel,
+            price: l.unitPrice > 0 ? formatMoney(l.unitPrice, req.currency || "YER") : "يُحدد عند المراجعة",
+            total: l.lineTotal > 0 ? formatMoney(l.lineTotal, req.currency || "YER") : "تقديري",
             notes: l.notes || "—",
           })),
+          totalsRow: {
+            title: "إجمالي الطلب",
+            total: orderTotal > 0 ? formatMoney(orderTotal, req.currency || "YER") : "يُحدد عند المراجعة",
+          },
         },
       ],
     });
@@ -1121,14 +1204,27 @@ export function ClientPortalApp({
                     </div>
                   </div>
 
-                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-xs flex flex-wrap gap-4">
-                    <div>
-                      <span className="text-slate-500">موقع الاستلام: </span>
-                      <strong>{confirmedReceipt.pickupLocation}</strong>
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-xs flex flex-wrap gap-4 justify-between items-center">
+                    <div className="flex flex-wrap gap-4">
+                      <div>
+                        <span className="text-slate-500">موقع الاستلام: </span>
+                        <strong>{confirmedReceipt.pickupLocation}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">التاريخ: </span>
+                        <bdi dir="ltr" className="font-mono">{formatIsoToDmy(confirmedReceipt.createdAt.slice(0, 10))}</bdi>
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-slate-500">التاريخ: </span>
-                      <bdi dir="ltr" className="font-mono">{formatIsoToDmy(confirmedReceipt.createdAt.slice(0, 10))}</bdi>
+                    <div className="font-black text-emerald-700 dark:text-emerald-300">
+                      {(() => {
+                        const tot =
+                          confirmedReceipt.totalConfirmed > 0
+                            ? confirmedReceipt.totalConfirmed
+                            : confirmedReceipt.totalEstimated;
+                        return tot > 0
+                          ? `الإجمالي (= P × Q): ${formatMoney(tot, confirmedReceipt.currency || "YER")}`
+                          : "التسعير: تقديري / يُحدد عند المراجعة";
+                      })()}
                     </div>
                   </div>
 
@@ -1140,6 +1236,8 @@ export function ClientPortalApp({
                           <th className="p-2">الصنف</th>
                           <th className="p-2">الكمية</th>
                           <th className="p-2">الوحدة</th>
+                          <th className="p-2">سعر الوحدة</th>
+                          <th className="p-2">الإجمالي (= P × Q)</th>
                           <th className="p-2">ملاحظات</th>
                         </tr>
                       </thead>
@@ -1150,6 +1248,16 @@ export function ClientPortalApp({
                             <td className="p-2 font-bold">{l.itemTitle}</td>
                             <td className="p-2 font-mono font-bold">{fmtNum(l.requestedQty)}</td>
                             <td className="p-2">{l.displayUnitLabel}</td>
+                            <td className="p-2 font-mono">
+                              {l.unitPrice > 0
+                                ? formatMoney(l.unitPrice, confirmedReceipt.currency || "YER")
+                                : "تقديري / يُحدد عند المراجعة"}
+                            </td>
+                            <td className="p-2 font-mono font-bold text-emerald-700 dark:text-emerald-300">
+                              {l.lineTotal > 0
+                                ? formatMoney(l.lineTotal, confirmedReceipt.currency || "YER")
+                                : "—"}
+                            </td>
                             <td className="p-2 text-slate-500">{l.notes || "—"}</td>
                           </tr>
                         ))}
@@ -1247,6 +1355,7 @@ export function ClientPortalApp({
                               requestedQty: "1",
                               unitCode: "QAT_BUNCH",
                               customUnitLabel: "",
+                              unitPrice: resolveLineDefaultUnitPrice("", "QAT_BUNCH", catalogItems, formConfig),
                               notes: "",
                             },
                           ])
@@ -1258,29 +1367,40 @@ export function ClientPortalApp({
                       </button>
                     </div>
 
-                    {lines.map((row, idx) => (
+                    {lines.map((row, idx) => {
+                      const rowQtyNum = Math.max(0, Number(row.requestedQty) || 0);
+                      const rowPriceNum = Math.max(0, Number(row.unitPrice) || 0);
+                      const { totalAmount: rowTotal } = computeSaleTotals(rowQtyNum, rowPriceNum, 0);
+                      return (
                       <div
                         key={row.rowKey}
                         className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 space-y-2"
                       >
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
                           <span className="font-bold text-slate-500">الصنف #{idx + 1}</span>
-                          {lines.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setLines((prev) => prev.filter((x) => x.rowKey !== row.rowKey))
-                              }
-                              className="text-rose-600 font-bold inline-flex items-center gap-0.5 hover:underline"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                              <span>حذف السطر</span>
-                            </button>
-                          )}
+                          <div className="flex items-center gap-3">
+                            <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300">
+                              {rowPriceNum > 0
+                                ? `الإجمالي (P×Q): ${formatMoney(rowTotal)}`
+                                : "التسعير: تقديري / يُحدد عند المراجعة"}
+                            </span>
+                            {lines.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setLines((prev) => prev.filter((x) => x.rowKey !== row.rowKey))
+                                }
+                                className="text-rose-600 font-bold inline-flex items-center gap-0.5 hover:underline"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>حذف السطر</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-                          <div className="sm:col-span-5 space-y-1.5">
+                          <div className="sm:col-span-4 space-y-1.5">
                             {catalogItems.length > 0 && (
                               <select
                                 aria-label="اختيار من الأصناف"
@@ -1295,6 +1415,10 @@ export function ClientPortalApp({
                                             ...x,
                                             itemId: nextId,
                                             itemTitle: found ? found.nameAr : nextId === "__CUSTOM__" ? "" : x.itemTitle,
+                                            unitPrice:
+                                              nextId === "__CUSTOM__"
+                                                ? ""
+                                                : resolveLineDefaultUnitPrice(nextId, x.unitCode, catalogItems, formConfig) || x.unitPrice,
                                           }
                                         : x
                                     )
@@ -1348,17 +1472,26 @@ export function ClientPortalApp({
                             />
                           </div>
 
-                          <div className="sm:col-span-3 space-y-1.5">
+                          <div className="sm:col-span-2 space-y-1.5">
                             <label className="block text-[10px] text-slate-500 mb-1">الوحدة *</label>
                             <select
                               value={row.unitCode}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                const nextUnit = e.target.value;
                                 setLines((prev) =>
                                   prev.map((x) =>
-                                    x.rowKey === row.rowKey ? { ...x, unitCode: e.target.value } : x
+                                    x.rowKey === row.rowKey
+                                      ? {
+                                          ...x,
+                                          unitCode: nextUnit,
+                                          unitPrice:
+                                            resolveLineDefaultUnitPrice(x.itemId, nextUnit, catalogItems, formConfig) ||
+                                            x.unitPrice,
+                                        }
+                                      : x
                                   )
-                                )
-                              }
+                                );
+                              }}
                               className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold"
                             >
                               {(formConfig?.unitOptions || []).map((u) => (
@@ -1393,6 +1526,25 @@ export function ClientPortalApp({
                           </div>
 
                           <div className="sm:col-span-2">
+                            <label className="block text-[10px] text-slate-500 mb-1">سعر الوحدة (ريال)</label>
+                            <input
+                              type="number"
+                              step="any"
+                              min="0"
+                              value={row.unitPrice}
+                              onChange={(e) =>
+                                setLines((prev) =>
+                                  prev.map((x) =>
+                                    x.rowKey === row.rowKey ? { ...x, unitPrice: e.target.value } : x
+                                  )
+                                )
+                              }
+                              placeholder="يُحدد عند المراجعة"
+                              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-mono font-bold"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-2">
                             <label className="block text-[10px] text-slate-500 mb-1">ملاحظات</label>
                             <input
                               type="text"
@@ -1410,8 +1562,33 @@ export function ClientPortalApp({
                           </div>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
+
+                  {(() => {
+                    const orderEstimatedTotal = lines.reduce(
+                      (s, row) =>
+                        s + computeSaleTotals(Math.max(0, Number(row.requestedQty) || 0), Math.max(0, Number(row.unitPrice) || 0), 0).totalAmount,
+                      0
+                    );
+                    const hasUnpriced = lines.some((l) => !(Number(l.unitPrice) > 0));
+                    return (
+                      <div className="p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <span className="font-bold text-slate-600 dark:text-slate-300">الإجمالي الكلي التقديري للطلب (= P × Q): </span>
+                          <strong className="text-base font-black text-emerald-700 dark:text-emerald-300">
+                            {orderEstimatedTotal > 0 ? formatMoney(orderEstimatedTotal) : "تقديري (يُعتمد من الإدارة)"}
+                          </strong>
+                        </div>
+                        {hasUnpriced && (
+                          <span className="text-[11px] text-amber-700 dark:text-amber-300 font-bold">
+                            * الأصناف غير المسعرة يتم تسعيرها عند مراجعة الطلب
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   <div className="pt-2">
                     <button
@@ -1459,24 +1636,38 @@ export function ClientPortalApp({
                           status: "POSTED",
                           format: "A4_LANDSCAPE",
                           letterhead: portalLetterhead,
+                          printedBy: account?.fullName || "بوابة العملاء",
+                          exportedBy: portalExportActor,
                           tables: [
                             {
-                              headingAr: "الطلبات المسجلة",
-                              headingEn: "Requests",
+                              headingAr: "الطلبات المسجلة والتسعير",
+                              headingEn: "Requests & Pricing",
                               columns: [
                                 { key: "num", labelAr: "رقم الطلب" },
                                 { key: "date", labelAr: "التاريخ" },
                                 { key: "pickup", labelAr: "موقع الاستلام" },
                                 { key: "status", labelAr: "الحالة" },
-                                { key: "lines", labelAr: "الأصناف" },
+                                { key: "lines", labelAr: "الأصناف والتسعير" },
+                                { key: "total", labelAr: "الإجمالي", numeric: true },
                               ],
-                              rows: requestsList.map((r) => ({
-                                num: r.requestNumber,
-                                date: formatIsoToDmy(r.createdAt.slice(0, 10)),
-                                pickup: r.pickupLocation,
-                                status: r.statusLabelAr,
-                                lines: r.lines.map((l) => `${l.itemTitle} (${l.requestedQty} ${l.displayUnitLabel})`).join("، "),
-                              })),
+                              rows: requestsList.map((r) => {
+                                const tot = r.totalConfirmed > 0 ? r.totalConfirmed : r.totalEstimated;
+                                return {
+                                  num: r.requestNumber,
+                                  date: formatIsoToDmy(r.createdAt.slice(0, 10)),
+                                  pickup: r.pickupLocation,
+                                  status: r.statusLabelAr,
+                                  lines: r.lines
+                                    .map(
+                                      (l) =>
+                                        `${l.itemTitle} (${l.confirmedQty ?? l.requestedQty} ${l.displayUnitLabel}${
+                                          l.unitPrice > 0 ? ` × ${fmtNum(l.unitPrice)}` : ""
+                                        })`
+                                    )
+                                    .join("، "),
+                                  total: tot > 0 ? formatMoney(tot, r.currency || "YER") : "تقديري",
+                                };
+                              }),
                             },
                           ],
                         })
@@ -1558,15 +1749,30 @@ export function ClientPortalApp({
                             ]}
                           />
                         </div>
-                        <div className="flex flex-wrap gap-2">
-                          {r.lines.map((l) => (
-                            <span
-                              key={l.id}
-                              className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold"
-                            >
-                              {l.itemTitle}: <strong>{fmtNum(l.confirmedQty ?? l.requestedQty)}</strong> {l.displayUnitLabel}
-                            </span>
-                          ))}
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap gap-2">
+                            {r.lines.map((l) => (
+                              <span
+                                key={l.id}
+                                className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold"
+                              >
+                                {l.itemTitle}: <strong>{fmtNum(l.confirmedQty ?? l.requestedQty)}</strong> {l.displayUnitLabel}
+                                {l.unitPrice > 0 && (
+                                  <span className="text-emerald-700 dark:text-emerald-300 font-mono">
+                                    {" "}× {fmtNum(l.unitPrice)} = {formatMoney(l.lineTotal, r.currency || "YER")}
+                                  </span>
+                                )}
+                              </span>
+                            ))}
+                          </div>
+                          <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300">
+                            {(r.totalConfirmed > 0 ? r.totalConfirmed : r.totalEstimated) > 0
+                              ? `الإجمالي: ${formatMoney(
+                                  r.totalConfirmed > 0 ? r.totalConfirmed : r.totalEstimated,
+                                  r.currency || "YER"
+                                )}`
+                              : "التسعير: يُحدد عند المراجعة"}
+                          </span>
                         </div>
                       </div>
                     ))}
@@ -1670,6 +1876,7 @@ export function ClientPortalApp({
                             format: "A4_PORTRAIT",
                             letterhead: portalLetterhead,
                             printedBy: account.fullName,
+                            exportedBy: portalExportActor,
                             summaryCards: [
                               { labelAr: "المدفوع", labelEn: "Paid", value: formatMoney(stmtSummary.totalPaid), tone: "emerald" },
                               { labelAr: "المتبقي المستحق", labelEn: "Balance Due", value: formatMoney(stmtSummary.totalUnpaid), tone: "rose" },

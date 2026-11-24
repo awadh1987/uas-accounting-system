@@ -596,6 +596,18 @@ async function ensureAdditiveColumns(client: {
         { name: "assignedProjects", ddl: 'ALTER TABLE "User" ADD COLUMN "assignedProjects" TEXT NOT NULL DEFAULT \'[]\'' },
       ],
     },
+    {
+      table: "ClientGoodsRequest",
+      columns: [
+        { name: "linkedSalesRecordId", ddl: 'ALTER TABLE "ClientGoodsRequest" ADD COLUMN "linkedSalesRecordId" TEXT' },
+        { name: "linkedDraftId", ddl: 'ALTER TABLE "ClientGoodsRequest" ADD COLUMN "linkedDraftId" TEXT' },
+        { name: "creditPaidPlanned", ddl: 'ALTER TABLE "ClientGoodsRequest" ADD COLUMN "creditPaidPlanned" DECIMAL NOT NULL DEFAULT 0' },
+        { name: "debitPlanned", ddl: 'ALTER TABLE "ClientGoodsRequest" ADD COLUMN "debitPlanned" DECIMAL NOT NULL DEFAULT 0' },
+        { name: "approvedByUserId", ddl: 'ALTER TABLE "ClientGoodsRequest" ADD COLUMN "approvedByUserId" TEXT' },
+        { name: "approvedByName", ddl: 'ALTER TABLE "ClientGoodsRequest" ADD COLUMN "approvedByName" TEXT' },
+        { name: "approvedAt", ddl: 'ALTER TABLE "ClientGoodsRequest" ADD COLUMN "approvedAt" DATETIME' },
+      ],
+    },
   ];
 
   const additiveTables = [
@@ -727,6 +739,13 @@ async function ensureAdditiveColumns(client: {
       "linkedInvoiceId" TEXT,
       "linkedSaleId" TEXT,
       "linkedReceiptId" TEXT,
+      "linkedSalesRecordId" TEXT,
+      "linkedDraftId" TEXT,
+      "creditPaidPlanned" DECIMAL NOT NULL DEFAULT 0,
+      "debitPlanned" DECIMAL NOT NULL DEFAULT 0,
+      "approvedByUserId" TEXT,
+      "approvedByName" TEXT,
+      "approvedAt" DATETIME,
       "reviewedById" TEXT,
       "reviewedByName" TEXT,
       "reviewedAt" DATETIME,
@@ -743,6 +762,7 @@ async function ensureAdditiveColumns(client: {
     `CREATE INDEX IF NOT EXISTS "ClientGoodsRequest_clientAccountId_createdAt_idx" ON "ClientGoodsRequest"("clientAccountId", "createdAt")`,
     `CREATE INDEX IF NOT EXISTS "ClientGoodsRequest_customerId_status_idx" ON "ClientGoodsRequest"("customerId", "status")`,
     `CREATE INDEX IF NOT EXISTS "ClientGoodsRequest_status_createdAt_idx" ON "ClientGoodsRequest"("status", "createdAt")`,
+    `CREATE INDEX IF NOT EXISTS "ClientGoodsRequest_linkedSalesRecordId_idx" ON "ClientGoodsRequest"("linkedSalesRecordId")`,
     `CREATE TABLE IF NOT EXISTS "ClientGoodsRequestLine" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "requestId" TEXT NOT NULL,

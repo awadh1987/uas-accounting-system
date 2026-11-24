@@ -1553,6 +1553,13 @@ model ClientGoodsRequest {
   linkedInvoiceId     String?
   linkedSaleId        String?
   linkedReceiptId     String?
+  linkedSalesRecordId String?
+  linkedDraftId       String?
+  creditPaidPlanned   Decimal               @default(0)
+  debitPlanned        Decimal               @default(0)
+  approvedByUserId    String?
+  approvedByName      String?
+  approvedAt          DateTime?
   reviewedById        String?
   reviewedByName      String?
   reviewedAt          DateTime?
@@ -1569,6 +1576,7 @@ model ClientGoodsRequest {
   @@index([clientAccountId, createdAt])
   @@index([customerId, status])
   @@index([status, createdAt])
+  @@index([linkedSalesRecordId])
 }
 
 model ClientGoodsRequestLine {

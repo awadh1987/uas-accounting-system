@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
 import { authorizeApiAction, corsOptionsResponse, jsonError } from "@/lib/apiHelpers";
 import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
+import { resolveRequestTenantScope } from "@/lib/clientPortal/clientAuth";
 import {
   serializeRequest,
   staffProcessGoodsRequest,
@@ -104,9 +105,11 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         }))
       : undefined;
 
+    const scope = resolveRequestTenantScope(req);
     const result = await staffProcessGoodsRequest({
       requestId,
       action,
+      tenantSlug: scope.tenantSlug,
       projectId: body.projectId ? String(body.projectId) : undefined,
       subProjectId: body.subProjectId ? String(body.subProjectId) : null,
       harvestName: body.harvestName ? String(body.harvestName) : undefined,
@@ -126,13 +129,17 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       },
     });
 
+    const replay = Boolean((result as { idempotentReplay?: boolean }).idempotentReplay);
     return NextResponse.json({
       success: true,
+      idempotentReplay: replay,
       request: result,
       message:
         action === "HANDOVER"
           ? "✅ تم تسليم الطلب وترحيل الفاتورة والقيد المحاسبي وإعداد مسودة واتساب"
-          : "✅ تم تحديث حالة طلب العميل بنجاح",
+          : replay
+          ? "ℹ️ هذا الطلب معتمد ومرتبط مسبقاً بسجل المبيعات (تم الحفاظ على عدم التكرار)"
+          : "✅ تم اعتماد الطلب وفتح دورة البيع في المبيعات والعملاء بنجاح",
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "تعذر معالجة طلب العميل";

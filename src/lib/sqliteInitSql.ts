@@ -1329,6 +1329,13 @@ CREATE TABLE "ClientGoodsRequest" (
     "linkedInvoiceId" TEXT,
     "linkedSaleId" TEXT,
     "linkedReceiptId" TEXT,
+    "linkedSalesRecordId" TEXT,
+    "linkedDraftId" TEXT,
+    "creditPaidPlanned" DECIMAL NOT NULL DEFAULT 0,
+    "debitPlanned" DECIMAL NOT NULL DEFAULT 0,
+    "approvedByUserId" TEXT,
+    "approvedByName" TEXT,
+    "approvedAt" DATETIME,
     "reviewedById" TEXT,
     "reviewedByName" TEXT,
     "reviewedAt" DATETIME,
@@ -1643,6 +1650,9 @@ CREATE INDEX "ClientGoodsRequest_customerId_status_idx" ON "ClientGoodsRequest"(
 
 -- CreateIndex
 CREATE INDEX "ClientGoodsRequest_status_createdAt_idx" ON "ClientGoodsRequest"("status", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "ClientGoodsRequest_linkedSalesRecordId_idx" ON "ClientGoodsRequest"("linkedSalesRecordId");
 
 -- CreateIndex
 CREATE INDEX "ClientGoodsRequestLine_requestId_idx" ON "ClientGoodsRequestLine"("requestId");

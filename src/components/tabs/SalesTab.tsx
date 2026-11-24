@@ -180,6 +180,44 @@ export function SalesTab({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [clientOptions, setClientOptions] = useState<QuickCustomerOption[]>([]);
   const [quickClientOpen, setQuickClientOpen] = useState(false);
+  const [portalDraftOrders, setPortalDraftOrders] = useState<
+    Array<{
+      id: string;
+      draftNumber: string;
+      titleAr: string;
+      status: string;
+      totalAmount: number;
+      payload: {
+        portalRequestId?: string;
+        requestNumber?: string;
+        customerId?: string;
+        customer?: string;
+        customerAccountCode?: string;
+        phone?: string;
+        projectId?: string;
+        subProjectId?: string | null;
+        harvest?: string;
+        pickupLocation?: string;
+        grade?: string;
+        bundles?: number;
+        price?: number;
+        amount?: number;
+        credit?: number;
+        debitReceivable?: number;
+        treasuryAccountId?: string | null;
+        date?: string;
+        notes?: string;
+        lines?: Array<{
+          itemTitle: string;
+          qty: number;
+          unitLabel: string;
+          unitPrice: number;
+          lineTotal: number;
+        }>;
+      };
+    }>
+  >([]);
+  const [handingOverDraftId, setHandingOverDraftId] = useState<string | null>(null);
 
   const liveStockCheck = useMemo(() => {
     const pid = activeProj?.id || projectId;
@@ -215,6 +253,16 @@ export function SalesTab({
         if (active && data?.customers) setClientOptions(data.customers);
       })
       .catch(() => null);
+
+    fetch("/api/drafts?module=SALES&status=ACTIVE_DRAFT", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { drafts?: typeof portalDraftOrders } | null) => {
+        if (active && Array.isArray(data?.drafts)) {
+          setPortalDraftOrders(data.drafts.filter((d) => Boolean(d.payload?.portalRequestId)));
+        }
+      })
+      .catch(() => null);
+
     return () => {
       active = false;
     };
@@ -532,6 +580,109 @@ export function SalesTab({
           </div>
         </div>
       </div>
+
+      {/* Linked Approved Client Portal Orders Ready for Sales Cycle Completion */}
+      {portalDraftOrders.length > 0 && !readOnly && (
+        <div className="card-surface rounded-2xl p-4 border border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/20 space-y-3 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="font-black text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-600" />
+              <span>أوامر بيع بوابة العملاء المعتمدة ({portalDraftOrders.length})</span>
+            </div>
+            <span className="text-[11px] text-slate-500">
+              جاهزة للتحميل في نموذج المبيعات أو إتمام التسليم والترحيل المباشر
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {portalDraftOrders.map((d) => (
+              <div
+                key={d.id}
+                className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 space-y-2"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-mono font-black px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
+                      <bdi dir="ltr">{d.payload.requestNumber || d.draftNumber}</bdi>
+                    </span>
+                    <span className="font-black">{d.payload.customer || d.titleAr}</span>
+                    {d.payload.customerAccountCode && (
+                      <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-200">
+                        COA {d.payload.customerAccountCode}
+                      </span>
+                    )}
+                  </div>
+                  <span className="font-mono font-black text-emerald-700 dark:text-emerald-300">
+                    {fmtNum(d.totalAmount)} ريال
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-500 flex flex-wrap gap-3">
+                  <span>استلام من: <strong>{d.payload.pickupLocation || "السوق"}</strong></span>
+                  <span>دائن (مقبوض): <strong className="text-emerald-600">{fmtNum(d.payload.credit || 0)} ريال</strong></span>
+                  <span>مدين (متبقي): <strong className="text-rose-600">{fmtNum(d.payload.debitReceivable || 0)} ريال</strong></span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (d.payload.projectId) setProjectId(d.payload.projectId);
+                      setCustomer(d.payload.customer || "");
+                      setPhone(d.payload.phone || "");
+                      if (d.payload.grade) {
+                        setSelectedGradePreset("أخرى (تحديد مخصص)");
+                        setCustomGradeText(d.payload.grade);
+                      }
+                      setBundles(String(d.payload.bundles || 1));
+                      setPrice(String(d.payload.price || 0));
+                      setCredit(String(d.payload.credit || 0));
+                      setNotes(d.payload.notes || "");
+                      setEditingId(null);
+                      setDrawerOpen(true);
+                    }}
+                    className="px-3 py-1 rounded-lg border border-slate-300 dark:border-slate-700 font-bold hover:bg-slate-100 dark:hover:bg-slate-800"
+                  >
+                    تحميل في نموذج البيع
+                  </button>
+                  {d.payload.portalRequestId && (
+                    <button
+                      type="button"
+                      disabled={handingOverDraftId === d.id}
+                      onClick={async () => {
+                        setHandingOverDraftId(d.id);
+                        try {
+                          const res = await fetch("/api/portal-admin/requests", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              requestId: d.payload.portalRequestId,
+                              action: "HANDOVER",
+                              projectId: d.payload.projectId || projectId,
+                              treasuryId: d.payload.treasuryAccountId || treasuryAccountId,
+                              immediatePaidAmount: Number(d.payload.credit || 0),
+                            }),
+                          });
+                          const out = (await res.json()) as { message?: string; error?: string };
+                          if (!res.ok) {
+                            onToast(out.error || "تعذر إتمام التسليم");
+                            return;
+                          }
+                          onToast(out.message || "✅ تم إتمام التسليم وترحيل عملية البيع");
+                          setPortalDraftOrders((prev) => prev.filter((x) => x.id !== d.id));
+                          await onRefreshState?.();
+                        } finally {
+                          setHandingOverDraftId(null);
+                        }
+                      }}
+                      className="px-3 py-1 rounded-lg accent-bg font-extrabold disabled:opacity-50"
+                    >
+                      {handingOverDraftId === d.id ? "جاري الترحيل..." : "إتمام التسليم (تم الاستلام + فاتورة)"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* SlideOver Drawer for Add / Edit Concurrent Sale */}
       <SlideOverDrawer

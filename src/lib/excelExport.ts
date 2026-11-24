@@ -2,6 +2,12 @@ import * as XLSX from "xlsx";
 import { computeNetOperatingProfit } from "@/lib/formulas";
 import { reconcileHarvestInventory } from "@/lib/harvestReconciliation";
 import { exportOrShareBinaryFile } from "@/lib/nativeBridge";
+import {
+  getActiveClientExportActor,
+  resolveExportSignature,
+  type ExportActorMeta,
+  type ResolvedExportSignature,
+} from "@/lib/uiFormatters";
 import type { UasBootstrapState } from "@/types/uas";
 
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -49,6 +55,47 @@ function createRtlSheet(rows: Record<string, unknown>[], numericCols: string[] =
   return ws;
 }
 
+/**
+ * Appends a structured RTL issuer signature footer separated by blank rows
+ * so Excel column sorting and AutoFilter stop strictly at the data table.
+ */
+export function appendExportSignatureToWorksheet(
+  ws: XLSX.WorkSheet,
+  dataRowCount: number,
+  sig: ResolvedExportSignature
+): void {
+  const startRow = Math.max(2, dataRowCount + 3);
+  XLSX.utils.sheet_add_aoa(
+    ws,
+    [
+      ["توقيع وبيانات المُصدِر / Export Issuer Signature"],
+      ["اسم المستخدم / Username", sig.username, "الاسم / Display Name", sig.displayName],
+      ["المسمى / Title", `${sig.titleAr} (${sig.titleEn})`],
+      ["مساحة العمل / Workspace", `${sig.tenantName} (${sig.tenantSlug})`],
+      ["تاريخ ووقت التصدير / Exported At", sig.exportedAtDisplay],
+    ],
+    { origin: { r: startRow, c: 0 } }
+  );
+}
+
+/**
+ * Adds a dedicated RTL Export Signature metadata sheet to any workbook.
+ */
+export function appendExportSignatureSheet(
+  wb: XLSX.WorkBook,
+  sig: ResolvedExportSignature
+): void {
+  const sigRows = [
+    { "الحقل / Field": "اسم المستخدم / Username", "القيمة / Value": sig.username },
+    { "الحقل / Field": "الاسم المعروض / Display Name", "القيمة / Value": sig.displayName },
+    { "الحقل / Field": "الصفة الوظيفية / Title", "القيمة / Value": `${sig.titleAr} (${sig.titleEn})` },
+    { "الحقل / Field": "مساحة العمل / Workspace", "القيمة / Value": `${sig.tenantName} (${sig.tenantSlug})` },
+    { "الحقل / Field": "تاريخ التصدير / Date", "القيمة / Value": sig.dateDmy },
+    { "الحقل / Field": "وقت التصدير / Time", "القيمة / Value": sig.timeStr },
+  ];
+  XLSX.utils.book_append_sheet(wb, createRtlSheet(sigRows), "توقيع المُصدِر");
+}
+
 export function exportFullWorkbookToExcel(
   state: UasBootstrapState,
   options?: {
@@ -56,6 +103,7 @@ export function exportFullWorkbookToExcel(
     workerFilter?: string;
     customerFilter?: string;
     tenantSlug?: string | null;
+    exportedBy?: ExportActorMeta | null;
   }
 ): void {
   const wb = XLSX.utils.book_new();
@@ -287,8 +335,23 @@ export function exportFullWorkbookToExcel(
   }));
   XLSX.utils.book_append_sheet(wb, createRtlSheet(auditRows), "Audit Log");
 
+  const sig = resolveExportSignature({
+    actor: options?.exportedBy ?? getActiveClientExportActor(),
+    tenantSlug: options?.tenantSlug ?? state.enterpriseProfile?.tenantSlug,
+    tenantName: state.enterpriseProfile?.legalNameAr,
+  });
+
+  // Add cleanly separated footer signature block to every sheet without breaking table sorting/totals
+  for (const sheetName of wb.SheetNames) {
+    const ws = wb.Sheets[sheetName];
+    if (!ws || !ws["!ref"]) continue;
+    const range = XLSX.utils.decode_range(ws["!ref"]);
+    appendExportSignatureToWorksheet(ws, range.e.r + 1, sig);
+  }
+  appendExportSignatureSheet(wb, sig);
+
   const dateTag = new Date().toISOString().slice(0, 10);
-  const safeTenant = String(options?.tenantSlug || state.enterpriseProfile?.tenantSlug || "default")
+  const safeTenant = String(sig.tenantSlug || "default")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-") || "default";
@@ -350,7 +413,12 @@ export interface FinancialExportPayload {
   };
 }
 
-export function exportFinancialStatementsToExcel(data: FinancialExportPayload): void {
+export function exportFinancialStatementsToExcel(
+  data: FinancialExportPayload & {
+    tenantSlug?: string | null;
+    exportedBy?: ExportActorMeta | null;
+  }
+): void {
   const wb = XLSX.utils.book_new();
   wb.Workbook = { Views: [{ RTL: true }] };
 
@@ -481,8 +549,20 @@ export function exportFinancialStatementsToExcel(data: FinancialExportPayload): 
     XLSX.utils.book_append_sheet(wb, spSheet, "Sub-Projects Variance");
   }
 
+  const fsSig = resolveExportSignature({
+    actor: data.exportedBy ?? getActiveClientExportActor(),
+    tenantSlug: data.tenantSlug,
+  });
+  for (const sheetName of wb.SheetNames) {
+    const ws = wb.Sheets[sheetName];
+    if (!ws || !ws["!ref"]) continue;
+    const range = XLSX.utils.decode_range(ws["!ref"]);
+    appendExportSignatureToWorksheet(ws, range.e.r + 1, fsSig);
+  }
+  appendExportSignatureSheet(wb, fsSig);
+
   const fsDateTag = new Date().toISOString().slice(0, 10);
-  const fsSafeTenant = String((data as { tenantSlug?: string }).tenantSlug || "default")
+  const fsSafeTenant = String(fsSig.tenantSlug || "default")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-") || "default";

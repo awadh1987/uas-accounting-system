@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import * as XLSX from "xlsx";
 import { resolveTenantCloudUrl } from "../src/lib/serverConnection";
 import {
   filterOutSyntheticTestRecords,
@@ -14,7 +15,13 @@ import {
   formatMoney,
   formatRefreshTimestamp,
   parseDmyOrIsoToIso,
+  resolveExportSignature,
 } from "../src/lib/uiFormatters";
+import {
+  appendExportSignatureSheet,
+  appendExportSignatureToWorksheet,
+} from "../src/lib/excelExport";
+import { exportBulkBankTransferFile } from "../src/lib/treasury/bankWalletGateway";
 import {
   buildUasPrintHtml,
   buildUasPrintJobTitle,
@@ -149,5 +156,87 @@ describe("Phase 8 — ERP UI Polish, Dates, Test Hygiene, PDF RTL Shaping & Over
     checkHas("src/components/tabs/InventoryTab.tsx", ["تحديث", "تسجيل دفعة حصاد الآن"]);
     checkHas("src/components/tabs/WorkersTab.tsx", ["ActionOverflowMenu", "UasDateInput", "رقم الهاتف:", "تحديث"]);
     checkHas("src/components/UasAppShell.tsx", ["pb-28 md:pb-24", "ClientPortalApp"]);
+  });
+
+  it("embeds Username + Title signature block across PDF/Print, Excel and CSV exports without breaking sorting or leaking paths", () => {
+    const html = buildUasPrintHtml({
+      titleAr: "فاتورة مبيعات وكشف",
+      titleEn: "Sales Invoice & Statement",
+      documentNumber: "INV-2026-99",
+      documentDate: "2026-11-24",
+      status: "POSTED",
+      letterhead: {
+        companyNameAr: "شركة الجبري",
+        tenantSlug: "aljabri",
+        isCustomTenantBrand: true,
+      },
+      exportedBy: {
+        username: "ahmed_sales",
+        displayName: "أحمد السقاف",
+        titleAr: "مسؤول مبيعات وتحصيل",
+        titleEn: "Sales & Collections",
+        tenantSlug: "aljabri",
+        tenantName: "شركة الجبري",
+      },
+    });
+    assert.ok(html.includes('data-testid="uas-export-signature-block"'));
+    assert.ok(html.includes("ahmed_sales"));
+    assert.ok(html.includes("أحمد السقاف"));
+    assert.ok(html.includes("مسؤول مبيعات وتحصيل"));
+    assert.ok(html.includes("aljabri"));
+    assert.ok(!html.includes("/var/www"));
+
+    // Excel workbook signature block separated by blank rows + dedicated signature sheet
+    const sig = resolveExportSignature({
+      actor: {
+        username: "khalid_chief",
+        displayName: "خالد العامري",
+        titleAr: "رئيس الحسابات",
+        titleEn: "Chief Accountant",
+        tenantSlug: "alameri",
+        tenantName: "شركة العامري",
+      },
+    });
+    const wb = XLSX.utils.book_new();
+    const dataRows = [
+      { "الصنف": "صوطي", "الكمية": 10, "الإجمالي": 50000 },
+      { "الصنف": "عنسي", "الكمية": 5, "الإجمالي": 25000 },
+    ];
+    const ws = XLSX.utils.json_to_sheet(dataRows);
+    appendExportSignatureToWorksheet(ws, dataRows.length, sig);
+    XLSX.utils.book_append_sheet(wb, ws, "المبيعات");
+    appendExportSignatureSheet(wb, sig);
+
+    // Blank separator rows after table (dataRows.length + 1 = row index 3 -> separator rows 3 & 4 empty!)
+    assert.equal(ws[XLSX.utils.encode_cell({ r: 3, c: 0 })], undefined);
+    const sigSheetRows = XLSX.utils.sheet_to_json<Record<string, string>>(wb.Sheets["توقيع المُصدِر"]);
+    const joinedSig = JSON.stringify(sigSheetRows);
+    assert.ok(joinedSig.includes("khalid_chief"));
+    assert.ok(joinedSig.includes("رئيس الحسابات"));
+    assert.ok(joinedSig.includes("alameri"));
+
+    // CSV export BOM + signature metadata without breaking data columns
+    const csvExport = exportBulkBankTransferFile({
+      treasuryAccountId: "t1",
+      provider: "KURAIMI_API",
+      format: "csv",
+      tenantSlug: "uas-ye",
+      exportedBy: {
+        username: "treasury_ops",
+        displayName: "سالم باوزير",
+        titleAr: "مسؤول الخزينة",
+        tenantSlug: "uas-ye",
+        tenantName: "نظام اليمن",
+      },
+      items: [
+        { beneficiaryName: "محمد علي", accountOrPhone: "777111222", amount: 15000, currencyCode: "YER" },
+      ],
+    });
+    const csvStr = csvExport.buffer.toString("utf8");
+    assert.ok(csvStr.startsWith("\uFEFF"), "CSV must keep UTF-8 BOM for Arabic Excel rendering");
+    assert.ok(csvStr.includes("treasury_ops"));
+    assert.ok(csvStr.includes("مسؤول الخزينة"));
+    assert.ok(csvStr.includes("uas-ye"));
+    assert.ok(!csvStr.includes("/var/www"));
   });
 });

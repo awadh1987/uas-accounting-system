@@ -2781,6 +2781,26 @@ async function handleOfflineAndroidApiRequestCore(
       })
     );
     const totalAmount = rows.reduce((acc: number, r: BatchExportRow) => acc + r.amount, 0);
+    const dtNow = new Date();
+    const dateDmy = `${String(dtNow.getUTCDate()).padStart(2, "0")} / ${String(
+      dtNow.getUTCMonth() + 1
+    ).padStart(2, "0")} / ${dtNow.getUTCFullYear()}`;
+    const timeStr = dtNow.toLocaleTimeString("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    const activeUser = (typeof window !== "undefined" ? window.localStorage.getItem("uas_current_username") : null) || "local_user";
+    const footerMeta = [
+      "",
+      "",
+      `"توقيع وبيانات المُصدِر / Export Signature"`,
+      `"اسم المستخدم / Username","${activeUser.replace(/"/g, '""')}"`,
+      `"المسمى / Title","مستخدم النظام المحلي / Offline Local Mode"`,
+      `"مساحة العمل / Workspace","default"`,
+      `"تاريخ ووقت التصدير / Exported At","${dateDmy} • ${timeStr}"`,
+    ].join("\n");
     const header = "رقم التسلسل,اسم المستفيد,رقم الحساب أو المحفظة,المبلغ,العملة,المرجع,البيان\n";
     const csvContent =
       "\uFEFF" +
@@ -2790,7 +2810,9 @@ async function handleOfflineAndroidApiRequestCore(
           (r: BatchExportRow) =>
             `"${r.serial}","${r.beneficiaryName}","${r.accountOrPhone}","${r.amount}","${r.currencyCode}","${r.reference}","${r.notes}"`
         )
-        .join("\n");
+        .join("\n") +
+      "\n" +
+      footerMeta;
     const base64 =
       typeof btoa === "function"
         ? btoa(unescape(encodeURIComponent(csvContent)))
