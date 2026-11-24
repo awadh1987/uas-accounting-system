@@ -18,8 +18,13 @@ import {
   buildServerAgentContext,
   executeConfirmedAiAction,
 } from "@/lib/ai/agentServerExecutor";
-import { normalizeMemoryTenantSlug } from "@/lib/ai/copilotMemoryTypes";
 import {
+  isDialectLearningConfigEntry,
+  isDialectTermMemoryEntry,
+  normalizeMemoryTenantSlug,
+} from "@/lib/ai/copilotMemoryTypes";
+import {
+  getUserDialectLearningEnabled,
   recordMemoryUsage,
   retrieveServerCopilotMemories,
 } from "@/lib/ai/copilotMemoryStore";
@@ -111,17 +116,35 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     const tenantSlug = normalizeMemoryTenantSlug(
       getActiveTenantId() || workspaceContext?.tenantSlug
     );
-    const activeMemories = retrieveServerCopilotMemories({
+    const dialect: "yemeni" | "msa" =
+      body.dialect === "msa" || workspaceContext?.dialect === "msa" ? "msa" : "yemeni";
+    const dialectLearningEnabled =
+      typeof body.dialectLearningEnabled === "boolean"
+        ? body.dialectLearningEnabled
+        : getUserDialectLearningEnabled({
+            tenantSlug,
+            userId: actor.userId,
+          });
+
+    const rawMemories = retrieveServerCopilotMemories({
       tenantSlug,
       userId: actor.userId,
       query: prompt || "قطفة علاقي مصروف مبيعات",
       activeTab: workspaceContext?.activeTab,
-      limit: 8,
+      limit: 10,
+    });
+    const activeMemories = rawMemories.filter((m) => {
+      if (isDialectLearningConfigEntry(m)) return false;
+      if (!dialectLearningEnabled && isDialectTermMemoryEntry(m)) return false;
+      return true;
     });
 
     const agentResponse = await runGeminiCopilotAgent(prompt, {
       ...serverCtx,
-      workspaceContext,
+      workspaceContext: {
+        ...workspaceContext,
+        dialect,
+      },
       explicitTool,
       conversationHistory,
       imageAttachment,
@@ -148,6 +171,8 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
             userId: actor.userId ?? undefined,
             activeTab: workspaceContext?.activeTab,
             editedDraftContext,
+            dialect,
+            dialectLearningEnabled,
           })
         : { learnedEvents: [], forgottenEntries: [] };
 

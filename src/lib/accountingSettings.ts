@@ -35,6 +35,57 @@ export type DocumentSequenceKey = "JV" | "RV" | "PV" | "INV" | "BILL" | "TRN";
 
 export type DocumentSequencesMap = Record<DocumentSequenceKey, DocumentSequenceConfig>;
 
+export const DEFAULT_DISK_ALERT_THRESHOLD_PERCENT = 80;
+export const MIN_DISK_ALERT_THRESHOLD_PERCENT = 50;
+export const MAX_DISK_ALERT_THRESHOLD_PERCENT = 95;
+
+export function clampDiskAlertThresholdPercent(
+  value: unknown,
+  fallback: number = DEFAULT_DISK_ALERT_THRESHOLD_PERCENT
+): number {
+  const num = typeof value === "number" ? value : Number(String(value ?? "").trim());
+  if (!Number.isFinite(num)) {
+    return fallback;
+  }
+  return Math.min(
+    MAX_DISK_ALERT_THRESHOLD_PERCENT,
+    Math.max(MIN_DISK_ALERT_THRESHOLD_PERCENT, Math.round(num))
+  );
+}
+
+export function resolveDefaultDiskAlertThresholdPercent(): number {
+  const envRaw = (process.env.UAS_DISK_ALERT_THRESHOLD_PERCENT || "").trim();
+  if (!envRaw) return DEFAULT_DISK_ALERT_THRESHOLD_PERCENT;
+  return clampDiskAlertThresholdPercent(envRaw, DEFAULT_DISK_ALERT_THRESHOLD_PERCENT);
+}
+
+export function parseTenantAdminConfigJson(raw?: string | null): Record<string, unknown> {
+  if (!raw || typeof raw !== "string") return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export function resolveEffectiveDiskThresholdPercent(
+  row?: { tenantAdminConfigJson?: string | null } | null
+): number {
+  const envDefault = resolveDefaultDiskAlertThresholdPercent();
+  const cfg = parseTenantAdminConfigJson(row?.tenantAdminConfigJson);
+  if (
+    cfg.diskAlertThresholdPercent !== undefined &&
+    cfg.diskAlertThresholdPercent !== null &&
+    String(cfg.diskAlertThresholdPercent).trim() !== ""
+  ) {
+    return clampDiskAlertThresholdPercent(cfg.diskAlertThresholdPercent, envDefault);
+  }
+  return envDefault;
+}
+
 export interface AccountingSettingsConfig {
   orgName: string;
   logoText: string;
@@ -51,6 +102,7 @@ export interface AccountingSettingsConfig {
   costingMethod: "WEIGHTED_AVERAGE" | "FIFO";
   negativeStockPolicy: "BLOCK" | "WARN";
   printLayout: "A4" | "80MM" | string;
+  diskAlertThresholdPercent: number;
   controlAccounts: ControlAccountsMap;
   documentSequences: DocumentSequencesMap;
 }
@@ -107,6 +159,7 @@ export const DEFAULT_ACCOUNTING_SETTINGS: AccountingSettingsConfig = {
   costingMethod: "WEIGHTED_AVERAGE",
   negativeStockPolicy: "BLOCK",
   printLayout: "A4",
+  diskAlertThresholdPercent: DEFAULT_DISK_ALERT_THRESHOLD_PERCENT,
   controlAccounts: { ...DEFAULT_CONTROL_ACCOUNTS },
   documentSequences: structuredClone(DEFAULT_DOCUMENT_SEQUENCES),
 };
@@ -129,8 +182,14 @@ export function parseAccountingSettings(row: {
   printLayout?: string | null;
   controlAccountsJson?: string | null;
   documentSequencesJson?: string | null;
+  tenantAdminConfigJson?: string | null;
 } | null): AccountingSettingsConfig {
-  if (!row) return structuredClone(DEFAULT_ACCOUNTING_SETTINGS);
+  if (!row) {
+    return {
+      ...structuredClone(DEFAULT_ACCOUNTING_SETTINGS),
+      diskAlertThresholdPercent: resolveDefaultDiskAlertThresholdPercent(),
+    };
+  }
 
   let parsedControl: Partial<ControlAccountsMap> = {};
   try {
@@ -184,6 +243,7 @@ export function parseAccountingSettings(row: {
     costingMethod: row.costingMethod === "FIFO" ? "FIFO" : "WEIGHTED_AVERAGE",
     negativeStockPolicy: row.negativeStockPolicy === "WARN" ? "WARN" : "BLOCK",
     printLayout: row.printLayout || "A4",
+    diskAlertThresholdPercent: resolveEffectiveDiskThresholdPercent(row),
     controlAccounts: { ...DEFAULT_CONTROL_ACCOUNTS, ...parsedControl },
     documentSequences: mergedSequences,
   };

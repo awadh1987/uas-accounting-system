@@ -11,6 +11,10 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   applyMemoryUpsert,
+  DIALECT_LEARNING_SETTING_TOPIC,
+  extractDialectLearningEnabled,
+  isDialectLearningConfigEntry,
+  isDialectTermMemoryEntry,
   normalizeMemoryTenantSlug,
   retrieveRelevantMemories,
   type CopilotMemoryEntry,
@@ -208,4 +212,86 @@ export function recordMemoryUsage(params: {
   if (dirty) {
     writeTenantMemoryFile(params.tenantSlug, current);
   }
+}
+
+export function getUserDialectLearningEnabled(params: {
+  tenantSlug: string;
+  userId?: string | null;
+}): boolean {
+  const list = readTenantMemoryFile(params.tenantSlug);
+  return extractDialectLearningEnabled(list, params.userId);
+}
+
+export function setUserDialectLearningEnabled(params: {
+  tenantSlug: string;
+  userId?: string | null;
+  enabled: boolean;
+}): CopilotMemoryEntry | null {
+  const ev = upsertTenantMemory({
+    tenantSlug: params.tenantSlug,
+    scope: "user",
+    userId: params.userId ?? undefined,
+    category: "dialect_preference",
+    topicKey: DIALECT_LEARNING_SETTING_TOPIC,
+    content: params.enabled ? "DIALECT_LEARNING_ENABLED" : "DIALECT_LEARNING_DISABLED",
+    sourceSnippet: "User Copilot Options Toggle",
+    confidence: 1,
+    pinned: false,
+    active: true,
+  });
+  return ev?.entry ?? null;
+}
+
+export function countLearnedDialectEntries(params: {
+  tenantSlug: string;
+  userId?: string | null;
+}): number {
+  const list = readTenantMemoryFile(params.tenantSlug);
+  return list.filter((e) => {
+    if (!isDialectTermMemoryEntry(e)) return false;
+    if (e.scope === "user" && params.userId && e.userId && e.userId !== params.userId) {
+      return false;
+    }
+    return true;
+  }).length;
+}
+
+export function listVisibleTenantMemories(params: {
+  tenantSlug: string;
+  userId?: string | null;
+  includeInactive?: boolean;
+}): CopilotMemoryEntry[] {
+  return listTenantMemories(params).filter((e) => !isDialectLearningConfigEntry(e));
+}
+
+export function resetLearnedDialectForUser(params: {
+  tenantSlug: string;
+  userId?: string | null;
+}): { removedCount: number; memories: CopilotMemoryEntry[] } {
+  const current = readTenantMemoryFile(params.tenantSlug);
+  let removedCount = 0;
+  const next = current.filter((entry) => {
+    if (!isDialectTermMemoryEntry(entry)) return true;
+    if (entry.scope === "user" && params.userId && entry.userId && entry.userId !== params.userId) {
+      return true;
+    }
+    if (entry.scope === "workspace" && params.userId && entry.userId && entry.userId !== params.userId) {
+      return true;
+    }
+    removedCount++;
+    return false;
+  });
+
+  if (removedCount > 0) {
+    writeTenantMemoryFile(params.tenantSlug, next);
+  }
+
+  return {
+    removedCount,
+    memories: listVisibleTenantMemories({
+      tenantSlug: params.tenantSlug,
+      userId: params.userId,
+      includeInactive: true,
+    }),
+  };
 }

@@ -21,6 +21,7 @@
     "license:keygen": "node scripts/licensing/keygen.mjs",
     "license:issue": "node scripts/licensing/issue-license.mjs",
     "release:build": "node scripts/build-commercial-release.mjs",
+    "backup:scheduled": "tsx scripts/run-scheduled-backups.mjs",
     "build:mobile": "node scripts/build-capacitor.mjs",
     "cap:sync": "npx cap sync",
     "cap:android": "npx cap open android",

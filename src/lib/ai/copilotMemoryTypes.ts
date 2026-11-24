@@ -13,7 +13,38 @@ export type CopilotMemoryCategory =
   | "domain_fact"
   | "naming_alias"
   | "workflow_preference"
-  | "operational_pattern";
+  | "operational_pattern"
+  | "dialect_preference";
+
+export const DIALECT_LEARNING_SETTING_TOPIC = "pref:dialect_learning_enabled";
+export const DIALECT_TERM_TOPIC_PREFIX = "dialect:";
+
+export function isDialectLearningConfigEntry(entry: Pick<CopilotMemoryEntry, "topicKey">): boolean {
+  return String(entry.topicKey || "").toLowerCase() === DIALECT_LEARNING_SETTING_TOPIC;
+}
+
+export function isDialectTermMemoryEntry(
+  entry: Pick<CopilotMemoryEntry, "category" | "topicKey">
+): boolean {
+  if (isDialectLearningConfigEntry(entry)) return false;
+  return (
+    entry.category === "dialect_preference" ||
+    String(entry.topicKey || "").toLowerCase().startsWith(DIALECT_TERM_TOPIC_PREFIX)
+  );
+}
+
+export function extractDialectLearningEnabled(
+  entries: CopilotMemoryEntry[],
+  userId?: string | null
+): boolean {
+  const cfg = entries.find((e) => {
+    if (!isDialectLearningConfigEntry(e)) return false;
+    if (userId && e.userId && e.userId !== userId) return false;
+    return e.active !== false;
+  });
+  if (!cfg) return true;
+  return !/OFF|DISABLED|FALSE|0$/i.test(cfg.content.trim());
+}
 
 export interface CopilotMemoryEntry {
   id: string;
@@ -58,6 +89,7 @@ const VALID_CATEGORIES = new Set<CopilotMemoryCategory>([
   "naming_alias",
   "workflow_preference",
   "operational_pattern",
+  "dialect_preference",
 ]);
 
 export function normalizeMemoryTenantSlug(rawSlug: string | null | undefined): string {

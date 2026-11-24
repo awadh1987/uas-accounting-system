@@ -578,37 +578,37 @@ export interface OfflineAutoLoginUser {
 
 export type OfflineActivationResult =
   | {
-      success: true;
-      license: UasSignedLicense;
-      company_lock: "ADOPTED" | "MATCHED" | "NOT_REQUIRED";
-      tenant_slug?: string | null;
-      tenantSlug?: string | null;
-      tenant_url?: string | null;
-      tenantUrl?: string | null;
-      allowed_modes?: ("local" | "lan" | "cloud")[];
-      allowedModes?: ("local" | "lan" | "cloud")[];
-      syncMetadata?: {
-        tenantSlug: string | null;
-        tenantUrl: string | null;
-        allowedModes: ("local" | "lan" | "cloud")[];
-      };
-      auto_login?: boolean;
-      user?: OfflineAutoLoginUser | null;
-      admin_credentials?: LicenseAdminCredentials | null;
-      seat?: {
-        user_email: string;
-        platform: SeatPlatform;
-        hwid: string;
-        status: "CREATED" | "REFRESHED" | "REBOUND";
-      } | null;
-      usage?: SeatUsage;
-    }
-  | {
-      success: false;
-      status: number;
-      code: string;
-      error: string;
+    success: true;
+    license: UasSignedLicense;
+    company_lock: "ADOPTED" | "MATCHED" | "NOT_REQUIRED";
+    tenant_slug?: string | null;
+    tenantSlug?: string | null;
+    tenant_url?: string | null;
+    tenantUrl?: string | null;
+    allowed_modes?: ("local" | "lan" | "cloud")[];
+    allowedModes?: ("local" | "lan" | "cloud")[];
+    syncMetadata?: {
+      tenantSlug: string | null;
+      tenantUrl: string | null;
+      allowedModes: ("local" | "lan" | "cloud")[];
     };
+    auto_login?: boolean;
+    user?: OfflineAutoLoginUser | null;
+    admin_credentials?: LicenseAdminCredentials | null;
+    seat?: {
+      user_email: string;
+      platform: SeatPlatform;
+      hwid: string;
+      status: "CREATED" | "REFRESHED" | "REBOUND";
+    } | null;
+    usage?: SeatUsage;
+  }
+  | {
+    success: false;
+    status: number;
+    code: string;
+    error: string;
+  };
 
 function tryOfflineAutoLogin(
   storage: KeyValueStorage,
@@ -946,17 +946,17 @@ export async function activateOfflineClientLicense(
     auto_login: autoLogin.auto_login,
     ...(autoLogin.auto_login
       ? {
-          user: autoLogin.user,
-          admin_credentials: autoLogin.admin_credentials,
-        }
+        user: autoLogin.user,
+        admin_credentials: autoLogin.admin_credentials,
+      }
       : {}),
     seat: policyResult.seat
       ? {
-          user_email: policyResult.seat.binding.userEmail,
-          platform: policyResult.seat.binding.platform,
-          hwid: policyResult.seat.binding.hwid,
-          status: policyResult.seat.status,
-        }
+        user_email: policyResult.seat.binding.userEmail,
+        platform: policyResult.seat.binding.platform,
+        hwid: policyResult.seat.binding.hwid,
+        status: policyResult.seat.status,
+      }
       : null,
     usage,
   };
@@ -1045,17 +1045,17 @@ export async function buildOfflineClientLicenseStatus(
   hwid: string;
   active_mode: "local" | "lan" | "cloud";
   license_status:
-    | "ACTIVE"
-    | "UNLICENSED"
-    | "EXPIRED"
-    | "SUSPENDED"
-    | "REVOKED"
-    | "INVALID_SIGNATURE"
-    | "HWID_MISMATCH"
-    | "CLOCK_TAMPER"
-    | "SEAT_LIMIT_REACHED"
-    | "MODE_NOT_ALLOWED"
-    | "COMPANY_MISMATCH";
+  | "ACTIVE"
+  | "UNLICENSED"
+  | "EXPIRED"
+  | "SUSPENDED"
+  | "REVOKED"
+  | "INVALID_SIGNATURE"
+  | "HWID_MISMATCH"
+  | "CLOCK_TAMPER"
+  | "SEAT_LIMIT_REACHED"
+  | "MODE_NOT_ALLOWED"
+  | "COMPANY_MISMATCH";
   is_valid: boolean;
   error?: string | null;
   customer_name?: string | null;
@@ -1096,14 +1096,19 @@ export async function buildOfflineClientLicenseStatus(
     rawMode === "cloud" || rawMode === "lan" || rawMode === "local"
       ? rawMode
       : savedServerUrl.startsWith("https://")
-      ? "cloud"
-      : savedServerUrl.startsWith("http://")
-      ? "lan"
-      : "local";
+        ? "cloud"
+        : savedServerUrl.startsWith("http://")
+          ? "lan"
+          : "local";
   const savedLanUrl = (storage.getItem("uas_lan_server_url") || "").trim().replace(/\/+$/, "");
   const savedCloudUrl = (storage.getItem("uas_cloud_server_url") || "").trim().replace(/\/+$/, "");
-  const lanUrl = savedLanUrl || (activeMode === "lan" && savedServerUrl ? savedServerUrl : "http://192.168.1.10:3000");
-  const cloudUrl = savedCloudUrl || (activeMode === "cloud" && savedServerUrl ? savedServerUrl : "https://qat.world");
+  const storedSlug = (storage.getItem("uas_tenant_slug") || "").trim().toLowerCase();
+  const defaultCloud =
+    storedSlug && storedSlug !== "default" && /^[a-z0-9-]+$/.test(storedSlug)
+      ? `https://${storedSlug}.qat.world`
+      : "https://qat.world";
+  const lanUrl = savedLanUrl || (activeMode === "lan" && savedServerUrl ? savedServerUrl : "");
+  const cloudUrl = savedCloudUrl || (activeMode === "cloud" && savedServerUrl ? savedServerUrl : defaultCloud);
 
   if (!license) {
     return {
@@ -1192,11 +1197,11 @@ export async function buildOfflineClientLicenseStatus(
     per_user_devices: policy.perUserDevices,
     seats: usage
       ? {
-          used_users: usage.usedUsers,
-          max_users: usage.maxUsers,
-          windows_bound: usage.windowsBound,
-          android_bound: usage.androidBound,
-        }
+        used_users: usage.usedUsers,
+        max_users: usage.maxUsers,
+        windows_bound: usage.windowsBound,
+        android_bound: usage.androidBound,
+      }
       : null,
     license_id: license.license_id,
     allowed_modes: license.allowed_modes,
@@ -1339,7 +1344,7 @@ export async function activateOnlineKeyOnClient(
             code: codeStr,
             error: String(
               data.error ||
-                "رفض الخادم السحابي مفتاح التفعيل (تحقق من اسم المنشأة أو حد المقاعد). / Cloud server rejected activation key."
+              "رفض الخادم السحابي مفتاح التفعيل (تحقق من اسم المنشأة أو حد المقاعد). / Cloud server rejected activation key."
             ),
             resolvedServerUrl: targetBase,
           };
@@ -1354,21 +1359,21 @@ export async function activateOnlineKeyOnClient(
   const localResult = await activateOfflineClientLicense(
     serverLicenseObj
       ? {
-          licenseFileContent: serverLicenseObj as unknown as Record<string, unknown>,
-          confirmCompanyName: decodedCompany || undefined,
-          userEmail: userEmail || undefined,
-          platform,
-          hwid,
-          deviceName: input.deviceName,
-        }
+        licenseFileContent: serverLicenseObj as unknown as Record<string, unknown>,
+        confirmCompanyName: decodedCompany || undefined,
+        userEmail: userEmail || undefined,
+        platform,
+        hwid,
+        deviceName: input.deviceName,
+      }
       : {
-          activationKey: key,
-          confirmCompanyName: decodedCompany || undefined,
-          userEmail: userEmail || undefined,
-          platform,
-          hwid,
-          deviceName: input.deviceName,
-        },
+        activationKey: key,
+        confirmCompanyName: decodedCompany || undefined,
+        userEmail: userEmail || undefined,
+        platform,
+        hwid,
+        deviceName: input.deviceName,
+      },
     opts
   );
 

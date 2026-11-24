@@ -52,6 +52,8 @@ import {
   X,
 } from "lucide-react";
 import {
+  isDialectLearningConfigEntry,
+  isDialectTermMemoryEntry,
   loadLocalCopilotMemories,
   normalizeMemoryTenantSlug,
   saveLocalCopilotMemories,
@@ -120,6 +122,7 @@ import {
   splitTextForSequentialSpeech,
   type CopilotDialectMode,
 } from "@/lib/ai/yemeniLocalization";
+import { sanitizeSpeechText } from "@/lib/speechSanitizer";
 import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
 import {
   executeMutation,
@@ -389,6 +392,8 @@ export function UasAiCopilot({
   const [audioLoadingMsgId, setAudioLoadingMsgId] = useState<string | null>(null);
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
   const activeAudioUrlRef = useRef<string | null>(null);
+  const preloadedUrlsRef = useRef<Set<string>>(new Set());
+  const preloadedAudiosRef = useRef<Set<HTMLAudioElement>>(new Set());
   const speechSessionRef = useRef(0);
   const inputPromptRef = useRef(inputPrompt);
   useEffect(() => {
@@ -416,16 +421,30 @@ export function UasAiCopilot({
     [workspaceContext?.tenantSlug, state.enterpriseProfile?.tenantSlug]
   );
 
+  const dialectLearningStorageKey = `uas_copilot_dialect_learning_${activeTenantSlug}_${currentUser?.id || "guest"}`;
+  const [dialectLearningEnabled, setDialectLearningEnabled] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      const saved = window.localStorage.getItem(dialectLearningStorageKey);
+      if (saved === "false" || saved === "0") return false;
+      if (saved === "true" || saved === "1") return true;
+    }
+    return true;
+  });
+
   const [memories, setMemories] = useState<CopilotMemoryEntry[]>(() => {
     if (typeof window !== "undefined") {
       return loadLocalCopilotMemories(
         normalizeMemoryTenantSlug(
           workspaceContext?.tenantSlug || state.enterpriseProfile?.tenantSlug || getStoredTenantId() || "default"
         )
-      );
+      ).filter((m) => !isDialectLearningConfigEntry(m));
     }
     return [];
   });
+  const learnedDialectCount = useMemo(
+    () => memories.filter((m) => isDialectTermMemoryEntry(m)).length,
+    [memories]
+  );
   const [memorySearch, setMemorySearch] = useState("");
   const [newMemoryContent, setNewMemoryContent] = useState("");
   const [newMemoryCategory, setNewMemoryCategory] = useState<CopilotMemoryCategory>("domain_fact");
@@ -660,6 +679,17 @@ export function UasAiCopilot({
       }
       activeAudioRef.current = null;
     }
+    for (const audio of preloadedAudiosRef.current) {
+      try {
+        audio.onended = null;
+        audio.onerror = null;
+        audio.pause();
+        audio.src = "";
+      } catch {
+        // ignore
+      }
+    }
+    preloadedAudiosRef.current.clear();
     if (activeAudioUrlRef.current) {
       try {
         URL.revokeObjectURL(activeAudioUrlRef.current);
@@ -668,6 +698,14 @@ export function UasAiCopilot({
       }
       activeAudioUrlRef.current = null;
     }
+    for (const url of preloadedUrlsRef.current) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // ignore
+      }
+    }
+    preloadedUrlsRef.current.clear();
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       try {
         window.speechSynthesis.cancel();
@@ -750,31 +788,42 @@ export function UasAiCopilot({
     }
   }
 
-  function playAudioBlobChunk(blob: Blob, sessionId: number): Promise<boolean> {
+  function playPreparedAudioChunk(
+    prepared: { audio: HTMLAudioElement; objectUrl: string },
+    sessionId: number
+  ): Promise<boolean> {
     return new Promise((resolve) => {
       if (speechSessionRef.current !== sessionId) {
+        try {
+          URL.revokeObjectURL(prepared.objectUrl);
+        } catch {}
+        preloadedUrlsRef.current.delete(prepared.objectUrl);
+        preloadedAudiosRef.current.delete(prepared.audio);
         resolve(false);
         return;
       }
-      const objectUrl = URL.createObjectURL(blob);
+      const { audio, objectUrl } = prepared;
       activeAudioUrlRef.current = objectUrl;
-      const audio = new Audio(objectUrl);
       activeAudioRef.current = audio;
 
       let settled = false;
       const cleanup = (ok: boolean) => {
         if (settled) return;
         settled = true;
+        audio.onended = null;
+        audio.onerror = null;
+        preloadedAudiosRef.current.delete(audio);
+        preloadedUrlsRef.current.delete(objectUrl);
         if (activeAudioRef.current === audio) {
           activeAudioRef.current = null;
         }
         if (activeAudioUrlRef.current === objectUrl) {
-          try {
-            URL.revokeObjectURL(objectUrl);
-          } catch {
-            // ignore
-          }
           activeAudioUrlRef.current = null;
+        }
+        try {
+          URL.revokeObjectURL(objectUrl);
+        } catch {
+          // ignore
         }
         resolve(ok);
       };
@@ -792,6 +841,8 @@ export function UasAiCopilot({
         headers: buildCopilotRequestHeaders(),
         body: JSON.stringify({
           text: chunkText,
+          visibleReply: chunkText,
+          speakReasoning: false,
           lang: isAr ? "ar" : "en",
           dialect,
         }),
@@ -817,28 +868,63 @@ export function UasAiCopilot({
     stopSpeechPlayback();
     const sessionId = speechSessionRef.current;
 
-    const chunks = splitTextForSequentialSpeech(text, {
+    // Strictly speak only sanitized chat output (never internal thoughts, prompts, or tool traces)
+    const chatOnlyText = sanitizeSpeechText(text, {
+      speakReasoning: false,
+      lang: isAr ? "ar" : "en",
+    });
+    if (!chatOnlyText) return;
+
+    const chunks = splitTextForSequentialSpeech(chatOnlyText, {
       lang: isAr ? "ar" : "en",
       dialect,
-      maxChunkChars: 420,
+      maxChunkChars: 900,
     });
     if (chunks.length === 0) return;
 
     if (!isOfflineClientContext()) {
       try {
         if (msgId) setAudioLoadingMsgId(msgId);
-        let nextBlobPromise: Promise<Blob | null> | null = fetchGeminiSpeechChunk(chunks[0]);
+        const PREFETCH_LOOKAHEAD = 2;
+        const preparedMap = new Map<
+          number,
+          Promise<{ audio: HTMLAudioElement; objectUrl: string } | null>
+        >();
+
+        const warmChunk = (idx: number) => {
+          if (idx >= chunks.length || preparedMap.has(idx)) return;
+          const p = fetchGeminiSpeechChunk(chunks[idx]).then((blob) => {
+            if (!blob || speechSessionRef.current !== sessionId) return null;
+            const objectUrl = URL.createObjectURL(blob);
+            preloadedUrlsRef.current.add(objectUrl);
+            const audio = new Audio(objectUrl);
+            audio.preload = "auto";
+            try {
+              audio.load();
+            } catch {
+              // ignore
+            }
+            preloadedAudiosRef.current.add(audio);
+            return { audio, objectUrl };
+          });
+          preparedMap.set(idx, p);
+        };
+
+        for (let k = 0; k <= PREFETCH_LOOKAHEAD; k++) {
+          warmChunk(k);
+        }
 
         for (let i = 0; i < chunks.length; i++) {
           if (speechSessionRef.current !== sessionId) return;
-          const blob = await nextBlobPromise;
+          const prepared = await (preparedMap.get(i) ?? Promise.resolve(null));
           if (speechSessionRef.current !== sessionId) return;
 
-          // Prefetch next chunk in parallel while playing current chunk so multi-part replies flow seamlessly
-          nextBlobPromise =
-            i + 1 < chunks.length ? fetchGeminiSpeechChunk(chunks[i + 1]) : null;
+          // Keep pre-buffer ahead of playback so chunk boundaries play continuously without choppy stalls
+          for (let look = 1; look <= PREFETCH_LOOKAHEAD; look++) {
+            warmChunk(i + look);
+          }
 
-          if (!blob) {
+          if (!prepared) {
             setAudioLoadingMsgId(null);
             await speakChunksViaBrowserFallback(chunks, msgId, sessionId, i);
             return;
@@ -848,7 +934,7 @@ export function UasAiCopilot({
           setSpeakingProgress({ current: i + 1, total: chunks.length });
           setAudioLoadingMsgId(null);
 
-          const playedOk = await playAudioBlobChunk(blob, sessionId);
+          const playedOk = await playPreparedAudioChunk(prepared, sessionId);
           if (!playedOk) {
             if (speechSessionRef.current === sessionId) {
               await speakChunksViaBrowserFallback(chunks, msgId, sessionId, i);
@@ -1367,7 +1453,9 @@ export function UasAiCopilot({
   }
 
   const refreshTenantMemories = useCallback(async () => {
-    const localSnapshot = loadLocalCopilotMemories(activeTenantSlug);
+    const localSnapshot = loadLocalCopilotMemories(activeTenantSlug).filter(
+      (m) => !isDialectLearningConfigEntry(m)
+    );
     if (isOfflineClientContext()) {
       setMemories(localSnapshot);
       return;
@@ -1380,8 +1468,22 @@ export function UasAiCopilot({
         setMemories(localSnapshot);
         return;
       }
-      const data = (await res.json()) as { memories?: CopilotMemoryEntry[] };
-      let serverList = Array.isArray(data.memories) ? data.memories : [];
+      const data = (await res.json()) as {
+        memories?: CopilotMemoryEntry[];
+        dialectLearningEnabled?: boolean;
+      };
+      if (typeof data.dialectLearningEnabled === "boolean") {
+        setDialectLearningEnabled(data.dialectLearningEnabled);
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(
+            dialectLearningStorageKey,
+            String(data.dialectLearningEnabled)
+          );
+        }
+      }
+      let serverList = (Array.isArray(data.memories) ? data.memories : []).filter(
+        (m) => !isDialectLearningConfigEntry(m)
+      );
       const serverIds = new Set(serverList.map((m) => m.id));
       const unsyncedLocal = localSnapshot.filter((m) => !serverIds.has(m.id));
       if (unsyncedLocal.length > 0) {
@@ -1393,7 +1495,7 @@ export function UasAiCopilot({
         if (syncRes.ok) {
           const syncData = (await syncRes.json()) as { memories?: CopilotMemoryEntry[] };
           if (Array.isArray(syncData.memories)) {
-            serverList = syncData.memories;
+            serverList = syncData.memories.filter((m) => !isDialectLearningConfigEntry(m));
           }
         }
       }
@@ -1405,7 +1507,96 @@ export function UasAiCopilot({
       setMemoryBusy(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTenantSlug, offlineMode, currentUser?.id]);
+  }, [activeTenantSlug, offlineMode, currentUser?.id, dialectLearningStorageKey]);
+
+  const handleToggleDialectLearning = async () => {
+    const nextEnabled = !dialectLearningEnabled;
+    setDialectLearningEnabled(nextEnabled);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(dialectLearningStorageKey, String(nextEnabled));
+    }
+    if (!isOfflineClientContext()) {
+      try {
+        const res = await fetch("/api/ai/memory", {
+          method: "POST",
+          headers: buildCopilotRequestHeaders(),
+          body: JSON.stringify({
+            action: "set_dialect_learning",
+            enabled: nextEnabled,
+            userId: currentUser?.id,
+          }),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { memories?: CopilotMemoryEntry[] };
+          if (Array.isArray(data.memories)) {
+            const cleaned = data.memories.filter((m) => !isDialectLearningConfigEntry(m));
+            saveLocalCopilotMemories(activeTenantSlug, cleaned);
+            setMemories(cleaned);
+          }
+        }
+      } catch {
+        // Keep optimistic local toggle cleanly
+      }
+    }
+    onToast(
+      nextEnabled
+        ? isAr
+          ? "✅ تم تفعيل التعلم التلقائي للهجة والأسلوب اليمني"
+          : "✅ Automatic Dialect Learning enabled"
+        : isAr
+          ? "⏸️ تم إيقاف التعلم التلقائي للهجة لهذا المستخدم"
+          : "⏸️ Automatic Dialect Learning disabled for this user"
+    );
+  };
+
+  const handleResetLearnedDialect = async () => {
+    if (typeof window !== "undefined") {
+      const ok = window.confirm(
+        isAr
+          ? "هل تريد مسح مفردات وتفضيلات اللهجة المكتسبة لهذا المستخدم وإعادتها للوضع الافتراضي؟ (لن تتأثر قواعد المنشأة المحاسبية)"
+          : "Reset all learned dialect phrases for this user back to default? (Tenant accounting rules remain intact.)"
+      );
+      if (!ok) return;
+    }
+
+    setMemoryBusy(true);
+    try {
+      const localFiltered = loadLocalCopilotMemories(activeTenantSlug).filter(
+        (m) => !isDialectTermMemoryEntry(m) && !isDialectLearningConfigEntry(m)
+      );
+      saveLocalCopilotMemories(activeTenantSlug, localFiltered);
+      setMemories(localFiltered);
+
+      if (!isOfflineClientContext()) {
+        const res = await fetch("/api/ai/memory", {
+          method: "POST",
+          headers: buildCopilotRequestHeaders(),
+          body: JSON.stringify({
+            action: "reset_dialect",
+            userId: currentUser?.id,
+          }),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as {
+            memories?: CopilotMemoryEntry[];
+            removedCount?: number;
+          };
+          if (Array.isArray(data.memories)) {
+            const cleaned = data.memories.filter((m) => !isDialectLearningConfigEntry(m));
+            saveLocalCopilotMemories(activeTenantSlug, cleaned);
+            setMemories(cleaned);
+          }
+        }
+      }
+      onToast(
+        isAr
+          ? "🔄 تم مسح اللهجة المكتسبة وإعادة الضبط للوضع الافتراضي"
+          : "🔄 Learned dialect preferences cleared and reset"
+      );
+    } finally {
+      setMemoryBusy(false);
+    }
+  };
 
   const refreshExecutiveBriefing = useCallback(
     async (forceRefresh = false) => {
@@ -1793,6 +1984,8 @@ export function UasAiCopilot({
             body: JSON.stringify({
               prompt,
               lang,
+              dialect,
+              dialectLearningEnabled,
               workspaceContext: mergedWorkspaceContext,
               conversationHistory: historySnapshot,
               ...(attachedImage
@@ -2386,6 +2579,19 @@ export function UasAiCopilot({
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
+              {(speakingMsgId || audioLoadingMsgId) && (
+                <button
+                  type="button"
+                  data-testid="copilot-global-stop-audio-btn"
+                  onClick={() => stopSpeechPlayback()}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-rose-400/50 bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-[11px] font-extrabold transition min-h-[36px]"
+                  title={isAr ? "إيقاف القراءة الصوتية الآن" : "Stop Voice Playback"}
+                >
+                  <span className="w-2 h-2 rounded-full bg-rose-400 animate-pulse" />
+                  <VolumeX className="w-3.5 h-3.5" />
+                  <span>{isAr ? "إيقاف" : "Stop"}</span>
+                </button>
+              )}
               <div className="relative" ref={headerActionsRef}>
                 <button
                   type="button"
@@ -2426,6 +2632,60 @@ export function UasAiCopilot({
                         <span className="text-[10px] text-slate-400">تبديل</span>
                       </button>
                     )}
+
+                    <button
+                      type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={dialectLearningEnabled}
+                      data-testid="uas-ai-copilot-dialect-learning-btn"
+                      onClick={() => {
+                        void handleToggleDialectLearning();
+                        setHeaderActionsOpen(false);
+                      }}
+                      className="w-full min-h-[40px] px-3 py-2 rounded-xl hover:bg-white/10 flex items-center justify-between gap-2 font-bold transition text-start"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <Sparkles
+                          className={`w-4 h-4 ${
+                            dialectLearningEnabled ? "text-amber-300" : "text-slate-400"
+                          }`}
+                        />
+                        <span>
+                          {isAr ? "تعلم اللهجة تلقائياً" : "Dialect Learning"}
+                        </span>
+                      </span>
+                      <span
+                        className={`text-[10px] font-mono ${
+                          dialectLearningEnabled ? "text-emerald-300" : "text-slate-400"
+                        }`}
+                      >
+                        {dialectLearningEnabled ? "ON" : "OFF"}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="uas-ai-copilot-reset-dialect-btn"
+                      disabled={memoryBusy}
+                      onClick={() => {
+                        setHeaderActionsOpen(false);
+                        void handleResetLearnedDialect();
+                      }}
+                      className="w-full min-h-[40px] px-3 py-2 rounded-xl hover:bg-white/10 flex items-center justify-between gap-2 font-bold text-sky-200 transition text-start disabled:opacity-50"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <RotateCcw className="w-4 h-4 text-sky-300" />
+                        <span>
+                          {isAr ? "إعادة ضبط اللهجة المكتسبة" : "Reset Learned Dialect"}
+                        </span>
+                      </span>
+                      {learnedDialectCount > 0 && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-sky-500/20 text-sky-200 text-[10px] font-mono">
+                          {learnedDialectCount}
+                        </span>
+                      )}
+                    </button>
 
                     <button
                       type="button"
@@ -4370,6 +4630,7 @@ export function UasAiCopilot({
                     <option value="correction">{isAr ? "تصحيح محاسبي" : "Correction"}</option>
                     <option value="operational_pattern">{isAr ? "نمط تشغيلي" : "Operational Pattern"}</option>
                     <option value="workflow_preference">{isAr ? "تفضيل شخصي" : "User Preference"}</option>
+                    <option value="dialect_preference">{isAr ? "لهجة وتفضيلات أسلوب" : "Dialect & Style"}</option>
                   </select>
                   <input
                     type="text"

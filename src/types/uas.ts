@@ -446,6 +446,7 @@ export interface UasSystemSettings {
   autoSyncIntervalSec?: number;
   defaultDeviceSyncMode?: "AUTO" | "MANUAL" | string;
   requireDeviceApproval?: boolean;
+  diskAlertThresholdPercent?: number;
 }
 
 export interface UasBootstrapState {
@@ -526,31 +527,44 @@ export interface UasNotificationEvent {
 
 export type TenantDeviceStatus = "ACTIVE" | "SUSPENDED" | "REVOKED";
 export type DeviceSyncMode = "AUTO" | "MANUAL";
-export type DevicePlatformType = "web" | "windows" | "android";
+export type DevicePlatformType = "web" | "windows" | "android" | "ios";
 
 export interface UasTenantDevice {
   id: string;
   deviceId: string;
   tenantSlug: string;
+  tenantName?: string | null;
+  activationKey?: string | null;
+  licenseKey?: string | null;
+  maskedActivationKey?: string | null;
   platform: DevicePlatformType | string;
+  clientPlatform?: DevicePlatformType | string;
   appVersion: string;
   osVersion: string;
   deviceLabel: string;
   userId?: string | null;
+  userName?: string | null;
   userEmail?: string | null;
   userDisplay?: string | null;
   lastSeenAt: string;
   ipAddress?: string | null;
   status: TenantDeviceStatus | string;
   syncMode: DeviceSyncMode | string;
+  syncPolicy?: DeviceSyncMode | string;
   syncIntervalSec: number;
   pendingQueueCount: number;
+  queueCount?: number;
   lastCursor: number;
   syncLag?: number;
   lastSyncAt?: string | null;
   lastSyncError?: string | null;
   pendingCommand?: string | null;
   pendingCommandAt?: string | null;
+  seatBound?: boolean;
+  tenantMismatch?: boolean;
+  keyMismatch?: boolean;
+  workspaceTenantSlug?: string | null;
+  workspaceLicenseKey?: string | null;
   createdAt: string;
   updatedAt: string;
 }

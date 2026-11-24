@@ -28,11 +28,19 @@ import { resolveEffectiveTagline } from "@/lib/branding";
 import { isInstalledClientApp } from "@/lib/runtimePlatform";
 import {
   getApiBaseUrl,
+  getStoredTenantSlug,
   resetApiBaseUrl,
   setApiBaseUrl,
   setStoredSessionToken,
   setStoredTenantId,
 } from "@/lib/apiClient";
+import {
+  detectReachableLanEndpoint,
+  evaluateConnectionOriginSwitch,
+  probeTenantEndpoint,
+  resolveActiveWorkspaceSlug,
+  resolveTenantCloudUrl,
+} from "@/lib/serverConnection";
 import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
 import type { LicenseStatusData } from "@/components/LicenseActivationModal";
 import type { LanguageCode, ThemeName, UasEnterpriseProfile, UasUser } from "@/types/uas";
@@ -60,8 +68,6 @@ export function LoginView({
   logoText,
   enterpriseProfile,
   lang,
-  theme: _theme,
-  currentUserId: _currentUserId,
   offlineMode,
   licenseStatus,
   onOpenLicenseModal,
@@ -200,19 +206,47 @@ export function LoginView({
 
   const BackArrow = isAr ? ArrowRight : ArrowLeft;
 
+  const activeWorkspaceSlug = resolveActiveWorkspaceSlug({
+    currentOriginOrHost: typeof window !== "undefined" ? window.location.host : undefined,
+    profileTenantSlug: enterpriseProfile?.tenantSlug,
+    licenseTenantSlug: licenseStatus?.tenant_slug,
+    storedTenantId: typeof window !== "undefined" ? getStoredTenantSlug() : null,
+  });
+  const currentOrigin = typeof window !== "undefined" ? window.location.origin : undefined;
+  const defaultCloudUrl = resolveTenantCloudUrl(activeWorkspaceSlug, currentOrigin);
+  const [detectingLan, setDetectingLan] = useState(false);
+
   async function testServerConnection(urlToTest: string) {
     const clean = urlToTest.trim().replace(/\/+$/, "");
     setTestingConnection(true);
     setConnectionStatus("idle");
     try {
-      const testEndpoint = clean ? `${clean}/api/public/verify` : "/api/public/verify";
-      const res = await fetch(testEndpoint, { signal: AbortSignal.timeout(4000) });
-      if (res.ok) {
+      const targetBase = clean || defaultCloudUrl;
+      const probe = await probeTenantEndpoint(targetBase, { timeoutMs: 4000 });
+      if (probe.ok) {
+        const drift = evaluateConnectionOriginSwitch({
+          activeTenantSlug: activeWorkspaceSlug,
+          targetUrl: targetBase,
+          currentOrigin,
+          targetResolvedTenantSlug: probe.tenantSlug,
+          targetIsTenantWorkspace: probe.isTenantWorkspace,
+        });
         setConnectionStatus("ok");
-        onToast(isAr ? "تم الاتصال بالخادم بنجاح!" : "Connected to server successfully!");
+        if (drift.hasWarning) {
+          onToast(`⚠️ ${isAr ? drift.messageAr : drift.messageEn}`);
+        } else {
+          onToast(isAr ? "تم الاتصال والتحقق من الخادم بنجاح!" : "Connected and verified server successfully!");
+        }
       } else {
-        setConnectionStatus("fail");
-        onToast(isAr ? `فشل الاتصال: HTTP ${res.status}` : `Connection failed: HTTP ${res.status}`);
+        const testEndpoint = clean ? `${clean}/api/public/verify` : "/api/public/verify";
+        const res = await fetch(testEndpoint, { signal: AbortSignal.timeout(4000) });
+        if (res.ok) {
+          setConnectionStatus("ok");
+          onToast(isAr ? "تم الاتصال بالخادم بنجاح!" : "Connected to server successfully!");
+        } else {
+          setConnectionStatus("fail");
+          onToast(isAr ? `فشل الاتصال: HTTP ${res.status}` : `Connection failed: HTTP ${res.status}`);
+        }
       }
     } catch {
       setConnectionStatus("fail");
@@ -222,17 +256,64 @@ export function LoginView({
     }
   }
 
+  async function handleAutoDetectLan() {
+    setDetectingLan(true);
+    try {
+      const res = await detectReachableLanEndpoint({
+        currentOrigin,
+        savedLanUrl: customServerUrl,
+        expectedTenantSlug: activeWorkspaceSlug,
+        timeoutMs: 1500,
+      });
+      if (res.detectedUrl) {
+        setCustomServerUrl(res.detectedUrl);
+        setConnectionStatus("ok");
+        onToast(
+          isAr
+            ? `✅ تم اكتشاف خادم LAN: ${res.detectedUrl}`
+            : `✅ Auto-detected LAN server: ${res.detectedUrl}`
+        );
+      } else {
+        onToast(
+          isAr
+            ? "ℹ️ لم يُكتشف خادم شبكة محلي متاح تلقائياً"
+            : "ℹ️ No local LAN server auto-detected"
+        );
+      }
+    } finally {
+      setDetectingLan(false);
+    }
+  }
+
   function handleApplyServerUrl(urlToApply: string) {
     const clean = urlToApply.trim().replace(/\/+$/, "");
     if (!clean) {
-      resetApiBaseUrl();
+      const restored = resetApiBaseUrl({
+        tenantSlug: activeWorkspaceSlug,
+        currentOrigin,
+      });
       setCustomServerUrl("");
-      onToast(isAr ? "تم استعادة العنوان الافتراضي" : "Reset to default endpoint");
-    } else {
-      setApiBaseUrl(clean);
-      setCustomServerUrl(clean);
-      onToast(isAr ? `تم حفظ عنوان الخادم: ${clean}` : `Server endpoint set: ${clean}`);
+      onToast(
+        isAr
+          ? `تمت استعادة الأصل الافتراضي (${restored})`
+          : `Reset to default origin (${restored})`
+      );
+      return;
     }
+
+    const drift = evaluateConnectionOriginSwitch({
+      activeTenantSlug: activeWorkspaceSlug,
+      targetUrl: clean,
+      currentOrigin,
+    });
+    if (drift.requiresConfirmation && typeof window !== "undefined") {
+      const proceed = window.confirm(isAr ? drift.messageAr : drift.messageEn);
+      if (!proceed) return;
+    }
+
+    setApiBaseUrl(clean);
+    setCustomServerUrl(clean);
+    onToast(isAr ? `تم حفظ عنوان الخادم: ${clean}` : `Server endpoint set: ${clean}`);
   }
 
   async function authenticate(params: { identifierInput: string; passInput: string }) {
@@ -581,15 +662,25 @@ export function LoginView({
 
                     <button
                       type="button"
-                      onClick={() => handleApplyServerUrl("https://qat.world")}
+                      onClick={() => handleApplyServerUrl(defaultCloudUrl)}
                       className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold transition flex items-center gap-1 ${
-                        customServerUrl === "https://qat.world"
+                        customServerUrl === defaultCloudUrl
                           ? "bg-emerald-600 text-white border-emerald-600"
                           : "border-slate-300 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-800"
                       }`}
                     >
                       <Globe2 className="w-3 h-3" />
-                      <span>qat.world (Cloud)</span>
+                      <span>{defaultCloudUrl.replace(/^https:\/\//, "")} (Cloud)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={detectingLan}
+                      onClick={() => void handleAutoDetectLan()}
+                      className="px-2.5 py-1.5 rounded-lg border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 text-[11px] font-bold hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition flex items-center gap-1 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${detectingLan ? "animate-spin" : ""}`} />
+                      <span>{isAr ? "اكتشاف LAN" : "Detect LAN"}</span>
                     </button>
                   </div>
 
@@ -597,14 +688,14 @@ export function LoginView({
                     <label className="text-[11px] font-bold text-slate-500">
                       {isAr
                         ? "عنوان خادم المكتب بالشبكة المحلية (LAN IP) أو دومين السحابة:"
-                        : "Office LAN IP (e.g. http://192.168.1.50:3000) or Cloud URL:"}
+                        : "Office LAN IP or Cloud URL:"}
                     </label>
                     <div className="flex gap-1.5">
                       <input
                         type="text"
                         value={customServerUrl}
                         onChange={(e) => setCustomServerUrl(e.target.value)}
-                        placeholder="http://192.168.1.x:3000"
+                        placeholder={defaultCloudUrl}
                         className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-mono font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500"
                       />
                       <button

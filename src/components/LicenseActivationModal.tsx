@@ -28,9 +28,9 @@ import { generateQrMatrix } from "@/lib/formulas";
 import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
 import {
   DEFAULT_CLOUD_API_URL,
-  DEFAULT_LAN_API_URL,
   getStoredRuntimeMode,
   getStoredServerUrls,
+  getStoredTenantSlug,
   isNativeAndroid,
   resolveApiBaseUrl,
   safeFetchJson,
@@ -38,6 +38,11 @@ import {
   setStoredSessionToken,
   setStoredTenantId,
 } from "@/lib/apiClient";
+import {
+  detectReachableLanEndpoint,
+  resolveActiveWorkspaceSlug,
+  resolveTenantCloudUrl,
+} from "@/lib/serverConnection";
 import {
   activateOfflineClientLicense,
   activateOnlineKeyOnClient,
@@ -58,14 +63,14 @@ export interface LicenseStatusData {
   hwid: string;
   active_mode: "local" | "lan" | "cloud";
   license_status:
-    | "ACTIVE"
-    | "UNLICENSED"
-    | "EXPIRED"
-    | "HWID_MISMATCH"
-    | "CLOCK_TAMPER"
-    | "SEAT_LIMIT_REACHED"
-    | "MODE_NOT_ALLOWED"
-    | "COMPANY_MISMATCH";
+  | "ACTIVE"
+  | "UNLICENSED"
+  | "EXPIRED"
+  | "HWID_MISMATCH"
+  | "CLOCK_TAMPER"
+  | "SEAT_LIMIT_REACHED"
+  | "MODE_NOT_ALLOWED"
+  | "COMPANY_MISMATCH";
   is_valid: boolean;
   error?: string | null;
   customer_name?: string | null;
@@ -175,18 +180,30 @@ export function LicenseActivationModal({
       ? getStoredRuntimeMode()
       : statusData?.active_mode || (typeof window !== "undefined" ? getStoredRuntimeMode() : "local"));
 
+  const activeWorkspaceSlug = resolveActiveWorkspaceSlug({
+    currentOriginOrHost: typeof window !== "undefined" ? window.location.host : undefined,
+    profileTenantSlug: enterpriseProfile?.tenantSlug,
+    licenseTenantSlug: statusData?.tenant_slug,
+    storedTenantId: typeof window !== "undefined" ? getStoredTenantSlug() : null,
+  });
+  const defaultTenantCloudUrl = resolveTenantCloudUrl(
+    activeWorkspaceSlug,
+    typeof window !== "undefined" ? window.location.origin : undefined
+  );
+
   const [lanUrlInput, setLanUrlInput] = useState<string>(() => {
     if (typeof window !== "undefined") {
       return getStoredServerUrls().lanUrl;
     }
-    return statusData?.lan_url || DEFAULT_LAN_API_URL;
+    return "";
   });
   const [cloudUrlInput, setCloudUrlInput] = useState<string>(() => {
     if (typeof window !== "undefined") {
-      return getStoredServerUrls().cloudUrl;
+      return getStoredServerUrls(undefined, { tenantSlug: activeWorkspaceSlug }).cloudUrl;
     }
-    return statusData?.cloud_url || DEFAULT_CLOUD_API_URL;
+    return statusData?.cloud_url || defaultTenantCloudUrl;
   });
+  const [detectingLan, setDetectingLan] = useState(false);
   const [switchingMode, setSwitchingMode] = useState(false);
 
   const currentUserId = currentUser?.id;
@@ -311,9 +328,9 @@ export function LicenseActivationModal({
 
       const normalizedPayload = payload.activationKey
         ? {
-            ...payload,
-            activationKey: extractUasKeyToken(payload.activationKey) ?? payload.activationKey.trim(),
-          }
+          ...payload,
+          activationKey: extractUasKeyToken(payload.activationKey) ?? payload.activationKey.trim(),
+        }
         : payload;
 
       // 1. Android APK online UASKEY-... flow: verify against Cloud/LAN server (defaults to https://qat.world)
@@ -422,20 +439,20 @@ export function LicenseActivationModal({
           // Static export or unreachable local API -> run client-side WebCrypto verification
           const fallbackRes = normalizedPayload.activationKey
             ? await activateOnlineKeyOnClient({
-                activationKey: normalizedPayload.activationKey,
-                confirmCompanyName: effectiveCompany || undefined,
-                userEmail: effectiveEmail || undefined,
-                platform,
-                hwid: clientHwid,
-                serverBaseUrl: resolveApiBaseUrl({ preferCloudFallback: true }),
-              })
+              activationKey: normalizedPayload.activationKey,
+              confirmCompanyName: effectiveCompany || undefined,
+              userEmail: effectiveEmail || undefined,
+              platform,
+              hwid: clientHwid,
+              serverBaseUrl: resolveApiBaseUrl({ preferCloudFallback: true }),
+            })
             : await activateOfflineClientLicense({
-                ...normalizedPayload,
-                confirmCompanyName: effectiveCompany || undefined,
-                userEmail: effectiveEmail || undefined,
-                platform,
-                hwid: clientHwid,
-              });
+              ...normalizedPayload,
+              confirmCompanyName: effectiveCompany || undefined,
+              userEmail: effectiveEmail || undefined,
+              platform,
+              hwid: clientHwid,
+            });
           if (!fallbackRes.success) {
             throw new Error(fallbackRes.error);
           }
@@ -479,8 +496,8 @@ export function LicenseActivationModal({
             ? "تم تفعيل الترخيص وتسجيل الدخول تلقائياً إلى مساحة المنشأة!"
             : "تم تفعيل الترخيص بنجاح وتوثيقه مشفراً مع قفل اسم المنشأة ومقعد المستخدم!"
           : autoLoginUser
-          ? "License activated and signed in automatically!"
-          : "License activated, company lock verified, and device seat bound!"
+            ? "License activated and signed in automatically!"
+            : "License activated, company lock verified, and device seat bound!"
       );
       onToast(
         isAr
@@ -488,8 +505,8 @@ export function LicenseActivationModal({
             ? "تم تفعيل المنظومة وتسجيل الدخول تلقائياً"
             : "تم تفعيل المنظومة بنجاح"
           : autoLoginUser
-          ? "System activated and signed in automatically"
-          : "System activated successfully"
+            ? "System activated and signed in automatically"
+            : "System activated successfully"
       );
       if (payload.activationKey) setSerialKey("");
       onRefreshStatus();
@@ -595,6 +612,35 @@ export function LicenseActivationModal({
     }
   }
 
+  async function handleAutoDetectLanInModal() {
+    setDetectingLan(true);
+    try {
+      const detected = await detectReachableLanEndpoint({
+        currentOrigin: typeof window !== "undefined" ? window.location.origin : undefined,
+        savedLanUrl: lanUrlInput,
+        serverLanIps: statusData?.server_lan_ips,
+        expectedTenantSlug: activeWorkspaceSlug,
+        timeoutMs: 1500,
+      });
+      if (detected.detectedUrl) {
+        setLanUrlInput(detected.detectedUrl);
+        onToast(
+          isAr
+            ? `✅ تم اكتشاف عنوان الشبكة المحلية: ${detected.detectedUrl}`
+            : `✅ Detected LAN URL: ${detected.detectedUrl}`
+        );
+      } else {
+        onToast(
+          isAr
+            ? "ℹ️ لم يُكتشف خادم شبكة محلي تلقائياً؛ أدخل العنوان يدوياً."
+            : "ℹ️ No LAN endpoint auto-detected; please enter manually."
+        );
+      }
+    } finally {
+      setDetectingLan(false);
+    }
+  }
+
   async function handleSwitchMode(targetMode: "local" | "lan" | "cloud", customUrl?: string) {
     setSwitchingMode(true);
     setErrorMsg(null);
@@ -602,13 +648,15 @@ export function LicenseActivationModal({
     try {
       const chosenUrl =
         targetMode === "cloud"
-          ? (customUrl ?? cloudUrlInput).trim() || DEFAULT_CLOUD_API_URL
+          ? (customUrl ?? cloudUrlInput).trim() || defaultTenantCloudUrl
           : targetMode === "lan"
-          ? (customUrl ?? lanUrlInput).trim() || DEFAULT_LAN_API_URL
-          : "";
+            ? (customUrl ?? lanUrlInput).trim()
+            : "";
 
       // 1. Always persist mode & server URL immediately to localStorage (works even when UNLICENSED)
-      const persisted = setStoredRuntimeMode(targetMode, chosenUrl);
+      const persisted = setStoredRuntimeMode(targetMode, chosenUrl, undefined, {
+        tenantSlug: activeWorkspaceSlug,
+      });
       setSelectedMode(persisted.mode);
       if (targetMode === "cloud") setCloudUrlInput(persisted.serverUrl);
       if (targetMode === "lan") setLanUrlInput(persisted.serverUrl);
@@ -635,12 +683,12 @@ export function LicenseActivationModal({
             ? `تم تفعيل الوضع السحابي (${persisted.serverUrl})`
             : `Switched to Cloud mode (${persisted.serverUrl})`
           : targetMode === "lan"
-          ? isAr
-            ? `تم تفعيل وضع الشبكة المحلية (${persisted.serverUrl})`
-            : `Switched to LAN mode (${persisted.serverUrl})`
-          : isAr
-          ? "تم تفعيل الوضع المحلي (Local)"
-          : "Switched to Local mode";
+            ? isAr
+              ? `تم تفعيل وضع الشبكة المحلية (${persisted.serverUrl})`
+              : `Switched to LAN mode (${persisted.serverUrl})`
+            : isAr
+              ? "تم تفعيل الوضع المحلي (Local)"
+              : "Switched to Local mode";
 
       setSuccessMsg(label);
       onToast(label);
@@ -711,15 +759,14 @@ export function LicenseActivationModal({
 
         {/* Status Alert Banner */}
         <div
-          className={`p-4 rounded-2xl border text-xs font-bold flex items-center justify-between gap-3 ${
-            isValid
-              ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200"
-              : status === "CLOCK_TAMPER" || status === "COMPANY_MISMATCH"
+          className={`p-4 rounded-2xl border text-xs font-bold flex items-center justify-between gap-3 ${isValid
+            ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200"
+            : status === "CLOCK_TAMPER" || status === "COMPANY_MISMATCH"
               ? "bg-rose-50 dark:bg-rose-950/40 border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200"
               : status === "EXPIRED"
-              ? "bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200"
-              : "bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200"
-          }`}
+                ? "bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200"
+                : "bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200"
+            }`}
         >
           <div className="flex items-center gap-2.5">
             {isValid ? (
@@ -734,24 +781,24 @@ export function LicenseActivationModal({
                     ? `مرخص للمنشأة: ${lockedCompanyName || "مؤسسة معتمدة"}`
                     : `Licensed to: ${lockedCompanyName || "Authorized Enterprise"}`
                   : status === "COMPANY_MISMATCH"
-                  ? isAr
-                    ? "اسم المنشأة لا يطابق الترخيص المعتمد"
-                    : "Company Name Mismatch Against License"
-                  : status === "CLOCK_TAMPER"
-                  ? isAr
-                    ? "تنبيه أمان: تم اكتشاف تلاعب بساعة وتاريخ الجهاز"
-                    : "Security Alert: Monotonic Clock Rollback Detected"
-                  : status === "EXPIRED"
-                  ? isAr
-                    ? "انتهت صلاحية الترخيص الحالي"
-                    : "License Has Expired"
-                  : status === "HWID_MISMATCH"
-                  ? isAr
-                    ? "الترخيص مرتبط بجهاز كمبيوتر آخر"
-                    : "Hardware Fingerprint Mismatch"
-                  : isAr
-                  ? "المنظومة غير مفعلة (تحتاج إلى ترخيص)"
-                  : "System Unlicensed"}
+                    ? isAr
+                      ? "اسم المنشأة لا يطابق الترخيص المعتمد"
+                      : "Company Name Mismatch Against License"
+                    : status === "CLOCK_TAMPER"
+                      ? isAr
+                        ? "تنبيه أمان: تم اكتشاف تلاعب بساعة وتاريخ الجهاز"
+                        : "Security Alert: Monotonic Clock Rollback Detected"
+                      : status === "EXPIRED"
+                        ? isAr
+                          ? "انتهت صلاحية الترخيص الحالي"
+                          : "License Has Expired"
+                        : status === "HWID_MISMATCH"
+                          ? isAr
+                            ? "الترخيص مرتبط بجهاز كمبيوتر آخر"
+                            : "Hardware Fingerprint Mismatch"
+                          : isAr
+                            ? "المنظومة غير مفعلة (تحتاج إلى ترخيص)"
+                            : "System Unlicensed"}
               </div>
               <div className="text-[11px] opacity-80 mt-0.5">
                 {statusData?.error ||
@@ -760,8 +807,8 @@ export function LicenseActivationModal({
                       ? `رقم الترخيص: ${statusData?.license_id} • متبقي ${statusData?.remaining_days} يوماً • المستخدمون: ${usedUsers} / ${maxUsers}`
                       : `ID: ${statusData?.license_id} • ${statusData?.remaining_days} days remaining • Seats: ${usedUsers} / ${maxUsers} Users`
                     : isAr
-                    ? "يرجى إدخال اسم المنشأة المطابق للترخيص ورفع ملف .uas أو المفتاح التسلسلي"
-                    : "Confirm company name below and upload your .uas file or enter your activation key")}
+                      ? "يرجى إدخال اسم المنشأة المطابق للترخيص ورفع ملف .uas أو المفتاح التسلسلي"
+                      : "Confirm company name below and upload your .uas file or enter your activation key")}
               </div>
             </div>
           </div>
@@ -815,11 +862,10 @@ export function LicenseActivationModal({
           <button
             type="button"
             onClick={() => setActiveTab("activate")}
-            className={`pb-2.5 px-3.5 text-xs font-black border-b-2 transition flex items-center gap-1.5 ${
-              activeTab === "activate"
-                ? "border-emerald-600 text-emerald-600 dark:text-emerald-400"
-                : "border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white"
-            }`}
+            className={`pb-2.5 px-3.5 text-xs font-black border-b-2 transition flex items-center gap-1.5 ${activeTab === "activate"
+              ? "border-emerald-600 text-emerald-600 dark:text-emerald-400"
+              : "border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white"
+              }`}
           >
             <Upload className="w-3.5 h-3.5" />
             <span>{isAr ? "تفعيل الترخيص" : "Activate License"}</span>
@@ -831,11 +877,10 @@ export function LicenseActivationModal({
               setActiveTab("seats");
               fetchSeatDetails();
             }}
-            className={`pb-2.5 px-3.5 text-xs font-black border-b-2 transition flex items-center gap-1.5 ${
-              activeTab === "seats"
-                ? "border-emerald-600 text-emerald-600 dark:text-emerald-400"
-                : "border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white"
-            }`}
+            className={`pb-2.5 px-3.5 text-xs font-black border-b-2 transition flex items-center gap-1.5 ${activeTab === "seats"
+              ? "border-emerald-600 text-emerald-600 dark:text-emerald-400"
+              : "border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white"
+              }`}
           >
             <Users className="w-3.5 h-3.5" />
             <span>
@@ -848,11 +893,10 @@ export function LicenseActivationModal({
           <button
             type="button"
             onClick={() => setActiveTab("request")}
-            className={`pb-2.5 px-3.5 text-xs font-black border-b-2 transition flex items-center gap-1.5 ${
-              activeTab === "request"
-                ? "border-emerald-600 text-emerald-600 dark:text-emerald-400"
-                : "border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white"
-            }`}
+            className={`pb-2.5 px-3.5 text-xs font-black border-b-2 transition flex items-center gap-1.5 ${activeTab === "request"
+              ? "border-emerald-600 text-emerald-600 dark:text-emerald-400"
+              : "border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white"
+              }`}
           >
             <QrCode className="w-3.5 h-3.5" />
             <span>{isAr ? "رمز طلب الترخيص" : "Request Code"}</span>
@@ -861,11 +905,10 @@ export function LicenseActivationModal({
           <button
             type="button"
             onClick={() => setActiveTab("mode")}
-            className={`pb-2.5 px-3.5 text-xs font-black border-b-2 transition flex items-center gap-1.5 ${
-              activeTab === "mode"
-                ? "border-emerald-600 text-emerald-600 dark:text-emerald-400"
-                : "border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white"
-            }`}
+            className={`pb-2.5 px-3.5 text-xs font-black border-b-2 transition flex items-center gap-1.5 ${activeTab === "mode"
+              ? "border-emerald-600 text-emerald-600 dark:text-emerald-400"
+              : "border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white"
+              }`}
           >
             <Network className="w-3.5 h-3.5" />
             <span>{isAr ? "وضع التشغيل (LAN / Cloud)" : "Runtime Mode"}</span>
@@ -1043,11 +1086,10 @@ export function LicenseActivationModal({
                         </div>
                         <div className="flex flex-wrap items-center gap-2 text-[11px]">
                           <span
-                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border ${
-                              u.windows
-                                ? "bg-sky-500/10 border-sky-500/30 text-sky-700 dark:text-sky-300"
-                                : "bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-400"
-                            }`}
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border ${u.windows
+                              ? "bg-sky-500/10 border-sky-500/30 text-sky-700 dark:text-sky-300"
+                              : "bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-400"
+                              }`}
                           >
                             <Laptop className="w-3 h-3" />
                             <span>
@@ -1056,11 +1098,10 @@ export function LicenseActivationModal({
                           </span>
 
                           <span
-                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border ${
-                              u.android
-                                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
-                                : "bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-400"
-                            }`}
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border ${u.android
+                              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
+                              : "bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-400"
+                              }`}
                           >
                             <Smartphone className="w-3 h-3" />
                             <span>
@@ -1247,11 +1288,10 @@ export function LicenseActivationModal({
                 type="button"
                 onClick={() => handleSwitchMode("local")}
                 disabled={switchingMode || !allowedModes.includes("local")}
-                className={`p-4 rounded-2xl border text-start space-y-2 transition relative ${
-                  selectedMode === "local"
-                    ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 ring-2 ring-emerald-500/30"
-                    : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
-                } ${!allowedModes.includes("local") ? "opacity-50 cursor-not-allowed" : ""}`}
+                className={`p-4 rounded-2xl border text-start space-y-2 transition relative ${selectedMode === "local"
+                  ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 ring-2 ring-emerald-500/30"
+                  : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
+                  } ${!allowedModes.includes("local") ? "opacity-50 cursor-not-allowed" : ""}`}
               >
                 <div className="w-8 h-8 rounded-xl bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-300">
                   <HardDrive className="w-4 h-4" />
@@ -1267,11 +1307,10 @@ export function LicenseActivationModal({
                 type="button"
                 onClick={() => handleSwitchMode("lan")}
                 disabled={switchingMode || !allowedModes.includes("lan")}
-                className={`p-4 rounded-2xl border text-start space-y-2 transition relative ${
-                  selectedMode === "lan"
-                    ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 ring-2 ring-emerald-500/30"
-                    : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
-                } ${!allowedModes.includes("lan") ? "opacity-50 cursor-not-allowed" : ""}`}
+                className={`p-4 rounded-2xl border text-start space-y-2 transition relative ${selectedMode === "lan"
+                  ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 ring-2 ring-emerald-500/30"
+                  : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
+                  } ${!allowedModes.includes("lan") ? "opacity-50 cursor-not-allowed" : ""}`}
               >
                 <div className="w-8 h-8 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
                   <Network className="w-4 h-4" />
@@ -1287,11 +1326,10 @@ export function LicenseActivationModal({
                 type="button"
                 onClick={() => handleSwitchMode("cloud")}
                 disabled={switchingMode || !allowedModes.includes("cloud")}
-                className={`p-4 rounded-2xl border text-start space-y-2 transition relative ${
-                  selectedMode === "cloud"
-                    ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 ring-2 ring-emerald-500/30"
-                    : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
-                } ${!allowedModes.includes("cloud") ? "opacity-50 cursor-not-allowed" : ""}`}
+                className={`p-4 rounded-2xl border text-start space-y-2 transition relative ${selectedMode === "cloud"
+                  ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 ring-2 ring-emerald-500/30"
+                  : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
+                  } ${!allowedModes.includes("cloud") ? "opacity-50 cursor-not-allowed" : ""}`}
               >
                 <div className="w-8 h-8 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-600 dark:text-amber-400">
                   <Globe2 className="w-4 h-4" />
@@ -1299,16 +1337,31 @@ export function LicenseActivationModal({
                 <div className="font-extrabold text-xs">
                   {isAr ? "سحابي (Cloud Hosted)" : "Cloud Server"}
                 </div>
-                <div className="text-[11px] text-slate-400">https://qat.world</div>
+                <div className="text-[11px] text-slate-400 font-mono truncate" dir="ltr">
+                  {defaultTenantCloudUrl}
+                </div>
               </button>
             </div>
 
             {/* Mode Details & Server URL Configuration Box */}
             {selectedMode === "lan" && (
               <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 space-y-3 text-xs">
-                <div className="font-bold flex items-center justify-between gap-2">
+                <div className="font-bold flex flex-wrap items-center justify-between gap-2">
                   <span>{isAr ? "رابط خادم الشبكة المحلية (Office LAN URL):" : "Office LAN Server URL:"}</span>
-                  <span className="font-mono text-emerald-600 font-black">{lanUrlInput || statusData?.lan_url}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-emerald-600 font-black">
+                      {lanUrlInput || (isAr ? "غير محدد" : "Not set")}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={detectingLan}
+                      onClick={() => void handleAutoDetectLanInModal()}
+                      className="px-2 py-1 rounded-lg border border-indigo-400/50 text-indigo-600 dark:text-indigo-300 text-[10px] font-bold hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition inline-flex items-center gap-1"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${detectingLan ? "animate-spin" : ""}`} />
+                      <span>{isAr ? "اكتشاف LAN" : "Auto-Detect"}</span>
+                    </button>
+                  </div>
                 </div>
                 <div className="flex flex-col sm:flex-row gap-2">
                   <input
@@ -1316,7 +1369,7 @@ export function LicenseActivationModal({
                     dir="ltr"
                     value={lanUrlInput}
                     onChange={(e) => setLanUrlInput(e.target.value)}
-                    placeholder="http://192.168.1.10:3000"
+                    placeholder={isAr ? "أدخل عنوان خادم الشبكة المحلية..." : "Enter Office LAN Server URL..."}
                     className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono font-bold"
                   />
                   <button
@@ -1340,7 +1393,7 @@ export function LicenseActivationModal({
               <div className="p-4 rounded-2xl bg-amber-50/40 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 space-y-3 text-xs">
                 <div className="font-bold flex items-center justify-between gap-2">
                   <span>{isAr ? "رابط الخادم السحابي (Cloud Server URL):" : "Cloud Server URL:"}</span>
-                  <span className="font-mono text-amber-700 dark:text-amber-300 font-black">{cloudUrlInput || DEFAULT_CLOUD_API_URL}</span>
+                  <span className="font-mono text-amber-700 dark:text-amber-300 font-black">{cloudUrlInput || defaultTenantCloudUrl || DEFAULT_CLOUD_API_URL}</span>
                 </div>
                 <div className="flex flex-col sm:flex-row gap-2">
                   <input
@@ -1348,7 +1401,7 @@ export function LicenseActivationModal({
                     dir="ltr"
                     value={cloudUrlInput}
                     onChange={(e) => setCloudUrlInput(e.target.value)}
-                    placeholder="https://qat.world"
+                    placeholder={defaultTenantCloudUrl}
                     className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono font-bold"
                   />
                   <button

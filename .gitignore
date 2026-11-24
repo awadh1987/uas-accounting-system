@@ -4,6 +4,8 @@ out/
 dist/
 prisma/dev.db
 prisma/dev.db-journal
+prisma/dev.db-shm
+prisma/dev.db-wal
 prisma/uas-enterprise.db*
 .env
 .env.local
@@ -34,7 +36,9 @@ prisma/tenants/
 /tenants/
 public/downloads/version.json
 # Runtime tenant databases, backups, and issued license artifacts
-backups/
+/backups/
+/prisma/backups/
+/data/
 data/tenants/
 data/licenses/
 data/branding/

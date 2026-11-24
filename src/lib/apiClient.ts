@@ -23,6 +23,11 @@ import {
   handleOfflineAndroidApiRequest,
   loadOfflineAndroidState,
 } from "@/lib/offlineAndroidStore";
+import {
+  normalizeActiveTenantSlug,
+  ROOT_CLOUD_URL,
+  resolveTenantCloudUrl,
+} from "@/lib/serverConnection";
 import type { UasBootstrapState, UasUser } from "@/types/uas";
 
 export const SERVER_URL_STORAGE_KEY = "uas_server_url";
@@ -30,10 +35,39 @@ export const RUNTIME_MODE_STORAGE_KEY = "uas_runtime_mode";
 export const LAN_URL_STORAGE_KEY = "uas_lan_server_url";
 export const CLOUD_URL_STORAGE_KEY = "uas_cloud_server_url";
 export const TENANT_ID_STORAGE_KEY = "uas_tenant_id";
+export const TENANT_SLUG_STORAGE_KEY = "uas_tenant_slug";
 export const DEVICE_ID_STORAGE_KEY = "uas_device_id";
+export const LICENSE_KEY_STORAGE_KEY = "uas_license_key";
 export const SESSION_TOKEN_STORAGE_KEY = "uas_session_token";
-export const DEFAULT_CLOUD_API_URL = "https://qat.world";
-export const DEFAULT_LAN_API_URL = "http://192.168.1.10:3000";
+export const DEFAULT_CLOUD_API_URL = ROOT_CLOUD_URL;
+export const DEFAULT_LAN_API_URL = "";
+
+function extractSafeClientLicenseId(raw: string | null | undefined): string {
+  const trimmed = (raw || "").trim();
+  if (!trimmed || trimmed.startsWith("UASKEY-") || trimmed.startsWith("{") || trimmed.length > 64 || /\s/.test(trimmed)) {
+    return "";
+  }
+  return /^UAS-/i.test(trimmed) ? trimmed.toUpperCase() : trimmed;
+}
+
+export function getStoredLicenseKeyId(storage?: Pick<StorageLike, "getItem"> | null): string {
+  const s = getStorage(storage);
+  return extractSafeClientLicenseId(s?.getItem(LICENSE_KEY_STORAGE_KEY));
+}
+
+export function setStoredLicenseKeyId(
+  licenseId: string | null | undefined,
+  storage?: StorageLike | null
+): void {
+  const s = getWritableStorage(storage);
+  if (!s) return;
+  const cleaned = extractSafeClientLicenseId(licenseId);
+  if (!cleaned) {
+    s.removeItem(LICENSE_KEY_STORAGE_KEY);
+  } else {
+    s.setItem(LICENSE_KEY_STORAGE_KEY, cleaned);
+  }
+}
 
 export function getStoredSessionToken(storage?: Pick<StorageLike, "getItem"> | null): string {
   const s = getStorage(storage);
@@ -67,11 +101,16 @@ export function getOrCreateClientDeviceId(storage?: StorageLike | null): string 
   return "dev-ephemeral";
 }
 
-export function detectClientDevicePlatform(winOverride?: BrowserEnvLike): "android" | "windows" | "web" {
-  if (isNativeAndroid(winOverride)) return "android";
+export function detectClientDevicePlatform(
+  winOverride?: BrowserEnvLike
+): "android" | "windows" | "ios" | "web" {
   const win: BrowserEnvLike | undefined =
     winOverride ?? (typeof window !== "undefined" ? (window as unknown as BrowserEnvLike) : undefined);
+  const capPlat = win?.Capacitor?.getPlatform?.()?.toLowerCase();
+  if (capPlat === "ios") return "ios";
+  if (isNativeAndroid(winOverride)) return "android";
   const ua = win?.navigator?.userAgent || (typeof navigator !== "undefined" ? navigator.userAgent : "");
+  if (/iphone|ipad|ipod/i.test(ua)) return "ios";
   if (/electron|uas-desktop|windows nt/i.test(ua)) return "windows";
   return "web";
 }
@@ -100,14 +139,40 @@ export function getStoredTenantId(storage?: Pick<StorageLike, "getItem"> | null)
   return (s?.getItem(TENANT_ID_STORAGE_KEY) || "").trim() || "default";
 }
 
+export function getStoredTenantSlug(storage?: Pick<StorageLike, "getItem"> | null): string | null {
+  const s = getStorage(storage);
+  const explicitSlug = normalizeActiveTenantSlug(s?.getItem(TENANT_SLUG_STORAGE_KEY));
+  if (explicitSlug) return explicitSlug;
+  return normalizeActiveTenantSlug(s?.getItem(TENANT_ID_STORAGE_KEY));
+}
+
+export function setStoredTenantSlug(
+  tenantSlug: string | null | undefined,
+  storage?: StorageLike | null
+): void {
+  const s = getWritableStorage(storage);
+  if (!s) return;
+  const cleaned = normalizeActiveTenantSlug(tenantSlug);
+  if (!cleaned) {
+    s.removeItem(TENANT_SLUG_STORAGE_KEY);
+  } else {
+    s.setItem(TENANT_SLUG_STORAGE_KEY, cleaned);
+  }
+}
+
 export function setStoredTenantId(tenantId: string, storage?: StorageLike | null): void {
   const s = getWritableStorage(storage);
   if (s) {
     const cleaned = (tenantId || "").trim();
     if (!cleaned || cleaned === "default") {
       s.removeItem(TENANT_ID_STORAGE_KEY);
+      s.removeItem(TENANT_SLUG_STORAGE_KEY);
     } else {
       s.setItem(TENANT_ID_STORAGE_KEY, cleaned);
+      const validSlug = normalizeActiveTenantSlug(cleaned);
+      if (validSlug) {
+        s.setItem(TENANT_SLUG_STORAGE_KEY, validSlug);
+      }
     }
   }
 }
@@ -177,14 +242,20 @@ export function normalizeServerUrl(url: string): string {
 }
 
 export function getStoredServerUrls(
-  storage?: Pick<StorageLike, "getItem"> | null
+  storage?: Pick<StorageLike, "getItem"> | null,
+  opts?: { tenantSlug?: string | null; currentOrigin?: string }
 ): { lanUrl: string; cloudUrl: string } {
   const s = getStorage(storage);
   const savedLan = s?.getItem(LAN_URL_STORAGE_KEY)?.trim() || "";
   const savedCloud = s?.getItem(CLOUD_URL_STORAGE_KEY)?.trim() || "";
+  const activeSlug = opts?.tenantSlug ?? getStoredTenantSlug(s);
+  const fallbackCloud = resolveTenantCloudUrl(
+    activeSlug,
+    opts?.currentOrigin ?? (typeof window !== "undefined" ? window.location.origin : undefined)
+  );
   return {
-    lanUrl: savedLan ? savedLan.replace(/\/+$/, "") : DEFAULT_LAN_API_URL,
-    cloudUrl: savedCloud ? savedCloud.replace(/\/+$/, "") : DEFAULT_CLOUD_API_URL,
+    lanUrl: savedLan ? savedLan.replace(/\/+$/, "") : "",
+    cloudUrl: savedCloud ? savedCloud.replace(/\/+$/, "") : fallbackCloud,
   };
 }
 
@@ -207,25 +278,35 @@ export function getStoredRuntimeMode(
 export function setStoredRuntimeMode(
   mode: ClientRuntimeMode,
   customUrl?: string,
-  storage?: StorageLike | null
+  storage?: StorageLike | null,
+  opts?: { tenantSlug?: string | null; currentOrigin?: string }
 ): { mode: ClientRuntimeMode; serverUrl: string } {
   const s = getWritableStorage(storage);
-  const existing = getStoredServerUrls(s);
+  const existing = getStoredServerUrls(s, opts);
+  const defaultCloud = resolveTenantCloudUrl(
+    opts?.tenantSlug ?? getStoredTenantSlug(s),
+    opts?.currentOrigin ?? (typeof window !== "undefined" ? window.location.origin : undefined)
+  );
   let serverUrl = "";
 
   if (mode === "cloud") {
-    serverUrl = normalizeServerUrl(customUrl || existing.cloudUrl || DEFAULT_CLOUD_API_URL);
+    serverUrl = normalizeServerUrl(customUrl || existing.cloudUrl || defaultCloud);
     if (s) {
       s.setItem(RUNTIME_MODE_STORAGE_KEY, "cloud");
       s.setItem(CLOUD_URL_STORAGE_KEY, serverUrl);
       s.setItem(SERVER_URL_STORAGE_KEY, serverUrl);
     }
   } else if (mode === "lan") {
-    serverUrl = normalizeServerUrl(customUrl || existing.lanUrl || DEFAULT_LAN_API_URL);
+    serverUrl = normalizeServerUrl(customUrl !== undefined ? customUrl : existing.lanUrl);
     if (s) {
       s.setItem(RUNTIME_MODE_STORAGE_KEY, "lan");
-      s.setItem(LAN_URL_STORAGE_KEY, serverUrl);
-      s.setItem(SERVER_URL_STORAGE_KEY, serverUrl);
+      if (serverUrl) {
+        s.setItem(LAN_URL_STORAGE_KEY, serverUrl);
+        s.setItem(SERVER_URL_STORAGE_KEY, serverUrl);
+      } else {
+        s.removeItem(LAN_URL_STORAGE_KEY);
+        s.removeItem(SERVER_URL_STORAGE_KEY);
+      }
     }
   } else {
     serverUrl = "";
@@ -301,19 +382,49 @@ export function getApiBaseUrl(): string {
   return resolveApiBaseUrl();
 }
 
-export function setApiBaseUrl(url: string): void {
-  if (typeof window === "undefined") return;
+export function setStoredLanUrl(url: string, storage?: StorageLike | null): string {
+  const s = getWritableStorage(storage);
+  const cleaned = normalizeServerUrl(url);
+  if (!s) return cleaned;
+  if (!cleaned) {
+    s.removeItem(LAN_URL_STORAGE_KEY);
+  } else {
+    s.setItem(LAN_URL_STORAGE_KEY, cleaned);
+  }
+  return cleaned;
+}
+
+export function setApiBaseUrl(url: string, storage?: StorageLike | null): void {
+  const s = getWritableStorage(storage);
+  if (!s) return;
   const cleaned = url.trim().replace(/\/+$/, "");
   if (!cleaned) {
-    window.localStorage.removeItem(SERVER_URL_STORAGE_KEY);
+    s.removeItem(SERVER_URL_STORAGE_KEY);
   } else {
-    window.localStorage.setItem(SERVER_URL_STORAGE_KEY, cleaned);
+    s.setItem(SERVER_URL_STORAGE_KEY, cleaned);
+    if (/^https:\/\//i.test(cleaned)) {
+      s.setItem(CLOUD_URL_STORAGE_KEY, cleaned);
+    } else if (/^http:\/\//i.test(cleaned)) {
+      s.setItem(LAN_URL_STORAGE_KEY, cleaned);
+    }
   }
 }
 
-export function resetApiBaseUrl(): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.removeItem(SERVER_URL_STORAGE_KEY);
+export function resetApiBaseUrl(opts?: {
+  tenantSlug?: string | null;
+  currentOrigin?: string;
+  storage?: StorageLike | null;
+}): string {
+  const s = getWritableStorage(opts?.storage);
+  const restored = resolveTenantCloudUrl(
+    opts?.tenantSlug ?? getStoredTenantSlug(s),
+    opts?.currentOrigin ?? (typeof window !== "undefined" ? window.location.origin : undefined)
+  );
+  if (s) {
+    s.removeItem(SERVER_URL_STORAGE_KEY);
+    s.removeItem(CLOUD_URL_STORAGE_KEY);
+  }
+  return restored;
 }
 
 export interface SafeFetchJsonResult<T = Record<string, unknown>> {
@@ -394,6 +505,10 @@ export async function safeFetchJson<T = Record<string, unknown>>(
     }
     if (!headers.has("x-uas-platform")) {
       headers.set("x-uas-platform", detectClientDevicePlatform());
+    }
+    if (!headers.has("x-uas-license-key")) {
+      const licKey = getStoredLicenseKeyId();
+      if (licKey) headers.set("x-uas-license-key", licKey);
     }
     if (!headers.has("x-uas-session-token")) {
       const sessionTok = getStoredSessionToken();
@@ -491,6 +606,10 @@ export function installGlobalApiFetchInterceptor(): void {
       }
       if (!headers.has("x-uas-platform")) {
         headers.set("x-uas-platform", detectClientDevicePlatform());
+      }
+      if (!headers.has("x-uas-license-key")) {
+        const licKey = getStoredLicenseKeyId();
+        if (licKey) headers.set("x-uas-license-key", licKey);
       }
       if (!headers.has("x-uas-session-token")) {
         const sessionTok = getStoredSessionToken();
@@ -757,8 +876,8 @@ function applyLocalOptimistic(
     const { totalAmount, debitReceivable } = computeSaleTotals(bundles, price, credit);
     const seq = String(
       payload.sequenceNumber ||
-        payload.batch ||
-        `SO-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`
+      payload.batch ||
+      `SO-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`
     );
     next.sales.push({
       id: "s" + Date.now(),

@@ -23,6 +23,18 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
       undefined;
 
     const result = await pullChangesSince({ sinceCursor, limit, deviceId });
+    if (result.blocked) {
+      return NextResponse.json(
+        {
+          success: false,
+          code: result.code,
+          clearCredentials: result.code === "DEVICE_REVOKED",
+          error: result.error,
+          devicePolicy: result.devicePolicy,
+        },
+        { status: result.status || 403 }
+      );
+    }
     return NextResponse.json({
       success: true,
       ...result,

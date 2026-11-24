@@ -18,7 +18,10 @@ import { parseAssignedProjects } from "@/lib/serverBootstrap";
 import { checkLicenseAndClock } from "@/lib/licensing/guard";
 import { getRuntimeConfig } from "@/lib/runtimeMode";
 import { extractSessionTokenFromRequest } from "@/lib/authSession";
-import { isUserSessionRevoked } from "@/lib/controlPanel/governanceStore";
+import {
+  isDeviceSessionRevoked,
+  isUserSessionRevoked,
+} from "@/lib/controlPanel/governanceStore";
 import { buildCorsHeaders, corsOptionsResponse } from "@/lib/cors";
 import type { UasUser, UserRole } from "@/types/uas";
 
@@ -38,11 +41,13 @@ export interface ResolvedActor {
   user?: UasUser | null;
   claimedRole?: UserRole;
   sessionTenantId?: string;
+  sessionDeviceId?: string;
   sessionIat?: number;
   sessionVerified?: boolean;
   authenticated?: boolean;
   invalidToken?: boolean;
   sessionRevoked?: boolean;
+  deviceRevoked?: boolean;
   tenantMismatch?: boolean;
   inactive?: boolean;
   spoofAttempt?: boolean;
@@ -92,6 +97,7 @@ export function extractActor(
       userDisplay: session.payload.disp || `مستخدم النظام (${role})`,
       userRole: role,
       sessionTenantId: normalizeTenantId(session.payload.tid),
+      sessionDeviceId: session.payload.did || undefined,
       sessionIat: session.payload.iat,
       sessionVerified: true,
       authenticated: true,
@@ -262,6 +268,49 @@ export async function resolveVerifiedActor(
     };
   }
 
+  const requestDeviceId =
+    (actor.sessionDeviceId || req?.headers?.get?.("x-uas-device-id") || "").trim() || undefined;
+
+  if (
+    actor.sessionVerified &&
+    requestDeviceId &&
+    isDeviceSessionRevoked(tokenTenantId, requestDeviceId, actor.sessionIat)
+  ) {
+    return {
+      userId: null,
+      userDisplay: displayLabel,
+      userRole: role,
+      user: null,
+      sessionVerified: false,
+      authenticated: false,
+      invalidToken: true,
+      deviceRevoked: true,
+    };
+  }
+
+  if (requestDeviceId) {
+    try {
+      const devRow = await prisma.tenantDevice.findUnique({
+        where: { deviceId: requestDeviceId },
+        select: { status: true },
+      });
+      if (devRow?.status === "REVOKED") {
+        return {
+          userId: null,
+          userDisplay: displayLabel,
+          userRole: role,
+          user: null,
+          sessionVerified: false,
+          authenticated: false,
+          invalidToken: true,
+          deviceRevoked: true,
+        };
+      }
+    } catch {
+      // Ignore if TenantDevice table is unavailable in isolated unit tests
+    }
+  }
+
   if (dbUser.active === false || dbUser.isActive === false || Boolean(dbUser.archivedAt)) {
     return {
       userId: dbUser.id,
@@ -334,6 +383,7 @@ export async function resolveVerifiedActor(
     userDisplay: displayLabel,
     userRole: role,
     user: uasUser,
+    sessionDeviceId: requestDeviceId,
     sessionVerified: actor.sessionVerified,
     authenticated: true,
   };
@@ -369,6 +419,21 @@ export async function authorizeApiAction(
       ok: false,
       response: forbiddenError(
         "⛔ رفض أمني: الرمز غير مصرح للوصول إلى بيانات هذه المنشأة / Cross-tenant session denied"
+      ),
+    };
+  }
+
+  if (actor.deviceRevoked) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        {
+          error:
+            "🔒 تم إلغاء صلاحية هذا الجهاز نهائياً — يرجى إعادة التفعيل أو مراجعة مدير النظام / Device revoked by administrator",
+          code: "DEVICE_REVOKED",
+          clearCredentials: true,
+        },
+        { status: 403 }
       ),
     };
   }

@@ -1,6 +1,5 @@
 import {
   DEFAULT_CLOUD_API_URL,
-  DEFAULT_LAN_API_URL,
   getStoredRuntimeMode,
   getStoredServerUrls,
   getStoredTenantId,
@@ -9,7 +8,8 @@ import {
   type ClientRuntimeMode,
   type StorageLike,
 } from "@/lib/apiClient";
-import { buildTenantWorkspaceUrl, extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
+import { resolveTenantCloudUrl } from "@/lib/serverConnection";
+import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
 
 export interface ResolvedTransportTarget {
   mode: ClientRuntimeMode;
@@ -42,11 +42,11 @@ export function resolveTransportTarget(opts?: {
     (typeof navigator !== "undefined" && navigator.onLine === false);
 
   if (mode === "cloud") {
-    let cloudBase = urls.cloudUrl || DEFAULT_CLOUD_API_URL;
+    let cloudBase = urls.cloudUrl || resolveTenantCloudUrl(tenantSlug, win?.location?.origin);
     if (hostSlug && win?.location?.origin && !onAndroid) {
       cloudBase = win.location.origin.replace(/\/+$/, "");
     } else if (tenantSlug && cloudBase === DEFAULT_CLOUD_API_URL) {
-      cloudBase = buildTenantWorkspaceUrl(tenantSlug);
+      cloudBase = resolveTenantCloudUrl(tenantSlug, win?.location?.origin);
     }
     return {
       mode: "cloud",
@@ -57,18 +57,18 @@ export function resolveTransportTarget(opts?: {
       badgeLabelAr: browserOffline
         ? "سحابي (أوفلاين مؤقت)"
         : tenantSlug
-        ? `سحابي (${tenantSlug}.qat.world)`
-        : "سحابي (qat.world)",
+          ? `سحابي (${tenantSlug}.qat.world)`
+          : "سحابي (qat.world)",
       badgeLabelEn: browserOffline
         ? "Cloud (Offline Queue)"
         : tenantSlug
-        ? `Cloud (${tenantSlug}.qat.world)`
-        : "Cloud (qat.world)",
+          ? `Cloud (${tenantSlug}.qat.world)`
+          : "Cloud (qat.world)",
     };
   }
 
   if (mode === "lan") {
-    const lanBase = urls.lanUrl || DEFAULT_LAN_API_URL;
+    const lanBase = urls.lanUrl || "";
     return {
       mode: "lan",
       baseUrl: lanBase,
@@ -167,8 +167,8 @@ export async function resilientFetch(
     const timer =
       timeoutMs > 0
         ? setTimeout(() => {
-            controller.abort();
-          }, timeoutMs)
+          controller.abort();
+        }, timeoutMs)
         : null;
 
     try {

@@ -769,6 +769,13 @@ async function initializeTenantDatabase(
         `PostgreSQL tenant schema "${schemaName}" is incomplete; missing required tables: ${missingTables.join(", ")}`
       );
     }
+    try {
+      await client.$executeRawUnsafe(
+        `ALTER TABLE "${schemaName}"."TenantDevice" ADD COLUMN IF NOT EXISTS "activationKey" TEXT;`
+      );
+    } catch {
+      // Non-fatal additive column check
+    }
   }
 
   // 1. EnterpriseProfile

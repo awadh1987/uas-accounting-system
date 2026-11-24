@@ -11,12 +11,17 @@ import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import { getActiveTenantId } from "@/lib/tenant/tenantContext";
 import { isReadOnly } from "@/lib/permissions";
 import {
+  countLearnedDialectEntries,
   deleteTenantMemory,
-  listTenantMemories,
+  getUserDialectLearningEnabled,
+  listVisibleTenantMemories,
+  resetLearnedDialectForUser,
+  setUserDialectLearningEnabled,
   updateTenantMemory,
   upsertTenantMemory,
 } from "@/lib/ai/copilotMemoryStore";
 import {
+  isDialectLearningConfigEntry,
   normalizeMemoryTenantSlug,
   type CopilotMemoryCategory,
   type CopilotMemoryEntry,
@@ -37,15 +42,25 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     const tenantSlug = resolveRequestTenantSlug();
     const includeInactive = req.nextUrl?.searchParams.get("includeInactive") === "true";
 
-    const memories = listTenantMemories({
+    const memories = listVisibleTenantMemories({
       tenantSlug,
       userId: actor.userId,
       includeInactive,
+    });
+    const dialectLearningEnabled = getUserDialectLearningEnabled({
+      tenantSlug,
+      userId: actor.userId,
+    });
+    const learnedDialectCount = countLearnedDialectEntries({
+      tenantSlug,
+      userId: actor.userId,
     });
 
     return NextResponse.json({
       success: true,
       tenantSlug,
+      dialectLearningEnabled,
+      learnedDialectCount,
       memories,
     });
   } catch (err: unknown) {
@@ -66,9 +81,53 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     const targetScope: CopilotMemoryScope = body.scope === "user" ? "user" : "workspace";
     const actorReadOnly = isReadOnly(actor.user || actor.userRole);
 
+    if (action === "set_dialect_learning") {
+      const enabled = body.enabled !== false;
+      setUserDialectLearningEnabled({
+        tenantSlug,
+        userId: actor.userId,
+        enabled,
+      });
+      return NextResponse.json({
+        success: true,
+        tenantSlug,
+        dialectLearningEnabled: enabled,
+        learnedDialectCount: countLearnedDialectEntries({
+          tenantSlug,
+          userId: actor.userId,
+        }),
+        memories: listVisibleTenantMemories({
+          tenantSlug,
+          userId: actor.userId,
+          includeInactive: true,
+        }),
+      });
+    }
+
+    if (action === "reset_dialect") {
+      const resetRes = resetLearnedDialectForUser({
+        tenantSlug,
+        userId: actor.userId,
+      });
+      return NextResponse.json({
+        success: true,
+        tenantSlug,
+        removedCount: resetRes.removedCount,
+        dialectLearningEnabled: getUserDialectLearningEnabled({
+          tenantSlug,
+          userId: actor.userId,
+        }),
+        learnedDialectCount: 0,
+        memories: resetRes.memories,
+      });
+    }
+
     if (action === "sync" && Array.isArray(body.entries)) {
       const synced: CopilotMemoryEntry[] = [];
       for (const rawEntry of body.entries as Array<Partial<CopilotMemoryEntry>>) {
+        if (isDialectLearningConfigEntry({ topicKey: String(rawEntry.topicKey || "") })) {
+          continue;
+        }
         const scope: CopilotMemoryScope = rawEntry.scope === "user" ? "user" : "workspace";
         if (actorReadOnly && scope === "workspace") continue;
         const ev = upsertTenantMemory({
@@ -90,7 +149,15 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         success: true,
         tenantSlug,
         syncedCount: synced.length,
-        memories: listTenantMemories({ tenantSlug, userId: actor.userId, includeInactive: true }),
+        dialectLearningEnabled: getUserDialectLearningEnabled({
+          tenantSlug,
+          userId: actor.userId,
+        }),
+        learnedDialectCount: countLearnedDialectEntries({
+          tenantSlug,
+          userId: actor.userId,
+        }),
+        memories: listVisibleTenantMemories({ tenantSlug, userId: actor.userId, includeInactive: true }),
       });
     }
 
@@ -116,7 +183,15 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         success: true,
         tenantSlug,
         removed,
-        memories: listTenantMemories({ tenantSlug, userId: actor.userId, includeInactive: true }),
+        dialectLearningEnabled: getUserDialectLearningEnabled({
+          tenantSlug,
+          userId: actor.userId,
+        }),
+        learnedDialectCount: countLearnedDialectEntries({
+          tenantSlug,
+          userId: actor.userId,
+        }),
+        memories: listVisibleTenantMemories({ tenantSlug, userId: actor.userId, includeInactive: true }),
       });
     }
 
@@ -139,7 +214,15 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         success: true,
         tenantSlug,
         memory: updated,
-        memories: listTenantMemories({ tenantSlug, userId: actor.userId, includeInactive: true }),
+        dialectLearningEnabled: getUserDialectLearningEnabled({
+          tenantSlug,
+          userId: actor.userId,
+        }),
+        learnedDialectCount: countLearnedDialectEntries({
+          tenantSlug,
+          userId: actor.userId,
+        }),
+        memories: listVisibleTenantMemories({ tenantSlug, userId: actor.userId, includeInactive: true }),
       });
     }
 
@@ -172,7 +255,15 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       success: true,
       tenantSlug,
       event: ev,
-      memories: listTenantMemories({ tenantSlug, userId: actor.userId, includeInactive: true }),
+      dialectLearningEnabled: getUserDialectLearningEnabled({
+        tenantSlug,
+        userId: actor.userId,
+      }),
+      learnedDialectCount: countLearnedDialectEntries({
+        tenantSlug,
+        userId: actor.userId,
+      }),
+      memories: listVisibleTenantMemories({ tenantSlug, userId: actor.userId, includeInactive: true }),
     });
   } catch (err: unknown) {
     console.error("POST /api/ai/memory error:", err);

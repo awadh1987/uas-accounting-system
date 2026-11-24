@@ -22,6 +22,7 @@ import {
   upsertTenantMemory,
 } from "./copilotMemoryStore";
 import {
+  isDialectTermMemoryEntry,
   normalizeMemoryTenantSlug,
   type CopilotMemoryCategory,
   type CopilotMemoryEntry,
@@ -51,6 +52,7 @@ const MEMORY_EXTRACTION_SCHEMA: Schema = {
               "naming_alias",
               "workflow_preference",
               "operational_pattern",
+              "dialect_preference",
             ],
           },
           scope: {
@@ -181,6 +183,8 @@ export async function learnFromCopilotTurn(params: {
   userId?: string;
   activeTab?: string;
   editedDraftContext?: string;
+  dialect?: "yemeni" | "msa";
+  dialectLearningEnabled?: boolean;
   geminiApiKey?: string;
   clientFactory?: GeminiClientFactory;
   enableGeminiExtraction?: boolean;
@@ -215,6 +219,8 @@ export async function learnFromCopilotTurn(params: {
     userId: params.userId,
     activeTab: params.activeTab,
     editedDraftContext: params.editedDraftContext,
+    dialect: params.dialect,
+    dialectLearningEnabled: params.dialectLearningEnabled,
   });
 
   // 3. Optional Gemini fast-model JSON extraction for subtle implicit rules
@@ -269,6 +275,12 @@ export async function learnFromCopilotTurn(params: {
 
   for (const candidate of merged.values()) {
     if ((candidate.confidence ?? 0.85) < 0.65) continue;
+    if (
+      params.dialectLearningEnabled === false &&
+      isDialectTermMemoryEntry(candidate)
+    ) {
+      continue;
+    }
     const event = upsertTenantMemory(candidate);
     if (event) {
       learnedEvents.push(event);

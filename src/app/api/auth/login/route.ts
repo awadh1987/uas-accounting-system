@@ -22,6 +22,11 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     const userId = String(body.userId || "").trim();
     const identifier = String(body.identifier || body.email || body.username || "").trim();
     const password = String(body.password || "");
+    const requestDeviceId = (
+      req.headers.get("x-uas-device-id") ||
+      (typeof body.deviceId === "string" ? body.deviceId : "") ||
+      ""
+    ).trim();
 
     if ((!userId && !identifier) || !password) {
       return jsonError("يرجى إدخال اسم المستخدم أو البريد الإلكتروني وكلمة المرور", 400);
@@ -100,8 +105,41 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       return jsonError("كلمة المرور غير صحيحة", 401);
     }
 
+    if (requestDeviceId) {
+      try {
+        const deviceRow = await prisma.tenantDevice.findUnique({
+          where: { deviceId: requestDeviceId },
+          select: { status: true },
+        });
+        if (deviceRow?.status === "REVOKED") {
+          return NextResponse.json(
+            {
+              error:
+                "🔒 تم إلغاء صلاحية هذا الجهاز نهائياً — يرجى إعادة التفعيل أو مراجعة مدير النظام / Device revoked by administrator",
+              code: "DEVICE_REVOKED",
+              clearCredentials: true,
+            },
+            { status: 403 }
+          );
+        }
+        if (deviceRow?.status === "SUSPENDED") {
+          return NextResponse.json(
+            {
+              error:
+                "🔒 هذا الجهاز موقوف مؤقتاً من لوحة تحكم المنشأة / Device suspended by administrator",
+              code: "DEVICE_LOCKED",
+            },
+            { status: 403 }
+          );
+        }
+      } catch {
+        // Ignore if TenantDevice table does not exist in minimal test DB
+      }
+    }
+
     const sessionData = await authenticateAndBuildSessionTx(user, activeTenantId, {
       plainPassword: password,
+      deviceId: requestDeviceId || null,
     });
 
     const response = NextResponse.json(sessionData, {

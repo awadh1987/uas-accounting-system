@@ -15,6 +15,7 @@ import type {
   WorkerWageEntry,
 } from "@prisma/client";
 import { formatAuditTimestamp, type CurrencyCode } from "@/lib/formulas";
+import { resolveEffectiveDiskThresholdPercent } from "@/lib/accountingSettings";
 import { issueSessionToken } from "@/lib/authSession";
 import {
   canApprove,
@@ -255,12 +256,12 @@ function mapSettings(settingsRow: SystemSettings | null): UasSystemSettings {
     defaultLang: settingsRow?.defaultLang === "en" ? "en" : "ar",
     defaultTheme:
       settingsRow?.defaultTheme === "dark" ||
-      settingsRow?.defaultTheme === "royal"
+        settingsRow?.defaultTheme === "royal"
         ? settingsRow.defaultTheme
         : "emerald",
     defaultCurrency:
       settingsRow?.defaultCurrency === "SAR" ||
-      settingsRow?.defaultCurrency === "USD"
+        settingsRow?.defaultCurrency === "USD"
         ? settingsRow.defaultCurrency
         : "YER",
     periodLockDate: settingsRow?.periodLockDate ?? null,
@@ -269,6 +270,7 @@ function mapSettings(settingsRow: SystemSettings | null): UasSystemSettings {
     defaultDeviceSyncMode:
       settingsRow?.defaultDeviceSyncMode === "MANUAL" ? "MANUAL" : "AUTO",
     requireDeviceApproval: settingsRow?.requireDeviceApproval ?? false,
+    diskAlertThresholdPercent: resolveEffectiveDiskThresholdPercent(settingsRow),
   };
 }
 
@@ -761,7 +763,13 @@ export async function authenticateAndBuildSessionTx(
     assignedProjects: string;
   },
   activeTenantId: string,
-  opts: { plainPassword?: string; auditAction?: string; auditDetailsPrefix?: string; now?: Date } = {}
+  opts: {
+    plainPassword?: string;
+    auditAction?: string;
+    auditDetailsPrefix?: string;
+    now?: Date;
+    deviceId?: string | null;
+  } = {}
 ) {
   const now = opts.now ?? new Date();
   const shouldUpgradeHash = Boolean(opts.plainPassword && isLegacySha256Hash(user.passwordHash));
@@ -842,6 +850,7 @@ export async function authenticateAndBuildSessionTx(
     userRole: normalizedUserRole,
     tenantId: activeTenantId,
     userDisplay: `${user.displayName || user.name} (${normalizedUserRole})`,
+    deviceId: opts.deviceId,
   });
 
   return {

@@ -1,9 +1,11 @@
 "use client";
 
 import {
+  detectClientDevicePlatform,
   fetchBootstrapState,
   getApiBaseUrl,
   getOrCreateClientDeviceId,
+  getStoredLicenseKeyId,
   getStoredSessionToken,
   getStoredTenantId,
   isAndroidLocalIsolatedMode,
@@ -93,12 +95,16 @@ export async function performManualSyncNow(currentUser: UasUser): Promise<Client
 
   const base = getApiBaseUrl();
   const sessionToken = getStoredSessionToken();
+  const licenseKeyId = getStoredLicenseKeyId();
+  const clientPlatform = detectClientDevicePlatform();
   const commonHeaders: Record<string, string> = {
     "Content-Type": "application/json",
     "x-uas-device-id": deviceId,
+    "x-uas-platform": clientPlatform,
     "x-uas-user-id": currentUser.id,
     "x-uas-role": String(currentUser.role),
     "x-uas-user-display": sanitizeHeaderValue(`${currentUser.name} (${currentUser.role})`),
+    ...(licenseKeyId ? { "x-uas-license-key": licenseKeyId } : {}),
     ...(sessionToken ? { "x-uas-session-token": sessionToken } : {}),
   };
   if (tenantId && tenantId !== "default") {
@@ -125,6 +131,8 @@ export async function performManualSyncNow(currentUser: UasUser): Promise<Client
         headers: commonHeaders,
         body: JSON.stringify({
           deviceId,
+          platform: clientPlatform,
+          ...(licenseKeyId ? { activationKey: licenseKeyId } : {}),
           userId: currentUser.id,
           userEmail: currentUser.email,
           userDisplay: currentUser.name,
@@ -280,7 +288,31 @@ export async function performManualSyncNow(currentUser: UasUser): Promise<Client
       { method: "GET", headers: commonHeaders, cache: "no-store" },
       { timeoutMs: 10000, maxRetries: 2 }
     );
-    if (pullRes.ok) {
+    if (pullRes.status === 403) {
+      const errPull = (await pullRes.json().catch(() => ({}))) as { code?: string };
+      if (errPull.code === "DEVICE_REVOKED") {
+        dispatchDeviceRevoked(errPull);
+        const boot = await fetchBootstrapState();
+        return {
+          ok: false,
+          syncedCount,
+          duplicateCount,
+          conflictCount,
+          failedCount,
+          pulledChangesCount: 0,
+          latestCursor,
+          pendingConflicts: [],
+          remainingQueue: boot.queueCount,
+          state: boot.state,
+          deviceStatus: "REVOKED",
+          syncMode,
+          error: "DEVICE_REVOKED",
+        };
+      }
+      if (errPull.code === "DEVICE_LOCKED") {
+        deviceStatus = "SUSPENDED";
+      }
+    } else if (pullRes.ok) {
       const pullData = (await pullRes.json().catch(() => ({}))) as {
         changes?: unknown[];
         latestCursor?: number;
@@ -366,7 +398,7 @@ export function startAutoSyncController(opts: {
   onSyncCompleteAction?: (result: ClientSyncResult) => void;
 }): () => void {
   if (typeof window === "undefined" || !opts.currentUser || !opts.enabled) {
-    return () => {};
+    return () => { };
   }
 
   const user = opts.currentUser;

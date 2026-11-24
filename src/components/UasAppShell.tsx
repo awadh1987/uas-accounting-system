@@ -43,8 +43,10 @@ import {
   isNativeAndroid,
   resolveApiBaseUrl,
   safeFetchJson,
+  setStoredLicenseKeyId,
   setStoredSessionToken,
   setStoredTenantId,
+  setStoredTenantSlug,
 } from "@/lib/apiClient";
 import { resolveEffectiveTab, resolveGroupForTab } from "@/lib/erpNavigation";
 import { exportFullWorkbookToExcel } from "@/lib/excelExport";
@@ -232,6 +234,9 @@ export function UasAppShell() {
     if (onAndroid) {
       try {
         const offlineStatus = (await buildOfflineClientLicenseStatus()) as LicenseStatusData;
+        if (offlineStatus.license_id) {
+          setStoredLicenseKeyId(offlineStatus.license_id);
+        }
         if (offlineStatus.is_valid || !base) {
           setLicenseStatus(offlineStatus);
           return;
@@ -244,6 +249,9 @@ export function UasAppShell() {
     try {
       const res = await safeFetchJson<LicenseStatusData>(`${base}/api/licensing/status`);
       if (res.ok && !res.isHtmlFallback && res.data) {
+        if (res.data.license_id) {
+          setStoredLicenseKeyId(res.data.license_id);
+        }
         recordOfflineLicenseGovernance({
           licenseId: res.data.license_id,
           status: res.data.license_status,
@@ -260,6 +268,9 @@ export function UasAppShell() {
     }
     try {
       const offlineStatus = (await buildOfflineClientLicenseStatus()) as LicenseStatusData;
+      if (offlineStatus.license_id) {
+        setStoredLicenseKeyId(offlineStatus.license_id);
+      }
       setLicenseStatus(offlineStatus);
     } catch {
       // ignore
@@ -296,6 +307,9 @@ export function UasAppShell() {
       const res = await fetchBootstrapState();
       if (!active) return;
       setState(res.state);
+      if (res.state.enterpriseProfile?.tenantSlug) {
+        setStoredTenantSlug(res.state.enterpriseProfile.tenantSlug);
+      }
       setLang(res.state.settings.defaultLang);
       setTheme(res.state.settings.defaultTheme);
       setCurrency(res.state.settings.defaultCurrency);
@@ -1800,15 +1814,16 @@ export function UasAppShell() {
                   currentUser={currentUser}
                   users={state.users}
                   projects={state.projects}
+                  offlineQueueCount={offlineQueueCount}
                   onRefreshState={refreshFromServer}
                   readOnly={userReadOnly}
                   canManageUsers={userCanManageUsers}
                   canManageCms={canManageLandingCms(currentUser)}
-                  onSaveBranding={async (orgName, logoText) => {
+                  onSaveBranding={async (orgName, logoText, extra) => {
                     await runMutation(
                       "/api/system/settings",
                       "PATCH",
-                      { orgName, logoText },
+                      { orgName, logoText, ...(extra || {}) },
                       "إعدادات النظام",
                       "تم حفظ شعار وإعدادات النظام"
                     );

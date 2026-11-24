@@ -13,6 +13,7 @@ export interface SessionPayload {
   role: UserRole;
   tid: string;
   disp: string;
+  did?: string;
   iat: number;
   exp: number;
 }
@@ -40,18 +41,25 @@ export function issueSessionToken(input: {
   userRole: UserRole | string;
   tenantId?: string;
   userDisplay?: string;
+  deviceId?: string | null;
   ttlMs?: number;
+  nowMs?: number;
 }): string {
-  const now = Date.now();
+  const now =
+    typeof input.nowMs === "number" && Number.isFinite(input.nowMs)
+      ? Math.round(input.nowMs)
+      : Date.now();
   const ttl = Number.isFinite(input.ttlMs) && (input.ttlMs ?? 0) > 0
     ? Number(input.ttlMs)
     : DEFAULT_SESSION_TTL_MS;
 
+  const cleanDeviceId = typeof input.deviceId === "string" ? input.deviceId.trim() : "";
   const payload: SessionPayload = {
     uid: String(input.userId).trim(),
     role: normalizeRole(input.userRole),
     tid: String(input.tenantId || "default").trim() || "default",
     disp: String(input.userDisplay || "").trim(),
+    ...(cleanDeviceId ? { did: cleanDeviceId } : {}),
     iat: now,
     exp: now + ttl,
   };
@@ -95,6 +103,7 @@ export function verifySessionToken(token: string | null | undefined): SessionPay
       role: normalizeRole(decoded.role),
       tid: typeof decoded.tid === "string" && decoded.tid.trim() ? decoded.tid.trim() : "default",
       disp: typeof decoded.disp === "string" ? decoded.disp : "",
+      ...(typeof decoded.did === "string" && decoded.did.trim() ? { did: decoded.did.trim() } : {}),
       iat: typeof decoded.iat === "number" ? decoded.iat : 0,
       exp: decoded.exp,
     };

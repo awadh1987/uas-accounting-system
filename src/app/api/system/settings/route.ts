@@ -1,19 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
-import { ensureSqliteDatabaseReady } from "@/lib/sqliteBootstrap";
+import { ensureSqliteDatabaseReady, isSqliteRuntime } from "@/lib/sqliteBootstrap";
 import { appendAuditLogTx, getBootstrapState } from "@/lib/serverBootstrap";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
 import {
+  clampDiskAlertThresholdPercent,
   DEFAULT_CONTROL_ACCOUNTS,
   DEFAULT_DOCUMENT_SEQUENCES,
   parseAccountingSettings,
+  parseTenantAdminConfigJson,
 } from "@/lib/accountingSettings";
 
 export const dynamic = "force-dynamic";
 
 export const GET = withTenantRoute(async function GET() {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
     const row = await prisma.systemSettings.findUnique({ where: { id: "default" } });
     const accountingSettings = parseAccountingSettings(row);
     return NextResponse.json({ success: true, settings: accountingSettings });
@@ -25,7 +29,9 @@ export const GET = withTenantRoute(async function GET() {
 
 async function saveSettings(req: NextRequest) {
   try {
-    await ensureSqliteDatabaseReady();
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    }
     const body = (await req.json()) as Record<string, unknown>;
     const auth = await authorizeApiAction(body, req, {
       moduleId: "system",
@@ -92,6 +98,27 @@ async function saveSettings(req: NextRequest) {
         ? { ...DEFAULT_DOCUMENT_SEQUENCES, ...current.documentSequences, ...(body.documentSequences as Record<string, unknown>) }
         : current.documentSequences;
 
+    const existingAdminCfg = parseTenantAdminConfigJson(existingRow?.tenantAdminConfigJson);
+    const hasThresholdUpdate =
+      body.diskAlertThresholdPercent !== undefined &&
+      body.diskAlertThresholdPercent !== null &&
+      String(body.diskAlertThresholdPercent).trim() !== "";
+    const nextDiskThreshold = hasThresholdUpdate
+      ? clampDiskAlertThresholdPercent(
+          body.diskAlertThresholdPercent,
+          current.diskAlertThresholdPercent
+        )
+      : undefined;
+    const nextTenantAdminConfigJson =
+      nextDiskThreshold !== undefined
+        ? JSON.stringify({
+            ...existingAdminCfg,
+            diskAlertThresholdPercent: nextDiskThreshold,
+            diskAlertThresholdUpdatedAt: new Date().toISOString(),
+            diskAlertThresholdUpdatedBy: actor.userId || actor.userDisplay,
+          })
+        : undefined;
+
     const updatedRow = await prisma.$transaction(async (tx) => {
       const saved = await tx.systemSettings.upsert({
         where: { id: "default" },
@@ -110,6 +137,9 @@ async function saveSettings(req: NextRequest) {
           ...(printLayout ? { printLayout } : {}),
           ...(body.controlAccounts ? { controlAccountsJson: JSON.stringify(mergedControlAccounts) } : {}),
           ...(body.documentSequences ? { documentSequencesJson: JSON.stringify(mergedSequences) } : {}),
+          ...(nextTenantAdminConfigJson !== undefined
+            ? { tenantAdminConfigJson: nextTenantAdminConfigJson }
+            : {}),
         },
         create: {
           id: "default",
@@ -127,6 +157,9 @@ async function saveSettings(req: NextRequest) {
           printLayout: printLayout || current.printLayout,
           controlAccountsJson: JSON.stringify(mergedControlAccounts),
           documentSequencesJson: JSON.stringify(mergedSequences),
+          ...(nextTenantAdminConfigJson !== undefined
+            ? { tenantAdminConfigJson: nextTenantAdminConfigJson }
+            : {}),
         },
       });
 
@@ -139,6 +172,9 @@ async function saveSettings(req: NextRequest) {
           costingMethod: saved.costingMethod,
           negativeStockPolicy: saved.negativeStockPolicy,
           printLayout: saved.printLayout,
+          ...(nextDiskThreshold !== undefined
+            ? { diskAlertThresholdPercent: nextDiskThreshold }
+            : {}),
         }),
       });
       return saved;

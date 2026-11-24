@@ -53,6 +53,12 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
 
     const result = await registerOrHeartbeatDevice({
       deviceId,
+      activationKey:
+        (typeof body.activationKey === "string" ? body.activationKey : "") ||
+        (typeof body.licenseKey === "string" ? body.licenseKey : "") ||
+        req.headers.get("x-uas-license-key") ||
+        req.headers.get("x-uas-activation-key") ||
+        undefined,
       platform:
         (typeof body.platform === "string" ? body.platform : "") ||
         req.headers.get("x-uas-platform") ||

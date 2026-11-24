@@ -94,6 +94,11 @@ export async function pullChangesSince(params: {
   limit?: number;
   deviceId?: string | null;
 }): Promise<{
+  ok?: boolean;
+  blocked?: boolean;
+  status?: number;
+  code?: "DEVICE_REVOKED" | "DEVICE_LOCKED";
+  error?: string;
   changes: SyncChangeItem[];
   latestCursor: number;
   hasMore: boolean;
@@ -108,6 +113,34 @@ export async function pullChangesSince(params: {
 }> {
   const sinceCursor = Math.max(0, Math.floor(Number(params.sinceCursor) || 0));
   const limit = Math.min(200, Math.max(1, Math.floor(Number(params.limit) || 100)));
+
+  const existingDev = params.deviceId
+    ? await prisma.tenantDevice.findUnique({ where: { deviceId: params.deviceId } })
+    : null;
+
+  if (existingDev && (existingDev.status === "REVOKED" || existingDev.status === "SUSPENDED")) {
+    return {
+      ok: false,
+      blocked: true,
+      status: 403,
+      code: existingDev.status === "REVOKED" ? "DEVICE_REVOKED" : "DEVICE_LOCKED",
+      error:
+        existingDev.status === "REVOKED"
+          ? "🔒 تم إلغاء صلاحية هذا الجهاز نهائياً — يرجى مسح الجلسة وإعادة التفعيل / Device revoked"
+          : "🔒 هذا الجهاز موقوف مؤقتاً من لوحة تحكم المنشأة / Device suspended",
+      changes: [],
+      latestCursor: existingDev.lastCursor,
+      hasMore: false,
+      serverTime: new Date().toISOString(),
+      pendingConflictsCount: 0,
+      devicePolicy: {
+        status: existingDev.status,
+        syncMode: existingDev.syncMode,
+        syncIntervalSec: existingDev.syncIntervalSec,
+        pendingCommand: existingDev.pendingCommand,
+      },
+    };
+  }
 
   const [rows, latestRow, pendingConflictsCount] = await Promise.all([
     prisma.syncChangeLog.findMany({
@@ -148,30 +181,30 @@ export async function pullChangesSince(params: {
     pendingCommand: string | null;
   } | null = null;
 
-  if (params.deviceId) {
-    const dev = await prisma.tenantDevice.findUnique({ where: { deviceId: params.deviceId } });
-    if (dev) {
-      devicePolicy = {
-        status: dev.status,
-        syncMode: dev.syncMode,
-        syncIntervalSec: dev.syncIntervalSec,
-        pendingCommand: dev.pendingCommand,
-      };
-      const shouldClearCmd =
-        dev.pendingCommand === "SYNC_NOW" || dev.pendingCommand === "FORCE_FULL_RESYNC";
-      await prisma.tenantDevice.update({
-        where: { deviceId: params.deviceId },
-        data: {
-          lastSeenAt: new Date(),
-          lastCursor: Math.max(dev.lastCursor, deliveredCursor),
-          lastSyncAt: new Date(),
-          ...(shouldClearCmd ? { pendingCommand: null } : {}),
-        },
-      });
-    }
+  if (params.deviceId && existingDev) {
+    devicePolicy = {
+      status: existingDev.status,
+      syncMode: existingDev.syncMode,
+      syncIntervalSec: existingDev.syncIntervalSec,
+      pendingCommand: existingDev.pendingCommand,
+    };
+    const shouldClearCmd =
+      existingDev.pendingCommand === "SYNC_NOW" ||
+      existingDev.pendingCommand === "FORCE_FULL_RESYNC";
+    await prisma.tenantDevice.update({
+      where: { deviceId: params.deviceId },
+      data: {
+        lastSeenAt: new Date(),
+        lastCursor: Math.max(existingDev.lastCursor, deliveredCursor),
+        lastSyncAt: new Date(),
+        ...(shouldClearCmd ? { pendingCommand: null } : {}),
+      },
+    });
   }
 
   return {
+    ok: true,
+    blocked: false,
     changes,
     latestCursor,
     hasMore,
@@ -638,7 +671,7 @@ export async function pushClientMutations(input: {
             conflictCount > 0 ? `${conflictCount} conflict(s) pending resolution` : null,
         },
       })
-      .catch(() => {});
+      .catch(() => { });
   }
 
   if (appliedCount > 0) {
@@ -716,8 +749,8 @@ export async function resolveSyncConflict(input: {
     input.resolution === "KEEP_SERVER"
       ? "RESOLVED_KEEP_SERVER"
       : input.resolution === "APPLY_CLIENT"
-      ? "RESOLVED_APPLY_CLIENT"
-      : "DISMISSED";
+        ? "RESOLVED_APPLY_CLIENT"
+        : "DISMISSED";
 
   const updated = await prisma.$transaction(async (tx) => {
     const clientPayload = safeParseJsonObj(existing.clientPayloadJson);

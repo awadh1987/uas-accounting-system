@@ -190,6 +190,19 @@ async function handleSaveTenantConfig(req: NextRequest) {
       deleteTenantBrandAssetFile(tenantKey, "all");
     }
 
+    const currentSettingsRow = await prisma.systemSettings.findUnique({ where: { id: "default" } });
+    let existingAdminCfg: Record<string, unknown> = {};
+    try {
+      if (currentSettingsRow?.tenantAdminConfigJson) {
+        const parsed = JSON.parse(currentSettingsRow.tenantAdminConfigJson);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          existingAdminCfg = parsed as Record<string, unknown>;
+        }
+      }
+    } catch {
+      existingAdminCfg = {};
+    }
+
     const { profile, settings } = await prisma.$transaction(async (tx) => {
       const savedProfile = await tx.enterpriseProfile.upsert({
         where: { id: "default" },
@@ -291,6 +304,7 @@ async function handleSaveTenantConfig(req: NextRequest) {
             ? { requireDeviceApproval: boolOpt("requireDeviceApproval") }
             : {}),
           tenantAdminConfigJson: JSON.stringify({
+            ...existingAdminCfg,
             updatedAt: new Date().toISOString(),
             updatedBy: auth.actor.userId,
           }),

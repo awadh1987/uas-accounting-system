@@ -1,10 +1,11 @@
 /**
  * UAS Enterprise — Yemeni Arabic Localization, ERP Dialect Grounding & Natural TTS Text Prep
  *
- * Tunes Copilot persona, greetings, domain terminology, and spoken audio preparation
- * so day-to-day field, warehouse, and accounting guidance feels authentically Yemeni
- * while preserving accounting precision, formal MSA toggling, and English support.
+ * Tunes Copilot persona, greetings, everyday trade/cashbox/receivables/harvest expressions,
+ * and spoken audio preparation so day-to-day field, warehouse, and accounting guidance
+ * feels authentically Yemeni while preserving accounting precision, MSA toggling, and English support.
  */
+import { sanitizeSpeechText } from "@/lib/speechSanitizer";
 
 export type CopilotDialectMode = "yemeni" | "msa";
 
@@ -17,15 +18,26 @@ export const YEMENI_ERP_GLOSSARY: Array<{
   { termAr: "العلاقية / العلاقي", meaningAr: "وحدة قياس وبيع المحصول المعتمدة في المخزون والمبيعات", english: "Harvest bundle / unit" },
   { termAr: "البزغة", meaningAr: "بداية موسم التوريد أو تفتح دفعة الحصاد الجديدة", english: "Early harvest sprout / batch onset" },
   { termAr: "الفاقد / التالف", meaningAr: "الكميات المخصومة من المحصول بسبب الفرز أو التلف", english: "Shrinkage / spoilage" },
-  { termAr: "المديونية / الذمم", meaningAr: "المبالغ المتبقية على العملاء أو المستحقات للعمال والموردين", english: "Receivables / payables" },
+  { termAr: "المديونية / الباقي عند العملاء", meaningAr: "المبالغ المتبقية على العملاء أو المستحقات للعمال والموردين", english: "Receivables / payables" },
   { termAr: "السند (قبض / صرف)", meaningAr: "وثيقة التحصيل النقدي أو الدفع المرتبطة بالخزينة والـ QR", english: "Receipt / Payment voucher" },
-  { termAr: "الخزينة / الصندوق", meaningAr: "النقدية المتاحة في الصناديق والحسابات البنكية والمحافظ", english: "Treasury cashbox / bank" },
+  { termAr: "الصندوق / الخزينة / الكاش", meaningAr: "النقدية المتاحة في الصناديق والحسابات البنكية والمحافظ", english: "Treasury cashbox / bank" },
+  { termAr: "الغلّة / الصافي", meaningAr: "صافي دخل المشروع أو المزرعة بعد خصم المصاريف والأجور والفاقد", english: "Net profit / yield" },
+  { termAr: "الأجور والقطافة", meaningAr: "أجور العمال اليومية ومستحقات القطف والتعبئة والنقل", english: "Harvest labor wages & logistics" },
   { termAr: "الريال اليمني (YER)", meaningAr: "العملة الأساسية للتقارير وميزان المراجعة ما لم يُحدد غيرها", english: "Yemeni Rial base currency" },
 ];
 
+export const YEMENI_EVERYDAY_PHRASES = {
+  greetings: ["حياك الله يا غالي", "يا هلا وغلا، منور", "أبشر من عيوني", "سمّ بالله"],
+  reassurance: ["أمورك طيبة", "ما عليك أمر", "خلّنا نراجعها حبة حبة", "شيكت لك على الحسابات"],
+  cashbox: ["رصيد الصندوق / الخزينة", "السيولة المتوفرة حالياً", "الوارد والمنصرف اليوم"],
+  receivables: ["الباقي عند العملاء (الذمم)", "المتأخرات والآجل", "التحصيل المستحق"],
+  harvests: ["دفعات القطفة والعلاقي", "صافي الغلّة", "المصروفات والأجور على القطفة"],
+} as const;
+
 export function buildGeminiDialectInstruction(
   lang: "ar" | "en",
-  dialect: CopilotDialectMode = "yemeni"
+  dialect: CopilotDialectMode = "yemeni",
+  learnedDialectTerms: string[] = []
 ): string {
   if (lang === "en") {
     return [
@@ -44,13 +56,22 @@ export function buildGeminiDialectInstruction(
     ].join("\n");
   }
 
-  return [
-    "أسلوب التخاطب والشخصية (لهجة يمنية ودية أصيلة + دقة محاسبية احترافية):",
-    "- خاطب المستخدم بلهجة يمنية محببة ومهذبة وطبيعية في الحديث اليومي (مثل: «حياك الله يا غالي»، «أبشر من عيوني»، «ما عليك أمر»، «أمورك طيبة»، «خلّنا نراجعها سوا»، «يعطيك العافية»).",
-    "- استعمل مصطلحات السوق والعمل الميداني المحاسبي في اليمن بشكل طبيعي ومفهوم عند الحاجة: (القطفة، العلاقية، البزغة، الفاقد/التالف، المديونية، السند، الخزينة، والريال اليمني)، مع بقاء أسماء الحسابات وأكوادها والأرقام المحاسبية دقيقة وواضحة تماماً.",
+  const lines = [
+    "أسلوب التخاطب والشخصية (لهجة يمنية يومية ودية أصيلة + دقة محاسبية احترافية):",
+    "- خاطب المستخدم بلهجة يمنية يومية لطيفة ومفهومة ومهذبة (مثل: «حياك الله يا غالي»، «أبشر من عيوني»، «ما عليك أمر»، «أمورك طيبة»، «خلّنا نراجعها حبة حبة»، «يعطيك العافية»).",
+    "- استخدم عبارات التجارة والعمل اليومي في اليمن بشكل طبيعي عند عرض الأرقام: (الصندوق والسيولة، الباقي عند العملاء والذمم، التوريد والمشتريات، القطفة والعلاقي والبزغة، أجور العمال، التالف/الفاقد، وصافي الغلّة بالريال اليمني)، مع بقاء أسماء الحسابات وأكوادها والأرقام المحاسبية دقيقة وواضحة تماماً.",
     "- لا ترد أبداً بجملة واحدة جافة أو قالب جامد؛ اشرح الأرقام والنتائج بسلاسة، ونبّه على أي مخاطر أو عجز مخزني أو فترة مغلقة أو نقص سيولة بروح ناصحة ومساعدة، واقترح الخطوة التالية بوضوح.",
     "- في التحيات والاستفسارات العامة (مثل مرحبا / السلام عليكم / كيف حالك)، رحّب بحرارة باللهجة اليمنية واعرض المساعدة العملية المرتبطة بالقسم النشط ومشروع المستخدم الحالي.",
-  ].join("\n");
+  ];
+
+  if (learnedDialectTerms.length > 0) {
+    lines.push(
+      "- تعبيرات ومفردات مفضلة تعلمتها من أسلوب هذا المستخدم (احرص على مراعاتها بلطف عند التحدث):",
+      ...learnedDialectTerms.slice(0, 5).map((t) => `  • ${t}`)
+    );
+  }
+
+  return lines.join("\n");
 }
 
 export function buildCopilotGreetingFallback(params: {
@@ -81,36 +102,18 @@ export function buildCopilotGreetingFallback(params: {
 
 export function formatSpokenTextForGeminiTts(
   rawText: string,
-  opts: { lang?: "ar" | "en"; dialect?: CopilotDialectMode; maxChars?: number } = {}
+  opts: {
+    lang?: "ar" | "en";
+    dialect?: CopilotDialectMode;
+    maxChars?: number;
+    speakReasoning?: boolean;
+  } = {}
 ): string {
-  const lang = opts.lang ?? (/[\u0600-\u06FF]/.test(rawText) ? "ar" : "en");
-  const maxChars = opts.maxChars ?? 12000;
-
-  let clean = String(rawText ?? "")
-    .replace(/\[[^\]]+\]\([^)]+\)/g, " ")
-    .replace(/https?:\/\/\S+/g, " ")
-    .replace(/[`*_~>#|•✅✓❌⛔⚠️🚨🔍📊📈📦🛡️🔒🔓📡🧠💳💰🏦👷🌱📄❓📖📷📵🗂️🔗⚡]/g, " ")
-    .replace(/\r?\n+/g, "، ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (lang === "ar") {
-    clean = clean
-      .replace(/\bYER\b/gi, "ريال يمني")
-      .replace(/\bSAR\b/gi, "ريال سعودي")
-      .replace(/\bUSD\b/gi, "دولار أمريكي")
-      .replace(/(\d+)\s*%/g, "$1 في المية")
-      .replace(/\b(PRJ|RV|PV|JV|SO|BILL|PO|LOC)-([0-9A-Za-z-]+)\b/gi, (_, pfx, num) => `${pfx} ${String(num).split("").join(" ")}`)
-      .replace(/\s*[:=]\s*/g, "، ")
-      .replace(/،{2,}/g, "، ");
-  } else {
-    clean = clean
-      .replace(/\bYER\b/gi, "Yemeni Rials")
-      .replace(/\bSAR\b/gi, "Saudi Riyals")
-      .replace(/\bUSD\b/gi, "US Dollars");
-  }
-
-  return clean.slice(0, maxChars).trim();
+  return sanitizeSpeechText(rawText, {
+    lang: opts.lang,
+    maxChars: opts.maxChars ?? 12000,
+    speakReasoning: opts.speakReasoning === true,
+  });
 }
 
 /**

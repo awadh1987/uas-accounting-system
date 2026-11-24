@@ -64,6 +64,11 @@ export const PATCH = withTenantRoute(async function PATCH(
   } catch (err) {
     console.error("PATCH /api/devices/[deviceId] error:", err);
     const msg = err instanceof Error ? err.message : "Failed to update device";
+    if (msg === "FORBIDDEN_CROSS_TENANT") {
+      return forbiddenError(
+        "⛔ رفض أمني: لا يمكن إدارة جهاز تابع لمنشأة أخرى / Cross-tenant device governance denied"
+      );
+    }
     return jsonError(msg, msg === "DEVICE_NOT_FOUND" ? 404 : 500);
   }
 });
@@ -99,6 +104,11 @@ export const DELETE = withTenantRoute(async function DELETE(
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("DELETE /api/devices/[deviceId] error:", err);
+    if (err instanceof Error && err.message === "FORBIDDEN_CROSS_TENANT") {
+      return forbiddenError(
+        "⛔ رفض أمني: لا يمكن حذف جهاز تابع لمنشأة أخرى / Cross-tenant device deletion denied"
+      );
+    }
     return jsonError("تعذر حذف الجهاز / Failed to delete device", 500);
   }
 });

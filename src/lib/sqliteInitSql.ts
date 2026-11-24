@@ -1260,6 +1260,7 @@ CREATE TABLE "TenantDevice" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "deviceId" TEXT NOT NULL,
     "tenantSlug" TEXT NOT NULL DEFAULT 'default',
+    "activationKey" TEXT,
     "platform" TEXT NOT NULL,
     "appVersion" TEXT NOT NULL DEFAULT '1.0.0',
     "osVersion" TEXT NOT NULL DEFAULT '',

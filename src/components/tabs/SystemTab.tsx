@@ -48,7 +48,22 @@ import {
   sanitizeHeaderValue,
   setStoredSessionToken,
   getStoredTenantId,
+  getStoredTenantSlug,
+  getStoredServerUrls,
+  setStoredLanUrl,
+  setStoredRuntimeMode,
+  isNativeAndroid,
 } from "@/lib/apiClient";
+import {
+  detectReachableLanEndpoint,
+  evaluateConnectionOriginSwitch,
+  isHttpsToHttpMixedContent,
+  isPrivateLanOrigin,
+  probeTenantEndpoint,
+  resolveActiveWorkspaceSlug,
+  resolveTenantCloudUrl,
+} from "@/lib/serverConnection";
+import { getOfflineQueueCount } from "@/lib/offlineDb";
 import {
   DEFAULT_TAGLINE_AR,
   DEFAULT_TAGLINE_EN,
@@ -67,23 +82,23 @@ const SuperadminLicenseGeneratorPanel =
   process.env.NEXT_PUBLIC_ENABLE_PLATFORM_ADMIN === "0"
     ? null
     : dynamic(
-        () =>
-          import("@/components/SuperadminLicenseGeneratorPanel").then(
-            (m) => m.SuperadminLicenseGeneratorPanel
-          ),
-        { ssr: false }
-      );
+      () =>
+        import("@/components/SuperadminLicenseGeneratorPanel").then(
+          (m) => m.SuperadminLicenseGeneratorPanel
+        ),
+      { ssr: false }
+    );
 
 const PlatformControlPanel =
   process.env.NEXT_PUBLIC_ENABLE_PLATFORM_ADMIN === "0"
     ? null
     : dynamic(
-        () =>
-          import("@/components/PlatformControlPanel").then(
-            (m) => m.PlatformControlPanel
-          ),
-        { ssr: false }
-      );
+      () =>
+        import("@/components/PlatformControlPanel").then(
+          (m) => m.PlatformControlPanel
+        ),
+      { ssr: false }
+    );
 import {
   ALL_USER_ROLES,
   ROLE_DEFAULT_PERMISSIONS,
@@ -164,115 +179,115 @@ const ACTION_PERM_DEFINITIONS: {
   labelEn: string;
   descAr: string;
 }[] = [
-  {
-    key: "canCreate",
-    labelAr: "إنشاء القيود والمعاملات",
-    labelEn: "Create Transactions",
-    descAr: "إدخال فواتير وسندات ومصروفات جديدة",
-  },
-  {
-    key: "canEdit",
-    labelAr: "تعديل المعاملات غير المقفلة",
-    labelEn: "Edit Transactions",
-    descAr: "تعديل القيود والفواتير المفتوحة قبل اعتمادها",
-  },
-  {
-    key: "canEditDate",
-    labelAr: "تعديل التواريخ بأثر رجعي",
-    labelEn: "Edit Transaction Dates",
-    descAr: "تغيير تاريخ المعاملات وسندات الصرف والقبض",
-  },
-  {
-    key: "canDeleteVoid",
-    labelAr: "حذف وإلغاء القيود",
-    labelEn: "Delete / Void Vouchers",
-    descAr: "إلغاء أو حذف المعاملات والسندات المفتوحة",
-  },
-  {
-    key: "canApprove",
-    labelAr: "الاعتماد المالي والتشغيلي",
-    labelEn: "Financial Approval",
-    descAr: "اعتماد أوامر الشراء وفواتير الموردين والرواتب",
-  },
-  {
-    key: "canPostLedger",
-    labelAr: "الترحيل للأستاذ العام (GL)",
-    labelEn: "Post to General Ledger",
-    descAr: "ترحيل السندات المعتمدة ودفتر اليومية",
-  },
-  {
-    key: "canLockPeriod",
-    labelAr: "إقفال القطفات والدورات",
-    labelEn: "Lock Periods & Cycles",
-    descAr: "تجميد الفترات المحاسبية وإقفال القطفات",
-  },
-  {
-    key: "canManageTreasury",
-    labelAr: "إدارة الخزينة والتحويلات",
-    labelEn: "Manage Treasury",
-    descAr: "تحويل الأموال بين الصناديق والحسابات البنكية",
-  },
-  {
-    key: "canManageLandingCms",
-    labelAr: "إدارة الهوية والصفحة العامة",
-    labelEn: "Manage CMS & Branding",
-    descAr: "تخصيص الشعار ومحتوى البوابة العامة",
-  },
-  {
-    key: "canManageUsers",
-    labelAr: "إدارة المستخدمين والأمان",
-    labelEn: "Manage Users & Security",
-    descAr: "إضافة المستخدمين، ضبط الصلاحيات، وإعادة تعيين كلمات المرور",
-  },
-  {
-    key: "canCloseFiscalYear",
-    labelAr: "إقفال السنة المالية وترحيل الأرصدة (accounting.close_year)",
-    labelEn: "Close Fiscal Year & Rollover",
-    descAr: "صلاحية ترحيل أرباح العام وإقفال السنة المحاسبية المنتهية",
-  },
-  {
-    key: "canFxRevalue",
-    labelAr: "إعادة تقييم فروق العملات (accounting.fx_revalue)",
-    labelEn: "Foreign Currency Revaluation",
-    descAr: "احتساب وترحيل قيود فروق تقييم العملات الأجنبية غير المحققة",
-  },
-  {
-    key: "canDecideApprovals",
-    labelAr: "اتخاذ قرارات الاعتماد (approvals.decide)",
-    labelEn: "Decide Approval Requests",
-    descAr: "اعتماد أو رفض المعاملات المالية وأوامر الصرف والشراء",
-  },
-  {
-    key: "canConfigureApprovals",
-    labelAr: "تهيئة مسارات وقواعد الاعتماد (approvals.configure)",
-    labelEn: "Configure Approval Rules",
-    descAr: "تحديد السقوف المالية وشروط طلب الاعتماد المسبق",
-  },
-  {
-    key: "canManageAllDrafts",
-    labelAr: "إدارة كافة مسودات العمل (drafts.manage_all)",
-    labelEn: "Manage All Workspace Drafts",
-    descAr: "الاطلاع على مسودات العمل المشتركة والخاصة وحذفها وترقيتها",
-  },
-  {
-    key: "canCustomUom",
-    labelAr: "إضافة وحدات قياس مخصصة (inventory.custom_uom)",
-    labelEn: "Create Custom Units of Measure",
-    descAr: "إدخال وحدات قياس ومعاملات تحويل ديناميكية مخصصة",
-  },
-  {
-    key: "canArchiveDeleteRecords",
-    labelAr: "أرشفة وحذف السجلات الأساسية (records.archive_delete)",
-    labelEn: "Archive / Safe-Delete Master Records",
-    descAr: "أرشفة أو حذف العملاء والموردين والعمال والأصناف والمراكز",
-  },
-  {
-    key: "canExecuteGateway",
-    labelAr: "تنفيذ التحويلات البنكية والمحافظ (treasury.execute_gateway)",
-    labelEn: "Execute Bank & E-Wallet Gateway Payouts",
-    descAr: "صلاحية إرسال مبالغ الدفعات إلكترونياً للبنوك والمحافظ الرقمية",
-  },
-];
+    {
+      key: "canCreate",
+      labelAr: "إنشاء القيود والمعاملات",
+      labelEn: "Create Transactions",
+      descAr: "إدخال فواتير وسندات ومصروفات جديدة",
+    },
+    {
+      key: "canEdit",
+      labelAr: "تعديل المعاملات غير المقفلة",
+      labelEn: "Edit Transactions",
+      descAr: "تعديل القيود والفواتير المفتوحة قبل اعتمادها",
+    },
+    {
+      key: "canEditDate",
+      labelAr: "تعديل التواريخ بأثر رجعي",
+      labelEn: "Edit Transaction Dates",
+      descAr: "تغيير تاريخ المعاملات وسندات الصرف والقبض",
+    },
+    {
+      key: "canDeleteVoid",
+      labelAr: "حذف وإلغاء القيود",
+      labelEn: "Delete / Void Vouchers",
+      descAr: "إلغاء أو حذف المعاملات والسندات المفتوحة",
+    },
+    {
+      key: "canApprove",
+      labelAr: "الاعتماد المالي والتشغيلي",
+      labelEn: "Financial Approval",
+      descAr: "اعتماد أوامر الشراء وفواتير الموردين والرواتب",
+    },
+    {
+      key: "canPostLedger",
+      labelAr: "الترحيل للأستاذ العام (GL)",
+      labelEn: "Post to General Ledger",
+      descAr: "ترحيل السندات المعتمدة ودفتر اليومية",
+    },
+    {
+      key: "canLockPeriod",
+      labelAr: "إقفال القطفات والدورات",
+      labelEn: "Lock Periods & Cycles",
+      descAr: "تجميد الفترات المحاسبية وإقفال القطفات",
+    },
+    {
+      key: "canManageTreasury",
+      labelAr: "إدارة الخزينة والتحويلات",
+      labelEn: "Manage Treasury",
+      descAr: "تحويل الأموال بين الصناديق والحسابات البنكية",
+    },
+    {
+      key: "canManageLandingCms",
+      labelAr: "إدارة الهوية والصفحة العامة",
+      labelEn: "Manage CMS & Branding",
+      descAr: "تخصيص الشعار ومحتوى البوابة العامة",
+    },
+    {
+      key: "canManageUsers",
+      labelAr: "إدارة المستخدمين والأمان",
+      labelEn: "Manage Users & Security",
+      descAr: "إضافة المستخدمين، ضبط الصلاحيات، وإعادة تعيين كلمات المرور",
+    },
+    {
+      key: "canCloseFiscalYear",
+      labelAr: "إقفال السنة المالية وترحيل الأرصدة (accounting.close_year)",
+      labelEn: "Close Fiscal Year & Rollover",
+      descAr: "صلاحية ترحيل أرباح العام وإقفال السنة المحاسبية المنتهية",
+    },
+    {
+      key: "canFxRevalue",
+      labelAr: "إعادة تقييم فروق العملات (accounting.fx_revalue)",
+      labelEn: "Foreign Currency Revaluation",
+      descAr: "احتساب وترحيل قيود فروق تقييم العملات الأجنبية غير المحققة",
+    },
+    {
+      key: "canDecideApprovals",
+      labelAr: "اتخاذ قرارات الاعتماد (approvals.decide)",
+      labelEn: "Decide Approval Requests",
+      descAr: "اعتماد أو رفض المعاملات المالية وأوامر الصرف والشراء",
+    },
+    {
+      key: "canConfigureApprovals",
+      labelAr: "تهيئة مسارات وقواعد الاعتماد (approvals.configure)",
+      labelEn: "Configure Approval Rules",
+      descAr: "تحديد السقوف المالية وشروط طلب الاعتماد المسبق",
+    },
+    {
+      key: "canManageAllDrafts",
+      labelAr: "إدارة كافة مسودات العمل (drafts.manage_all)",
+      labelEn: "Manage All Workspace Drafts",
+      descAr: "الاطلاع على مسودات العمل المشتركة والخاصة وحذفها وترقيتها",
+    },
+    {
+      key: "canCustomUom",
+      labelAr: "إضافة وحدات قياس مخصصة (inventory.custom_uom)",
+      labelEn: "Create Custom Units of Measure",
+      descAr: "إدخال وحدات قياس ومعاملات تحويل ديناميكية مخصصة",
+    },
+    {
+      key: "canArchiveDeleteRecords",
+      labelAr: "أرشفة وحذف السجلات الأساسية (records.archive_delete)",
+      labelEn: "Archive / Safe-Delete Master Records",
+      descAr: "أرشفة أو حذف العملاء والموردين والعمال والأصناف والمراكز",
+    },
+    {
+      key: "canExecuteGateway",
+      labelAr: "تنفيذ التحويلات البنكية والمحافظ (treasury.execute_gateway)",
+      labelEn: "Execute Bank & E-Wallet Gateway Payouts",
+      descAr: "صلاحية إرسال مبالغ الدفعات إلكترونياً للبنوك والمحافظ الرقمية",
+    },
+  ];
 
 interface SystemTabProps {
   settings: UasSystemSettings;
@@ -282,10 +297,15 @@ interface SystemTabProps {
   currentUser: UasUser;
   users: UasUser[];
   projects?: UasProject[];
+  offlineQueueCount?: number;
   readOnly?: boolean;
   canManageUsers?: boolean;
   canManageCms?: boolean;
-  onSaveBranding: (orgName: string, logoText: string) => Promise<void>;
+  onSaveBranding: (
+    orgName: string,
+    logoText: string,
+    extra?: { diskAlertThresholdPercent?: number }
+  ) => Promise<void>;
   onSaveEnterpriseBranding?: (payload: Partial<UasEnterpriseProfile>) => Promise<void>;
   onChangeLang: (lang: LanguageCode) => void;
   onChangeTheme: (theme: ThemeName) => void;
@@ -344,6 +364,7 @@ export function SystemTab({
   currentUser,
   users,
   projects = [],
+  offlineQueueCount = 0,
   readOnly = false,
   canManageUsers = true,
   canManageCms = false,
@@ -452,6 +473,7 @@ export function SystemTab({
 
   const [orgNameDraft, setOrgNameDraft] = useState<string | null>(null);
   const [logoTextDraft, setLogoTextDraft] = useState<string | null>(null);
+  const [diskThresholdDraft, setDiskThresholdDraft] = useState<number | null>(null);
   const [profileNameDraft, setProfileNameDraft] = useState<string | null>(null);
   const [profileAvatarDraft, setProfileAvatarDraft] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState("");
@@ -466,8 +488,8 @@ export function SystemTab({
           ? `هل تريد أرشفة المستخدم "${user.name}" وإلغاء ربط أجهزته من الترخيص؟`
           : `Archive user "${user.name}" and release their bound license seats?`
         : isAr
-        ? `هل تريد استعادة المستخدم المؤرشف "${user.name}" وتفعيل حسابه؟`
-        : `Restore archived user "${user.name}"?`;
+          ? `هل تريد استعادة المستخدم المؤرشف "${user.name}" وتفعيل حسابه؟`
+          : `Restore archived user "${user.name}"?`;
     if (typeof window !== "undefined" && !window.confirm(confirmText)) return;
 
     setUserLifecycleBusyId(user.id);
@@ -498,9 +520,9 @@ export function SystemTab({
       }
       onToast(
         res.data.message ||
-          (action === "archive"
-            ? "تمت أرشفة المستخدم وتحرير مقعد الترخيص بنجاح"
-            : "تمت استعادة المستخدم بنجاح")
+        (action === "archive"
+          ? "تمت أرشفة المستخدم وتحرير مقعد الترخيص بنجاح"
+          : "تمت استعادة المستخدم بنجاح")
       );
       onRefreshState?.();
     } finally {
@@ -563,17 +585,17 @@ export function SystemTab({
           res.data?.guidance ||
           (guardReason === "LAST_ADMIN"
             ? (isAr
-                ? "لا يمكن حذف أو أرشفة المشرف العام الوحيد المتبقي في المنشأة لضمان استمرارية إدارة النظام. يرجى إنشاء أو ترقية مشرف بديل أولاً، أو استخدام خيار الإيقاف المؤقت (إيقاف)."
-                : "Cannot delete the last active SUPER_ADMIN. Designate a replacement admin first, or use Suspend.")
+              ? "لا يمكن حذف أو أرشفة المشرف العام الوحيد المتبقي في المنشأة لضمان استمرارية إدارة النظام. يرجى إنشاء أو ترقية مشرف بديل أولاً، أو استخدام خيار الإيقاف المؤقت (إيقاف)."
+              : "Cannot delete the last active SUPER_ADMIN. Designate a replacement admin first, or use Suspend.")
             : guardReason === "SELF_DELETION"
-            ? (isAr
+              ? (isAr
                 ? "لا يمكن حذف الحساب المسجل به حالياً. يمكنك استخدام خيار إيقاف الحساب (إيقاف) أو تسليم الصلاحيات لمشرف آخر أولاً."
                 : "Cannot delete your own active account. Use Suspend or transfer ownership.")
-            : guardReason === "LINKED_RECORDS"
-            ? (isAr
-                ? "توجد قيود أو سجلات محاسبية مرتبطة بهذا المستخدم. تم الاحتفاظ بالبيانات لحماية الدفاتر المحاسبية، يمكنك استخدام خيار الإيقاف أو الأرشفة."
-                : "Accounting/audit records exist for this user. Use Suspend or Archive to maintain audit integrity.")
-            : "");
+              : guardReason === "LINKED_RECORDS"
+                ? (isAr
+                  ? "توجد قيود أو سجلات محاسبية مرتبطة بهذا المستخدم. تم الاحتفاظ بالبيانات لحماية الدفاتر المحاسبية، يمكنك استخدام خيار الإيقاف أو الأرشفة."
+                  : "Accounting/audit records exist for this user. Use Suspend or Archive to maintain audit integrity.")
+                : "");
 
         const formatted = guidanceMsg && !errorDetail.includes(guidanceMsg)
           ? `⛔ ${errorDetail}\n💡 ${guidanceMsg}`
@@ -600,28 +622,173 @@ export function SystemTab({
     }
   }
 
-  const [serverUrlDraft, setServerUrlDraft] = useState(() => getApiBaseUrl());
-  const [testingServer, setTestingServer] = useState(false);
+  const currentOrigin = typeof window !== "undefined" ? window.location.origin : undefined;
+  const activeTenantSlug = resolveActiveWorkspaceSlug({
+    currentOriginOrHost: typeof window !== "undefined" ? window.location.host : undefined,
+    profileTenantSlug: enterpriseProfile?.tenantSlug,
+    storedTenantId:
+      typeof window !== "undefined" ? getStoredTenantSlug() || getStoredTenantId() : null,
+  });
+  const defaultTenantCloudUrl = resolveTenantCloudUrl(activeTenantSlug, currentOrigin);
 
-  async function handleSaveServerUrl(targetUrl: string) {
+  const [serverUrlDraft, setServerUrlDraft] = useState(() => getApiBaseUrl());
+  const [lanUrlDraft, setLanUrlDraft] = useState(() => getStoredServerUrls().lanUrl);
+  const [testingServer, setTestingServer] = useState(false);
+  const [detectingLan, setDetectingLan] = useState(false);
+  const [lanAutoDetectStatus, setLanAutoDetectStatus] = useState<string | null>(null);
+  const [connectionProbeWarning, setConnectionProbeWarning] = useState<string | null>(null);
+  const [driftConfirmState, setDriftConfirmState] = useState<{
+    open: boolean;
+    targetUrl: string;
+    warningAr: string;
+    warningEn: string;
+    resolvedTenantSlug?: string | null;
+    offlineQueueCount: number;
+  } | null>(null);
+  const lanInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const runAutoLanDetection = React.useCallback(
+    async (opts?: { silent?: boolean; forceFocusOnEmpty?: boolean }) => {
+      setDetectingLan(true);
+      try {
+        let serverLanIps: string[] = [];
+        try {
+          const runtimeRes = await safeFetchJson<{ lanIps?: string[]; lanUrl?: string }>(
+            "/api/system/runtime",
+            { cache: "no-store" }
+          );
+          if (runtimeRes.ok && Array.isArray(runtimeRes.data?.lanIps)) {
+            serverLanIps = runtimeRes.data.lanIps;
+          }
+        } catch {
+          // Optional server runtime hint unavailable (e.g. offline/mobile)
+        }
+
+        const detected = await detectReachableLanEndpoint({
+          currentOrigin,
+          savedLanUrl: lanUrlDraft || getStoredServerUrls().lanUrl,
+          serverLanIps,
+          expectedTenantSlug: activeTenantSlug,
+          timeoutMs: 1500,
+        });
+
+        if (detected.detectedUrl) {
+          setLanUrlDraft(detected.detectedUrl);
+          setStoredLanUrl(detected.detectedUrl);
+          const tenantTag = detected.probe?.tenantSlug || "default";
+          setLanAutoDetectStatus(
+            isAr
+              ? `تم اكتشاف خادم شبكة محلي متاح (${detected.detectedUrl}) — النطاق: ${tenantTag}`
+              : `Detected reachable LAN endpoint (${detected.detectedUrl}) — workspace: ${tenantTag}`
+          );
+          if (!opts?.silent) {
+            onToast(
+              isAr
+                ? `✅ تم اكتشاف عنوان الشبكة المحلية تلقائياً: ${detected.detectedUrl}`
+                : `✅ Auto-detected Office LAN endpoint: ${detected.detectedUrl}`
+            );
+          }
+        } else {
+          setLanAutoDetectStatus(
+            isAr
+              ? "لم يتم العثور على خادم LAN محلي مستجيب تلقائياً — يمكنك كتابة عنوان الشبكة يدوياً."
+              : "No reachable local LAN server auto-detected — enter your Office LAN URL manually."
+          );
+          if (!opts?.silent) {
+            onToast(
+              isAr
+                ? "ℹ️ لم يُكتشف خادم شبكة محلي متاح تلقائياً؛ أدخل عنوان LAN يدوياً."
+                : "ℹ️ No LAN server auto-detected; please enter the LAN address manually."
+            );
+          }
+          if (opts?.forceFocusOnEmpty) {
+            lanInputRef.current?.focus();
+          }
+        }
+      } finally {
+        setDetectingLan(false);
+      }
+    },
+    [activeTenantSlug, currentOrigin, isAr, lanUrlDraft, onToast]
+  );
+
+  useEffect(() => {
+    if (activeSubTab !== "security") return;
+    if (lanUrlDraft.trim()) return;
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled) {
+        void runAutoLanDetection({ silent: true });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSubTab, lanUrlDraft, runAutoLanDetection]);
+
+  function handleLanUrlChange(nextVal: string) {
+    setLanUrlDraft(nextVal);
+    setStoredLanUrl(nextVal);
+  }
+
+  async function handleResetDefaultOrigin() {
+    const restoredOrigin = resetApiBaseUrl({
+      tenantSlug: activeTenantSlug,
+      currentOrigin,
+    });
+    if (isNativeAndroid()) {
+      setStoredRuntimeMode("cloud", restoredOrigin, undefined, {
+        tenantSlug: activeTenantSlug,
+        currentOrigin,
+      });
+    }
+    setServerUrlDraft(restoredOrigin);
+    setConnectionProbeWarning(null);
+    onToast(
+      isAr
+        ? `✅ تمت استعادة الأصل الافتراضي للمنشأة: ${restoredOrigin}`
+        : `✅ Restored default tenant origin: ${restoredOrigin}`
+    );
+  }
+
+  async function handleSaveServerUrl(
+    targetUrl: string,
+    opts?: { bypassDriftConfirm?: boolean; markAsLan?: boolean }
+  ) {
     const cleaned = targetUrl.trim().replace(/\/+$/, "");
-    setServerUrlDraft(cleaned);
-    setApiBaseUrl(cleaned);
     if (!cleaned) {
-      resetApiBaseUrl();
-      onToast(
-        isAr
-          ? "تمت استعادة الاتصال بالخادم المحلي الافتراضي"
-          : "Restored default local server connection"
-      );
+      await handleResetDefaultOrigin();
       return;
     }
 
-    // Check for mixed-content restriction if browser is HTTPS and target is HTTP
-    const isHttpsOrigin = typeof window !== "undefined" && window.location.protocol === "https:";
-    const isHttpTarget = /^http:\/\//i.test(cleaned);
+    const liveQueueCount = Math.max(offlineQueueCount, await getOfflineQueueCount());
+    const initialSwitchEval = evaluateConnectionOriginSwitch({
+      activeTenantSlug,
+      targetUrl: cleaned,
+      currentOrigin,
+      offlineQueueCount: liveQueueCount,
+    });
 
-    if (isHttpsOrigin && isHttpTarget) {
+    if (initialSwitchEval.requiresConfirmation && !opts?.bypassDriftConfirm) {
+      setDriftConfirmState({
+        open: true,
+        targetUrl: cleaned,
+        warningAr: initialSwitchEval.messageAr,
+        warningEn: initialSwitchEval.messageEn,
+        resolvedTenantSlug: initialSwitchEval.targetTenantSlug,
+        offlineQueueCount: liveQueueCount,
+      });
+      return;
+    }
+
+    if (isHttpsToHttpMixedContent(cleaned)) {
+      if (opts?.markAsLan || isPrivateLanOrigin(cleaned)) {
+        setLanUrlDraft(cleaned);
+        setStoredLanUrl(cleaned);
+      }
+      setServerUrlDraft(cleaned);
+      setApiBaseUrl(cleaned);
+      setConnectionProbeWarning(null);
       onToast(
         isAr
           ? `ℹ️ تم حفظ عنوان خادم الشبكة المحلية (${cleaned}) بنجاح. سيتصل تلقائياً عند فتح تطبيق أندرويد أو تطبيق سطح المكتب (تقييد المتصفح يمنع فحص HTTP من موقع HTTPS).`
@@ -632,37 +799,65 @@ export function SystemTab({
 
     setTestingServer(true);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
-      const res = await fetch(`${cleaned}/api/bootstrap`, {
-        cache: "no-store",
-        signal: controller.signal,
+      const probe = await probeTenantEndpoint(cleaned, { timeoutMs: 3500 });
+      const resolvedSwitchEval = evaluateConnectionOriginSwitch({
+        activeTenantSlug,
+        targetUrl: cleaned,
+        currentOrigin,
+        offlineQueueCount: liveQueueCount,
+        targetResolvedTenantSlug: probe.ok ? probe.tenantSlug : undefined,
+        targetIsTenantWorkspace: probe.ok ? probe.isTenantWorkspace : undefined,
       });
-      clearTimeout(timeoutId);
-      if (res.ok) {
-        onToast(
-          isAr
-            ? `✅ تم الاتصال بالخادم بنجاح: ${cleaned}`
-            : `✅ Connected to server: ${cleaned}`
-        );
+
+      if (resolvedSwitchEval.requiresConfirmation && !opts?.bypassDriftConfirm) {
+        setDriftConfirmState({
+          open: true,
+          targetUrl: cleaned,
+          warningAr: resolvedSwitchEval.messageAr,
+          warningEn: resolvedSwitchEval.messageEn,
+          resolvedTenantSlug: probe.tenantSlug,
+          offlineQueueCount: liveQueueCount,
+        });
+        return;
+      }
+
+      setServerUrlDraft(cleaned);
+      setApiBaseUrl(cleaned);
+      if (opts?.markAsLan || isPrivateLanOrigin(cleaned)) {
+        setLanUrlDraft(cleaned);
+        setStoredLanUrl(cleaned);
+      }
+
+      if (probe.ok) {
+        if (resolvedSwitchEval.hasWarning) {
+          const warnMsg = isAr ? resolvedSwitchEval.messageAr : resolvedSwitchEval.messageEn;
+          setConnectionProbeWarning(warnMsg);
+          onToast(`⚠️ ${warnMsg}`);
+        } else {
+          setConnectionProbeWarning(null);
+          const resolvedLabel = probe.tenantSlug ? `${probe.tenantSlug}.qat.world` : "qat.world";
+          onToast(
+            isAr
+              ? `✅ تم الاتصال والتحقق من المنشأة بنجاح: ${cleaned} (${resolvedLabel})`
+              : `✅ Connected & verified workspace (${resolvedLabel}): ${cleaned}`
+          );
+        }
       } else {
-        onToast(
+        setConnectionProbeWarning(
           isAr
-            ? `⚠️ تم حفظ العنوان (${cleaned}) لكن الخادم أعاد رمز ${res.status}`
-            : `⚠️ Saved (${cleaned}) but server returned ${res.status}`
+            ? `تعذر التحقق من /api/public/tenant على ${cleaned} (${probe.error || `HTTP ${probe.status}`})`
+            : `Unable to verify /api/public/tenant at ${cleaned} (${probe.error || `HTTP ${probe.status}`})`
+        );
+        onToast(
+          probe.error === "TIMEOUT"
+            ? isAr
+              ? `⚠️ لم يستجب الخادم خلال 3.5 ثوانٍ (${cleaned})`
+              : `⚠️ Server timed out (${cleaned})`
+            : isAr
+              ? `⚠️ تم حفظ العنوان (${cleaned}) — تعذر الوصول إلى الخادم حالياً`
+              : `⚠️ Saved (${cleaned}) — unable to reach server right now`
         );
       }
-    } catch (err: unknown) {
-      const isTimeout = err instanceof Error && err.name === "AbortError";
-      onToast(
-        isAr
-          ? (isTimeout
-              ? `⚠️ لم يستجب الخادم في غضون 3 ثوانٍ (${cleaned})`
-              : `⚠️ تم حفظ العنوان (${cleaned}) — تعذر الاتصال بالخادم حالياً`)
-          : (isTimeout
-              ? `⚠️ Server timed out after 3s (${cleaned})`
-              : `⚠️ Saved (${cleaned}) — unable to reach server right now`)
-      );
     } finally {
       setTestingServer(false);
     }
@@ -676,10 +871,32 @@ export function SystemTab({
     sizeFormatted: string;
     createdAt: string;
     type: "auto" | "pre-restore" | "manual";
+    engine?: "postgresql" | "sqlite" | "portable";
+    tenantSlug?: string;
+  }
+  interface BackupHealthSummary {
+    tenantSlug: string;
+    engine: "postgresql" | "sqlite";
+    lastScheduledBackupAt: string | null;
+    lastScheduledStatus: string | null;
+    lastBackupFilename: string | null;
+    lastBackupError: string | null;
+    retentionPolicy: { daily: number; weekly: number; monthly: number; preRestore: number };
+    diskUsagePercent: number;
+    diskAlertThresholdPercent: number;
+    diskWarningExceeded: boolean;
+    diskTotalFormatted: string;
+    diskUsedFormatted: string;
+    diskAvailFormatted: string;
+    tenantBackupsFormatted: string;
+    attachmentsFormatted: string;
+    attachmentsCount: number;
   }
   const [localBackups, setLocalBackups] = useState<AutoBackupItem[]>([]);
+  const [backupHealth, setBackupHealth] = useState<BackupHealthSummary | null>(null);
   const [loadingBackups, setLoadingBackups] = useState(false);
   const [downloadingBackup, setDownloadingBackup] = useState(false);
+  const [deletingBackupName, setDeletingBackupName] = useState<string | null>(null);
   const [restoringBackup, setRestoringBackup] = useState(false);
   const [confirmRestoreModal, setConfirmRestoreModal] = useState<{
     open: boolean;
@@ -700,8 +917,8 @@ export function SystemTab({
     resetScope === "section"
       ? `RESET_SECTION_${resetSectionModule.toUpperCase()}`
       : resetScope === "unit"
-      ? "RESET_UNIT"
-      : "FACTORY_RESET";
+        ? "RESET_UNIT"
+        : "FACTORY_RESET";
 
   const handleExecuteScopedReset = async () => {
     if (currentUser.role !== "SUPER_ADMIN") {
@@ -768,6 +985,9 @@ export function SystemTab({
         if (data.ok && Array.isArray(data.backups)) {
           setLocalBackups(data.backups);
         }
+        if (data.health && typeof data.health === "object") {
+          setBackupHealth(data.health as BackupHealthSummary);
+        }
       }
     } catch (err) {
       console.warn("Failed to fetch backups:", err);
@@ -788,10 +1008,20 @@ export function SystemTab({
       const baseUrl = getApiBaseUrl();
       const endpoint = baseUrl ? `${baseUrl}/api/system/backup` : "/api/system/backup";
       const res = await fetch(endpoint, {
+        method: "POST",
         headers: {
+          "Content-Type": "application/json",
           "x-uas-role": currentUser.role,
           "x-uas-user-id": currentUser.id,
         },
+        body: JSON.stringify({
+          persist: true,
+          actor: {
+            userId: currentUser.id,
+            userRole: currentUser.role,
+            userDisplay: currentUser.displayName || currentUser.name,
+          },
+        }),
       });
 
       if (!res.ok) {
@@ -814,6 +1044,7 @@ export function SystemTab({
       });
 
       onToast(isAr ? "✅ تم تحميل وحفظ النسخة الاحتياطية بنجاح" : "✅ Backup file exported successfully");
+      await fetchBackups();
     } catch (err) {
       onToast(
         isAr
@@ -822,6 +1053,81 @@ export function SystemTab({
       );
     } finally {
       setDownloadingBackup(false);
+    }
+  }
+
+  async function handleDownloadSnapshotFile(filename: string) {
+    try {
+      const baseUrl = getApiBaseUrl();
+      const endpoint = baseUrl
+        ? `${baseUrl}/api/system/backups/${encodeURIComponent(filename)}`
+        : `/api/system/backups/${encodeURIComponent(filename)}`;
+      const res = await fetch(endpoint, {
+        headers: {
+          "x-uas-role": currentUser.role,
+          "x-uas-user-id": currentUser.id,
+        },
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const arrayBuf = await blob.arrayBuffer();
+      await exportOrShareBinaryFile({
+        filename,
+        mimeType: filename.endsWith(".db") ? "application/x-sqlite3" : "application/json",
+        data: arrayBuf,
+        title: isAr ? `تحميل النسخة: ${filename}` : `Download ${filename}`,
+      });
+      onToast(isAr ? `✅ تم تحميل ${filename}` : `✅ Downloaded ${filename}`);
+    } catch (err) {
+      onToast(
+        isAr
+          ? `❌ تعذر تحميل النسخة: ${(err as Error).message}`
+          : `❌ Failed to download snapshot: ${(err as Error).message}`
+      );
+    }
+  }
+
+  async function handleDeleteSnapshot(filename: string) {
+    if (readOnly) return;
+    if (typeof window !== "undefined") {
+      const ok = window.confirm(
+        isAr
+          ? `هل تريد حذف النسخة الاحتياطية "${filename}" نهائياً؟`
+          : `Permanently delete snapshot "${filename}"?`
+      );
+      if (!ok) return;
+    }
+    setDeletingBackupName(filename);
+    try {
+      const res = await safeFetchJson<{ ok?: boolean; error?: string }>(
+        `/api/system/backups/${encodeURIComponent(filename)}`,
+        {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+            "x-uas-role": currentUser.role,
+            "x-uas-user-id": currentUser.id,
+          },
+          body: JSON.stringify({
+            actor: {
+              userId: currentUser.id,
+              userRole: currentUser.role,
+              userDisplay: currentUser.displayName || currentUser.name,
+            },
+          }),
+        }
+      );
+      if (!res.ok || !res.data?.ok) {
+        onToast(res.data?.error || (isAr ? "تعذر حذف النسخة الاحتياطية" : "Failed to delete snapshot"));
+        return;
+      }
+      onToast(isAr ? `✅ تم حذف النسخة ${filename}` : `✅ Deleted snapshot ${filename}`);
+      await fetchBackups();
+    } finally {
+      setDeletingBackupName(null);
     }
   }
 
@@ -1133,9 +1439,9 @@ export function SystemTab({
       if (!res.ok || !res.data?.success) {
         throw new Error(
           res.data?.error ||
-            res.data?.message ||
-            res.error ||
-            (isAr ? "تعذر إعادة تعيين كلمة المرور" : "Failed to reset password")
+          res.data?.message ||
+          res.error ||
+          (isAr ? "تعذر إعادة تعيين كلمة المرور" : "Failed to reset password")
         );
       }
 
@@ -1145,9 +1451,9 @@ export function SystemTab({
 
       onToast(
         res.data.message ||
-          (isAr
-            ? `تمت إعادة تعيين كلمة المرور للمستخدم (${resetModalUser.name}) بنجاح`
-            : `Password reset successfully for ${resetModalUser.name}`)
+        (isAr
+          ? `تمت إعادة تعيين كلمة المرور للمستخدم (${resetModalUser.name}) بنجاح`
+          : `Password reset successfully for ${resetModalUser.name}`)
       );
       setResetModalUser(null);
       setResetNewPass("");
@@ -1235,10 +1541,10 @@ export function SystemTab({
           [field]: data.assetUrl,
           ...(kind === "logo"
             ? {
-                logoUrl: data.assetUrl,
-                enterpriseLogoStyle: "custom",
-                showEnterpriseLogo: true,
-              }
+              logoUrl: data.assetUrl,
+              enterpriseLogoStyle: "custom",
+              showEnterpriseLogo: true,
+            }
             : {}),
         }));
         onToast(
@@ -1247,8 +1553,8 @@ export function SystemTab({
               ? "✅ تم رفع أيقونة المتصفح (Favicon) المخصصة للمنشأة"
               : "✅ Custom tenant favicon uploaded"
             : isAr
-            ? "✅ تم رفع شعار المنشأة المخصص وتحديث أيقونة التبويب"
-            : "✅ Custom enterprise logo uploaded & browser tab icon updated"
+              ? "✅ تم رفع شعار المنشأة المخصص وتحديث أيقونة التبويب"
+              : "✅ Custom enterprise logo uploaded & browser tab icon updated"
         );
         await onRefreshState?.();
         return;
@@ -1364,11 +1670,10 @@ export function SystemTab({
           <button
             type="button"
             onClick={() => handleSelectSubTab("branding")}
-            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-              activeSubTab === "branding"
-                ? "accent-bg shadow-sm"
-                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-            }`}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${activeSubTab === "branding"
+              ? "accent-bg shadow-sm"
+              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+              }`}
           >
             <Palette className="w-4 h-4" />
             <span>{isAr ? "الهوية المؤسسية وإدارة الصفحة (Branding & CMS)" : "Branding & Landing CMS"}</span>
@@ -1376,11 +1681,10 @@ export function SystemTab({
           <button
             type="button"
             onClick={() => handleSelectSubTab("users")}
-            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-              activeSubTab === "users"
-                ? "accent-bg shadow-sm"
-                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-            }`}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${activeSubTab === "users"
+              ? "accent-bg shadow-sm"
+              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+              }`}
           >
             <Shield className="w-4 h-4" />
             <span>{isAr ? "المستخدمين وحوكمة الصلاحيات (Users & RBAC)" : "Users & RBAC Matrix"}</span>
@@ -1388,11 +1692,10 @@ export function SystemTab({
           <button
             type="button"
             onClick={() => handleSelectSubTab("accounting")}
-            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-              activeSubTab === "accounting"
-                ? "accent-bg shadow-sm"
-                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-            }`}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${activeSubTab === "accounting"
+              ? "accent-bg shadow-sm"
+              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+              }`}
           >
             <FileText className="w-4 h-4" />
             <span>{isAr ? "الإعدادات المحاسبية والتشغيلية (Accounting Settings)" : "Accounting & Operational Settings"}</span>
@@ -1400,11 +1703,10 @@ export function SystemTab({
           <button
             type="button"
             onClick={() => handleSelectSubTab("tenant-config")}
-            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-              activeSubTab === "tenant-config"
-                ? "accent-bg shadow-sm"
-                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-            }`}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${activeSubTab === "tenant-config"
+              ? "accent-bg shadow-sm"
+              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+              }`}
           >
             <Globe className="w-4 h-4" />
             <span>{isAr ? "إعدادات مساحة المنشأة (Tenant Config)" : "Tenant Admin Config"}</span>
@@ -1412,11 +1714,10 @@ export function SystemTab({
           <button
             type="button"
             onClick={() => handleSelectSubTab("devices")}
-            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-              activeSubTab === "devices"
-                ? "accent-bg shadow-sm"
-                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-            }`}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${activeSubTab === "devices"
+              ? "accent-bg shadow-sm"
+              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+              }`}
           >
             <Smartphone className="w-4 h-4" />
             <span>{isAr ? "أجهزة المنشأة والمزامنة (Devices)" : "Tenant Devices Control"}</span>
@@ -1424,11 +1725,10 @@ export function SystemTab({
           <button
             type="button"
             onClick={() => handleSelectSubTab("security")}
-            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-              activeSubTab === "security"
-                ? "accent-bg shadow-sm"
-                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-            }`}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${activeSubTab === "security"
+              ? "accent-bg shadow-sm"
+              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+              }`}
           >
             <Sliders className="w-4 h-4" />
             <span>{isAr ? "إعدادات النظام والأمان والربط (Settings & Connectivity)" : "System Settings & Connectivity"}</span>
@@ -1438,11 +1738,10 @@ export function SystemTab({
               <button
                 type="button"
                 onClick={() => handleSelectSubTab("superadmin-licenses")}
-                className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-                  activeSubTab === "superadmin-licenses"
-                    ? "accent-bg shadow-sm"
-                    : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
-                }`}
+                className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${activeSubTab === "superadmin-licenses"
+                  ? "accent-bg shadow-sm"
+                  : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
+                  }`}
               >
                 <KeyRound className="w-4 h-4" />
                 <span>
@@ -1454,11 +1753,10 @@ export function SystemTab({
               <button
                 type="button"
                 onClick={() => handleSelectSubTab("control-panel")}
-                className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-                  activeSubTab === "control-panel"
-                    ? "accent-bg shadow-sm"
-                    : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30"
-                }`}
+                className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${activeSubTab === "control-panel"
+                  ? "accent-bg shadow-sm"
+                  : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30"
+                  }`}
               >
                 <ShieldCheck className="w-4 h-4" />
                 <span>
@@ -1573,16 +1871,58 @@ export function SystemTab({
                 </select>
               </div>
             </div>
+            <div className="pt-1 border-t border-slate-200/70 dark:border-slate-700/60">
+              <label className="block font-semibold mb-1">
+                {isAr
+                  ? "حد تنبيه امتلاء القرص (%) / Disk Alert Threshold (%)"
+                  : "Disk Alert Threshold (%) / حد تنبيه امتلاء القرص"}
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={50}
+                  max={95}
+                  step={1}
+                  data-testid="disk-alert-threshold-input"
+                  value={
+                    diskThresholdDraft ??
+                    (typeof settings.diskAlertThresholdPercent === "number"
+                      ? settings.diskAlertThresholdPercent
+                      : 80)
+                  }
+                  onChange={(e) => {
+                    const num = Number(e.target.value);
+                    setDiskThresholdDraft(Number.isFinite(num) ? num : 80);
+                  }}
+                  className="w-28 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono font-bold"
+                />
+                <span className="text-[11px] text-slate-500">
+                  {isAr
+                    ? "% (النطاق: 50%–95%، الافتراضي: 80%)"
+                    : "% (Range: 50%–95%, default: 80%)"}
+                </span>
+              </div>
+            </div>
             <button
               onClick={async () => {
-                await onSaveBranding(orgName, logoText);
+                const rawThreshold =
+                  diskThresholdDraft ??
+                  (typeof settings.diskAlertThresholdPercent === "number"
+                    ? settings.diskAlertThresholdPercent
+                    : 80);
+                const clampedThreshold = Math.min(95, Math.max(50, Math.round(rawThreshold)));
+                await onSaveBranding(orgName, logoText, {
+                  diskAlertThresholdPercent: clampedThreshold,
+                });
                 setOrgNameDraft(null);
                 setLogoTextDraft(null);
+                setDiskThresholdDraft(null);
+                await fetchBackups();
               }}
               disabled={readOnly || !canManageUsers}
               className="w-full py-2.5 rounded-xl accent-bg font-bold disabled:opacity-50"
             >
-              حفظ إعدادات النظام
+              {isAr ? "حفظ إعدادات النظام" : "Save System Settings"}
             </button>
           </div>
 
@@ -1668,15 +2008,15 @@ export function SystemTab({
                 <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 font-mono text-[11px]">
                   <span className="text-slate-500">{isAr ? "الخادم النشط:" : "Active Endpoint:"}</span>
                   <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                    {serverUrlDraft || (isAr ? "محلي افتراضي (Same-Origin)" : "Default Origin")}
+                    {serverUrlDraft || defaultTenantCloudUrl}
                   </span>
                 </div>
               </div>
 
               <p className="text-slate-600 dark:text-slate-300 leading-relaxed text-xs">
                 {isAr
-                  ? "عند تشغيل النظام داخل شبكة المكتب المحلية (Office Wi-Fi) أو ربط تطبيق الأندرويد أو أجهزة الكاشير والمحاسبين، أدخل عنوان الخادم المخصص أو اختر السحابة الإنتاجية (https://qat.world)."
-                  : "When operating inside the office local network or connecting Android APK tablets and remote workstations, configure your custom server address or connect to production cloud (https://qat.world)."}
+                  ? `عند تشغيل النظام داخل شبكة المكتب المحلية (Office Wi-Fi) أو ربط تطبيق الأندرويد أو أجهزة الكاشير والمحاسبين، أدخل عنوان الخادم المخصص أو استخدم السحابة الإنتاجية للمنشأة (${defaultTenantCloudUrl}).`
+                  : `When operating inside the office local network or connecting Android APK tablets and remote workstations, enter your custom server address or connect to your workspace cloud (${defaultTenantCloudUrl}).`}
               </p>
 
               <div className="flex flex-wrap gap-2.5" dir="ltr">
@@ -1684,8 +2024,8 @@ export function SystemTab({
                   type="url"
                   value={serverUrlDraft}
                   onChange={(e) => setServerUrlDraft(e.target.value)}
-                  placeholder="https://qat.world or http://192.168.1.100:3000"
-                  className="flex-1 min-w-[260px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3.5 py-2.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                  placeholder={defaultTenantCloudUrl}
+                  className="flex-1 min-w-[240px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3.5 py-2.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
                 />
                 <button
                   type="button"
@@ -1700,11 +2040,71 @@ export function SystemTab({
                         ? "جاري التحقق والاتصال..."
                         : "Verifying connection..."
                       : isAr
-                      ? "حفظ واختبار الاتصال"
-                      : "Save & Test Connection"}
+                        ? "حفظ واختبار الاتصال"
+                        : "Save & Test Connection"}
                   </span>
                 </button>
               </div>
+
+              {/* Editable & Auto-Detecting Office LAN Endpoint (Starts Empty) */}
+              <div className="p-3.5 rounded-2xl bg-slate-50/80 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-bold text-[11px] text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                    <Wifi className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span>
+                      {isAr
+                        ? "عنوان خادم الشبكة المحلية (Office LAN — قابل للتعديل والاكتشاف التلقائي):"
+                        : "Office LAN Server URL (Editable & Auto-Detect):"}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    disabled={detectingLan}
+                    onClick={() => void runAutoLanDetection({ silent: false })}
+                    className="px-2.5 py-1 rounded-lg border border-indigo-500/40 bg-indigo-50/60 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 hover:border-indigo-500 font-bold text-[11px] inline-flex items-center gap-1 transition disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${detectingLan ? "animate-spin" : ""}`} />
+                    <span>{isAr ? "اكتشاف الشبكة تلقائياً" : "Auto-Detect LAN"}</span>
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap gap-2" dir="ltr">
+                  <input
+                    ref={lanInputRef}
+                    data-testid="editable-lan-url-input"
+                    type="url"
+                    value={lanUrlDraft}
+                    onChange={(e) => handleLanUrlChange(e.target.value)}
+                    placeholder={
+                      isAr
+                        ? "اتركه فارغاً أو أدخل عنوان LAN (مثلاً http://<lan-ip>:3000)"
+                        : "Empty by default — enter Office LAN URL if applicable"
+                    }
+                    className="flex-1 min-w-[220px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                  />
+                  <button
+                    type="button"
+                    disabled={testingServer || readOnly || !lanUrlDraft.trim()}
+                    onClick={() => void handleSaveServerUrl(lanUrlDraft, { markAsLan: true })}
+                    className="px-3.5 py-2 rounded-xl border border-indigo-500/40 bg-indigo-600 text-white font-bold text-[11px] hover:bg-indigo-700 disabled:opacity-40 transition"
+                  >
+                    {isAr ? "اتصال بالـ LAN" : "Connect LAN"}
+                  </button>
+                </div>
+
+                {lanAutoDetectStatus && (
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {lanAutoDetectStatus}
+                  </p>
+                )}
+              </div>
+
+              {connectionProbeWarning && (
+                <div className="p-3 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/80 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200 text-[11px] font-bold flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <span>{connectionProbeWarning}</span>
+                </div>
+              )}
 
               <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
                 <span className="text-[11px] font-bold text-slate-500">
@@ -1712,27 +2112,42 @@ export function SystemTab({
                 </span>
                 <button
                   type="button"
-                  onClick={() => void handleSaveServerUrl("https://qat.world")}
+                  data-testid="cloud-preset-button"
+                  onClick={() => void handleSaveServerUrl(defaultTenantCloudUrl)}
                   className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-mono text-[11px] hover:border-emerald-500 hover:text-emerald-600 transition flex items-center gap-1.5"
                 >
                   <Globe className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Cloud: https://qat.world</span>
+                  <span>Cloud: {defaultTenantCloudUrl}</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => void handleSaveServerUrl("http://192.168.1.100:3000")}
-                  className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-mono text-[11px] hover:border-emerald-500 hover:text-emerald-600 transition flex items-center gap-1.5"
+                  data-testid="lan-preset-button"
+                  onClick={() => {
+                    if (lanUrlDraft.trim()) {
+                      void handleSaveServerUrl(lanUrlDraft, { markAsLan: true });
+                    } else {
+                      void runAutoLanDetection({ silent: false, forceFocusOnEmpty: true });
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-mono text-[11px] hover:border-indigo-500 hover:text-indigo-600 transition flex items-center gap-1.5"
                 >
                   <Wifi className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>LAN: http://192.168.1.100:3000</span>
+                  <span>
+                    {lanUrlDraft.trim()
+                      ? `LAN: ${lanUrlDraft.trim()}`
+                      : isAr
+                        ? "LAN: غير محدد (اكتشاف/تعديل)"
+                        : "LAN: Empty (Detect / Edit)"}
+                  </span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => void handleSaveServerUrl("")}
+                  data-testid="reset-default-origin-button"
+                  onClick={() => void handleResetDefaultOrigin()}
                   className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-[11px] hover:border-rose-500 hover:text-rose-600 transition flex items-center gap-1.5"
                 >
                   <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
-                  <span>{isAr ? "استعادة المحلي الافتراضي" : "Reset Default Origin"}</span>
+                  <span>{isAr ? "استعادة الأصل الافتراضي للمنشأة" : "Reset Default Origin"}</span>
                 </button>
               </div>
 
@@ -1753,9 +2168,18 @@ export function SystemTab({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <a
-                    href="/downloads/UAS-Mobile-Release-qat.world.apk"
+                    href="https://qat.world/downloads/UAS-Setup-Win64.exe"
+                    download="UAS-Setup-Win64.exe"
+                    className="px-3 py-1.5 rounded-xl border border-indigo-500/40 bg-indigo-50/60 dark:bg-indigo-950/30 font-bold text-xs flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300 hover:border-indigo-500 transition"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>{isAr ? "ويندوز (.exe)" : "Windows (.exe)"}</span>
+                  </a>
+
+                  <a
+                    href="https://qat.world/downloads/UAS-Mobile-Release-qat.world.apk"
                     download="UAS-Mobile-Release-qat.world.apk"
                     className="px-3 py-1.5 rounded-xl accent-bg font-extrabold text-xs flex items-center gap-1.5 shadow-xs hover:opacity-95 transition"
                   >
@@ -1825,8 +2249,8 @@ export function SystemTab({
                           ? "جاري التصدير..."
                           : "Exporting..."
                         : isAr
-                        ? "تحميل نسخة احتياطية الآن (.uasbak)"
-                        : "Download Backup (.uasbak)"}
+                          ? "تحميل نسخة احتياطية الآن (.uasbak)"
+                          : "Download Backup (.uasbak)"}
                     </span>
                   </button>
 
@@ -1835,7 +2259,7 @@ export function SystemTab({
                     <span>{isAr ? "استعادة من ملف" : "Restore from File"}</span>
                     <input
                       type="file"
-                      accept=".uasbak,.db"
+                      accept=".uasbak,.db,.dump,.json"
                       className="hidden"
                       onChange={(e) => {
                         const file = e.target.files?.[0];
@@ -1856,13 +2280,93 @@ export function SystemTab({
                   : "UAS ensures business continuity through atomic consistent snapshots. Before any restore executes, the system verifies SQLite integrity and company lock, and automatically creates a safety pre-restore backup."}
               </p>
 
+              {/* Storage, Retention & Alert Health Summary */}
+              {backupHealth && (
+                <div
+                  data-testid="backup-health-summary-card"
+                  className="rounded-xl p-3.5 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 space-y-2.5"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="px-2 py-0.5 rounded-md bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 font-bold text-[11px]">
+                        {isAr ? "المحرك:" : "Engine:"}{" "}
+                        {backupHealth.engine === "postgresql" ? "PostgreSQL" : "SQLite"}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded-md font-bold text-[11px] ${backupHealth.lastScheduledStatus === "FAILED"
+                          ? "bg-rose-500/15 text-rose-700 dark:text-rose-300"
+                          : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                          }`}
+                      >
+                        {isAr ? "النسخ المجدول:" : "Scheduled:"}{" "}
+                        {backupHealth.lastScheduledStatus || (isAr ? "قيد الانتظار" : "Pending")}
+                        {backupHealth.lastScheduledBackupAt
+                          ? ` • ${new Date(backupHealth.lastScheduledBackupAt).toLocaleString(
+                            isAr ? "ar-EG" : "en-US",
+                            { dateStyle: "short", timeStyle: "short" }
+                          )}`
+                          : ""}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded-md font-bold text-[11px] inline-flex items-center gap-1 ${backupHealth.diskWarningExceeded
+                          ? "bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30"
+                          : "bg-slate-200/70 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+                          }`}
+                      >
+                        {backupHealth.diskWarningExceeded && (
+                          <AlertTriangle className="w-3 h-3 shrink-0" />
+                        )}
+                        <span>
+                          {isAr ? "القرص:" : "Disk:"} {backupHealth.diskUsagePercent}% /{" "}
+                          {isAr ? "الحد:" : "Threshold:"} {backupHealth.diskAlertThresholdPercent}%
+                          {backupHealth.diskWarningExceeded
+                            ? isAr
+                              ? " (تجاوز الحد!)"
+                              : " (Threshold Exceeded!)"
+                            : ""}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
+                    <div className="p-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800">
+                      <div className="text-slate-400">
+                        {isAr ? "سياسة الاحتفاظ (GFS):" : "GFS Retention Policy:"}
+                      </div>
+                      <div className="font-bold text-slate-700 dark:text-slate-200 mt-0.5">
+                        {isAr
+                          ? `${backupHealth.retentionPolicy.daily} يومي / ${backupHealth.retentionPolicy.weekly} أسبوعي / ${backupHealth.retentionPolicy.monthly} شهري (${backupHealth.retentionPolicy.preRestore} أمان)`
+                          : `${backupHealth.retentionPolicy.daily} daily / ${backupHealth.retentionPolicy.weekly} weekly / ${backupHealth.retentionPolicy.monthly} monthly (${backupHealth.retentionPolicy.preRestore} safety)`}
+                      </div>
+                    </div>
+                    <div className="p-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800">
+                      <div className="text-slate-400">
+                        {isAr ? "حجم نسخ المنشأة / المرفقات:" : "Tenant Backups / Attachments:"}
+                      </div>
+                      <div className="font-mono font-bold text-slate-700 dark:text-slate-200 mt-0.5">
+                        {backupHealth.tenantBackupsFormatted} • {backupHealth.attachmentsFormatted}{" "}
+                        ({backupHealth.attachmentsCount})
+                      </div>
+                    </div>
+                    <div className="p-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800">
+                      <div className="text-slate-400">
+                        {isAr ? "مساحة الخادم المتاحة:" : "Server Disk Free / Total:"}
+                      </div>
+                      <div className="font-mono font-bold text-slate-700 dark:text-slate-200 mt-0.5">
+                        {backupHealth.diskAvailFormatted} / {backupHealth.diskTotalFormatted}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Local Rolling Backups Table */}
               <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Archive className="w-3.5 h-3.5 text-slate-400" />
                     <span className="font-extrabold text-xs text-slate-800 dark:text-slate-200">
-                      {isAr ? "النسخ الاحتياطية التلقائية على الخادم (Daily Rolling Snapshots):" : "Automatic Server Rolling Snapshots:"}
+                      {isAr ? "النسخ الاحتياطية على الخادم (Server & GFS Snapshots):" : "Server & GFS Snapshots:"}
                     </span>
                   </div>
                   <button
@@ -1888,15 +2392,15 @@ export function SystemTab({
                       : "No local rolling snapshots found (created automatically once per 24 hours)"}
                   </div>
                 ) : (
-                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-                    <table className="w-full text-start text-xs font-medium">
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
+                    <table className="w-full text-start text-xs font-medium min-w-[540px]">
                       <thead className="bg-slate-50 dark:bg-slate-900/70 border-b border-slate-200 dark:border-slate-800 text-slate-500">
                         <tr>
                           <th className="py-2 px-3 text-start">{isAr ? "اسم الملف" : "Filename"}</th>
                           <th className="py-2 px-3 text-start">{isAr ? "النوع" : "Type"}</th>
                           <th className="py-2 px-3 text-start">{isAr ? "الحجم" : "Size"}</th>
                           <th className="py-2 px-3 text-start">{isAr ? "تاريخ الإنشاء" : "Created At"}</th>
-                          <th className="py-2 px-3 text-end">{isAr ? "الإجراء" : "Action"}</th>
+                          <th className="py-2 px-3 text-end">{isAr ? "الإجراءات" : "Actions"}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -1904,22 +2408,29 @@ export function SystemTab({
                           <tr key={b.filename} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/30 transition">
                             <td className="py-2 px-3 font-mono font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
                               <FileText className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                              <span className="truncate max-w-[220px]">{b.filename}</span>
+                              <span className="truncate max-w-[210px]">{b.filename}</span>
                             </td>
                             <td className="py-2 px-3">
-                              {b.type === "auto" ? (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300">
-                                  {isAr ? "تلقائي يومي" : "Daily Auto"}
-                                </span>
-                              ) : b.type === "pre-restore" ? (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300">
-                                  {isAr ? "أمان قبل الاستعادة" : "Pre-Restore"}
-                                </span>
-                              ) : (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                                  {isAr ? "يدوي" : "Manual"}
-                                </span>
-                              )}
+                              <div className="flex flex-wrap items-center gap-1">
+                                {b.type === "auto" ? (
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300">
+                                    {isAr ? "تلقائي يومي" : "Daily Auto"}
+                                  </span>
+                                ) : b.type === "pre-restore" ? (
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300">
+                                    {isAr ? "أمان قبل الاستعادة" : "Pre-Restore"}
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                                    {isAr ? "يدوي" : "Manual"}
+                                  </span>
+                                )}
+                                {b.engine && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-100 dark:bg-slate-800 text-slate-500">
+                                    {b.engine === "postgresql" ? "PG" : b.engine === "sqlite" ? "SQLite" : "V2"}
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="py-2 px-3 font-mono text-slate-500">{b.sizeFormatted}</td>
                             <td className="py-2 px-3 font-mono text-slate-500">
@@ -1929,19 +2440,41 @@ export function SystemTab({
                               })}
                             </td>
                             <td className="py-2 px-3 text-end">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setConfirmRestoreModal({
-                                    open: true,
-                                    localSnapshotName: b.filename,
-                                  })
-                                }
-                                disabled={restoringBackup}
-                                className="px-2.5 py-1 rounded-lg border border-amber-500/40 bg-amber-50/50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 hover:bg-amber-500 hover:text-white font-bold text-[11px] transition"
-                              >
-                                {isAr ? "استعادة" : "Restore"}
-                              </button>
+                              <div className="inline-flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDownloadSnapshotFile(b.filename)}
+                                  className="px-2 py-1 rounded-lg border border-emerald-500/40 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-600 hover:text-white font-bold text-[11px] inline-flex items-center gap-1 transition"
+                                  title={isAr ? "تحميل" : "Download"}
+                                >
+                                  <Download className="w-3 h-3" />
+                                  <span className="hidden sm:inline">{isAr ? "تحميل" : "Download"}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setConfirmRestoreModal({
+                                      open: true,
+                                      localSnapshotName: b.filename,
+                                    })
+                                  }
+                                  disabled={restoringBackup}
+                                  className="px-2.5 py-1 rounded-lg border border-amber-500/40 bg-amber-50/50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 hover:bg-amber-500 hover:text-white font-bold text-[11px] transition"
+                                >
+                                  {isAr ? "استعادة" : "Restore"}
+                                </button>
+                                {!readOnly && (
+                                  <button
+                                    type="button"
+                                    disabled={deletingBackupName === b.filename}
+                                    onClick={() => void handleDeleteSnapshot(b.filename)}
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition disabled:opacity-40"
+                                    title={isAr ? "حذف النسخة" : "Delete Snapshot"}
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -1982,11 +2515,10 @@ export function SystemTab({
                   type="button"
                   data-testid="reset-scope-section"
                   onClick={() => setResetScope("section")}
-                  className={`p-3 rounded-xl border text-start transition ${
-                    resetScope === "section"
-                      ? "border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300"
-                      : "border-slate-200 dark:border-slate-800 hover:border-slate-300"
-                  }`}
+                  className={`p-3 rounded-xl border text-start transition ${resetScope === "section"
+                    ? "border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300"
+                    : "border-slate-200 dark:border-slate-800 hover:border-slate-300"
+                    }`}
                 >
                   <div className="font-extrabold">{isAr ? "1. إعادة ضبط بحسب القسم / الموديول" : "1. By Section / Module"}</div>
                   <div className="text-[10px] text-slate-500 font-normal mt-0.5">
@@ -1998,11 +2530,10 @@ export function SystemTab({
                   type="button"
                   data-testid="reset-scope-unit"
                   onClick={() => setResetScope("unit")}
-                  className={`p-3 rounded-xl border text-start transition ${
-                    resetScope === "unit"
-                      ? "border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300"
-                      : "border-slate-200 dark:border-slate-800 hover:border-slate-300"
-                  }`}
+                  className={`p-3 rounded-xl border text-start transition ${resetScope === "unit"
+                    ? "border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300"
+                    : "border-slate-200 dark:border-slate-800 hover:border-slate-300"
+                    }`}
                 >
                   <div className="font-extrabold">{isAr ? "2. إعادة ضبط بحسب المشروع / الوحدة" : "2. By Project / Unit"}</div>
                   <div className="text-[10px] text-slate-500 font-normal mt-0.5">
@@ -2014,11 +2545,10 @@ export function SystemTab({
                   type="button"
                   data-testid="reset-scope-factory"
                   onClick={() => setResetScope("factory")}
-                  className={`p-3 rounded-xl border text-start transition ${
-                    resetScope === "factory"
-                      ? "border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300"
-                      : "border-slate-200 dark:border-slate-800 hover:border-slate-300"
-                  }`}
+                  className={`p-3 rounded-xl border text-start transition ${resetScope === "factory"
+                    ? "border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300"
+                    : "border-slate-200 dark:border-slate-800 hover:border-slate-300"
+                    }`}
                 >
                   <div className="font-extrabold">{isAr ? "3. تهيئة مصنعية شاملة (Factory)" : "3. Full Factory Format"}</div>
                   <div className="text-[10px] text-slate-500 font-normal mt-0.5">
@@ -2132,6 +2662,95 @@ export function SystemTab({
         </div>
       )}
 
+      {/* Subdomain / Tenant Origin Drift Confirmation Modal */}
+      {driftConfirmState?.open &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[85] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 no-print"
+            onClick={() => setDriftConfirmState(null)}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div
+              className="card-surface rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-amber-300 dark:border-amber-700 space-y-4 text-xs"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 flex items-center justify-center">
+                    <AlertTriangle className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-sm text-slate-900 dark:text-slate-100">
+                      {isAr
+                        ? "تحذير تغيير النطاق أو الخادم (Subdomain Drift Guard)"
+                        : "Subdomain Drift & Origin Switch Warning"}
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      {isAr
+                        ? "تأكيد تغيير أصل الاتصال عن نطاق المنشأة النشط"
+                        : "Confirm switching away from active workspace origin"}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDriftConfirmState(null)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 space-y-2 leading-relaxed">
+                <p className="font-bold">{driftConfirmState.warningAr}</p>
+                <p className="text-[11px] opacity-90">{driftConfirmState.warningEn}</p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 space-y-1 font-mono text-[11px]">
+                <div>
+                  <span className="text-slate-500">{isAr ? "النطاق الافتراضي للمنشأة:" : "Workspace Cloud:"} </span>
+                  <span className="font-bold text-emerald-600">{defaultTenantCloudUrl}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">{isAr ? "العنوان المطلوب:" : "Target URL:"} </span>
+                  <span className="font-bold text-amber-700 dark:text-amber-300">{driftConfirmState.targetUrl}</span>
+                </div>
+                {driftConfirmState.offlineQueueCount > 0 && (
+                  <div className="text-rose-600 font-bold">
+                    {isAr
+                      ? `العمليات المحلية غير المزامنة: ${driftConfirmState.offlineQueueCount}`
+                      : `Pending un-synced offline queue items: ${driftConfirmState.offlineQueueCount}`}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setDriftConfirmState(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                >
+                  {isAr ? "إلغاء والبقاء في نطاق المنشأة" : "Cancel & Keep Workspace Origin"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = driftConfirmState.targetUrl;
+                    setDriftConfirmState(null);
+                    void handleSaveServerUrl(target, { bypassDriftConfirm: true });
+                  }}
+                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold shadow-sm transition"
+                >
+                  {isAr ? "تأكيد تغيير الاتصال" : "Confirm Origin Switch"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
       {/* Restore Confirmation Modal */}
       {confirmRestoreModal.open &&
         typeof document !== "undefined" &&
@@ -2226,1011 +2845,1006 @@ export function SystemTab({
         <div className="space-y-6">
           {/* Users Control Panel & Roles */}
           <div className="card-surface rounded-2xl p-5 space-y-4 overflow-x-auto">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-3">
-            <div>
-              <h3 className="text-sm font-extrabold">
-                لوحة تحكم المستخدمين والصلاحيات (Users Control Panel &amp; Roles)
-              </h3>
-              <p className="text-xs text-slate-500">
-                إدارة حسابات المستخدمين، الأدوار الوظيفية، حالة الحساب، وتسجيل الدخول/الخروج
-              </p>
-            </div>
-            <button
-              onClick={onOpenLogin}
-              className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold"
-            >
-              🔐 تبديل المستخدم (Log in / Log out)
-            </button>
-          </div>
-
-          {!readOnly && canManageUsers ? (
-            <form
-              onSubmit={handleAddUserSubmit}
-              className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl"
-            >
-              <input
-                value={newUserName}
-                onChange={(e) => setNewUserName(e.target.value)}
-                type="text"
-                placeholder="اسم المستخدم الجديد"
-                className="rounded-lg border border-slate-300 bg-transparent px-2.5 py-1.5"
-              />
-              <input
-                value={newUserEmail}
-                onChange={(e) => setNewUserEmail(e.target.value)}
-                type="email"
-                placeholder="البريد أو المعرف"
-                className="rounded-lg border border-slate-300 bg-transparent px-2.5 py-1.5"
-              />
-              <select
-                value={newUserRole}
-                onChange={(e) => setNewUserRole(e.target.value)}
-                className="rounded-lg border border-slate-300 bg-transparent px-2.5 py-1.5"
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-3">
+              <div>
+                <h3 className="text-sm font-extrabold">
+                  لوحة تحكم المستخدمين والصلاحيات (Users Control Panel &amp; Roles)
+                </h3>
+                <p className="text-xs text-slate-500">
+                  إدارة حسابات المستخدمين، الأدوار الوظيفية، حالة الحساب، وتسجيل الدخول/الخروج
+                </p>
+              </div>
+              <button
+                onClick={onOpenLogin}
+                className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold"
               >
-                {ALL_USER_ROLES.map((r) => (
-                  <option key={r} value={r}>
-                    {ROLE_DEFINITIONS[r].labelAr} ({ROLE_DEFINITIONS[r].shortEn})
-                  </option>
-                ))}
-              </select>
-              <button type="submit" className="rounded-lg accent-bg font-bold py-1.5 px-3">
-                + إضافة مستخدم
+                🔐 تبديل المستخدم (Log in / Log out)
               </button>
-            </form>
-          ) : (
-            <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 text-xs text-amber-800 dark:text-amber-300 font-semibold">
-              <Lock className="w-4 h-4 shrink-0" />
-              <span>إدارة المستخدمين وتعديل الإعدادات مقتصرة على مدير النظام العام (SUPER_ADMIN).</span>
             </div>
-          )}
 
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs text-slate-500 dark:text-slate-400">
-              {isAr
-                ? `إجمالي المستخدمين المعروضين: ${users.filter((u) => (showArchivedUsers ? true : !u.archivedAt)).length} (المؤرشفون: ${users.filter((u) => Boolean(u.archivedAt)).length})`
-                : `Visible Users: ${users.filter((u) => (showArchivedUsers ? true : !u.archivedAt)).length} (Archived: ${users.filter((u) => Boolean(u.archivedAt)).length})`}
+            {!readOnly && canManageUsers ? (
+              <form
+                onSubmit={handleAddUserSubmit}
+                className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl"
+              >
+                <input
+                  value={newUserName}
+                  onChange={(e) => setNewUserName(e.target.value)}
+                  type="text"
+                  placeholder="اسم المستخدم الجديد"
+                  className="rounded-lg border border-slate-300 bg-transparent px-2.5 py-1.5"
+                />
+                <input
+                  value={newUserEmail}
+                  onChange={(e) => setNewUserEmail(e.target.value)}
+                  type="email"
+                  placeholder="البريد أو المعرف"
+                  className="rounded-lg border border-slate-300 bg-transparent px-2.5 py-1.5"
+                />
+                <select
+                  value={newUserRole}
+                  onChange={(e) => setNewUserRole(e.target.value)}
+                  className="rounded-lg border border-slate-300 bg-transparent px-2.5 py-1.5"
+                >
+                  {ALL_USER_ROLES.map((r) => (
+                    <option key={r} value={r}>
+                      {ROLE_DEFINITIONS[r].labelAr} ({ROLE_DEFINITIONS[r].shortEn})
+                    </option>
+                  ))}
+                </select>
+                <button type="submit" className="rounded-lg accent-bg font-bold py-1.5 px-3">
+                  + إضافة مستخدم
+                </button>
+              </form>
+            ) : (
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 text-xs text-amber-800 dark:text-amber-300 font-semibold">
+                <Lock className="w-4 h-4 shrink-0" />
+                <span>إدارة المستخدمين وتعديل الإعدادات مقتصرة على مدير النظام العام (SUPER_ADMIN).</span>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                {isAr
+                  ? `إجمالي المستخدمين المعروضين: ${users.filter((u) => (showArchivedUsers ? true : !u.archivedAt)).length} (المؤرشفون: ${users.filter((u) => Boolean(u.archivedAt)).length})`
+                  : `Visible Users: ${users.filter((u) => (showArchivedUsers ? true : !u.archivedAt)).length} (Archived: ${users.filter((u) => Boolean(u.archivedAt)).length})`}
+              </div>
+              <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 text-xs font-bold cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={showArchivedUsers}
+                  onChange={(e) => setShowArchivedUsers(e.target.checked)}
+                  className="rounded border-slate-400 text-emerald-600 focus:ring-emerald-500"
+                />
+                <Archive className="w-3.5 h-3.5 text-slate-500" />
+                <span>{isAr ? "إظهار المؤرشفين" : "Show Archived"}</span>
+              </label>
             </div>
-            <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 text-xs font-bold cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={showArchivedUsers}
-                onChange={(e) => setShowArchivedUsers(e.target.checked)}
-                className="rounded border-slate-400 text-emerald-600 focus:ring-emerald-500"
-              />
-              <Archive className="w-3.5 h-3.5 text-slate-500" />
-              <span>{isAr ? "إظهار المؤرشفين" : "Show Archived"}</span>
-            </label>
-          </div>
 
-          <table className="w-full text-xs text-right border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-800/60">
-                <th className="p-2.5">المستخدم</th>
-                <th className="p-2.5">الدور المؤسسي</th>
-                <th className="p-2.5">نظام الصلاحيات</th>
-                <th className="p-2.5">نطاق المشاريع</th>
-                <th className="p-2.5">الحالة</th>
-                <th className="p-2.5 text-center">إجراءات الأمان والتحكم</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-              {users
-                .filter((u) => (showArchivedUsers ? true : !u.archivedAt))
-                .map((u) => {
-                const roleMeta = getRoleMeta(u.role);
-                const isArchived = Boolean(u.archivedAt);
-                const isUserActive = !isArchived && u.active && (u.isActive ?? true);
-                const hasCustom = Boolean(u.useCustomPermissions);
-                const isSelf = u.id === currentUser.id;
-                const isBusy = userLifecycleBusyId === u.id;
+            <table className="w-full text-xs text-right border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-800/60">
+                  <th className="p-2.5">المستخدم</th>
+                  <th className="p-2.5">الدور المؤسسي</th>
+                  <th className="p-2.5">نظام الصلاحيات</th>
+                  <th className="p-2.5">نطاق المشاريع</th>
+                  <th className="p-2.5">الحالة</th>
+                  <th className="p-2.5 text-center">إجراءات الأمان والتحكم</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                {users
+                  .filter((u) => (showArchivedUsers ? true : !u.archivedAt))
+                  .map((u) => {
+                    const roleMeta = getRoleMeta(u.role);
+                    const isArchived = Boolean(u.archivedAt);
+                    const isUserActive = !isArchived && u.active && (u.isActive ?? true);
+                    const hasCustom = Boolean(u.useCustomPermissions);
+                    const isSelf = u.id === currentUser.id;
+                    const isBusy = userLifecycleBusyId === u.id;
 
-                return (
-                  <tr key={u.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
-                    <td className="p-2.5">
-                      <div className="flex items-center gap-2.5">
-                        <SvgAvatar
-                          char={u.avatarChar}
-                          avatarUrl={u.avatarUrl}
-                          color={u.avatarColor}
-                          size={32}
-                          alt={u.displayName || u.name}
-                        />
-                        <div>
-                          <div className="font-bold flex items-center gap-1.5">
-                            <span>{u.displayName ? `${u.displayName} (${u.name})` : u.name}</span>
-                            {u.id === currentUser.id && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 font-extrabold">
-                                أنت
+                    return (
+                      <tr key={u.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                        <td className="p-2.5">
+                          <div className="flex items-center gap-2.5">
+                            <SvgAvatar
+                              char={u.avatarChar}
+                              avatarUrl={u.avatarUrl}
+                              color={u.avatarColor}
+                              size={32}
+                              alt={u.displayName || u.name}
+                            />
+                            <div>
+                              <div className="font-bold flex items-center gap-1.5">
+                                <span>{u.displayName ? `${u.displayName} (${u.name})` : u.name}</span>
+                                {u.id === currentUser.id && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 font-extrabold">
+                                    أنت
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-slate-400 font-mono flex items-center gap-2">
+                                <span>{u.email}</span>
+                                {u.phone && <span>• {u.phone}</span>}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="p-2.5">
+                          <div className="flex flex-col gap-1">
+                            <span className={`px-2 py-0.5 rounded-lg font-bold inline-block w-fit ${roleMeta.badgeClass}`}>
+                              {roleMeta.labelAr}
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-medium">
+                              {u.department || roleMeta.departmentAr}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="p-2.5">
+                          {hasCustom ? (
+                            <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-300 inline-flex items-center gap-1">
+                              <Sliders className="w-3 h-3" />
+                              <span>صلاحيات مخصصة</span>
+                            </span>
+                          ) : (
+                            <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 inline-flex items-center gap-1">
+                              <Shield className="w-3 h-3" />
+                              <span>دور افتراضي</span>
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-2.5">
+                          <span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">
+                            {u.assignedProjects?.length
+                              ? `${u.assignedProjects.length} مشاريع مسندة`
+                              : "جميع المشاريع (غير مقيد)"}
+                          </span>
+                        </td>
+                        <td className="p-2.5">
+                          <div className="flex flex-col gap-1 items-start">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[11px] font-bold ${isArchived
+                                ? "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                                : isUserActive
+                                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+                                  : "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300"
+                                }`}
+                            >
+                              {isArchived
+                                ? "مؤرشف (Archived)"
+                                : isUserActive
+                                  ? "نشط (Active)"
+                                  : "موقوف (Suspended)"}
+                            </span>
+                            {u.mustChangePassword && (
+                              <span className="text-[9px] font-extrabold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-1 py-0.5 rounded">
+                                مطلوب تغيير المرور
                               </span>
                             )}
                           </div>
-                          <div className="text-[11px] text-slate-400 font-mono flex items-center gap-2">
-                            <span>{u.email}</span>
-                            {u.phone && <span>• {u.phone}</span>}
+                        </td>
+                        <td className="p-2.5">
+                          <div className="flex flex-wrap items-center justify-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openPermissionsDrawer(u)}
+                              disabled={readOnly || !canManageUsers}
+                              title="إدارة الصلاحيات والمحددات"
+                              className="px-2 py-1 rounded-lg border border-purple-300 dark:border-purple-800 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/40 text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40"
+                            >
+                              <Sliders className="w-3.5 h-3.5" />
+                              <span>الصلاحيات</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => openResetPasswordModal(u)}
+                              disabled={readOnly || !canManageUsers}
+                              title="إعادة تعيين كلمة المرور"
+                              className="px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40"
+                            >
+                              <KeyRound className="w-3.5 h-3.5" />
+                              <span>كلمة المرور</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => onToggleUserStatus(u.id)}
+                              disabled={readOnly || !canManageUsers || isSelf || isArchived}
+                              title={isUserActive ? "إيقاف الحساب" : "تفعيل الحساب"}
+                              className={`px-2 py-1 rounded-lg border text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40 ${isUserActive
+                                ? "border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                                : "border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
+                                }`}
+                            >
+                              <UserCheck className="w-3.5 h-3.5" />
+                              <span>{isUserActive ? "إيقاف" : "تفعيل"}</span>
+                            </button>
+
+                            {!isSelf && (
+                              <button
+                                type="button"
+                                onClick={() => handleArchiveOrRestoreUser(u, isArchived ? "restore" : "archive")}
+                                disabled={readOnly || !canManageUsers || isBusy}
+                                title={isArchived ? "استعادة الحساب المؤرشف" : "أرشفة الحساب وتحرير مقعد الترخيص"}
+                                className={`px-2 py-1 rounded-lg border text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40 ${isArchived
+                                  ? "border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
+                                  : "border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                                  }`}
+                              >
+                                {isArchived ? <RotateCcw className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}
+                                <span>{isArchived ? "استعادة" : "أرشفة"}</span>
+                              </button>
+                            )}
+
+                            {!isSelf && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteUser(u)}
+                                disabled={readOnly || !canManageUsers || isBusy}
+                                title="حذف المستخدم (أو أرشفة تلقائية في حال وجود قيود محاسبية)"
+                                className="px-2 py-1 rounded-lg border border-red-300 dark:border-red-900 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>حذف</span>
+                              </button>
+                            )}
                           </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-2.5">
-                      <div className="flex flex-col gap-1">
-                        <span className={`px-2 py-0.5 rounded-lg font-bold inline-block w-fit ${roleMeta.badgeClass}`}>
-                          {roleMeta.labelAr}
-                        </span>
-                        <span className="text-[10px] text-slate-500 font-medium">
-                          {u.department || roleMeta.departmentAr}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="p-2.5">
-                      {hasCustom ? (
-                        <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-300 inline-flex items-center gap-1">
-                          <Sliders className="w-3 h-3" />
-                          <span>صلاحيات مخصصة</span>
-                        </span>
-                      ) : (
-                        <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 inline-flex items-center gap-1">
-                          <Shield className="w-3 h-3" />
-                          <span>دور افتراضي</span>
-                        </span>
-                      )}
-                    </td>
-                    <td className="p-2.5">
-                      <span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">
-                        {u.assignedProjects?.length
-                          ? `${u.assignedProjects.length} مشاريع مسندة`
-                          : "جميع المشاريع (غير مقيد)"}
-                      </span>
-                    </td>
-                    <td className="p-2.5">
-                      <div className="flex flex-col gap-1 items-start">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                            isArchived
-                              ? "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
-                              : isUserActive
-                              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
-                              : "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300"
-                          }`}
-                        >
-                          {isArchived
-                            ? "مؤرشف (Archived)"
-                            : isUserActive
-                            ? "نشط (Active)"
-                            : "موقوف (Suspended)"}
-                        </span>
-                        {u.mustChangePassword && (
-                          <span className="text-[9px] font-extrabold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-1 py-0.5 rounded">
-                            مطلوب تغيير المرور
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="p-2.5">
-                      <div className="flex flex-wrap items-center justify-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => openPermissionsDrawer(u)}
-                          disabled={readOnly || !canManageUsers}
-                          title="إدارة الصلاحيات والمحددات"
-                          className="px-2 py-1 rounded-lg border border-purple-300 dark:border-purple-800 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/40 text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40"
-                        >
-                          <Sliders className="w-3.5 h-3.5" />
-                          <span>الصلاحيات</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => openResetPasswordModal(u)}
-                          disabled={readOnly || !canManageUsers}
-                          title="إعادة تعيين كلمة المرور"
-                          className="px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40"
-                        >
-                          <KeyRound className="w-3.5 h-3.5" />
-                          <span>كلمة المرور</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => onToggleUserStatus(u.id)}
-                          disabled={readOnly || !canManageUsers || isSelf || isArchived}
-                          title={isUserActive ? "إيقاف الحساب" : "تفعيل الحساب"}
-                          className={`px-2 py-1 rounded-lg border text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40 ${
-                            isUserActive
-                              ? "border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40"
-                              : "border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
-                          }`}
-                        >
-                          <UserCheck className="w-3.5 h-3.5" />
-                          <span>{isUserActive ? "إيقاف" : "تفعيل"}</span>
-                        </button>
-
-                        {!isSelf && (
-                          <button
-                            type="button"
-                            onClick={() => handleArchiveOrRestoreUser(u, isArchived ? "restore" : "archive")}
-                            disabled={readOnly || !canManageUsers || isBusy}
-                            title={isArchived ? "استعادة الحساب المؤرشف" : "أرشفة الحساب وتحرير مقعد الترخيص"}
-                            className={`px-2 py-1 rounded-lg border text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40 ${
-                              isArchived
-                                ? "border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
-                                : "border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
-                            }`}
-                          >
-                            {isArchived ? <RotateCcw className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}
-                            <span>{isArchived ? "استعادة" : "أرشفة"}</span>
-                          </button>
-                        )}
-
-                        {!isSelf && (
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteUser(u)}
-                            disabled={readOnly || !canManageUsers || isBusy}
-                            title="حذف المستخدم (أو أرشفة تلقائية في حال وجود قيود محاسبية)"
-                            className="px-2 py-1 rounded-lg border border-red-300 dark:border-red-900 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-40"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>حذف</span>
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {/* 7-Role RBAC Matrix Card */}
-        <div className="card-surface rounded-2xl p-5 space-y-4 overflow-x-auto">
-          <div className="flex items-center justify-between gap-2 border-b pb-3">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl accent-badge flex items-center justify-center">
-                <ShieldCheck className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-sm font-extrabold">
-                  مصفوفة الصلاحيات المؤسسية للأدوار السبعة (7-Role RBAC Matrix)
-                </h3>
-                <p className="text-xs text-slate-500">
-                  توزيع الصلاحيات التشغيلية والاعتماد والترحيل المحاسبي وحالة القراءة فقط
-                </p>
-              </div>
-            </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
           </div>
 
-          <table className="w-full text-xs text-right border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-800/60">
-                <th className="p-2.5">الدور الوظيفي</th>
-                <th className="p-2.5">الإدارة / القسم</th>
-                <th className="p-2.5 text-center">الاعتماد المالي</th>
-                <th className="p-2.5 text-center">الترحيل للـ GL</th>
-                <th className="p-2.5 text-center">إقفال القطفات</th>
-                <th className="p-2.5 text-center">قراءة فقط</th>
-                <th className="p-2.5">الوحدات المصرح بها</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-              {ALL_USER_ROLES.map((roleKey) => {
-                const def = ROLE_DEFINITIONS[roleKey];
-                const groups = getAccessibleGroups(roleKey);
-                const approve = canApprove(roleKey);
-                const post = canPostLedger(roleKey);
-                const lock = canLockPeriod(roleKey);
-                const ro = checkIsReadOnly(roleKey);
-                const isCurrent = getRoleMeta(currentUser.role).role === roleKey;
-                return (
-                  <tr key={roleKey} className={isCurrent ? "bg-emerald-50/40 dark:bg-emerald-950/20" : ""}>
-                    <td className="p-2.5">
-                      <span className={`px-2 py-0.5 rounded-lg font-bold inline-block ${def.badgeClass}`}>
-                        {def.labelAr}
-                      </span>
-                      <div className="text-[10px] font-mono text-slate-400 mt-0.5">{roleKey}</div>
-                    </td>
-                    <td className="p-2.5 text-slate-600 dark:text-slate-300">{def.departmentAr}</td>
-                    <td className="p-2.5 text-center">
-                      {approve ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 inline" />
-                      ) : (
-                        <XCircle className="w-4 h-4 text-slate-300 inline" />
-                      )}
-                    </td>
-                    <td className="p-2.5 text-center">
-                      {post ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 inline" />
-                      ) : (
-                        <XCircle className="w-4 h-4 text-slate-300 inline" />
-                      )}
-                    </td>
-                    <td className="p-2.5 text-center">
-                      {lock ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 inline" />
-                      ) : (
-                        <XCircle className="w-4 h-4 text-slate-300 inline" />
-                      )}
-                    </td>
-                    <td className="p-2.5 text-center">
-                      {ro ? (
-                        <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-bold text-[10px]">
-                          Read-Only
+          {/* 7-Role RBAC Matrix Card */}
+          <div className="card-surface rounded-2xl p-5 space-y-4 overflow-x-auto">
+            <div className="flex items-center justify-between gap-2 border-b pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl accent-badge flex items-center justify-center">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold">
+                    مصفوفة الصلاحيات المؤسسية للأدوار السبعة (7-Role RBAC Matrix)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    توزيع الصلاحيات التشغيلية والاعتماد والترحيل المحاسبي وحالة القراءة فقط
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <table className="w-full text-xs text-right border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-800/60">
+                  <th className="p-2.5">الدور الوظيفي</th>
+                  <th className="p-2.5">الإدارة / القسم</th>
+                  <th className="p-2.5 text-center">الاعتماد المالي</th>
+                  <th className="p-2.5 text-center">الترحيل للـ GL</th>
+                  <th className="p-2.5 text-center">إقفال القطفات</th>
+                  <th className="p-2.5 text-center">قراءة فقط</th>
+                  <th className="p-2.5">الوحدات المصرح بها</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                {ALL_USER_ROLES.map((roleKey) => {
+                  const def = ROLE_DEFINITIONS[roleKey];
+                  const groups = getAccessibleGroups(roleKey);
+                  const approve = canApprove(roleKey);
+                  const post = canPostLedger(roleKey);
+                  const lock = canLockPeriod(roleKey);
+                  const ro = checkIsReadOnly(roleKey);
+                  const isCurrent = getRoleMeta(currentUser.role).role === roleKey;
+                  return (
+                    <tr key={roleKey} className={isCurrent ? "bg-emerald-50/40 dark:bg-emerald-950/20" : ""}>
+                      <td className="p-2.5">
+                        <span className={`px-2 py-0.5 rounded-lg font-bold inline-block ${def.badgeClass}`}>
+                          {def.labelAr}
                         </span>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="p-2.5 font-mono text-[11px] text-slate-500">
-                      {groups.join(" • ")}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                        <div className="text-[10px] font-mono text-slate-400 mt-0.5">{roleKey}</div>
+                      </td>
+                      <td className="p-2.5 text-slate-600 dark:text-slate-300">{def.departmentAr}</td>
+                      <td className="p-2.5 text-center">
+                        {approve ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 inline" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-slate-300 inline" />
+                        )}
+                      </td>
+                      <td className="p-2.5 text-center">
+                        {post ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 inline" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-slate-300 inline" />
+                        )}
+                      </td>
+                      <td className="p-2.5 text-center">
+                        {lock ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 inline" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-slate-300 inline" />
+                        )}
+                      </td>
+                      <td className="p-2.5 text-center">
+                        {ro ? (
+                          <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-bold text-[10px]">
+                            Read-Only
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+                      <td className="p-2.5 font-mono text-[11px] text-slate-500">
+                        {groups.join(" • ")}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
-    )}
+      )}
 
       {/* Dual Logo Generator & Landing Page CMS Studio */}
       {activeSubTab === "branding" && (
-      <form
-        onSubmit={handleSaveCmsSubmit}
-        className="card-surface rounded-2xl p-5 space-y-6 text-xs"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-700 pb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl accent-badge flex items-center justify-center">
-              <Palette className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-sm font-extrabold">
-                {isAr
-                  ? "استوديو الهوية المؤسسية والشعار المزدوج وإدارة الصفحة الرئيسية (Branding & Landing CMS)"
-                  : "Enterprise Dual Logo Generator & Public Landing CMS"}
-              </h3>
-              <p className="text-xs text-slate-500">
-                {isAr
-                  ? "تخصيص شعار النظام وشعار المؤسسة (SVG أو رفع صورة) والتحكم بمحتوى البوابة العامة"
-                  : "Customize dual SVG/image logos, brand theme color, and bilingual public landing portal content"}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <div className="px-3 py-2 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 flex items-center gap-3">
-              <span className="text-[10px] font-bold text-slate-500 flex items-center gap-1">
-                <Eye className="w-3.5 h-3.5" />
-                {isAr ? "معاينة حية:" : "Live Preview:"}
-              </span>
-              <DualLogoBadge
-                profile={cmsDraft as UasEnterpriseProfile}
-                logoText={logoText}
-                size="md"
-              />
-            </div>
-            <button
-              type="button"
-              disabled={readOnly || !canManageCms || savingCms}
-              onClick={() => void handleResetDefaultBrand()}
-              className="px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
-              title={
-                isAr
-                  ? "إزالة الشعار والأيقونة والشعار الفرعي المخصص والعودة إلى هوية UAS الافتراضية"
-                  : "Remove custom logo/favicon/tagline and restore default UAS branding"
-              }
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>{isAr ? "استعادة هوية UAS" : "Reset to UAS"}</span>
-            </button>
-            <button
-              type="submit"
-              disabled={readOnly || !canManageCms || savingCms}
-              className="px-4 py-2.5 rounded-xl accent-bg font-extrabold inline-flex items-center gap-2 shadow-sm disabled:opacity-50"
-            >
-              <Save className="w-4 h-4" />
-              <span>
-                {savingCms
-                  ? isAr
-                    ? "جاري الحفظ..."
-                    : "Saving..."
-                  : isAr
-                  ? "حفظ الهوية والصفحة الرئيسية"
-                  : "Save Branding & CMS"}
-              </span>
-            </button>
-          </div>
-        </div>
-
-        {!canManageCms && (
-          <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 text-amber-800 dark:text-amber-300 font-semibold">
-            <Lock className="w-4 h-4 shrink-0" />
-            <span>
-              {isAr
-                ? "تعديل الهوية المؤسسية ومحتوى الصفحة الرئيسية متاح لمدير النظام العام (SUPER_ADMIN) فقط."
-                : "Branding & Landing CMS customization is restricted to SUPER_ADMIN."}
-            </span>
-          </div>
-        )}
-
-        {/* Dual Logo Generator Controls */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {/* UAS System Logo Slot */}
-          <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-900/30">
-            <div className="flex items-center justify-between">
-              <div className="font-extrabold flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-emerald-600" />
-                <span>{isAr ? "شعار النظام الموحد (UAS Logo)" : "UAS System Logo"}</span>
+        <form
+          onSubmit={handleSaveCmsSubmit}
+          className="card-surface rounded-2xl p-5 space-y-6 text-xs"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-700 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl accent-badge flex items-center justify-center">
+                <Palette className="w-5 h-5" />
               </div>
-              <label className="inline-flex items-center gap-2 cursor-pointer font-bold">
-                <input
-                  type="checkbox"
-                  checked={cmsDraft.showUasLogo ?? true}
-                  disabled={readOnly || !canManageCms}
-                  onChange={(e) =>
-                    updateCmsDraft((prev) => ({ ...prev, showUasLogo: e.target.checked }))
-                  }
-                  className="rounded border-slate-300 text-emerald-600 w-4 h-4"
-                />
-                <span>{isAr ? "إظهار الشعار" : "Show Logo"}</span>
-              </label>
-            </div>
-
-            <div className="grid grid-cols-5 gap-2">
-              {UAS_LOGO_PRESETS.map((preset) => {
-                const active = (cmsDraft.uasLogoStyle || "emerald-shield") === preset.id;
-                return (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    disabled={readOnly || !canManageCms}
-                    onClick={() =>
-                      updateCmsDraft((prev) => ({
-                        ...prev,
-                        uasLogoStyle: preset.id,
-                      }))
-                    }
-                    className={`p-2 rounded-xl border flex flex-col items-center gap-1.5 transition ${
-                      active
-                        ? "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300"
-                        : "border-slate-200 dark:border-slate-700 hover:border-emerald-400"
-                    }`}
-                  >
-                    <div className="w-8 h-8 rounded-lg accent-bg flex items-center justify-center text-white">
-                      {renderUasPresetSvg(preset.id, "w-5 h-5", logoText)}
-                    </div>
-                    <span className="text-[10px] font-bold text-center leading-tight line-clamp-1">
-                      {isAr ? preset.labelAr : preset.labelEn}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              <input
-                type="text"
-                value={cmsDraft.uasLogoCustomUrl ?? ""}
-                disabled={readOnly || !canManageCms}
-                onChange={(e) =>
-                  updateCmsDraft((prev) => ({
-                    ...prev,
-                    uasLogoCustomUrl: e.target.value,
-                    uasLogoStyle: e.target.value.trim() ? "custom" : prev.uasLogoStyle || "emerald-shield",
-                  }))
-                }
-                placeholder={isAr ? "رابط صورة أو SVG مخصص (اختياري)..." : "Custom image/SVG URL (optional)..."}
-                className="flex-1 min-w-[180px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
-              />
-              <label className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center gap-1.5">
-                <Upload className="w-3.5 h-3.5" />
-                <span>{isAr ? "رفع صورة" : "Upload"}</span>
-                <input
-                  type="file"
-                  accept="image/*,.svg"
-                  disabled={readOnly || !canManageCms}
-                  className="hidden"
-                  onChange={(e) =>
-                    handleLogoFileUpload("uasLogoCustomUrl", "uasLogoStyle", e.target.files?.[0])
-                  }
-                />
-              </label>
-            </div>
-          </div>
-
-          {/* Enterprise Custom Logo Slot */}
-          <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-900/30">
-            <div className="flex items-center justify-between">
-              <div className="font-extrabold flex items-center gap-1.5">
-                <Globe className="w-4 h-4 text-indigo-600" />
-                <span>{isAr ? "شعار المؤسسة المخصص (Enterprise Logo)" : "Enterprise Custom Logo"}</span>
-              </div>
-              <label className="inline-flex items-center gap-2 cursor-pointer font-bold">
-                <input
-                  type="checkbox"
-                  checked={cmsDraft.showEnterpriseLogo ?? false}
-                  disabled={readOnly || !canManageCms}
-                  onChange={(e) =>
-                    updateCmsDraft((prev) => ({ ...prev, showEnterpriseLogo: e.target.checked }))
-                  }
-                  className="rounded border-slate-300 text-emerald-600 w-4 h-4"
-                />
-                <span>{isAr ? "إظهار الشعار" : "Show Logo"}</span>
-              </label>
-            </div>
-
-            <div className="grid grid-cols-5 gap-2">
-              {ENTERPRISE_LOGO_PRESETS.map((preset) => {
-                const active = (cmsDraft.enterpriseLogoStyle || "agri-leaf") === preset.id;
-                return (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    disabled={readOnly || !canManageCms}
-                    onClick={() =>
-                      updateCmsDraft((prev) => ({
-                        ...prev,
-                        enterpriseLogoStyle: preset.id,
-                      }))
-                    }
-                    className={`p-2 rounded-xl border flex flex-col items-center gap-1.5 transition ${
-                      active
-                        ? "border-indigo-600 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300"
-                        : "border-slate-200 dark:border-slate-700 hover:border-indigo-400"
-                    }`}
-                  >
-                    <div
-                      className="w-8 h-8 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center"
-                      style={{ color: cmsDraft.brandColor || "#059669" }}
-                    >
-                      {renderEnterprisePresetSvg(preset.id, "w-5 h-5")}
-                    </div>
-                    <span className="text-[10px] font-bold text-center leading-tight line-clamp-1">
-                      {isAr ? preset.labelAr : preset.labelEn}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              <input
-                type="text"
-                value={cmsDraft.enterpriseLogoCustomUrl ?? ""}
-                disabled={readOnly || !canManageCms}
-                onChange={(e) =>
-                  updateCmsDraft((prev) => ({
-                    ...prev,
-                    enterpriseLogoCustomUrl: e.target.value,
-                    enterpriseLogoStyle: e.target.value.trim() ? "custom" : prev.enterpriseLogoStyle || "agri-leaf",
-                  }))
-                }
-                placeholder={isAr ? "رابط شعار المؤسسة أو رفع ملف..." : "Enterprise image/SVG URL..."}
-                className="flex-1 min-w-[180px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
-              />
-              <label className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center gap-1.5">
-                <Upload className="w-3.5 h-3.5" />
-                <span>{isAr ? "رفع صورة" : "Upload"}</span>
-                <input
-                  type="file"
-                  accept="image/*,.svg"
-                  disabled={readOnly || !canManageCms}
-                  className="hidden"
-                  onChange={(e) =>
-                    void handleLogoFileUpload(
-                      "enterpriseLogoCustomUrl",
-                      "enterpriseLogoStyle",
-                      e.target.files?.[0]
-                    )
-                  }
-                />
-              </label>
-            </div>
-          </div>
-        </div>
-
-        {/* Browser Tab Favicon & Editable Brand Subtitle/Tagline */}
-        {(() => {
-          const previewBrand = resolveEffectiveBrandInfo(cmsDraft as UasEnterpriseProfile);
-          return (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-2 border-t border-slate-200 dark:border-slate-700">
-              <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-900/30">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="font-extrabold flex items-center gap-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={previewBrand.effectiveFaviconUrl}
-                      alt="Browser Tab Icon"
-                      className="w-5 h-5 rounded object-contain border border-slate-200 dark:border-slate-700 bg-white p-0.5"
-                    />
-                    <span>
-                      {isAr
-                        ? "أيقونة تبويب المتصفح (Favicon) وعنوان التبويب"
-                        : "Browser Tab Icon (Favicon) & Tab Title"}
-                    </span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded-md bg-slate-200/70 dark:bg-slate-800 text-[10px] font-mono" dir="ltr">
-                    {previewBrand.tabTitleEn}
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-500">
-                  {previewBrand.hasCustomFavicon
-                    ? isAr
-                      ? "أيقونة Favicon مخصصة نشطة حالياً لتبويب المتصفح."
-                      : "Dedicated custom favicon is active for browser tabs."
-                    : previewBrand.derivedFaviconFromLogo
-                    ? isAr
-                      ? "يتم اشتقاق أيقونة تبويب المتصفح تلقائياً من شعار المؤسسة المخصص."
-                      : "Browser tab favicon is automatically derived from your custom enterprise logo."
-                    : isAr
-                    ? "يتم استخدام أيقونة UAS الافتراضية حتى يتم رفع شعار أو أيقونة مخصصة."
-                    : "Using default UAS favicon until a custom logo or favicon is uploaded."}
+              <div>
+                <h3 className="text-sm font-extrabold">
+                  {isAr
+                    ? "استوديو الهوية المؤسسية والشعار المزدوج وإدارة الصفحة الرئيسية (Branding & Landing CMS)"
+                    : "Enterprise Dual Logo Generator & Public Landing CMS"}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {isAr
+                    ? "تخصيص شعار النظام وشعار المؤسسة (SVG أو رفع صورة) والتحكم بمحتوى البوابة العامة"
+                    : "Customize dual SVG/image logos, brand theme color, and bilingual public landing portal content"}
                 </p>
-                <div className="flex flex-wrap items-center gap-2">
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="px-3 py-2 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 flex items-center gap-3">
+                <span className="text-[10px] font-bold text-slate-500 flex items-center gap-1">
+                  <Eye className="w-3.5 h-3.5" />
+                  {isAr ? "معاينة حية:" : "Live Preview:"}
+                </span>
+                <DualLogoBadge
+                  profile={cmsDraft as UasEnterpriseProfile}
+                  logoText={logoText}
+                  size="md"
+                />
+              </div>
+              <button
+                type="button"
+                disabled={readOnly || !canManageCms || savingCms}
+                onClick={() => void handleResetDefaultBrand()}
+                className="px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+                title={
+                  isAr
+                    ? "إزالة الشعار والأيقونة والشعار الفرعي المخصص والعودة إلى هوية UAS الافتراضية"
+                    : "Remove custom logo/favicon/tagline and restore default UAS branding"
+                }
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>{isAr ? "استعادة هوية UAS" : "Reset to UAS"}</span>
+              </button>
+              <button
+                type="submit"
+                disabled={readOnly || !canManageCms || savingCms}
+                className="px-4 py-2.5 rounded-xl accent-bg font-extrabold inline-flex items-center gap-2 shadow-sm disabled:opacity-50"
+              >
+                <Save className="w-4 h-4" />
+                <span>
+                  {savingCms
+                    ? isAr
+                      ? "جاري الحفظ..."
+                      : "Saving..."
+                    : isAr
+                      ? "حفظ الهوية والصفحة الرئيسية"
+                      : "Save Branding & CMS"}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {!canManageCms && (
+            <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 text-amber-800 dark:text-amber-300 font-semibold">
+              <Lock className="w-4 h-4 shrink-0" />
+              <span>
+                {isAr
+                  ? "تعديل الهوية المؤسسية ومحتوى الصفحة الرئيسية متاح لمدير النظام العام (SUPER_ADMIN) فقط."
+                  : "Branding & Landing CMS customization is restricted to SUPER_ADMIN."}
+              </span>
+            </div>
+          )}
+
+          {/* Dual Logo Generator Controls */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* UAS System Logo Slot */}
+            <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-900/30">
+              <div className="flex items-center justify-between">
+                <div className="font-extrabold flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-emerald-600" />
+                  <span>{isAr ? "شعار النظام الموحد (UAS Logo)" : "UAS System Logo"}</span>
+                </div>
+                <label className="inline-flex items-center gap-2 cursor-pointer font-bold">
                   <input
-                    type="text"
-                    value={cmsDraft.faviconUrl ?? ""}
+                    type="checkbox"
+                    checked={cmsDraft.showUasLogo ?? true}
                     disabled={readOnly || !canManageCms}
                     onChange={(e) =>
-                      updateCmsDraft((prev) => ({
-                        ...prev,
-                        faviconUrl: e.target.value,
-                      }))
+                      updateCmsDraft((prev) => ({ ...prev, showUasLogo: e.target.checked }))
                     }
-                    placeholder={
-                      isAr
-                        ? "رابط أيقونة مخصصة (اختياري — يُشتق من الشعار تلقائياً)..."
-                        : "Custom favicon URL (optional — auto-derived from logo)..."
-                    }
-                    className="flex-1 min-w-[180px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
+                    className="rounded border-slate-300 text-emerald-600 w-4 h-4"
                   />
-                  <label className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center gap-1.5">
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>{isAr ? "رفع أيقونة" : "Upload Icon"}</span>
-                    <input
-                      type="file"
-                      accept="image/*,.ico,.svg"
-                      disabled={readOnly || !canManageCms}
-                      className="hidden"
-                      onChange={(e) =>
-                        void handleLogoFileUpload("faviconUrl", null, e.target.files?.[0])
-                      }
-                    />
-                  </label>
-                  {cmsDraft.faviconUrl && (
+                  <span>{isAr ? "إظهار الشعار" : "Show Logo"}</span>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-5 gap-2">
+                {UAS_LOGO_PRESETS.map((preset) => {
+                  const active = (cmsDraft.uasLogoStyle || "emerald-shield") === preset.id;
+                  return (
                     <button
+                      key={preset.id}
                       type="button"
                       disabled={readOnly || !canManageCms}
-                      onClick={() => updateCmsDraft((prev) => ({ ...prev, faviconUrl: null }))}
-                      className="px-2.5 py-1.5 rounded-xl border border-rose-300 text-rose-600 font-bold hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                      onClick={() =>
+                        updateCmsDraft((prev) => ({
+                          ...prev,
+                          uasLogoStyle: preset.id,
+                        }))
+                      }
+                      className={`p-2 rounded-xl border flex flex-col items-center gap-1.5 transition ${active
+                        ? "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300"
+                        : "border-slate-200 dark:border-slate-700 hover:border-emerald-400"
+                        }`}
                     >
-                      {isAr ? "مسح" : "Clear"}
+                      <div className="w-8 h-8 rounded-lg accent-bg flex items-center justify-center text-white">
+                        {renderUasPresetSvg(preset.id, "w-5 h-5", logoText)}
+                      </div>
+                      <span className="text-[10px] font-bold text-center leading-tight line-clamp-1">
+                        {isAr ? preset.labelAr : preset.labelEn}
+                      </span>
                     </button>
-                  )}
-                </div>
+                  );
+                })}
               </div>
 
-              <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-900/30">
-                <div className="font-extrabold">
-                  {isAr
-                    ? "الوصف التعريفي أسفل اسم المنشأة (Editable Tagline)"
-                    : "Editable Brand Subtitle / Tagline"}
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <input
+                  type="text"
+                  value={cmsDraft.uasLogoCustomUrl ?? ""}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) =>
+                    updateCmsDraft((prev) => ({
+                      ...prev,
+                      uasLogoCustomUrl: e.target.value,
+                      uasLogoStyle: e.target.value.trim() ? "custom" : prev.uasLogoStyle || "emerald-shield",
+                    }))
+                  }
+                  placeholder={isAr ? "رابط صورة أو SVG مخصص (اختياري)..." : "Custom image/SVG URL (optional)..."}
+                  className="flex-1 min-w-[180px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
+                />
+                <label className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center gap-1.5">
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>{isAr ? "رفع صورة" : "Upload"}</span>
+                  <input
+                    type="file"
+                    accept="image/*,.svg"
+                    disabled={readOnly || !canManageCms}
+                    className="hidden"
+                    onChange={(e) =>
+                      handleLogoFileUpload("uasLogoCustomUrl", "uasLogoStyle", e.target.files?.[0])
+                    }
+                  />
+                </label>
+              </div>
+            </div>
+
+            {/* Enterprise Custom Logo Slot */}
+            <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-900/30">
+              <div className="flex items-center justify-between">
+                <div className="font-extrabold flex items-center gap-1.5">
+                  <Globe className="w-4 h-4 text-indigo-600" />
+                  <span>{isAr ? "شعار المؤسسة المخصص (Enterprise Logo)" : "Enterprise Custom Logo"}</span>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-bold mb-1">
-                      {isAr ? "الشعار اللفظي / الوصف (عربي)" : "Tagline (Arabic)"}
-                    </label>
-                    <input
-                      type="text"
-                      value={cmsDraft.taglineAr ?? ""}
+                <label className="inline-flex items-center gap-2 cursor-pointer font-bold">
+                  <input
+                    type="checkbox"
+                    checked={cmsDraft.showEnterpriseLogo ?? false}
+                    disabled={readOnly || !canManageCms}
+                    onChange={(e) =>
+                      updateCmsDraft((prev) => ({ ...prev, showEnterpriseLogo: e.target.checked }))
+                    }
+                    className="rounded border-slate-300 text-emerald-600 w-4 h-4"
+                  />
+                  <span>{isAr ? "إظهار الشعار" : "Show Logo"}</span>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-5 gap-2">
+                {ENTERPRISE_LOGO_PRESETS.map((preset) => {
+                  const active = (cmsDraft.enterpriseLogoStyle || "agri-leaf") === preset.id;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
                       disabled={readOnly || !canManageCms}
-                      onChange={(e) =>
-                        updateCmsDraft((p) => ({ ...p, taglineAr: e.target.value }))
+                      onClick={() =>
+                        updateCmsDraft((prev) => ({
+                          ...prev,
+                          enterpriseLogoStyle: preset.id,
+                        }))
                       }
-                      placeholder={DEFAULT_TAGLINE_AR}
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-                    />
+                      className={`p-2 rounded-xl border flex flex-col items-center gap-1.5 transition ${active
+                        ? "border-indigo-600 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300"
+                        : "border-slate-200 dark:border-slate-700 hover:border-indigo-400"
+                        }`}
+                    >
+                      <div
+                        className="w-8 h-8 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center"
+                        style={{ color: cmsDraft.brandColor || "#059669" }}
+                      >
+                        {renderEnterprisePresetSvg(preset.id, "w-5 h-5")}
+                      </div>
+                      <span className="text-[10px] font-bold text-center leading-tight line-clamp-1">
+                        {isAr ? preset.labelAr : preset.labelEn}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <input
+                  type="text"
+                  value={cmsDraft.enterpriseLogoCustomUrl ?? ""}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) =>
+                    updateCmsDraft((prev) => ({
+                      ...prev,
+                      enterpriseLogoCustomUrl: e.target.value,
+                      enterpriseLogoStyle: e.target.value.trim() ? "custom" : prev.enterpriseLogoStyle || "agri-leaf",
+                    }))
+                  }
+                  placeholder={isAr ? "رابط شعار المؤسسة أو رفع ملف..." : "Enterprise image/SVG URL..."}
+                  className="flex-1 min-w-[180px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
+                />
+                <label className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center gap-1.5">
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>{isAr ? "رفع صورة" : "Upload"}</span>
+                  <input
+                    type="file"
+                    accept="image/*,.svg"
+                    disabled={readOnly || !canManageCms}
+                    className="hidden"
+                    onChange={(e) =>
+                      void handleLogoFileUpload(
+                        "enterpriseLogoCustomUrl",
+                        "enterpriseLogoStyle",
+                        e.target.files?.[0]
+                      )
+                    }
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Browser Tab Favicon & Editable Brand Subtitle/Tagline */}
+          {(() => {
+            const previewBrand = resolveEffectiveBrandInfo(cmsDraft as UasEnterpriseProfile);
+            return (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-2 border-t border-slate-200 dark:border-slate-700">
+                <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-900/30">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-extrabold flex items-center gap-2">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={previewBrand.effectiveFaviconUrl}
+                        alt="Browser Tab Icon"
+                        className="w-5 h-5 rounded object-contain border border-slate-200 dark:border-slate-700 bg-white p-0.5"
+                      />
+                      <span>
+                        {isAr
+                          ? "أيقونة تبويب المتصفح (Favicon) وعنوان التبويب"
+                          : "Browser Tab Icon (Favicon) & Tab Title"}
+                      </span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-md bg-slate-200/70 dark:bg-slate-800 text-[10px] font-mono" dir="ltr">
+                      {previewBrand.tabTitleEn}
+                    </span>
                   </div>
-                  <div>
-                    <label className="block font-bold mb-1">
-                      {isAr ? "الشعار اللفظي / الوصف (إنجليزي)" : "Tagline (English)"}
-                    </label>
+                  <p className="text-[11px] text-slate-500">
+                    {previewBrand.hasCustomFavicon
+                      ? isAr
+                        ? "أيقونة Favicon مخصصة نشطة حالياً لتبويب المتصفح."
+                        : "Dedicated custom favicon is active for browser tabs."
+                      : previewBrand.derivedFaviconFromLogo
+                        ? isAr
+                          ? "يتم اشتقاق أيقونة تبويب المتصفح تلقائياً من شعار المؤسسة المخصص."
+                          : "Browser tab favicon is automatically derived from your custom enterprise logo."
+                        : isAr
+                          ? "يتم استخدام أيقونة UAS الافتراضية حتى يتم رفع شعار أو أيقونة مخصصة."
+                          : "Using default UAS favicon until a custom logo or favicon is uploaded."}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
                     <input
                       type="text"
-                      value={cmsDraft.taglineEn ?? ""}
+                      value={cmsDraft.faviconUrl ?? ""}
                       disabled={readOnly || !canManageCms}
                       onChange={(e) =>
-                        updateCmsDraft((p) => ({ ...p, taglineEn: e.target.value }))
+                        updateCmsDraft((prev) => ({
+                          ...prev,
+                          faviconUrl: e.target.value,
+                        }))
                       }
-                      placeholder={DEFAULT_TAGLINE_EN}
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                      placeholder={
+                        isAr
+                          ? "رابط أيقونة مخصصة (اختياري — يُشتق من الشعار تلقائياً)..."
+                          : "Custom favicon URL (optional — auto-derived from logo)..."
+                      }
+                      className="flex-1 min-w-[180px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
                     />
+                    <label className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center gap-1.5">
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{isAr ? "رفع أيقونة" : "Upload Icon"}</span>
+                      <input
+                        type="file"
+                        accept="image/*,.ico,.svg"
+                        disabled={readOnly || !canManageCms}
+                        className="hidden"
+                        onChange={(e) =>
+                          void handleLogoFileUpload("faviconUrl", null, e.target.files?.[0])
+                        }
+                      />
+                    </label>
+                    {cmsDraft.faviconUrl && (
+                      <button
+                        type="button"
+                        disabled={readOnly || !canManageCms}
+                        onClick={() => updateCmsDraft((prev) => ({ ...prev, faviconUrl: null }))}
+                        className="px-2.5 py-1.5 rounded-xl border border-rose-300 text-rose-600 font-bold hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                      >
+                        {isAr ? "مسح" : "Clear"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-900/30">
+                  <div className="font-extrabold">
+                    {isAr
+                      ? "الوصف التعريفي أسفل اسم المنشأة (Editable Tagline)"
+                      : "Editable Brand Subtitle / Tagline"}
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold mb-1">
+                        {isAr ? "الشعار اللفظي / الوصف (عربي)" : "Tagline (Arabic)"}
+                      </label>
+                      <input
+                        type="text"
+                        value={cmsDraft.taglineAr ?? ""}
+                        disabled={readOnly || !canManageCms}
+                        onChange={(e) =>
+                          updateCmsDraft((p) => ({ ...p, taglineAr: e.target.value }))
+                        }
+                        placeholder={DEFAULT_TAGLINE_AR}
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold mb-1">
+                        {isAr ? "الشعار اللفظي / الوصف (إنجليزي)" : "Tagline (English)"}
+                      </label>
+                      <input
+                        type="text"
+                        value={cmsDraft.taglineEn ?? ""}
+                        disabled={readOnly || !canManageCms}
+                        onChange={(e) =>
+                          updateCmsDraft((p) => ({ ...p, taglineEn: e.target.value }))
+                        }
+                        placeholder={DEFAULT_TAGLINE_EN}
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          );
-        })()}
+            );
+          })()}
 
-        {/* Legal Identity & Theme Color */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-200 dark:border-slate-700">
-          <div>
-            <label className="block font-bold mb-1">
-              {isAr ? "الاسم القانوني للمؤسسة (عربي)" : "Legal Name (AR)"}
-            </label>
-            <input
-              type="text"
-              value={cmsDraft.legalNameAr ?? ""}
-              disabled={readOnly || !canManageCms}
-              onChange={(e) => updateCmsDraft((p) => ({ ...p, legalNameAr: e.target.value }))}
-              placeholder={isAr ? "اسم المنشأة" : "Enterprise Name"}
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-            />
-          </div>
-          <div>
-            <label className="block font-bold mb-1">
-              {isAr ? "الاسم القانوني (English)" : "Legal Name (EN)"}
-            </label>
-            <input
-              type="text"
-              value={cmsDraft.legalNameEn ?? ""}
-              disabled={readOnly || !canManageCms}
-              onChange={(e) => updateCmsDraft((p) => ({ ...p, legalNameEn: e.target.value }))}
-              placeholder="Enterprise Legal Name"
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-            />
-          </div>
-          <div>
-            <label className="block font-bold mb-1">
-              {isAr ? "الرقم الضريبي (Tax ID)" : "Tax Number"}
-            </label>
-            <input
-              type="text"
-              value={cmsDraft.taxNumber ?? ""}
-              disabled={readOnly || !canManageCms}
-              onChange={(e) => updateCmsDraft((p) => ({ ...p, taxNumber: e.target.value }))}
-              placeholder={isAr ? "مثال: 300xxxxxxxxx" : "e.g. 300xxxxxxxxx"}
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono"
-            />
-          </div>
-          <div>
-            <label className="block font-bold mb-1">
-              {isAr ? "السجل التجاري (Commercial Reg)" : "Commercial Reg"}
-            </label>
-            <input
-              type="text"
-              value={cmsDraft.commercialReg ?? ""}
-              disabled={readOnly || !canManageCms}
-              onChange={(e) => updateCmsDraft((p) => ({ ...p, commercialReg: e.target.value }))}
-              placeholder="CR-0000"
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono"
-            />
-          </div>
-          <div>
-            <label className="block font-bold mb-1">
-              {isAr ? "البريد الإلكتروني الرسمي" : "Official Email"}
-            </label>
-            <input
-              type="email"
-              value={cmsDraft.email ?? ""}
-              disabled={readOnly || !canManageCms}
-              onChange={(e) => updateCmsDraft((p) => ({ ...p, email: e.target.value }))}
-              placeholder="finance@enterprise.com"
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-            />
-          </div>
-          <div>
-            <label className="block font-bold mb-1">
-              {isAr ? "العنوان الرسمي المسجل" : "Registered Address"}
-            </label>
-            <input
-              type="text"
-              value={cmsDraft.address ?? ""}
-              disabled={readOnly || !canManageCms}
-              onChange={(e) => updateCmsDraft((p) => ({ ...p, address: e.target.value }))}
-              placeholder={isAr ? "المدينة - الدولة" : "City - Country"}
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-            />
-          </div>
-          <div>
-            <label className="block font-bold mb-1">
-              {isAr ? "لون الهوية الرئيسي" : "Brand Accent Color"}
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                value={cmsDraft.brandColor || "#059669"}
-                disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, brandColor: e.target.value }))}
-                className="w-10 h-9 rounded-lg border border-slate-300 bg-transparent p-0.5 cursor-pointer"
-              />
+          {/* Legal Identity & Theme Color */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-200 dark:border-slate-700">
+            <div>
+              <label className="block font-bold mb-1">
+                {isAr ? "الاسم القانوني للمؤسسة (عربي)" : "Legal Name (AR)"}
+              </label>
               <input
                 type="text"
-                value={cmsDraft.brandColor || "#059669"}
+                value={cmsDraft.legalNameAr ?? ""}
                 disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, brandColor: e.target.value }))}
-                className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-2 font-mono"
+                onChange={(e) => updateCmsDraft((p) => ({ ...p, legalNameAr: e.target.value }))}
+                placeholder={isAr ? "اسم المنشأة" : "Enterprise Name"}
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
               />
             </div>
-          </div>
-          <div className="flex flex-col justify-end gap-2 pb-1">
-            <label className="inline-flex items-center gap-2 cursor-pointer font-bold">
-              <input
-                type="checkbox"
-                checked={cmsDraft.showPublicMetrics ?? true}
-                disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, showPublicMetrics: e.target.checked }))}
-                className="rounded border-slate-300 text-emerald-600 w-4 h-4"
-              />
-              <span>{isAr ? "عرض المؤشرات العامة للزوار" : "Show Public KPIs"}</span>
-            </label>
-            <label className="inline-flex items-center gap-2 cursor-pointer font-bold">
-              <input
-                type="checkbox"
-                checked={cmsDraft.showPublicVerify ?? true}
-                disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, showPublicVerify: e.target.checked }))}
-                className="rounded border-slate-300 text-emerald-600 w-4 h-4"
-              />
-              <span>{isAr ? "عرض بوابة التحقق والباركود" : "Show QR Verify Portal"}</span>
-            </label>
-          </div>
-        </div>
-
-        {/* Landing Page CMS Fields */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-slate-200 dark:border-slate-700">
-          <div className="space-y-3">
-            <h4 className="font-extrabold text-emerald-700 dark:text-emerald-400">
-              {isAr ? "المحتوى العربي للصفحة الرئيسية (AR CMS)" : "Arabic Landing CMS"}
-            </h4>
             <div>
-              <label className="block font-bold mb-1">{isAr ? "شارة الهيرو (عربي)" : "Hero Badge (AR)"}</label>
+              <label className="block font-bold mb-1">
+                {isAr ? "الاسم القانوني (English)" : "Legal Name (EN)"}
+              </label>
               <input
                 type="text"
-                value={cmsDraft.heroBadgeAr ?? ""}
+                value={cmsDraft.legalNameEn ?? ""}
                 disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, heroBadgeAr: e.target.value }))}
+                onChange={(e) => updateCmsDraft((p) => ({ ...p, legalNameEn: e.target.value }))}
+                placeholder="Enterprise Legal Name"
                 className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
               />
             </div>
             <div>
-              <label className="block font-bold mb-1">{isAr ? "العنوان الرئيسي (عربي)" : "Hero Title (AR)"}</label>
+              <label className="block font-bold mb-1">
+                {isAr ? "الرقم الضريبي (Tax ID)" : "Tax Number"}
+              </label>
               <input
                 type="text"
-                value={cmsDraft.heroTitleAr ?? ""}
+                value={cmsDraft.taxNumber ?? ""}
                 disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, heroTitleAr: e.target.value }))}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                onChange={(e) => updateCmsDraft((p) => ({ ...p, taxNumber: e.target.value }))}
+                placeholder={isAr ? "مثال: 300xxxxxxxxx" : "e.g. 300xxxxxxxxx"}
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono"
               />
             </div>
             <div>
-              <label className="block font-bold mb-1">{isAr ? "الوصف المختصر (عربي)" : "Hero Subtitle (AR)"}</label>
-              <textarea
-                rows={2}
-                value={cmsDraft.heroSubtitleAr ?? ""}
-                disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, heroSubtitleAr: e.target.value }))}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-              />
-            </div>
-            <div>
-              <label className="block font-bold mb-1">{isAr ? "عن المؤسسة والرسالة (عربي)" : "About / Mission (AR)"}</label>
-              <textarea
-                rows={2}
-                value={cmsDraft.aboutMissionAr ?? ""}
-                disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, aboutMissionAr: e.target.value }))}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-              />
-            </div>
-            <div>
-              <label className="block font-bold mb-1">{isAr ? "نص زر الدخول الرئيسي (عربي)" : "Primary CTA Text (AR)"}</label>
+              <label className="block font-bold mb-1">
+                {isAr ? "السجل التجاري (Commercial Reg)" : "Commercial Reg"}
+              </label>
               <input
                 type="text"
-                value={cmsDraft.ctaPrimaryTextAr ?? ""}
+                value={cmsDraft.commercialReg ?? ""}
                 disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, ctaPrimaryTextAr: e.target.value }))}
+                onChange={(e) => updateCmsDraft((p) => ({ ...p, commercialReg: e.target.value }))}
+                placeholder="CR-0000"
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono"
+              />
+            </div>
+            <div>
+              <label className="block font-bold mb-1">
+                {isAr ? "البريد الإلكتروني الرسمي" : "Official Email"}
+              </label>
+              <input
+                type="email"
+                value={cmsDraft.email ?? ""}
+                disabled={readOnly || !canManageCms}
+                onChange={(e) => updateCmsDraft((p) => ({ ...p, email: e.target.value }))}
+                placeholder="finance@enterprise.com"
                 className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
               />
+            </div>
+            <div>
+              <label className="block font-bold mb-1">
+                {isAr ? "العنوان الرسمي المسجل" : "Registered Address"}
+              </label>
+              <input
+                type="text"
+                value={cmsDraft.address ?? ""}
+                disabled={readOnly || !canManageCms}
+                onChange={(e) => updateCmsDraft((p) => ({ ...p, address: e.target.value }))}
+                placeholder={isAr ? "المدينة - الدولة" : "City - Country"}
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="block font-bold mb-1">
+                {isAr ? "لون الهوية الرئيسي" : "Brand Accent Color"}
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={cmsDraft.brandColor || "#059669"}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, brandColor: e.target.value }))}
+                  className="w-10 h-9 rounded-lg border border-slate-300 bg-transparent p-0.5 cursor-pointer"
+                />
+                <input
+                  type="text"
+                  value={cmsDraft.brandColor || "#059669"}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, brandColor: e.target.value }))}
+                  className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-2 font-mono"
+                />
+              </div>
+            </div>
+            <div className="flex flex-col justify-end gap-2 pb-1">
+              <label className="inline-flex items-center gap-2 cursor-pointer font-bold">
+                <input
+                  type="checkbox"
+                  checked={cmsDraft.showPublicMetrics ?? true}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, showPublicMetrics: e.target.checked }))}
+                  className="rounded border-slate-300 text-emerald-600 w-4 h-4"
+                />
+                <span>{isAr ? "عرض المؤشرات العامة للزوار" : "Show Public KPIs"}</span>
+              </label>
+              <label className="inline-flex items-center gap-2 cursor-pointer font-bold">
+                <input
+                  type="checkbox"
+                  checked={cmsDraft.showPublicVerify ?? true}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, showPublicVerify: e.target.checked }))}
+                  className="rounded border-slate-300 text-emerald-600 w-4 h-4"
+                />
+                <span>{isAr ? "عرض بوابة التحقق والباركود" : "Show QR Verify Portal"}</span>
+              </label>
             </div>
           </div>
 
-          <div className="space-y-3">
-            <h4 className="font-extrabold text-indigo-700 dark:text-indigo-400">
-              {isAr ? "المحتوى الإنجليزي والتواصل (EN & Contact CMS)" : "English & Contact CMS"}
-            </h4>
-            <div>
-              <label className="block font-bold mb-1">{isAr ? "شارة الهيرو (EN)" : "Hero Badge (EN)"}</label>
-              <input
-                type="text"
-                value={cmsDraft.heroBadgeEn ?? ""}
-                disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, heroBadgeEn: e.target.value }))}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-              />
+          {/* Landing Page CMS Fields */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-slate-200 dark:border-slate-700">
+            <div className="space-y-3">
+              <h4 className="font-extrabold text-emerald-700 dark:text-emerald-400">
+                {isAr ? "المحتوى العربي للصفحة الرئيسية (AR CMS)" : "Arabic Landing CMS"}
+              </h4>
+              <div>
+                <label className="block font-bold mb-1">{isAr ? "شارة الهيرو (عربي)" : "Hero Badge (AR)"}</label>
+                <input
+                  type="text"
+                  value={cmsDraft.heroBadgeAr ?? ""}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, heroBadgeAr: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="block font-bold mb-1">{isAr ? "العنوان الرئيسي (عربي)" : "Hero Title (AR)"}</label>
+                <input
+                  type="text"
+                  value={cmsDraft.heroTitleAr ?? ""}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, heroTitleAr: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="block font-bold mb-1">{isAr ? "الوصف المختصر (عربي)" : "Hero Subtitle (AR)"}</label>
+                <textarea
+                  rows={2}
+                  value={cmsDraft.heroSubtitleAr ?? ""}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, heroSubtitleAr: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="block font-bold mb-1">{isAr ? "عن المؤسسة والرسالة (عربي)" : "About / Mission (AR)"}</label>
+                <textarea
+                  rows={2}
+                  value={cmsDraft.aboutMissionAr ?? ""}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, aboutMissionAr: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="block font-bold mb-1">{isAr ? "نص زر الدخول الرئيسي (عربي)" : "Primary CTA Text (AR)"}</label>
+                <input
+                  type="text"
+                  value={cmsDraft.ctaPrimaryTextAr ?? ""}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, ctaPrimaryTextAr: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                />
+              </div>
             </div>
-            <div>
-              <label className="block font-bold mb-1">{isAr ? "العنوان الرئيسي (EN)" : "Hero Title (EN)"}</label>
-              <input
-                type="text"
-                value={cmsDraft.heroTitleEn ?? ""}
-                disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, heroTitleEn: e.target.value }))}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-              />
-            </div>
-            <div>
-              <label className="block font-bold mb-1">{isAr ? "الوصف المختصر (EN)" : "Hero Subtitle (EN)"}</label>
-              <textarea
-                rows={2}
-                value={cmsDraft.heroSubtitleEn ?? ""}
-                disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, heroSubtitleEn: e.target.value }))}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-              />
-            </div>
-            <div>
-              <label className="block font-bold mb-1">{isAr ? "عن المؤسسة والرسالة (EN)" : "About / Mission (EN)"}</label>
-              <textarea
-                rows={2}
-                value={cmsDraft.aboutMissionEn ?? ""}
-                disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, aboutMissionEn: e.target.value }))}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-              />
-            </div>
-            <div>
-              <label className="block font-bold mb-1">{isAr ? "نص زر الدخول الرئيسي (EN)" : "Primary CTA Text (EN)"}</label>
-              <input
-                type="text"
-                value={cmsDraft.ctaPrimaryTextEn ?? ""}
-                disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, ctaPrimaryTextEn: e.target.value }))}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-              />
-            </div>
-          </div>
-        </div>
 
-        {/* Public Contact Channels */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200 dark:border-slate-700">
-          <div>
-            <label className="block font-bold mb-1">{isAr ? "هاتف التواصل العام" : "Contact Phone"}</label>
-            <input
-              type="text"
-              value={cmsDraft.contactPhone ?? ""}
-              disabled={readOnly || !canManageCms}
-              onChange={(e) => updateCmsDraft((p) => ({ ...p, contactPhone: e.target.value }))}
-              placeholder="+967 1 000 000"
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-            />
+            <div className="space-y-3">
+              <h4 className="font-extrabold text-indigo-700 dark:text-indigo-400">
+                {isAr ? "المحتوى الإنجليزي والتواصل (EN & Contact CMS)" : "English & Contact CMS"}
+              </h4>
+              <div>
+                <label className="block font-bold mb-1">{isAr ? "شارة الهيرو (EN)" : "Hero Badge (EN)"}</label>
+                <input
+                  type="text"
+                  value={cmsDraft.heroBadgeEn ?? ""}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, heroBadgeEn: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="block font-bold mb-1">{isAr ? "العنوان الرئيسي (EN)" : "Hero Title (EN)"}</label>
+                <input
+                  type="text"
+                  value={cmsDraft.heroTitleEn ?? ""}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, heroTitleEn: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="block font-bold mb-1">{isAr ? "الوصف المختصر (EN)" : "Hero Subtitle (EN)"}</label>
+                <textarea
+                  rows={2}
+                  value={cmsDraft.heroSubtitleEn ?? ""}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, heroSubtitleEn: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="block font-bold mb-1">{isAr ? "عن المؤسسة والرسالة (EN)" : "About / Mission (EN)"}</label>
+                <textarea
+                  rows={2}
+                  value={cmsDraft.aboutMissionEn ?? ""}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, aboutMissionEn: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="block font-bold mb-1">{isAr ? "نص زر الدخول الرئيسي (EN)" : "Primary CTA Text (EN)"}</label>
+                <input
+                  type="text"
+                  value={cmsDraft.ctaPrimaryTextEn ?? ""}
+                  disabled={readOnly || !canManageCms}
+                  onChange={(e) => updateCmsDraft((p) => ({ ...p, ctaPrimaryTextEn: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                />
+              </div>
+            </div>
           </div>
-          <div>
-            <label className="block font-bold mb-1">{isAr ? "رقم واتساب التواصل" : "WhatsApp Number"}</label>
-            <input
-              type="text"
-              value={cmsDraft.contactWhatsApp ?? ""}
-              disabled={readOnly || !canManageCms}
-              onChange={(e) => updateCmsDraft((p) => ({ ...p, contactWhatsApp: e.target.value }))}
-              placeholder="967770000000"
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-            />
+
+          {/* Public Contact Channels */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200 dark:border-slate-700">
+            <div>
+              <label className="block font-bold mb-1">{isAr ? "هاتف التواصل العام" : "Contact Phone"}</label>
+              <input
+                type="text"
+                value={cmsDraft.contactPhone ?? ""}
+                disabled={readOnly || !canManageCms}
+                onChange={(e) => updateCmsDraft((p) => ({ ...p, contactPhone: e.target.value }))}
+                placeholder="+967 1 000 000"
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="block font-bold mb-1">{isAr ? "رقم واتساب التواصل" : "WhatsApp Number"}</label>
+              <input
+                type="text"
+                value={cmsDraft.contactWhatsApp ?? ""}
+                disabled={readOnly || !canManageCms}
+                onChange={(e) => updateCmsDraft((p) => ({ ...p, contactWhatsApp: e.target.value }))}
+                placeholder="967770000000"
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="block font-bold mb-1">{isAr ? "العنوان العام (المقر)" : "Public Office Address"}</label>
+              <input
+                type="text"
+                value={cmsDraft.contactAddress ?? ""}
+                disabled={readOnly || !canManageCms}
+                onChange={(e) => updateCmsDraft((p) => ({ ...p, contactAddress: e.target.value }))}
+                placeholder={isAr ? "المدينة - الدولة" : "City - Country"}
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+              />
+            </div>
           </div>
-          <div>
-            <label className="block font-bold mb-1">{isAr ? "العنوان العام (المقر)" : "Public Office Address"}</label>
-            <input
-              type="text"
-              value={cmsDraft.contactAddress ?? ""}
-              disabled={readOnly || !canManageCms}
-              onChange={(e) => updateCmsDraft((p) => ({ ...p, contactAddress: e.target.value }))}
-              placeholder={isAr ? "المدينة - الدولة" : "City - Country"}
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-            />
-          </div>
-        </div>
-      </form>
-    )}
+        </form>
+      )}
 
       {/* Dynamic RBAC Permissions SlideOverDrawer */}
       <SlideOverDrawer
@@ -3264,9 +3878,8 @@ export function SystemTab({
                   <div className="font-extrabold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
                     <span>{permDrawerUser.displayName || permDrawerUser.name}</span>
                     <span
-                      className={`text-[10px] px-2 py-0.5 rounded-lg font-bold ${
-                        ROLE_DEFINITIONS[normalizeRole(permDrawerUser.role)].badgeClass
-                      }`}
+                      className={`text-[10px] px-2 py-0.5 rounded-lg font-bold ${ROLE_DEFINITIONS[normalizeRole(permDrawerUser.role)].badgeClass
+                        }`}
                     >
                       {ROLE_DEFINITIONS[normalizeRole(permDrawerUser.role)].labelAr}
                     </span>
@@ -3291,11 +3904,10 @@ export function SystemTab({
                 <button
                   type="button"
                   onClick={() => setPermUseCustom(false)}
-                  className={`p-3 rounded-xl border text-right transition ${
-                    !permUseCustom
-                      ? "border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 ring-2 ring-emerald-500/20"
-                      : "border-slate-200 dark:border-slate-700 hover:border-slate-300 text-slate-600 dark:text-slate-400"
-                  }`}
+                  className={`p-3 rounded-xl border text-right transition ${!permUseCustom
+                    ? "border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 ring-2 ring-emerald-500/20"
+                    : "border-slate-200 dark:border-slate-700 hover:border-slate-300 text-slate-600 dark:text-slate-400"
+                    }`}
                 >
                   <div className="font-extrabold flex items-center gap-1.5 mb-1">
                     <Shield className="w-4 h-4 text-emerald-600" />
@@ -3309,11 +3921,10 @@ export function SystemTab({
                 <button
                   type="button"
                   onClick={() => setPermUseCustom(true)}
-                  className={`p-3 rounded-xl border text-right transition ${
-                    permUseCustom
-                      ? "border-purple-500 bg-purple-50/70 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200 ring-2 ring-purple-500/20"
-                      : "border-slate-200 dark:border-slate-700 hover:border-slate-300 text-slate-600 dark:text-slate-400"
-                  }`}
+                  className={`p-3 rounded-xl border text-right transition ${permUseCustom
+                    ? "border-purple-500 bg-purple-50/70 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200 ring-2 ring-purple-500/20"
+                    : "border-slate-200 dark:border-slate-700 hover:border-slate-300 text-slate-600 dark:text-slate-400"
+                    }`}
                 >
                   <div className="font-extrabold flex items-center gap-1.5 mb-1">
                     <Sliders className="w-4 h-4 text-purple-600" />
@@ -3355,11 +3966,10 @@ export function SystemTab({
                       return (
                         <label
                           key={domain.id}
-                          className={`p-2.5 rounded-xl border flex items-start gap-2.5 cursor-pointer transition ${
-                            isAllowed
-                              ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-950 dark:text-emerald-200"
-                              : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:border-slate-300"
-                          }`}
+                          className={`p-2.5 rounded-xl border flex items-start gap-2.5 cursor-pointer transition ${isAllowed
+                            ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-950 dark:text-emerald-200"
+                            : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:border-slate-300"
+                            }`}
                         >
                           <input
                             type="checkbox"
@@ -3396,11 +4006,10 @@ export function SystemTab({
                       return (
                         <label
                           key={perm.key}
-                          className={`p-2.5 rounded-xl border flex items-start gap-2.5 cursor-pointer transition ${
-                            isChecked
-                              ? "border-purple-500 bg-purple-50/50 dark:bg-purple-950/20 text-purple-950 dark:text-purple-200"
-                              : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:border-slate-300"
-                          }`}
+                          className={`p-2.5 rounded-xl border flex items-start gap-2.5 cursor-pointer transition ${isChecked
+                            ? "border-purple-500 bg-purple-50/50 dark:bg-purple-950/20 text-purple-950 dark:text-purple-200"
+                            : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:border-slate-300"
+                            }`}
                         >
                           <input
                             type="checkbox"
@@ -3451,11 +4060,10 @@ export function SystemTab({
                   <button
                     type="button"
                     onClick={() => setPermAssignedProjects([])}
-                    className={`px-2 py-0.5 rounded font-bold transition ${
-                      permAssignedProjects.length === 0
-                        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
-                        : "text-slate-500 hover:underline"
-                    }`}
+                    className={`px-2 py-0.5 rounded font-bold transition ${permAssignedProjects.length === 0
+                      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
+                      : "text-slate-500 hover:underline"
+                      }`}
                   >
                     جميع المشاريع (غير مقيد)
                   </button>
@@ -3478,11 +4086,10 @@ export function SystemTab({
                     return (
                       <label
                         key={p.id}
-                        className={`p-2 rounded-lg border text-xs font-semibold flex items-center gap-2 cursor-pointer transition ${
-                          checked
-                            ? "border-emerald-500 bg-emerald-50/60 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200"
-                            : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-300"
-                        }`}
+                        className={`p-2 rounded-lg border text-xs font-semibold flex items-center gap-2 cursor-pointer transition ${checked
+                          ? "border-emerald-500 bg-emerald-50/60 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200"
+                          : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-300"
+                          }`}
                       >
                         <input
                           type="checkbox"
@@ -3570,140 +4177,140 @@ export function SystemTab({
               className="relative z-[80] card-surface rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-700 space-y-4 text-xs"
               onClick={(e) => e.stopPropagation()}
             >
-            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 flex items-center justify-center">
-                  <KeyRound className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-sm text-slate-900 dark:text-slate-100">
-                    إعادة تعيين كلمة المرور
-                  </h3>
-                  <p className="text-[11px] text-slate-500">
-                    تعيين كلمة مرور جديدة للمستخدم من قبل الإدارة
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setResetModalUser(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Target User Info */}
-            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-center gap-3">
-              <SvgAvatar
-                char={resetModalUser.avatarChar}
-                avatarUrl={resetModalUser.avatarUrl}
-                color={resetModalUser.avatarColor}
-                size={36}
-                alt={resetModalUser.displayName || resetModalUser.name}
-              />
-              <div>
-                <div className="font-bold text-slate-900 dark:text-slate-100">
-                  {resetModalUser.displayName || resetModalUser.name}
-                </div>
-                <div className="text-[11px] text-slate-500 font-mono">
-                  {resetModalUser.email} • {ROLE_DEFINITIONS[normalizeRole(resetModalUser.role)].labelAr}
-                </div>
-              </div>
-            </div>
-
-            <form onSubmit={handleExecutePasswordReset} className="space-y-4">
-              {resetErrorMsg && (
-                <div
-                  role="alert"
-                  className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-bold text-xs flex items-start gap-2"
-                >
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>{resetErrorMsg}</span>
-                </div>
-              )}
-              <div>
-                <label className="block font-extrabold text-xs mb-1.5 text-slate-700 dark:text-slate-300">
-                  كلمة المرور الجديدة (New Password):
-                </label>
+              <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-3">
                 <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={resetNewPass}
-                    onChange={(e) => {
-                      setResetNewPass(e.target.value);
-                      setResetErrorMsg(null);
-                    }}
-                    required
-                    placeholder="أدخل كلمة مرور قوية..."
-                    className="flex-1 rounded-xl border border-slate-300 dark:border-slate-600 bg-transparent px-3 py-2 font-mono text-xs font-bold"
-                  />
-                  <button
-                    type="button"
-                    onClick={copyPassword}
-                    title="نسخ إلى الحافظة"
-                    className="px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 font-bold inline-flex items-center gap-1 transition"
-                  >
-                    {resetCopied ? (
-                      <Check className="w-4 h-4 text-emerald-600" />
-                    ) : (
-                      <Copy className="w-4 h-4 text-slate-500" />
-                    )}
-                    <span>{resetCopied ? "تم النسخ" : "نسخ"}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setResetNewPass(generateRandomPass())}
-                    title="توليد كلمة مرور عشوائية"
-                    className="px-2.5 py-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 font-bold inline-flex items-center gap-1 transition"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    <span>توليد</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Force Password Change Checkbox */}
-              <label className="flex items-start gap-2.5 p-3 rounded-xl border border-amber-200 dark:border-amber-800/40 bg-amber-50/60 dark:bg-amber-950/20 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={resetMustChange}
-                  onChange={(e) => setResetMustChange(e.target.checked)}
-                  className="rounded border-amber-400 text-amber-600 w-4 h-4 mt-0.5"
-                />
-                <div>
-                  <div className="font-extrabold text-xs text-amber-900 dark:text-amber-200">
-                    إلزام المستخدم بتغيير كلمة المرور فور تسجيل الدخول القادم
+                  <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 flex items-center justify-center">
+                    <KeyRound className="w-4 h-4" />
                   </div>
-                  <div className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5">
-                    يُنصح بإبقائها مفعلة لتأكيد خصوصية الحساب عند تسليم كلمة المرور المؤقتة
+                  <div>
+                    <h3 className="font-extrabold text-sm text-slate-900 dark:text-slate-100">
+                      إعادة تعيين كلمة المرور
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      تعيين كلمة مرور جديدة للمستخدم من قبل الإدارة
+                    </p>
                   </div>
                 </div>
-              </label>
-
-              {/* Modal Actions */}
-              <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setResetModalUser(null)}
-                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
                 >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  disabled={resettingPass || !resetNewPass.trim()}
-                  className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold shadow-sm disabled:opacity-50 inline-flex items-center gap-2"
-                >
-                  {resettingPass && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                  <span>{resettingPass ? "جاري التعيين..." : "تأكيد التعيين"}</span>
+                  <X className="w-4 h-4" />
                 </button>
               </div>
-            </form>
-          </div>
-        </div>,
-        document.body
-      )}
+
+              {/* Target User Info */}
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-center gap-3">
+                <SvgAvatar
+                  char={resetModalUser.avatarChar}
+                  avatarUrl={resetModalUser.avatarUrl}
+                  color={resetModalUser.avatarColor}
+                  size={36}
+                  alt={resetModalUser.displayName || resetModalUser.name}
+                />
+                <div>
+                  <div className="font-bold text-slate-900 dark:text-slate-100">
+                    {resetModalUser.displayName || resetModalUser.name}
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-mono">
+                    {resetModalUser.email} • {ROLE_DEFINITIONS[normalizeRole(resetModalUser.role)].labelAr}
+                  </div>
+                </div>
+              </div>
+
+              <form onSubmit={handleExecutePasswordReset} className="space-y-4">
+                {resetErrorMsg && (
+                  <div
+                    role="alert"
+                    className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-bold text-xs flex items-start gap-2"
+                  >
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{resetErrorMsg}</span>
+                  </div>
+                )}
+                <div>
+                  <label className="block font-extrabold text-xs mb-1.5 text-slate-700 dark:text-slate-300">
+                    كلمة المرور الجديدة (New Password):
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={resetNewPass}
+                      onChange={(e) => {
+                        setResetNewPass(e.target.value);
+                        setResetErrorMsg(null);
+                      }}
+                      required
+                      placeholder="أدخل كلمة مرور قوية..."
+                      className="flex-1 rounded-xl border border-slate-300 dark:border-slate-600 bg-transparent px-3 py-2 font-mono text-xs font-bold"
+                    />
+                    <button
+                      type="button"
+                      onClick={copyPassword}
+                      title="نسخ إلى الحافظة"
+                      className="px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 font-bold inline-flex items-center gap-1 transition"
+                    >
+                      {resetCopied ? (
+                        <Check className="w-4 h-4 text-emerald-600" />
+                      ) : (
+                        <Copy className="w-4 h-4 text-slate-500" />
+                      )}
+                      <span>{resetCopied ? "تم النسخ" : "نسخ"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setResetNewPass(generateRandomPass())}
+                      title="توليد كلمة مرور عشوائية"
+                      className="px-2.5 py-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 font-bold inline-flex items-center gap-1 transition"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      <span>توليد</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Force Password Change Checkbox */}
+                <label className="flex items-start gap-2.5 p-3 rounded-xl border border-amber-200 dark:border-amber-800/40 bg-amber-50/60 dark:bg-amber-950/20 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={resetMustChange}
+                    onChange={(e) => setResetMustChange(e.target.checked)}
+                    className="rounded border-amber-400 text-amber-600 w-4 h-4 mt-0.5"
+                  />
+                  <div>
+                    <div className="font-extrabold text-xs text-amber-900 dark:text-amber-200">
+                      إلزام المستخدم بتغيير كلمة المرور فور تسجيل الدخول القادم
+                    </div>
+                    <div className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5">
+                      يُنصح بإبقائها مفعلة لتأكيد خصوصية الحساب عند تسليم كلمة المرور المؤقتة
+                    </div>
+                  </div>
+                </label>
+
+                {/* Modal Actions */}
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setResetModalUser(null)}
+                    className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={resettingPass || !resetNewPass.trim()}
+                    className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold shadow-sm disabled:opacity-50 inline-flex items-center gap-2"
+                  >
+                    {resettingPass && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                    <span>{resettingPass ? "جاري التعيين..." : "تأكيد التعيين"}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
     </section>
   );
 }

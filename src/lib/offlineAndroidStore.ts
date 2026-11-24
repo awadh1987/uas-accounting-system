@@ -557,9 +557,9 @@ function extractActorFromReq(body: Record<string, unknown>, init?: RequestInit) 
   const userRole = String(actorObj.userRole || body.userRole || headers.get("x-uas-role") || "SUPER_ADMIN");
   const userDisplay = String(
     actorObj.userDisplay ||
-      body.userDisplay ||
-      safeDecodeHeader(headers.get("x-uas-user-display")) ||
-      "مدير النظام العام (SUPER_ADMIN)"
+    body.userDisplay ||
+    safeDecodeHeader(headers.get("x-uas-user-display")) ||
+    "مدير النظام العام (SUPER_ADMIN)"
   );
   return { userId, userRole, userDisplay };
 }
@@ -1141,7 +1141,7 @@ function handleOfflineScopedReset(
   if (s) {
     try {
       s.setItem(backupKey, JSON.stringify(state));
-    } catch {}
+    } catch { }
   }
 
   // Purge sync queue entries matching the reset scope to prevent sync loops
@@ -1268,12 +1268,12 @@ function handleOfflineScopedReset(
       coa = (Array.isArray(state.accounts) && state.accounts.length > 0
         ? (state.accounts as unknown as OfflineCoaAccountResetItem[])
         : [
-            { code: "1", nameAr: "الأصول", nameEn: "Assets", level: 1, type: "ASSET", isPosting: false },
-            { code: "2", nameAr: "الخصوم", nameEn: "Liabilities", level: 1, type: "LIABILITY", isPosting: false },
-            { code: "3", nameAr: "حقوق الملكية", nameEn: "Equity", level: 1, type: "EQUITY", isPosting: false },
-            { code: "4", nameAr: "الإيرادات", nameEn: "Revenue", level: 1, type: "REVENUE", isPosting: false },
-            { code: "5", nameAr: "المصروفات", nameEn: "Expenses", level: 1, type: "EXPENSE", isPosting: false },
-          ]);
+          { code: "1", nameAr: "الأصول", nameEn: "Assets", level: 1, type: "ASSET", isPosting: false },
+          { code: "2", nameAr: "الخصوم", nameEn: "Liabilities", level: 1, type: "LIABILITY", isPosting: false },
+          { code: "3", nameAr: "حقوق الملكية", nameEn: "Equity", level: 1, type: "EQUITY", isPosting: false },
+          { code: "4", nameAr: "الإيرادات", nameEn: "Revenue", level: 1, type: "REVENUE", isPosting: false },
+          { code: "5", nameAr: "المصروفات", nameEn: "Expenses", level: 1, type: "EXPENSE", isPosting: false },
+        ]);
     }
     if (coaMode === "blank_coa") {
       coa = coa.filter((a: OfflineCoaAccountResetItem) => ["1", "2", "3", "4", "5"].includes(a.code));
@@ -1292,7 +1292,7 @@ function handleOfflineScopedReset(
   if (s) {
     try {
       s.setItem("uas_offline_sync_queue", JSON.stringify(syncQueue));
-    } catch {}
+    } catch { }
   }
 
   saveOfflineAndroidState(state, s);
@@ -1365,8 +1365,8 @@ async function handleOfflineAndroidApiRequestCore(
       const scope = (rawUrl.includes("scope=factory")
         ? "factory"
         : rawUrl.includes("scope=unit")
-        ? "unit"
-        : "section") as string;
+          ? "unit"
+          : "section") as string;
       let expectedPhrase = "RESET_SECTION";
       if (scope === "unit") expectedPhrase = "RESET_UNIT";
       else if (scope === "factory") expectedPhrase = "FACTORY_RESET";
@@ -2835,11 +2835,11 @@ async function handleOfflineAndroidApiRequestCore(
       const rowAmt = Number(row.credit || row.debit) || 0;
       let match = row.referenceId
         ? dispatches.find(
-            (d) =>
-              d.externalReferenceId &&
-              String(d.externalReferenceId).toLowerCase() === String(row.referenceId).toLowerCase() &&
-              !matchedDispatchIds.has(d.id)
-          )
+          (d) =>
+            d.externalReferenceId &&
+            String(d.externalReferenceId).toLowerCase() === String(row.referenceId).toLowerCase() &&
+            !matchedDispatchIds.has(d.id)
+        )
         : null;
       if (match) {
         matchedDispatchIds.add(match.id);
@@ -3359,11 +3359,78 @@ async function handleOfflineAndroidApiRequestCore(
     };
 
     if (method === "GET") {
-      return jsonResponse({ success: true, tenantSlug, memories: readMem(), offline: true }, 200);
+      const all = readMem();
+      const visible = all.filter((e) => !e.topicKey.toLowerCase().startsWith("pref:dialect_learning_enabled"));
+      const cfg = all.find((e) => e.topicKey.toLowerCase() === "pref:dialect_learning_enabled");
+      const dialectLearningEnabled = cfg ? !/OFF|DISABLED|FALSE|0$/i.test(cfg.content.trim()) : true;
+      const learnedDialectCount = visible.filter(
+        (e) => e.category === "dialect_preference" || e.topicKey.toLowerCase().startsWith("dialect:")
+      ).length;
+      return jsonResponse(
+        { success: true, tenantSlug, dialectLearningEnabled, learnedDialectCount, memories: visible, offline: true },
+        200
+      );
     }
 
     const action = String(body.action || "upsert").toLowerCase();
     let current = readMem();
+    if (action === "set_dialect_learning") {
+      const enabled = body.enabled !== false;
+      const up = applyMemoryUpsert(current, {
+        tenantSlug,
+        scope: "user",
+        userId: typeof body.userId === "string" ? body.userId : undefined,
+        category: "dialect_preference",
+        topicKey: "pref:dialect_learning_enabled",
+        content: enabled ? "DIALECT_LEARNING_ENABLED" : "DIALECT_LEARNING_DISABLED",
+        confidence: 1,
+        active: true,
+      });
+      writeMem(up.nextList);
+      const visible = up.nextList.filter(
+        (e) => !e.topicKey.toLowerCase().startsWith("pref:dialect_learning_enabled")
+      );
+      return jsonResponse(
+        {
+          success: true,
+          tenantSlug,
+          dialectLearningEnabled: enabled,
+          learnedDialectCount: visible.filter(
+            (e) => e.category === "dialect_preference" || e.topicKey.toLowerCase().startsWith("dialect:")
+          ).length,
+          memories: visible,
+          offline: true,
+        },
+        200
+      );
+    }
+    if (action === "reset_dialect") {
+      let removedCount = 0;
+      const next = current.filter((e) => {
+        const isDialectTerm =
+          (e.category === "dialect_preference" ||
+            e.topicKey.toLowerCase().startsWith("dialect:")) &&
+          e.topicKey.toLowerCase() !== "pref:dialect_learning_enabled";
+        if (!isDialectTerm) return true;
+        removedCount++;
+        return false;
+      });
+      writeMem(next);
+      const visible = next.filter(
+        (e) => !e.topicKey.toLowerCase().startsWith("pref:dialect_learning_enabled")
+      );
+      return jsonResponse(
+        {
+          success: true,
+          tenantSlug,
+          removedCount,
+          learnedDialectCount: 0,
+          memories: visible,
+          offline: true,
+        },
+        200
+      );
+    }
     if (action === "sync" && Array.isArray(body.entries)) {
       for (const rawEntry of body.entries as Array<Partial<CopilotMemoryEntry>>) {
         const res = applyMemoryUpsert(current, {
@@ -3399,14 +3466,14 @@ async function handleOfflineAndroidApiRequestCore(
       current = current.map((m) =>
         m.id === id
           ? {
-              ...m,
-              ...(body.active !== undefined ? { active: Boolean(body.active) } : {}),
-              ...(body.pinned !== undefined ? { pinned: Boolean(body.pinned) } : {}),
-              ...(typeof body.content === "string" && body.content.trim()
-                ? { content: body.content.trim() }
-                : {}),
-              updatedAt: new Date().toISOString(),
-            }
+            ...m,
+            ...(body.active !== undefined ? { active: Boolean(body.active) } : {}),
+            ...(body.pinned !== undefined ? { pinned: Boolean(body.pinned) } : {}),
+            ...(typeof body.content === "string" && body.content.trim()
+              ? { content: body.content.trim() }
+              : {}),
+            updatedAt: new Date().toISOString(),
+          }
           : m
       );
       writeMem(current);

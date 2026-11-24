@@ -569,6 +569,12 @@ async function ensureAdditiveColumns(client: {
       ],
     },
     {
+      table: "TenantDevice",
+      columns: [
+        { name: "activationKey", ddl: 'ALTER TABLE "TenantDevice" ADD COLUMN "activationKey" TEXT' },
+      ],
+    },
+    {
       table: "User",
       columns: [
         { name: "displayName", ddl: 'ALTER TABLE "User" ADD COLUMN "displayName" TEXT' },

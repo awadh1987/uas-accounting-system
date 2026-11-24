@@ -8,6 +8,7 @@
  */
 
 import {
+  DIALECT_TERM_TOPIC_PREFIX,
   isSensitiveOrDisallowedMemory,
   normalizeMemoryTenantSlug,
   normalizeTopicKey,
@@ -23,6 +24,8 @@ export interface DeterministicLearnContext {
   userId?: string;
   activeTab?: string;
   editedDraftContext?: string;
+  dialect?: "yemeni" | "msa";
+  dialectLearningEnabled?: boolean;
 }
 
 export interface ForgetIntentResult {
@@ -329,6 +332,34 @@ export function extractDeterministicMemories(
       topicKey: buildTopicKey("pref", prefMatch[1]),
       confidence: 0.88,
     });
+  }
+
+  // 6. Yemeni everyday dialect phrasing & regional terminology learning (when enabled)
+  if (ctx.dialectLearningEnabled !== false && ctx.dialect !== "msa") {
+    const dialectPrefMatch = rawPrompt.match(
+      /((?:خاطبني|كلمني|تكلم\s+معي|اكتب\s+لي|قول\s+لي|استعمل\s+(?:كلمة|عبارة|لفظ))\s+[^\n.!؟]{4,90})/i
+    );
+    if (dialectPrefMatch?.[1]) {
+      pushCandidate(`يفضل المستخدم الأسلوب: ${dialectPrefMatch[1]}`, {
+        category: "dialect_preference",
+        scope: "user",
+        topicKey: buildTopicKey(DIALECT_TERM_TOPIC_PREFIX.replace(/:$/, ""), dialectPrefMatch[1].slice(0, 48)),
+        confidence: 0.9,
+      });
+    } else {
+      const yemeniIdiomMatch = rawPrompt.match(
+        /\b(العلاقي|العلاقية|القطفة|البزغة|الحواصل|الجعالة|المخارج|الغل[ةه]|زبط\s+لي|شيك\s+على\s+(?:الصندوق|الخزينة|الباقي)|الباقي\s+عند\s+العملاء)\b/i
+      );
+      if (yemeniIdiomMatch?.[1]) {
+        const idiom = yemeniIdiomMatch[1].trim();
+        pushCandidate(`يستخدم المستخدم مصطلحات يمنية يومية مثل: "${idiom}"`, {
+          category: "dialect_preference",
+          scope: "user",
+          topicKey: `${DIALECT_TERM_TOPIC_PREFIX}${normalizeTopicKey(idiom, idiom)}`,
+          confidence: 0.82,
+        });
+      }
+    }
   }
 
   return candidates.slice(0, 3);

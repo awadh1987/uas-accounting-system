@@ -1473,7 +1473,8 @@ model TenantDevice {
   id                String    @id @default(cuid())
   deviceId          String    @unique
   tenantSlug        String    @default("default")
-  platform          String    // web | windows | android
+  activationKey     String?
+  platform          String    // web | windows | android | ios
   appVersion        String    @default("1.0.0")
   osVersion         String    @default("")
   deviceLabel       String    @default("")

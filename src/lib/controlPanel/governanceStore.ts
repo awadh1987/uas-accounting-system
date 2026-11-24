@@ -39,6 +39,15 @@ export interface UserSessionRevocationRecord {
   updatedBy: string;
 }
 
+export interface DeviceSessionRevocationRecord {
+  tenantId: string;
+  deviceId: string;
+  revokedBeforeMs: number;
+  reason?: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
 export interface ControlPanelAuditEntry {
   id: string;
   timestamp: string;
@@ -57,6 +66,7 @@ interface GovernanceStateFile {
   tenants: Record<string, TenantGovernanceRecord>;
   rotatedKeys: RotatedKeyRecord[];
   userSessionRevocations: Record<string, UserSessionRevocationRecord>;
+  deviceSessionRevocations: Record<string, DeviceSessionRevocationRecord>;
   auditLogs: ControlPanelAuditEntry[];
 }
 
@@ -72,6 +82,7 @@ function createEmptyState(): GovernanceStateFile {
     tenants: {},
     rotatedKeys: [],
     userSessionRevocations: {},
+    deviceSessionRevocations: {},
     auditLogs: [],
   };
 }
@@ -98,6 +109,10 @@ function loadState(): GovernanceStateFile {
         userSessionRevocations:
           parsed.userSessionRevocations && typeof parsed.userSessionRevocations === "object"
             ? parsed.userSessionRevocations
+            : {},
+        deviceSessionRevocations:
+          parsed.deviceSessionRevocations && typeof parsed.deviceSessionRevocations === "object"
+            ? parsed.deviceSessionRevocations
             : {},
         auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [],
       };
@@ -427,6 +442,57 @@ export function clearUserSignInBlock(
   state.userSessionRevocations[key] = next;
   saveState(state);
   return next;
+}
+
+function makeDeviceRevocationKey(tenantId: string, deviceId: string): string {
+  return `${normalizeTenantId(tenantId)}::${String(deviceId || "").trim().toLowerCase()}`;
+}
+
+export function recordDeviceSessionRevocation(
+  tenantId: string,
+  deviceId: string,
+  opts: {
+    revokedBeforeMs?: number;
+    reason?: string;
+    updatedBy: string;
+  }
+): DeviceSessionRevocationRecord {
+  const state = loadState();
+  const key = makeDeviceRevocationKey(tenantId, deviceId);
+  const next: DeviceSessionRevocationRecord = {
+    tenantId: normalizeTenantId(tenantId),
+    deviceId: String(deviceId).trim(),
+    revokedBeforeMs: opts.revokedBeforeMs ?? Date.now(),
+    reason: opts.reason,
+    updatedAt: new Date().toISOString(),
+    updatedBy: opts.updatedBy,
+  };
+  state.deviceSessionRevocations[key] = next;
+  saveState(state);
+  return next;
+}
+
+export function isDeviceSessionRevoked(
+  tenantId: string,
+  deviceId: string,
+  tokenIatMs?: number | null
+): boolean {
+  const state = loadState();
+  const rec = state.deviceSessionRevocations?.[makeDeviceRevocationKey(tenantId, deviceId)];
+  if (!rec) return false;
+  if (typeof tokenIatMs === "number" && tokenIatMs <= rec.revokedBeforeMs) {
+    return true;
+  }
+  return false;
+}
+
+export function clearDeviceSessionRevocation(tenantId: string, deviceId: string): void {
+  const state = loadState();
+  const key = makeDeviceRevocationKey(tenantId, deviceId);
+  if (state.deviceSessionRevocations && state.deviceSessionRevocations[key]) {
+    delete state.deviceSessionRevocations[key];
+    saveState(state);
+  }
 }
 
 export function appendControlPanelAudit(

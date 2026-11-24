@@ -16,6 +16,7 @@ import {
   splitTextForSequentialSpeech,
   type CopilotDialectMode,
 } from "@/lib/ai/yemeniLocalization";
+import { sanitizeSpeechText } from "@/lib/speechSanitizer";
 
 export const dynamic = "force-dynamic";
 
@@ -78,7 +79,17 @@ export async function synthesizeGeminiSpeechAudio(params: {
   dialect?: CopilotDialectMode;
   voiceName?: string;
   geminiApiKey?: string;
+  speakReasoning?: boolean;
 }): Promise<{ ok: true; wavBuffer: Buffer; model: string } | { ok: false; reason: string }> {
+  const speakReasoning = params.speakReasoning === true;
+  const sanitized = sanitizeSpeechText(params.text, {
+    lang: params.lang,
+    speakReasoning,
+  });
+  if (!sanitized) {
+    return { ok: false, reason: "EMPTY_SPOKEN_TEXT" };
+  }
+
   const apiKey = params.geminiApiKey ?? process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
     return { ok: false, reason: "GEMINI_API_KEY_UNCONFIGURED" };
@@ -87,14 +98,14 @@ export async function synthesizeGeminiSpeechAudio(params: {
   const lang: "ar" | "en" =
     params.lang === "en" || params.lang === "ar"
       ? params.lang
-      : /[\u0600-\u06FF]/.test(params.text)
+      : /[\u0600-\u06FF]/.test(sanitized)
       ? "ar"
       : "en";
   const dialect: CopilotDialectMode = params.dialect === "msa" ? "msa" : "yemeni";
-  const chunks = splitTextForSequentialSpeech(params.text, {
+  const chunks = splitTextForSequentialSpeech(sanitized, {
     lang,
     dialect,
-    maxChunkChars: 650,
+    maxChunkChars: 900,
   });
   if (chunks.length === 0) {
     return { ok: false, reason: "EMPTY_SPOKEN_TEXT" };
@@ -180,19 +191,28 @@ export async function synthesizeGeminiSpeechAudio(params: {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-    const text = String(body.text ?? "").trim();
-    if (!text) {
-      return NextResponse.json({ error: "Text is required", fallback: true }, { status: 400 });
-    }
+    const rawSource = String(body.visibleReply ?? body.text ?? "").trim();
     const lang = body.lang === "en" || body.lang === "ar" ? body.lang : undefined;
+    const speakReasoning = body.speakReasoning === true;
+    const sanitizedText = sanitizeSpeechText(rawSource, {
+      lang,
+      speakReasoning,
+    });
+    if (!sanitizedText) {
+      return NextResponse.json(
+        { error: "Text is required", fallback: true, reason: "EMPTY_SPOKEN_TEXT" },
+        { status: 400 }
+      );
+    }
     const dialect = body.dialect === "msa" ? "msa" : "yemeni";
     const voiceName = typeof body.voiceName === "string" ? body.voiceName : undefined;
 
     const result = await synthesizeGeminiSpeechAudio({
-      text,
+      text: sanitizedText,
       lang,
       dialect,
       voiceName,
+      speakReasoning,
     });
 
     if (!result.ok) {

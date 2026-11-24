@@ -248,8 +248,15 @@ function buildSystemGroundingPrompt(
   };
 
   const dialect: CopilotDialectMode = wCtx.dialect === "msa" ? "msa" : "yemeni";
-  const dialectRules = buildGeminiDialectInstruction(lang, dialect);
   const memories = (ctx.memories ?? []).filter((m) => m.active);
+  const learnedDialectTerms = memories
+    .filter(
+      (m) =>
+        m.category === "dialect_preference" ||
+        String(m.topicKey || "").toLowerCase().startsWith("dialect:")
+    )
+    .map((m) => m.content);
+  const dialectRules = buildGeminiDialectInstruction(lang, dialect, learnedDialectTerms);
   const memorySection =
     memories.length > 0
       ? [
