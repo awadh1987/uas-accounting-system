@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { AlertTriangle, Pencil, Plus } from "lucide-react";
+import { AlertTriangle, Pencil, Plus, RefreshCw } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { SelectWithOther } from "@/components/SelectWithOther";
@@ -9,6 +9,7 @@ import { MultiUnitInventoryPanel } from "@/components/MultiUnitInventoryPanel";
 import { fmtNum } from "@/lib/formulas";
 import { reconcileHarvestInventory, type ReconciliationStatus } from "@/lib/harvestReconciliation";
 import type { UasInventoryBatch, UasProject, UasSaleTransaction } from "@/types/uas";
+import { formatRefreshTimestamp } from "@/lib/uiFormatters";
 
 type InventoryPayload = {
   projectId: string;
@@ -28,6 +29,8 @@ interface InventoryTabProps {
   canEditRecords?: boolean;
   onAddInventoryBatch: (payload: InventoryPayload) => Promise<boolean>;
   onEditInventoryBatch?: (payload: InventoryPayload & { id: string }) => Promise<boolean>;
+  onRefreshState?: () => Promise<void>;
+  onToast?: (msg: string) => void;
 }
 
 export function InventoryTab({
@@ -38,6 +41,8 @@ export function InventoryTab({
   canEditRecords = false,
   onAddInventoryBatch,
   onEditInventoryBatch,
+  onRefreshState,
+  onToast,
 }: InventoryTabProps) {
   const [projectId, setProjectId] = useState(projects[0]?.id || "");
   const activeProj = projects.find((p) => p.id === projectId) || projects[0];
@@ -49,6 +54,22 @@ export function InventoryTab({
   const [notes, setNotes] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState("");
+
+  const handleRefreshHarvest = async () => {
+    if (!onRefreshState) return;
+    setRefreshing(true);
+    try {
+      await onRefreshState();
+      setLastRefreshedAt(new Date().toISOString());
+      onToast?.("✅ تم تحديث مطابقة مخزون العلاقيات بنجاح");
+    } catch {
+      onToast?.("تعذر تحديث بيانات المخزون");
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const reconciliation = useMemo(
     () => reconcileHarvestInventory(inventoryBatches, sales),
@@ -140,7 +161,7 @@ export function InventoryTab({
   return (
     <section className="space-y-6">
       {/* Phase 3: Item Master Data & Multi-Unit Inventory Panel (with universal Other/Custom support) */}
-      <MultiUnitInventoryPanel readOnly={readOnly} />
+      <MultiUnitInventoryPanel readOnly={readOnly} onRefreshState={onRefreshState} onToast={onToast} />
 
       <SlideOverDrawer
         open={drawerOpen && !readOnly}
@@ -265,41 +286,57 @@ export function InventoryTab({
             <p className="text-xs text-slate-500">
               رقابة دقيقة على كميات العلاقيات لكل قطفة ولكل درجة لمنع العجز أو الفاقد غير المبرر
             </p>
+            {lastRefreshedAt && (
+              <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold mt-0.5">
+                {formatRefreshTimestamp(lastRefreshedAt)}
+              </div>
+            )}
           </div>
-          {!readOnly && (
-            <button
-              type="button"
-              onClick={openCreateDrawer}
-              className="px-3.5 py-1.5 rounded-xl accent-bg text-xs font-extrabold inline-flex items-center gap-1.5 shadow-sm no-print"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>تسجيل دفعة حصاد</span>
-            </button>
-          )}
+          <div className="flex flex-wrap items-center gap-2 no-print">
+            {onRefreshState && (
+              <button
+                type="button"
+                onClick={() => void handleRefreshHarvest()}
+                disabled={refreshing}
+                className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+                <span>تحديث</span>
+              </button>
+            )}
+            {!readOnly && (
+              <button
+                type="button"
+                onClick={openCreateDrawer}
+                className="px-3.5 py-1.5 rounded-xl accent-bg text-xs font-extrabold inline-flex items-center gap-1.5 shadow-sm"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>تسجيل دفعة حصاد</span>
+              </button>
+            )}
+          </div>
         </div>
 
-        {inventoryBatches.length > 0 && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
-            <div className="rounded-xl border border-slate-200 dark:border-slate-700/80 p-3 bg-slate-50/70 dark:bg-slate-900/40">
-              <div className="text-[11px] text-slate-500 font-semibold">إجمالي المقطوف</div>
-              <div className="text-sm font-black tabular-nums mt-0.5">{fmtNum(reconciliation.summary.totalHarvested)} علاقية</div>
-            </div>
-            <div className="rounded-xl border border-emerald-200 dark:border-emerald-800/60 p-3 bg-emerald-50/50 dark:bg-emerald-950/20">
-              <div className="text-[11px] text-emerald-700 dark:text-emerald-300 font-semibold">المباع للعملاء</div>
-              <div className="text-sm font-black text-emerald-700 dark:text-emerald-300 tabular-nums mt-0.5">{fmtNum(reconciliation.summary.totalMatchedSold)} علاقية</div>
-            </div>
-            <div className="rounded-xl border border-amber-200 dark:border-amber-800/60 p-3 bg-amber-50/50 dark:bg-amber-950/20">
-              <div className="text-[11px] text-amber-700 dark:text-amber-300 font-semibold">الفاقد / التالف</div>
-              <div className="text-sm font-black text-amber-700 dark:text-amber-300 tabular-nums mt-0.5">{fmtNum(reconciliation.summary.totalShrinkage)} علاقية</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 dark:border-slate-700/80 p-3 bg-slate-50/70 dark:bg-slate-900/40">
-              <div className="text-[11px] text-slate-500 font-semibold">الصافي المتبقي</div>
-              <div className={`text-sm font-black tabular-nums mt-0.5 ${reconciliation.summary.totalRemaining < 0 ? "text-rose-600" : ""}`}>
-                {fmtNum(reconciliation.summary.totalRemaining)} علاقية
-              </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700/80 p-3 bg-slate-50/70 dark:bg-slate-900/40">
+            <div className="text-[11px] text-slate-500 font-semibold">إجمالي المقطوف</div>
+            <div className="text-sm font-black tabular-nums mt-0.5">{fmtNum(reconciliation.summary.totalHarvested)} علاقية</div>
+          </div>
+          <div className="rounded-xl border border-emerald-200 dark:border-emerald-800/60 p-3 bg-emerald-50/50 dark:bg-emerald-950/20">
+            <div className="text-[11px] text-emerald-700 dark:text-emerald-300 font-semibold">المباع للعملاء</div>
+            <div className="text-sm font-black text-emerald-700 dark:text-emerald-300 tabular-nums mt-0.5">{fmtNum(reconciliation.summary.totalMatchedSold)} علاقية</div>
+          </div>
+          <div className="rounded-xl border border-amber-200 dark:border-amber-800/60 p-3 bg-amber-50/50 dark:bg-amber-950/20">
+            <div className="text-[11px] text-amber-700 dark:text-amber-300 font-semibold">الفاقد / التالف</div>
+            <div className="text-sm font-black text-amber-700 dark:text-amber-300 tabular-nums mt-0.5">{fmtNum(reconciliation.summary.totalShrinkage)} علاقية</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700/80 p-3 bg-slate-50/70 dark:bg-slate-900/40">
+            <div className="text-[11px] text-slate-500 font-semibold">الصافي المتبقي</div>
+            <div className={`text-sm font-black tabular-nums mt-0.5 ${reconciliation.summary.totalRemaining < 0 ? "text-rose-600" : ""}`}>
+              {fmtNum(reconciliation.summary.totalRemaining)} علاقية
             </div>
           </div>
-        )}
+        </div>
 
         {reconciliation.unmatchedSalesGroups.length > 0 && (
           <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/80 dark:bg-amber-950/30 p-3.5 text-xs space-y-1.5">
@@ -331,7 +368,9 @@ export function InventoryTab({
         {inventoryBatches.length === 0 ? (
           <EmptyState
             title="لا توجد دفعات حصاد مسجلة في المخزون"
-            description="أضف دفعة حصاد جديدة لبدء مطابقة الإنتاج مع المبيعات والفاقد."
+            description="أضف دفعة حصاد جديدة لبدء مطابقة الإنتاج مع المبيعات والفاقد لكل قطفة ودرجة."
+            actionLabel={!readOnly ? "تسجيل دفعة حصاد الآن" : undefined}
+            onAction={!readOnly ? openCreateDrawer : undefined}
           />
         ) : (
           <>

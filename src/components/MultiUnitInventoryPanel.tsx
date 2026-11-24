@@ -4,9 +4,12 @@ import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { ArrowDownUp, Boxes, Layers, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Archive, ArrowDownUp, Boxes, Layers, Plus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { safeFetchJson } from "@/lib/apiClient";
 import { fmtNum } from "@/lib/formulas";
+import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
+import { formatRefreshTimestamp } from "@/lib/uiFormatters";
+import { filterOutSyntheticTestRecords, isSyntheticTestRecord } from "@/lib/testRecordHygiene";
 
 interface UomRecord {
   id: string;
@@ -80,16 +83,18 @@ interface InventoryItemRecord {
 interface MultiUnitInventoryPanelProps {
   lang?: "ar" | "en";
   readOnly?: boolean;
+  onRefreshState?: () => Promise<void>;
   onToast?: (msg: string) => void;
 }
 
 export function MultiUnitInventoryPanel({
   lang = "ar",
   readOnly = false,
+  onRefreshState,
   onToast,
 }: MultiUnitInventoryPanelProps) {
   const isAr = lang === "ar";
-  const notify = (msg: string) => onToast?.(msg);
+  const notify = useCallback((msg: string) => onToast?.(msg), [onToast]);
 
   const [units, setUnits] = useState<UomRecord[]>([]);
   const [categories, setCategories] = useState<CategoryRecord[]>([]);
@@ -175,6 +180,18 @@ export function MultiUnitInventoryPanel({
   }, [baseUnitId, categoryId, defaultWarehouseId, movItemId]);
 
   const [showArchivedItems, setShowArchivedItems] = useState(false);
+  const [hideTestRecords, setHideTestRecords] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState("");
+
+  const handleRefresh = useCallback(async () => {
+    try {
+      await Promise.all([loadAll(), onRefreshState?.()]);
+      setLastRefreshedAt(new Date().toISOString());
+      onToast?.(isAr ? "✅ تم تحديث أصناف المخزون والأرصدة بنجاح" : "✅ Inventory items & stock refreshed");
+    } catch {
+      onToast?.(isAr ? "تعذر تحديث بيانات المخزون" : "Failed to refresh inventory");
+    }
+  }, [isAr, loadAll, onRefreshState, onToast]);
 
   const handleArchiveItem = useCallback(
     async (item: InventoryItemRecord) => {
@@ -193,7 +210,7 @@ export function MultiUnitInventoryPanel({
         notify(msg);
       }
     },
-    [loadAll]
+    [loadAll, notify]
   );
 
   const handleRestoreItem = useCallback(
@@ -213,12 +230,13 @@ export function MultiUnitInventoryPanel({
         notify(msg);
       }
     },
-    [loadAll]
+    [loadAll, notify]
   );
 
   const handleDeleteItem = useCallback(
-    async (item: InventoryItemRecord) => {
+    async (item: InventoryItemRecord, skipConfirm = false) => {
       if (
+        !skipConfirm &&
         !confirm(
           `هل أنت متأكد من حذف الصنف (${item.nameAr})؟ في حال وجود حركات مخزنية أو فواتير مرتبطة سيتم أرشفته آلياً حفاظاً على التاريخ المالي.`
         )
@@ -239,11 +257,17 @@ export function MultiUnitInventoryPanel({
         notify(msg);
       }
     },
-    [loadAll]
+    [loadAll, notify]
   );
 
   useEffect(() => {
-    loadAll();
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) void loadAll();
+    });
+    return () => {
+      active = false;
+    };
   }, [loadAll]);
 
   function addConversionRow() {
@@ -397,12 +421,17 @@ export function MultiUnitInventoryPanel({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {lastRefreshedAt && (
+              <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                {formatRefreshTimestamp(lastRefreshedAt, isAr ? "ar" : "en")}
+              </span>
+            )}
             <button
               type="button"
-              onClick={loadAll}
+              onClick={() => void handleRefresh()}
               disabled={loading}
-              className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold inline-flex items-center gap-1"
+              className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
               <span>{isAr ? "تحديث" : "Refresh"}</span>
@@ -417,6 +446,42 @@ export function MultiUnitInventoryPanel({
                 <span>{isAr ? "+ إضافة بطاقة صنف" : "+ Add Item Master"}</span>
               </button>
             )}
+            <ActionOverflowMenu
+              testId="inventory-items-overflow"
+              label={isAr ? "خيارات الأصناف" : "Inventory Options"}
+              size="sm"
+              items={[
+                {
+                  id: "toggle-archived",
+                  label: showArchivedItems
+                    ? isAr
+                      ? "إخفاء الأصناف المؤرشفة"
+                      : "Hide Archived Items"
+                    : isAr
+                    ? "إظهار الأصناف المؤرشفة"
+                    : "Show Archived Items",
+                  icon: <Archive className="w-3.5 h-3.5" />,
+                  onClick: () => setShowArchivedItems((p) => !p),
+                },
+                {
+                  id: "toggle-test",
+                  label: hideTestRecords
+                    ? isAr
+                      ? "إظهار الأصناف التجريبية"
+                      : "Show Test Items"
+                    : isAr
+                    ? "إخفاء الأصناف التجريبية"
+                    : "Hide Test Items",
+                  onClick: () => setHideTestRecords((p) => !p),
+                },
+                {
+                  id: "refresh",
+                  label: isAr ? "إعادة تحميل المخزون" : "Reload Stock",
+                  icon: <RefreshCw className="w-3.5 h-3.5" />,
+                  onClick: () => void handleRefresh(),
+                },
+              ]}
+            />
           </div>
         </div>
 
@@ -791,18 +856,29 @@ export function MultiUnitInventoryPanel({
               )}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-6 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-2 items-center">
               <select
+                dir={isAr ? "rtl" : "ltr"}
+                aria-label={isAr ? "الصنف المخزني" : "Inventory Item"}
+                title={
+                  activeMovItem
+                    ? `${activeMovItem.nameAr} (${activeMovItem.sku})`
+                    : isAr
+                    ? "اختر الصنف"
+                    : "Select item"
+                }
                 value={movItemId}
                 onChange={(e) => {
                   setMovItemId(e.target.value);
                   const it = items.find((x) => x.id === e.target.value);
                   if (it) setMovUnitId(it.baseUnitId);
                 }}
-                className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 font-bold"
+                className="lg:col-span-2 w-full min-w-0 truncate rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 font-bold text-right"
               >
                 {items.map((it) => (
-                  <option key={it.id} value={it.id}>{it.nameAr} ({it.sku})</option>
+                  <option key={it.id} value={it.id} title={`${it.nameAr} (${it.sku})`}>
+                    {it.nameAr} ({it.sku})
+                  </option>
                 ))}
               </select>
 
@@ -955,10 +1031,11 @@ export function MultiUnitInventoryPanel({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                {items
-                  .filter((i) => (showArchivedItems ? true : i.isActive !== false))
+                {filterOutSyntheticTestRecords(items, hideTestRecords)
+                  .visible.filter((i) => (showArchivedItems ? true : i.isActive !== false))
                   .map((item) => {
                     const isArchived = item.isActive === false;
+                    const isTestItem = isSyntheticTestRecord(item);
                     return (
                       <tr
                         key={item.id}
@@ -969,11 +1046,16 @@ export function MultiUnitInventoryPanel({
                         }`}
                       >
                         <td className="p-2">
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-bold">{item.nameAr}</span>
                             {isArchived && (
                               <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200">
                                 مؤرشف
+                              </span>
+                            )}
+                            {isTestItem && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                                تجريبي
                               </span>
                             )}
                           </div>
@@ -1015,43 +1097,48 @@ export function MultiUnitInventoryPanel({
                         </td>
                         {!readOnly && (
                           <td className="p-2 no-print">
-                            <div className="flex items-center gap-1.5">
-                              {!isArchived ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() => void handleArchiveItem(item)}
-                                    className="px-2 py-1 rounded border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 font-bold hover:bg-amber-50"
-                                  >
-                                    أرشفة
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => void handleDeleteItem(item)}
-                                    className="px-2 py-1 rounded border border-rose-300 dark:border-rose-700 text-rose-600 font-bold hover:bg-rose-50"
-                                  >
-                                    حذف
-                                  </button>
-                                </>
-                              ) : (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() => void handleRestoreItem(item)}
-                                    className="px-2 py-1 rounded border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 font-bold hover:bg-emerald-50"
-                                  >
-                                    استعادة
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => void handleDeleteItem(item)}
-                                    className="px-2 py-1 rounded border border-rose-300 dark:border-rose-700 text-rose-600 font-bold hover:bg-rose-50"
-                                  >
-                                    حذف نهائي
-                                  </button>
-                                </>
-                              )}
-                            </div>
+                            <ActionOverflowMenu
+                              size="xs"
+                              align="end"
+                              label={isAr ? "خيارات الصنف" : "Item Options"}
+                              items={[
+                                {
+                                  id: "archive",
+                                  label: isArchived
+                                    ? isAr
+                                      ? "استعادة الصنف"
+                                      : "Restore Item"
+                                    : isAr
+                                    ? "أرشفة الصنف"
+                                    : "Archive Item",
+                                  icon: isArchived ? (
+                                    <RotateCcw className="w-3.5 h-3.5" />
+                                  ) : (
+                                    <Archive className="w-3.5 h-3.5" />
+                                  ),
+                                  tone: isArchived ? "default" : "warning",
+                                  onClick: () =>
+                                    isArchived ? handleRestoreItem(item) : handleArchiveItem(item),
+                                },
+                                {
+                                  id: "delete",
+                                  label: isArchived
+                                    ? isAr
+                                      ? "حذف نهائي"
+                                      : "Delete Permanently"
+                                    : isAr
+                                    ? "حذف الصنف"
+                                    : "Delete Item",
+                                  icon: <Trash2 className="w-3.5 h-3.5" />,
+                                  tone: "danger",
+                                  dividerBefore: true,
+                                  confirmTitle: `حذف الصنف (${item.nameAr})`,
+                                  confirmMessage:
+                                    "في حال وجود حركات مخزنية أو فواتير مرتبطة بهذا الصنف سيتم أرشفته آلياً حفاظاً على التاريخ المالي.",
+                                  onClick: () => handleDeleteItem(item, true),
+                                },
+                              ]}
+                            />
                           </td>
                         )}
                       </tr>

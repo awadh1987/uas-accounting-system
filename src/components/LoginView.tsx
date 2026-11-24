@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   AlertCircle,
   ArrowLeft,
@@ -56,6 +57,7 @@ interface LoginViewProps {
   licenseStatus?: LicenseStatusData | null;
   onOpenLicenseModal?: () => void;
   onBackToLanding: () => void;
+  onOpenClientPortal?: () => void;
   onToggleLang: () => void;
   onLoginSuccess: (user: UasUser, rememberDevice: boolean) => void;
   onToast: (msg: string) => void;
@@ -72,6 +74,7 @@ export function LoginView({
   licenseStatus,
   onOpenLicenseModal,
   onBackToLanding,
+  onOpenClientPortal,
   onToggleLang,
   onLoginSuccess,
   onToast,
@@ -736,6 +739,28 @@ export function LoginView({
             <div className="pt-1 text-center text-[11px] text-slate-400 flex items-center justify-center gap-1.5">
               <Lock className="w-3 h-3 text-emerald-600" />
               <span>{isAr ? "اتصال مشفر وآمن بمعايير المؤسسات" : "Encrypted Enterprise-Grade Authentication"}</span>
+            </div>
+
+            <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 text-xs">
+              <span className="text-slate-500 font-semibold">
+                {isAr ? "هل أنت عميل خارجي تبحث عن طلباتك وفواتيرك؟" : "External client?"}
+              </span>
+              {onOpenClientPortal ? (
+                <button
+                  type="button"
+                  onClick={onOpenClientPortal}
+                  className="px-3 py-1.5 rounded-xl border border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 font-extrabold hover:bg-emerald-100 transition"
+                >
+                  {isAr ? "دخول / تسجيل بوابة العملاء" : "Open Client Portal"}
+                </button>
+              ) : (
+                <Link
+                  href="/portal"
+                  className="px-3 py-1.5 rounded-xl border border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 font-extrabold hover:bg-emerald-100 transition"
+                >
+                  {isAr ? "دخول / تسجيل بوابة العملاء" : "Open Client Portal"}
+                </Link>
+              )}
             </div>
 
             {/* Direct Commercial Downloads: Windows Desktop / LAN + Android Mobile App (Web Portal Only) */}

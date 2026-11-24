@@ -11,9 +11,11 @@ import {
   Tooltip,
 } from "chart.js";
 import { Bar } from "react-chartjs-2";
-import { BarChart3, CheckCircle2, FileSpreadsheet, Printer, Scale, AlertTriangle, X, Eye } from "lucide-react";
+import { BarChart3, CheckCircle2, FileSpreadsheet, Printer, RefreshCw, Scale, AlertTriangle, X, Eye } from "lucide-react";
 import { exportFinancialStatementsToExcel } from "@/lib/excelExport";
 import { fmtNum } from "@/lib/formulas";
+import { UasDateInput } from "@/components/UasDateInput";
+import { formatRefreshTimestamp } from "@/lib/uiFormatters";
 import {
   printUasDocument,
   resolveLetterheadFromProfile,
@@ -278,6 +280,8 @@ export function FinancialReportsTab({
   const [drilldownLines, setDrilldownLines] = useState<DrilldownLine[]>([]);
   const [drilldownLoading, setDrilldownLoading] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState("");
 
   const availableSubProjects = useMemo(() => {
     if (!localProjectId || localProjectId === "ALL") {
@@ -321,6 +325,7 @@ export function FinancialReportsTab({
         if (agRes.ok) setAgingReport((await agRes.json()) as AgingPayload);
         if (taxRes.ok) setTaxSummary((await taxRes.json()) as TaxSummaryPayload);
         if (ratRes.ok) setRatios((await ratRes.json()) as FinancialRatiosPayload);
+        setLastRefreshedAt(new Date().toISOString());
         setLoading(false);
       })
       .catch(() => {
@@ -343,6 +348,7 @@ export function FinancialReportsTab({
     costCenterFilter,
     coaLevel,
     agingType,
+    refreshTick,
     onToast,
   ]);
 
@@ -515,6 +521,24 @@ export function FinancialReportsTab({
                 عملة المعاملة (FX)
               </button>
             </div>
+            {lastRefreshedAt && (
+              <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                {formatRefreshTimestamp(lastRefreshedAt)}
+              </span>
+            )}
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => {
+                setLoading(true);
+                setRefreshTick((t) => t + 1);
+                onToast("✅ جاري تحديث القوائم والتقارير المالية...");
+              }}
+              className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+              <span>تحديث</span>
+            </button>
             <button
               onClick={handleExportExcel}
               className="px-3.5 py-2 rounded-xl accent-bg text-xs font-extrabold flex items-center gap-1.5"
@@ -765,19 +789,17 @@ export function FinancialReportsTab({
             <option value={2}>عرض حتى الجيل 2 (الحسابات العامة الرئيسية)</option>
             <option value={1}>عرض الجيل 1 فقط (الحسابات الرئيسية)</option>
           </select>
-          <input
-            type="date"
-            dir="ltr"
+          <UasDateInput
             value={fromDate}
-            onChange={(e) => setFromDate(e.target.value)}
-            className="w-full min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            onChange={setFromDate}
+            placeholder="من: يوم / شهر / سنة"
+            ariaLabel="من تاريخ"
           />
-          <input
-            type="date"
-            dir="ltr"
+          <UasDateInput
             value={toDate}
-            onChange={(e) => setToDate(e.target.value)}
-            className="w-full min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            onChange={setToDate}
+            placeholder="إلى: يوم / شهر / سنة"
+            ariaLabel="إلى تاريخ"
           />
         </div>
 
@@ -795,20 +817,18 @@ export function FinancialReportsTab({
           {compareEnabled && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-slate-500">من:</span>
-              <input
-                type="date"
-                dir="ltr"
+              <UasDateInput
                 value={compareFromDate}
-                onChange={(e) => setCompareFromDate(e.target.value)}
-                className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-1 text-xs font-mono"
+                onChange={setCompareFromDate}
+                placeholder="من: يوم / شهر / سنة"
+                ariaLabel="بداية الفترة المقارنة"
               />
               <span className="text-slate-500">إلى:</span>
-              <input
-                type="date"
-                dir="ltr"
+              <UasDateInput
                 value={compareToDate}
-                onChange={(e) => setCompareToDate(e.target.value)}
-                className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-1 text-xs font-mono"
+                onChange={setCompareToDate}
+                placeholder="إلى: يوم / شهر / سنة"
+                ariaLabel="نهاية الفترة المقارنة"
               />
             </div>
           )}

@@ -34,6 +34,7 @@ import { SystemTab } from "@/components/tabs/SystemTab";
 import { TreasuryTab } from "@/components/tabs/TreasuryTab";
 import { WorkersTab } from "@/components/tabs/WorkersTab";
 import { TabErrorBoundary } from "@/components/TabErrorBoundary";
+import { ClientPortalApp } from "@/components/client-portal/ClientPortalApp";
 import {
   executeMutation,
   fetchBootstrapState,
@@ -106,7 +107,15 @@ interface BeforeInstallPromptEvent extends Event {
 export function UasAppShell() {
   const [state, setState] = useState<UasBootstrapState>(INITIAL_FALLBACK_STATE);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"landing" | "login" | "erp">(() => {
+  const [viewMode, setViewMode] = useState<"landing" | "login" | "erp" | "client_portal">(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const sp = new URLSearchParams(window.location.search);
+        if (sp.get("portal") === "client") return "client_portal";
+      } catch {
+        // ignore
+      }
+    }
     return isInstalledClientApp() ? "login" : "landing";
   });
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
@@ -1185,7 +1194,9 @@ export function UasAppShell() {
         }}
       />
 
-      {viewMode === "landing" ? (
+      {viewMode === "client_portal" ? (
+        <ClientPortalApp onBackHome={() => setViewMode("landing")} />
+      ) : viewMode === "landing" ? (
         <LandingPage
           state={state}
           lang={lang}
@@ -1199,6 +1210,7 @@ export function UasAppShell() {
             setViewMode("erp");
           }}
           onOpenLogin={() => setViewMode("login")}
+          onOpenClientPortal={() => setViewMode("client_portal")}
           onToggleLang={() => setLang((prev) => (prev === "ar" ? "en" : "ar"))}
           onSelectProjectCard={(projectId) => {
             if (currentUser) {
@@ -1240,6 +1252,7 @@ export function UasAppShell() {
             setPendingProjectId(null);
             setViewMode("landing");
           }}
+          onOpenClientPortal={() => setViewMode("client_portal")}
           onToggleLang={() => setLang((prev) => (prev === "ar" ? "en" : "ar"))}
           licenseStatus={licenseStatus}
           onOpenLicenseModal={() => setLicenseModalOpen(true)}
@@ -1401,7 +1414,7 @@ export function UasAppShell() {
               onLogout={handleLogout}
             />
 
-            <main className="max-w-7xl w-full mx-auto flex-1 p-4 md:p-6 pb-24 md:pb-20 space-y-5">
+            <main className="max-w-7xl w-full mx-auto flex-1 p-4 md:p-6 pb-28 md:pb-24 space-y-5">
               {loading && (
                 <div className="card-surface rounded-2xl p-3 text-xs text-center text-slate-500">
                   جاري تحميل البيانات المحاسبية...
@@ -1558,6 +1571,7 @@ export function UasAppShell() {
                     showToast("تم تصدير ملف Excel بنجاح");
                   }}
                   onSwitchTab={navigateToTab}
+                  onRefreshState={refreshFromServer}
                   onToast={showToast}
                 />
               )}
@@ -1693,6 +1707,8 @@ export function UasAppShell() {
                       "تم حذف المصروف"
                     );
                   }}
+                  onRefreshState={refreshFromServer}
+                  onToast={showToast}
                 />
               )}
 
@@ -1783,6 +1799,7 @@ export function UasAppShell() {
                     );
                   }}
                   onOpenSaleVoucher={openSaleVoucher}
+                  onRefreshState={refreshFromServer}
                   onToast={showToast}
                 />
               )}
@@ -1801,6 +1818,7 @@ export function UasAppShell() {
                     exportFullWorkbookToExcel(state, { customerFilter });
                     showToast("تم تصدير كشف العملاء إلى Excel بنجاح");
                   }}
+                  onRefreshState={refreshFromServer}
                   onToast={showToast}
                 />
               )}
@@ -1995,6 +2013,8 @@ export function UasAppShell() {
                       "تم تعديل دفعة الحصاد والمخزون بنجاح"
                     )
                   }
+                  onRefreshState={refreshFromServer}
+                  onToast={showToast}
                 />
               )}
 

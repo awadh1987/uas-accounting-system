@@ -2,6 +2,7 @@
 import { isInstalledClientApp } from "@/lib/runtimePlatform";
 
 import React, { useEffect, useState, useSyncExternalStore } from "react";
+import Link from "next/link";
 import {
   ArrowLeft,
   ArrowRight,
@@ -42,6 +43,7 @@ interface LandingPageProps {
   currentUser?: UasUser | null;
   onEnterErp: (tab?: TabId) => void;
   onOpenLogin: () => void;
+  onOpenClientPortal?: () => void;
   onToggleLang: () => void;
   onSelectProjectCard?: (projectId: string) => void;
 }
@@ -80,6 +82,7 @@ export function LandingPage({
   currentUser,
   onEnterErp,
   onOpenLogin,
+  onOpenClientPortal,
   onToggleLang,
   onSelectProjectCard,
 }: LandingPageProps) {
@@ -332,6 +335,25 @@ export function LandingPage({
               <Globe2 className="w-3.5 h-3.5" />
               <span>{isAr ? "English" : "العربية"}</span>
             </button>
+
+            {onOpenClientPortal ? (
+              <button
+                type="button"
+                onClick={onOpenClientPortal}
+                className="px-3.5 py-2 rounded-xl border border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold flex items-center gap-1.5 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>{isAr ? "بوابة العملاء" : "Client Portal"}</span>
+              </button>
+            ) : (
+              <Link
+                href="/portal"
+                className="px-3.5 py-2 rounded-xl border border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold flex items-center gap-1.5 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>{isAr ? "بوابة العملاء" : "Client Portal"}</span>
+              </Link>
+            )}
 
             <button
               type="button"

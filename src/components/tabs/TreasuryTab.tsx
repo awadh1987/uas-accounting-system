@@ -28,6 +28,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
+import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
 import { SelectWithOther } from "@/components/SelectWithOther";
 import { BankPayoutModal, type PayoutInitialData } from "@/components/BankPayoutModal";
 import { fmtNum, formatCurrencyVal, type CurrencyCode } from "@/lib/formulas";
@@ -411,7 +412,8 @@ export function TreasuryTab({
   // Handle Archive / Restore / Safe Delete
   async function handleLifecycleTreasury(
     t: UasTreasuryAccount,
-    action: "ARCHIVE" | "RESTORE" | "SAFE_DELETE"
+    action: "ARCHIVE" | "RESTORE" | "SAFE_DELETE",
+    skipConfirm = false
   ) {
     if (readOnly || !canManageTreasury) return;
     const actionLabel =
@@ -422,6 +424,7 @@ export function TreasuryTab({
         : "حذف";
 
     if (
+      !skipConfirm &&
       action === "SAFE_DELETE" &&
       !confirm(`هل أنت متأكد من حذف الحساب (${t.nameAr || t.name})؟ إذا كان مرتبطاً بحركات مالية فسيتم أرشفته بأمان لمنع اختلال القيود.`)
     ) {
@@ -960,47 +963,32 @@ export function TreasuryTab({
                         <span>تعديل</span>
                       </button>
 
-                      <div className="flex items-center gap-1.5">
-                        {!isArchived ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => void handleLifecycleTreasury(t, "ARCHIVE")}
-                              className="text-amber-700 dark:text-amber-400 font-bold hover:underline inline-flex items-center gap-0.5"
-                            >
-                              <Archive className="w-3 h-3" />
-                              <span>أرشفة</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleLifecycleTreasury(t, "SAFE_DELETE")}
-                              className="text-rose-600 font-bold hover:underline inline-flex items-center gap-0.5"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                              <span>حذف</span>
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => void handleLifecycleTreasury(t, "RESTORE")}
-                              className="text-emerald-700 dark:text-emerald-400 font-bold hover:underline inline-flex items-center gap-0.5"
-                            >
-                              <RotateCcw className="w-3 h-3" />
-                              <span>استعادة</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleLifecycleTreasury(t, "SAFE_DELETE")}
-                              className="text-rose-600 font-bold hover:underline inline-flex items-center gap-0.5"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                              <span>حذف نهائي</span>
-                            </button>
-                          </>
-                        )}
-                      </div>
+                      <ActionOverflowMenu
+                        size="xs"
+                        align="end"
+                        label="خيارات الحساب"
+                        items={[
+                          {
+                            id: "archive",
+                            label: isArchived ? "استعادة الحساب" : "أرشفة الحساب",
+                            icon: isArchived ? <RotateCcw className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />,
+                            tone: isArchived ? "default" : "warning",
+                            onClick: () =>
+                              handleLifecycleTreasury(t, isArchived ? "RESTORE" : "ARCHIVE", true),
+                          },
+                          {
+                            id: "delete",
+                            label: isArchived ? "حذف نهائي" : "حذف الحساب",
+                            icon: <Trash2 className="w-3.5 h-3.5" />,
+                            tone: "danger",
+                            dividerBefore: true,
+                            confirmTitle: `حذف الحساب (${t.nameAr || t.name})`,
+                            confirmMessage:
+                              "إذا كان هذا الحساب مرتبطاً بحركات مالية فسيتم أرشفته بأمان لمنع اختلال القيود المحاسبية.",
+                            onClick: () => handleLifecycleTreasury(t, "SAFE_DELETE", true),
+                          },
+                        ]}
+                      />
                     </div>
                   )}
                 </div>

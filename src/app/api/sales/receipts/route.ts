@@ -7,6 +7,8 @@ import {
   reverseJournalEntry,
 } from "@/lib/accounting/ledgerService";
 import { authorizeApiAction, jsonError } from "@/lib/apiHelpers";
+import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
+import { createWhatsAppDraftTx } from "@/lib/whatsapp/outboxService";
 
 export const dynamic = "force-dynamic";
 
@@ -75,6 +77,43 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       costCenterId: body.costCenterId ? String(body.costCenterId) : null,
       createdById: actor.userId ?? undefined,
     });
+
+    // Queue an editable WhatsApp payment-receipt draft if customer has a linked phone
+    try {
+      await ensurePortalSchemaReady();
+      const custPhone = result.receipt.customer?.phone;
+      if (custPhone) {
+        const portalAcc = await prisma.clientPortalAccount.findFirst({
+          where: { customerId: result.receipt.customerId },
+          select: { id: true, phone: true },
+        });
+        const openInvs = await prisma.salesInvoice.findMany({
+          where: {
+            customerId: result.receipt.customerId,
+            balanceDue: { gt: 0 },
+            status: { not: "VOIDED" },
+          },
+          select: { balanceDue: true },
+        });
+        const balanceDue = openInvs.reduce((s, r) => s + Number(r.balanceDue || 0), 0);
+        await createWhatsAppDraftTx(prisma, {
+          eventType: "PAYMENT_RECEIPT",
+          clientAccountId: portalAcc?.id ?? null,
+          customerId: result.receipt.customerId,
+          recipientName: result.receipt.customer?.nameAr || "العميل",
+          recipientPhone: portalAcc?.phone || custPhone,
+          variables: {
+            receiptNumber: result.receipt.voucherNumber,
+            paidAmount: Number(result.receipt.amount || 0).toLocaleString("en-US"),
+            balanceDue: Math.round(balanceDue).toLocaleString("en-US"),
+            currency: result.receipt.currency || "YER",
+          },
+        });
+      }
+    } catch {
+      // Non-fatal: accounting receipt already posted
+    }
+
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "تعذر إصدار سند القبض";

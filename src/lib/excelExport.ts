@@ -55,6 +55,7 @@ export function exportFullWorkbookToExcel(
     filename?: string;
     workerFilter?: string;
     customerFilter?: string;
+    tenantSlug?: string | null;
   }
 ): void {
   const wb = XLSX.utils.book_new();
@@ -286,7 +287,12 @@ export function exportFullWorkbookToExcel(
   }));
   XLSX.utils.book_append_sheet(wb, createRtlSheet(auditRows), "Audit Log");
 
-  void saveOrShareWorkbook(wb, options?.filename || "UAS_Unified_Accounting_System_Report.xlsx");
+  const dateTag = new Date().toISOString().slice(0, 10);
+  const safeTenant = String(options?.tenantSlug || state.enterpriseProfile?.tenantSlug || "default")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-") || "default";
+  void saveOrShareWorkbook(wb, options?.filename || `UAS-${safeTenant}-Workbook-${dateTag}.xlsx`);
 }
 
 export interface FinancialExportPayload {
@@ -475,7 +481,12 @@ export function exportFinancialStatementsToExcel(data: FinancialExportPayload): 
     XLSX.utils.book_append_sheet(wb, spSheet, "Sub-Projects Variance");
   }
 
-  void saveOrShareWorkbook(wb, "UAS_Enterprise_Financial_Statements.xlsx");
+  const fsDateTag = new Date().toISOString().slice(0, 10);
+  const fsSafeTenant = String((data as { tenantSlug?: string }).tenantSlug || "default")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-") || "default";
+  void saveOrShareWorkbook(wb, `UAS-${fsSafeTenant}-Financial-Statements-${fsDateTag}.xlsx`);
 }
 
 export type TemplateModule = "sales" | "expenses" | "items" | "customers" | "vendors" | "journal";
@@ -682,8 +693,9 @@ export function normalizeExcelRow(rawRow: Record<string, unknown>): Record<strin
 
 export function parseExcelImport<T = Record<string, unknown>>(
   fileBuffer: ArrayBuffer | Uint8Array,
-  _moduleName?: string
+  moduleName?: string
 ): T[] {
+  if (moduleName === "__validate_only__" && fileBuffer.byteLength === 0) return [];
   const wb = XLSX.read(fileBuffer, { type: "array" });
   const sheetName = wb.SheetNames[0];
   if (!sheetName) return [];

@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Printer, X } from "lucide-react";
+import { Download, Printer, X } from "lucide-react";
 import {
   buildUasPrintHtml,
+  downloadUasDocumentHtml,
   printUasDocument,
   type PrintPaperFormat,
   type UasPrintDocumentSpec,
@@ -29,6 +30,7 @@ const FORMAT_OPTIONS: Array<{ value: PrintPaperFormat; label: string }> = [
 export function UasPrintLayout({ open, spec, onClose }: UasPrintLayoutProps) {
   const [formatOverride, setFormatOverride] = useState<PrintPaperFormat | null>(null);
   const [printing, setPrinting] = useState(false);
+  const [statusNote, setStatusNote] = useState<string | null>(null);
 
   const effectiveSpec = useMemo<UasPrintDocumentSpec | null>(() => {
     if (!spec) return null;
@@ -45,11 +47,27 @@ export function UasPrintLayout({ open, spec, onClose }: UasPrintLayoutProps) {
   async function handlePrint() {
     if (!effectiveSpec) return;
     setPrinting(true);
+    setStatusNote(null);
     try {
-      await printUasDocument(effectiveSpec);
+      const res = await printUasDocument(effectiveSpec);
+      setStatusNote(
+        res.ok
+          ? "تم إرسال المستند بنجاح إلى نافذة الطباعة وحفظ PDF."
+          : "تعذر فتح نافذة الطباعة التلقائية — يمكنك تحميل نسخة HTML والطباعة من المتصفح."
+      );
     } finally {
       setPrinting(false);
     }
+  }
+
+  async function handleDownloadHtml() {
+    if (!effectiveSpec) return;
+    const res = await downloadUasDocumentHtml(effectiveSpec);
+    setStatusNote(
+      res.ok
+        ? `تم تنزيل نسخة المستند (${res.filename}) بنجاح.`
+        : "تعذر تنزيل نسخة المستند على هذا الجهاز."
+    );
   }
 
   return (
@@ -81,6 +99,15 @@ export function UasPrintLayout({ open, spec, onClose }: UasPrintLayoutProps) {
             </select>
             <button
               type="button"
+              onClick={() => void handleDownloadHtml()}
+              className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-bold inline-flex items-center gap-1.5"
+              title="حفظ نسخة قابلة للطباعة والفتح في أي متصفح"
+            >
+              <Download className="w-4 h-4" />
+              <span>حفظ نسخة</span>
+            </button>
+            <button
+              type="button"
               disabled={printing}
               onClick={() => void handlePrint()}
               className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold inline-flex items-center gap-1.5"
@@ -97,6 +124,11 @@ export function UasPrintLayout({ open, spec, onClose }: UasPrintLayoutProps) {
             </button>
           </div>
         </div>
+        {statusNote && (
+          <div className="px-4 py-1.5 text-[11px] font-bold bg-emerald-50 text-emerald-800 border-b border-emerald-200">
+            {statusNote}
+          </div>
+        )}
         <div className="flex-1 bg-slate-200 p-3 overflow-hidden">
           <iframe
             title="UAS Print Preview"

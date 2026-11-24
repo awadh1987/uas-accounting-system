@@ -30,7 +30,7 @@ export function buildCorsHeaders(origin: string | null): Record<string, string> 
     "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers":
-      "Content-Type, Authorization, X-Requested-With, x-uas-seat-token, x-uas-device-name, x-uas-device-id, x-uas-platform, x-uas-app-version, x-uas-os-version, x-uas-user-id, x-uas-role, x-uas-user-display, x-uas-tenant-id, x-tenant-id, x-uas-company-id, x-uas-session-tenant, x-uas-session-token, x-idempotency-key",
+      "Content-Type, Authorization, X-Requested-With, x-uas-seat-token, x-uas-device-name, x-uas-device-id, x-uas-platform, x-uas-app-version, x-uas-os-version, x-uas-user-id, x-uas-role, x-uas-user-display, x-uas-tenant-id, x-tenant-id, x-uas-company-id, x-uas-session-tenant, x-uas-session-token, x-uas-client-token, x-idempotency-key",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin, Host, X-Forwarded-Host",
   };

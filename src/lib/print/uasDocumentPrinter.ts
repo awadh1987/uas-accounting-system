@@ -34,6 +34,7 @@ export interface CompanyLetterheadMeta {
   taglineAr?: string;
   taglineEn?: string;
   tenantUrl?: string;
+  tenantSlug?: string | null;
   isCustomTenantBrand?: boolean;
 }
 
@@ -73,6 +74,7 @@ export interface UasPrintDocumentSpec {
   fiscalYear?: string;
   costCenter?: string;
   issueDate?: string;
+  documentDate?: string;
   currency?: string;
   status?: DocumentStatusBadge;
   format?: PrintPaperFormat;
@@ -415,7 +417,10 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
       padding: 0;
       background: #FFFFFF !important;
       color: #0F172A !important;
-      font-family: "Cairo", "Tajawal", "Segoe UI", Tahoma, Arial, sans-serif;
+      font-family: "Cairo", "Tajawal", "Noto Sans Arabic", "Amiri", "Segoe UI", Tahoma, Arial, sans-serif;
+      font-feature-settings: "liga" 1, "calt" 1;
+      text-rendering: optimizeLegibility;
+      letter-spacing: 0;
       direction: rtl;
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
@@ -437,7 +442,8 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
       transform: translate(-50%, -50%) rotate(-28deg);
       font-size: 46px;
       font-weight: 900;
-      letter-spacing: 2px;
+      letter-spacing: 0;
+      text-rendering: optimizeLegibility;
       color: ${st.color};
       opacity: ${status === "POSTED" ? "0.055" : "0.11"};
       pointer-events: none;
@@ -519,7 +525,12 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
       border-radius: 8px;
       padding: 8px 10px;
       background: #FFFFFF;
+      break-inside: avoid;
+      page-break-inside: avoid;
     }
+    .uas-header { break-inside: avoid; page-break-inside: avoid; }
+    .uas-table thead { display: table-header-group; }
+    .uas-table tbody tr, .uas-qr-strip, .uas-notes { break-inside: avoid; page-break-inside: avoid; }
     .uas-tone-emerald { border-right: 4px solid #059669; }
     .uas-tone-rose { border-right: 4px solid #e11d48; }
     .uas-tone-amber { border-right: 4px solid #d97706; }
@@ -709,18 +720,68 @@ export function buildUasPrintHtml(spec: UasPrintDocumentSpec): string {
 }
 
 /**
+ * Builds a clean, filesystem-safe, tenant- and date-stamped PDF / print job filename.
+ */
+export function buildUasPrintJobTitle(spec: UasPrintDocumentSpec): string {
+  const slugPart = String(spec.letterhead?.tenantSlug || "uas")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-") || "uas";
+  const datePart = /^\d{4}-\d{2}-\d{2}/.test(spec.documentDate || "")
+    ? String(spec.documentDate).slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+  const titlePart = String(spec.titleEn || spec.titleAr || "Document")
+    .replace(/[^\w\u0600-\u06FF-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  const docPart = String(spec.documentNumber || "DOC")
+    .replace(/[^\w-]+/g, "-")
+    .slice(0, 24);
+  return `${slugPart}-${titlePart}-${docPart}-${datePart}`.slice(0, 96);
+}
+
+/**
+ * Downloads a standalone Arabic RTL light-mode printable HTML snapshot (for archive or Save-as-PDF
+ * in browsers/devices where popups or native spoolers need a fallback).
+ */
+export async function downloadUasDocumentHtml(
+  spec: UasPrintDocumentSpec
+): Promise<{ ok: boolean; filename: string }> {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return { ok: false, filename: "" };
+  }
+  const html = buildUasPrintHtml(spec);
+  const filename = `${buildUasPrintJobTitle(spec)}.html`;
+  try {
+    const blob = new Blob(["\ufeff", html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      a.remove();
+      URL.revokeObjectURL(url);
+    }, 1000);
+    return { ok: true, filename };
+  } catch {
+    return { ok: false, filename };
+  }
+}
+
+/**
  * Dispatches the clean light-mode document to the native print / Save-as-PDF spooler
  * across Windows Desktop (UAS.exe), Web (qat.world), and Android APK (Capacitor).
  */
-export async function printUasDocument(spec: UasPrintDocumentSpec): Promise<{ ok: boolean; method: string }> {
+export async function printUasDocument(spec: UasPrintDocumentSpec): Promise<{ ok: boolean; method: string; jobTitle?: string }> {
   if (typeof window === "undefined" || typeof document === "undefined") {
     return { ok: false, method: "ssr_noop" };
   }
 
   const html = buildUasPrintHtml(spec);
-  const jobTitle = `${spec.titleEn || spec.titleAr}-${spec.documentNumber || "UAS"}`
-    .replace(/[^\w\u0600-\u06FF-]+/g, "-")
-    .slice(0, 80);
+  const jobTitle = buildUasPrintJobTitle(spec);
 
   // Android Capacitor APK: inject an isolated light-mode print portal so Android PrintManager
   // captures ONLY the pure light-mode accounting document (never dark UI or AI Copilot).

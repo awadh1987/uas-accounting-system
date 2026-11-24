@@ -1,10 +1,13 @@
 "use client";
 
 import React, { useState } from "react";
-import { Pencil, Plus } from "lucide-react";
+import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
+import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
+import { UasDateInput } from "@/components/UasDateInput";
 import { computeOperatingExpenseTotal, fmtNum } from "@/lib/formulas";
+import { formatIsoToDmy, formatRefreshTimestamp } from "@/lib/uiFormatters";
 import type { UasOperatingExpense, UasProject } from "@/types/uas";
 import {
   AccountingDirectionSelector,
@@ -36,6 +39,8 @@ interface ExpensesTabProps {
   onAddExpense: (payload: ExpensePayload) => Promise<boolean>;
   onEditExpense?: (id: string, payload: ExpensePayload) => Promise<boolean>;
   onDeleteExpense: (id: string) => Promise<void>;
+  onRefreshState?: () => Promise<void>;
+  onToast?: (msg: string) => void;
 }
 
 const CATEGORY_META: Record<
@@ -78,7 +83,11 @@ export function ExpensesTab({
   onAddExpense,
   onEditExpense,
   onDeleteExpense,
+  onRefreshState,
+  onToast,
 }: ExpensesTabProps) {
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState("");
   const [projectId, setProjectId] = useState(projects[0]?.id || "");
   const activeProj = projects.find((p) => p.id === projectId) || projects[0];
   const [harvest, setHarvest] = useState(activeProj?.harvests[0] || "القطفة الأولى");
@@ -325,12 +334,11 @@ export function ExpensesTab({
                   <span className="text-[10px] text-amber-600">(مقفل حسب الصلاحية)</span>
                 )}
               </label>
-              <input
+              <UasDateInput
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
-                type="date"
+                onChange={setDate}
                 disabled={Boolean(editingId) && !canEditDate}
-                className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 disabled:opacity-50"
+                allowClear={false}
               />
             </div>
             <div>
@@ -358,6 +366,11 @@ export function ExpensesTab({
             <p className="text-xs text-slate-500">
               وقود/محروقات، وجبات غذائية، مواد غذائية، أجور نقل، وأخرى
             </p>
+            {lastRefreshedAt && (
+              <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold mt-0.5">
+                {formatRefreshTimestamp(lastRefreshedAt)}
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2 no-print">
             <select
@@ -372,6 +385,28 @@ export function ExpensesTab({
               <option value="أجور نقل">أجور نقل</option>
               <option value="أخرى">أخرى</option>
             </select>
+            {onRefreshState && (
+              <button
+                type="button"
+                disabled={refreshing}
+                onClick={async () => {
+                  setRefreshing(true);
+                  try {
+                    await onRefreshState();
+                    setLastRefreshedAt(new Date().toISOString());
+                    onToast?.("✅ تم تحديث سجل المصروفات التشغيلية");
+                  } catch {
+                    onToast?.("تعذر تحديث المصروفات");
+                  } finally {
+                    setRefreshing(false);
+                  }
+                }}
+                className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+                <span>تحديث</span>
+              </button>
+            )}
             {!readOnly && (
               <button
                 id="expSubTypeInput"
@@ -435,25 +470,29 @@ export function ExpensesTab({
                     <td className="p-2.5 text-slate-500">{e.notes || "—"}</td>
                     {!readOnly && (
                       <td className="p-2.5 no-print">
-                        <div className="flex items-center gap-2">
-                          {canEditRecords && onEditExpense && (
-                            <button
-                              type="button"
-                              onClick={() => openEditDrawer(e)}
-                              className="inline-flex items-center gap-1 text-indigo-600 hover:underline font-bold"
-                            >
-                              <Pencil className="w-3 h-3" />
-                              <span>تعديل</span>
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => onDeleteExpense(e.id)}
-                            className="text-rose-600 hover:underline font-bold"
-                          >
-                            حذف
-                          </button>
-                        </div>
+                        <ActionOverflowMenu
+                          size="xs"
+                          align="end"
+                          label="خيارات المصروف"
+                          items={[
+                            {
+                              id: "edit",
+                              label: "تعديل المصروف",
+                              icon: <Pencil className="w-3.5 h-3.5" />,
+                              hidden: !(canEditRecords && onEditExpense),
+                              onClick: () => openEditDrawer(e),
+                            },
+                            {
+                              id: "delete",
+                              label: "حذف المصروف",
+                              icon: <Trash2 className="w-3.5 h-3.5" />,
+                              tone: "danger",
+                              confirmTitle: "حذف المصروف التشغيلي",
+                              confirmMessage: `هل أنت متأكد من حذف المصروف (${e.category} - ${fmtNum(e.total)} ريال) بتاريخ ${formatIsoToDmy(e.date.slice(0, 10))}؟`,
+                              onClick: () => onDeleteExpense(e.id),
+                            },
+                          ]}
+                        />
                       </td>
                     )}
                   </tr>

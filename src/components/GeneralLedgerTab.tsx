@@ -9,8 +9,10 @@ import {
 } from "@/lib/print/uasDocumentPrinter";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
 import { useFormDraft } from "@/hooks/useFormDraft";
-import { BookOpen, CheckCircle2, Pencil, Plus, RotateCcw, Search, Trash2, AlertTriangle } from "lucide-react";
+import { BookOpen, CheckCircle2, Pencil, Plus, RefreshCw, RotateCcw, Search, Trash2, AlertTriangle } from "lucide-react";
 import { fmtNum } from "@/lib/formulas";
+import { UasDateInput } from "@/components/UasDateInput";
+import { formatRefreshTimestamp } from "@/lib/uiFormatters";
 import type { UasEnterpriseProfile, UasProject, UasUser } from "@/types/uas";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { EmptyState } from "@/components/EmptyState";
@@ -195,11 +197,15 @@ export function GeneralLedgerTab({
     []
   );
 
-  const loadData = useCallback(async () => {
+  const [lastRefreshedAt, setLastRefreshedAt] = useState("");
+
+  const loadData = useCallback(async (manual = false) => {
     setLoading(true);
     try {
       const res = await fetchJournalAndCoa();
       applyJournalAndCoa(res);
+      setLastRefreshedAt(new Date().toISOString());
+      if (manual) onToast("✅ تم تحديث قيود دفتر اليومية العام");
     } catch {
       onToast("تعذر تحميل قيود دفتر اليومية العام");
     } finally {
@@ -417,6 +423,20 @@ export function GeneralLedgerTab({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {lastRefreshedAt && (
+              <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                {formatRefreshTimestamp(lastRefreshedAt)}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => void loadData(true)}
+              disabled={loading}
+              className="px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-300 dark:border-slate-700 inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+              <span>تحديث</span>
+            </button>
             <button
               type="button"
               onClick={() => setShowFxPanel((v) => !v)}
@@ -540,12 +560,11 @@ export function GeneralLedgerTab({
                     <span className="text-[10px] text-amber-600">(مقفل حسب الصلاحية)</span>
                   )}
                 </label>
-                <input
-                  type="date"
+                <UasDateInput
                   value={date}
-                  onChange={(e) => setDate(e.target.value)}
+                  onChange={setDate}
                   disabled={Boolean(editingEntryId) && !canEditDate}
-                  className="w-full rounded-xl border border-slate-300 bg-white dark:bg-slate-900 px-3 py-2 disabled:opacity-50"
+                  allowClear={false}
                 />
               </div>
               <div>
@@ -904,17 +923,17 @@ export function GeneralLedgerTab({
               </option>
             ))}
           </select>
-          <input
-            type="date"
+          <UasDateInput
             value={filterFrom}
-            onChange={(e) => setFilterFrom(e.target.value)}
-            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            onChange={setFilterFrom}
+            placeholder="من: يوم / شهر / سنة"
+            ariaLabel="من تاريخ"
           />
-          <input
-            type="date"
+          <UasDateInput
             value={filterTo}
-            onChange={(e) => setFilterTo(e.target.value)}
-            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            onChange={setFilterTo}
+            placeholder="إلى: يوم / شهر / سنة"
+            ariaLabel="إلى تاريخ"
           />
         </div>
 

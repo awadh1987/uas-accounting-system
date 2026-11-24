@@ -5,13 +5,17 @@ import { SaveDraftButton } from "@/components/SaveDraftButton";
 
 import React, { useCallback, useEffect, useState } from "react";
 import {
+  Archive,
   CheckCircle2,
   ClipboardCheck,
   Edit3,
   FileText,
   PackageCheck,
+  Phone,
   Plus,
   Printer,
+  RefreshCw,
+  RotateCcw,
   Send,
   ShoppingCart,
   Store,
@@ -29,6 +33,10 @@ import {
   AccountingDirectionSelector,
   type CustomAccountPayload,
 } from "@/components/AccountingDirectionSelector";
+import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
+import { UasDateInput } from "@/components/UasDateInput";
+import { formatRefreshTimestamp } from "@/lib/uiFormatters";
+import { filterOutSyntheticTestRecords, isSyntheticTestRecord } from "@/lib/testRecordHygiene";
 
 interface VendorItem {
   id: string;
@@ -263,6 +271,23 @@ export function ProcurementTab({
   }, [fetchProcurementBundle, applyProcurementBundle, onToast]);
 
   const [showArchivedVendors, setShowArchivedVendors] = useState(false);
+  const [hideTestRecords, setHideTestRecords] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string>("");
+
+  const handleRefreshAll = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([loadAll(), onRefreshState()]);
+      setLastRefreshedAt(new Date().toISOString());
+      onToast("✅ تم تحديث بيانات المشتريات والموردين بنجاح");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "تعذر تحديث بيانات المشتريات";
+      onToast(msg);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadAll, onRefreshState, onToast]);
 
   const handleArchiveVendor = useCallback(
     async (v: VendorItem) => {
@@ -305,8 +330,9 @@ export function ProcurementTab({
   );
 
   const handleDeleteVendor = useCallback(
-    async (v: VendorItem) => {
+    async (v: VendorItem, skipConfirm = false) => {
       if (
+        !skipConfirm &&
         !confirm(
           `هل أنت متأكد من حذف المورد (${v.nameAr})؟ في حال وجود حركات أو فواتير مرتبطة سيتم أرشفته آلياً حفاظاً على التاريخ المالي.`
         )
@@ -635,15 +661,17 @@ export function ProcurementTab({
     });
   }
 
-  async function handleDeleteBill(bill: VendorBillItem) {
+  async function handleDeleteBill(bill: VendorBillItem, skipConfirm = false) {
     if (Number(bill.paidAmount) > 0 || (bill.paymentCount ?? 0) > 0) {
-      alert("⚠️ لا يمكن حذف فاتورة تم سدادها أو سداد جزء منها. يرجى إلغاء سندات الصرف المرتبطة أولاً.");
+      onToast("⚠️ لا يمكن حذف فاتورة تم سدادها أو سداد جزء منها. يرجى إلغاء سندات الصرف المرتبطة أولاً.");
       return;
     }
-    const confirmed = window.confirm(
-      `هل أنت متأكد من حذف فاتورة المورد (${bill.billNumber}) بمبلغ ${Number(bill.totalAmount).toLocaleString()} ${bill.currency}؟ سيتم إلغاء القيد المحاسبي المرتبط بها.`
-    );
-    if (!confirmed) return;
+    if (!skipConfirm) {
+      const confirmed = window.confirm(
+        `هل أنت متأكد من حذف فاتورة المورد (${bill.billNumber}) بمبلغ ${Number(bill.totalAmount).toLocaleString()} ${bill.currency}؟ سيتم إلغاء القيد المحاسبي المرتبط بها.`
+      );
+      if (!confirmed) return;
+    }
 
     try {
       const res = await fetch(`/api/procurement/bills?id=${encodeURIComponent(bill.id)}`, {
@@ -664,11 +692,13 @@ export function ProcurementTab({
     }
   }
 
-  async function handleDeletePayment(payment: PaymentVoucherItem) {
-    const confirmed = window.confirm(
-      `هل أنت متأكد من حذف سند الصرف (${payment.voucherNumber}) بمبلغ ${Number(payment.amount).toLocaleString()} ${payment.currency}؟ سيتم إعادة رصيد الفاتورة المرتبطة وعكس القيد المحاسبي.`
-    );
-    if (!confirmed) return;
+  async function handleDeletePayment(payment: PaymentVoucherItem, skipConfirm = false) {
+    if (!skipConfirm) {
+      const confirmed = window.confirm(
+        `هل أنت متأكد من حذف سند الصرف (${payment.voucherNumber}) بمبلغ ${Number(payment.amount).toLocaleString()} ${payment.currency}؟ سيتم إعادة رصيد الفاتورة المرتبطة وعكس القيد المحاسبي.`
+      );
+      if (!confirmed) return;
+    }
 
     try {
       const res = await fetch(`/api/procurement/payments?id=${encodeURIComponent(payment.id)}`, {
@@ -690,22 +720,33 @@ export function ProcurementTab({
   }
 
   const activePoProj = projects.find((p) => p.id === poProjectId);
+  const { visible: visiblePos, hiddenCount: hiddenTestPos } = filterOutSyntheticTestRecords(pos, hideTestRecords);
+  const { visible: visibleBills, hiddenCount: hiddenTestBills } = filterOutSyntheticTestRecords(bills, hideTestRecords);
+  const { visible: visiblePayments, hiddenCount: hiddenTestPayments } = filterOutSyntheticTestRecords(payments, hideTestRecords);
+  const { visible: visibleVendorsAll, hiddenCount: hiddenTestVendors } = filterOutSyntheticTestRecords(vendors, hideTestRecords);
+  const totalSyntheticCount =
+    hiddenTestPos + hiddenTestBills + hiddenTestPayments + hiddenTestVendors;
 
   return (
     <section className="space-y-5">
       <div className="card-surface rounded-2xl p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl accent-bg flex items-center justify-center">
+            <div className="w-10 h-10 rounded-xl accent-bg flex items-center justify-center shrink-0">
               <ShoppingCart className="w-5 h-5" />
             </div>
             <div>
               <h2 className="text-base font-extrabold">
-                إدارة المشتريات والموردين والمطابقة الثلاثية (PO → GRN → Bill → Payment)
+                إدارة المشتريات والموردين والمطابقة الثلاثية
               </h2>
               <p className="text-xs text-slate-500">
-                دورة شراء كاملة مع إنشاء قيد مزدوج آلي للمخزون/المصروفات وذمم الموردين (2111xx).
+                أوامر الشراء والاستلام المخزني وفواتير الموردين وسندات الصرف مع الترحيل الآلي إلى ذمم الموردين.
               </p>
+              {lastRefreshedAt && (
+                <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold mt-0.5">
+                  {formatRefreshTimestamp(lastRefreshedAt)}
+                </div>
+              )}
             </div>
           </div>
 
@@ -719,25 +760,25 @@ export function ProcurementTab({
                 onChange={(e) => setSubTab(e.target.value as "pos" | "bills" | "payments" | "vendors")}
                 className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-extrabold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
               >
-                <option value="pos">{`أوامر الشراء والاستلام (${pos.length})`}</option>
-                <option value="bills">{`فواتير الموردين (${bills.length})`}</option>
-                <option value="payments">{`سندات الصرف (${payments.length})`}</option>
-                <option value="vendors">{`دليل الموردين (${vendors.length})`}</option>
+                <option value="pos">{`أوامر الشراء والاستلام (${visiblePos.length})`}</option>
+                <option value="bills">{`فواتير الموردين (${visibleBills.length})`}</option>
+                <option value="payments">{`سندات الصرف (${visiblePayments.length})`}</option>
+                <option value="vendors">{`دليل الموردين (${visibleVendorsAll.length})`}</option>
               </select>
             </div>
 
             <div className="hidden md:flex flex-wrap items-center gap-1.5">
               {[
-                { id: "pos" as const, label: `أوامر الشراء والاستلام (${pos.length})`, Icon: ClipboardCheck },
-                { id: "bills" as const, label: `فواتير الموردين (${bills.length})`, Icon: FileText },
-                { id: "payments" as const, label: `سندات الصرف (${payments.length})`, Icon: Wallet },
-                { id: "vendors" as const, label: `دليل الموردين (${vendors.length})`, Icon: Store },
+                { id: "pos" as const, label: `أوامر الشراء والاستلام (${visiblePos.length})`, Icon: ClipboardCheck },
+                { id: "bills" as const, label: `فواتير الموردين (${visibleBills.length})`, Icon: FileText },
+                { id: "payments" as const, label: `سندات الصرف (${visiblePayments.length})`, Icon: Wallet },
+                { id: "vendors" as const, label: `دليل الموردين (${visibleVendorsAll.length})`, Icon: Store },
               ].map(({ id, label, Icon }) => (
                 <button
                   key={id}
                   onClick={() => setSubTab(id)}
                   className={`px-3 py-2 rounded-xl font-bold flex items-center gap-1.5 ${
-                    subTab === id ? "accent-bg" : "border border-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    subTab === id ? "accent-bg" : "border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
@@ -745,6 +786,47 @@ export function ProcurementTab({
                 </button>
               ))}
             </div>
+
+            <button
+              type="button"
+              onClick={() => void handleRefreshAll()}
+              disabled={refreshing || loading}
+              className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+              title="تحديث سجلات المشتريات والموردين من الخادم"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing || loading ? "animate-spin" : ""}`} />
+              <span>تحديث</span>
+            </button>
+
+            <ActionOverflowMenu
+              testId="procurement-toolbar-overflow"
+              label="خيارات المشتريات"
+              size="sm"
+              items={[
+                {
+                  id: "toggle-test-records",
+                  label: hideTestRecords
+                    ? `إظهار السجلات التجريبية (${totalSyntheticCount})`
+                    : `إخفاء السجلات التجريبية (${totalSyntheticCount})`,
+                  hidden: totalSyntheticCount === 0,
+                  onClick: () => setHideTestRecords((prev) => !prev),
+                },
+                {
+                  id: "toggle-archived-vendors",
+                  label: showArchivedVendors ? "إخفاء الموردين المؤرشفين" : "إظهار الموردين المؤرشفين",
+                  onClick: () => {
+                    setSubTab("vendors");
+                    setShowArchivedVendors((prev) => !prev);
+                  },
+                },
+                {
+                  id: "refresh-proc",
+                  label: "إعادة تحميل شاملة",
+                  icon: <RefreshCw className="w-3.5 h-3.5" />,
+                  onClick: () => void handleRefreshAll(),
+                },
+              ]}
+            />
 
             {!readOnly && (
               <button
@@ -998,37 +1080,41 @@ export function ProcurementTab({
                                 سداد
                               </button>
                             )}
-                            {!readOnly && canApprove && canEditRecords && b.status !== "VOIDED" && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingBillId(b.id);
-                                  setBillVendorId(b.vendorId);
-                                  setBillProjectId(b.projectId);
-                                  setBillSubProjectId(b.subProjectId || b.subProject?.id || "");
-                                  setBillPoId("");
-                                  setBillDate(b.date.slice(0, 10));
-                                  setBillAmount(String(b.totalAmount));
-                                  setBillIsInventory(b.isInventory);
-                                  setBillNotes(b.notes || "");
-                                  setDrawerKind("bill");
-                                }}
-                                className="px-2 py-1 rounded-lg border border-indigo-300 text-indigo-700 hover:bg-indigo-50 font-bold inline-flex items-center gap-1"
-                              >
-                                <Edit3 className="w-3 h-3" />
-                                <span>تعديل</span>
-                              </button>
-                            )}
                             {!readOnly && canEditRecords && (
-                              <button
-                                type="button"
-                                onClick={() => void handleDeleteBill(b)}
-                                className="px-2 py-1 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 font-bold inline-flex items-center gap-1"
-                                title="حذف الفاتورة"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                                <span>حذف</span>
-                              </button>
+                              <ActionOverflowMenu
+                                size="xs"
+                                align="end"
+                                label="خيارات الفاتورة"
+                                items={[
+                                  {
+                                    id: "edit-bill",
+                                    label: "تعديل الفاتورة",
+                                    icon: <Edit3 className="w-3.5 h-3.5" />,
+                                    hidden: !canApprove || b.status === "VOIDED",
+                                    onClick: () => {
+                                      setEditingBillId(b.id);
+                                      setBillVendorId(b.vendorId);
+                                      setBillProjectId(b.projectId);
+                                      setBillSubProjectId(b.subProjectId || b.subProject?.id || "");
+                                      setBillPoId("");
+                                      setBillDate(b.date.slice(0, 10));
+                                      setBillAmount(String(b.totalAmount));
+                                      setBillIsInventory(b.isInventory);
+                                      setBillNotes(b.notes || "");
+                                      setDrawerKind("bill");
+                                    },
+                                  },
+                                  {
+                                    id: "delete-bill",
+                                    label: "حذف الفاتورة",
+                                    icon: <Trash2 className="w-3.5 h-3.5" />,
+                                    tone: "danger",
+                                    confirmTitle: "حذف فاتورة المورد",
+                                    confirmMessage: `هل أنت متأكد من حذف فاتورة المورد (${b.billNumber}) بمبلغ ${fmtNum(b.totalAmount)} ${b.currency}؟ سيتم إلغاء القيد المحاسبي المرتبط بها.`,
+                                    onClick: () => handleDeleteBill(b, true),
+                                  },
+                                ]}
+                              />
                             )}
                           </div>
                         </td>
@@ -1111,38 +1197,42 @@ export function ProcurementTab({
                                 تم التحويل: {executedDispatches[p.id]}
                               </span>
                             )}
-                            {!readOnly && canApprove && canEditRecords && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingPaymentId(p.id);
-                                  setPayVendorId(p.vendorId || p.vendor.id);
-                                  setPayBillId(p.billId || p.bill?.id || "");
-                                  setPayProjectId(p.projectId || "");
-                                  setPaySubProjectId(p.subProjectId || p.subProject?.id || "");
-                                  setPayTreasuryId(p.treasuryId || p.treasury.id);
-                                  setPayDate(p.date.slice(0, 10));
-                                  setPayAmount(String(p.amount));
-                                  setPayRef(p.referenceNumber || "");
-                                  setPayNotes(p.notes || "");
-                                  setDrawerKind("payment");
-                                }}
-                                className="px-2 py-1 rounded-lg border border-indigo-300 text-indigo-700 hover:bg-indigo-50 font-bold inline-flex items-center gap-1"
-                              >
-                                <Edit3 className="w-3 h-3" />
-                                <span>تعديل</span>
-                              </button>
-                            )}
                             {!readOnly && canEditRecords && (
-                              <button
-                                type="button"
-                                onClick={() => void handleDeletePayment(p)}
-                                className="px-2 py-1 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 font-bold inline-flex items-center gap-1"
-                                title="حذف سند الصرف"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                                <span>حذف</span>
-                              </button>
+                              <ActionOverflowMenu
+                                size="xs"
+                                align="end"
+                                label="خيارات السند"
+                                items={[
+                                  {
+                                    id: "edit-payment",
+                                    label: "تعديل سند الصرف",
+                                    icon: <Edit3 className="w-3.5 h-3.5" />,
+                                    hidden: !canApprove,
+                                    onClick: () => {
+                                      setEditingPaymentId(p.id);
+                                      setPayVendorId(p.vendorId || p.vendor.id);
+                                      setPayBillId(p.billId || p.bill?.id || "");
+                                      setPayProjectId(p.projectId || "");
+                                      setPaySubProjectId(p.subProjectId || p.subProject?.id || "");
+                                      setPayTreasuryId(p.treasuryId || p.treasury.id);
+                                      setPayDate(p.date.slice(0, 10));
+                                      setPayAmount(String(p.amount));
+                                      setPayRef(p.referenceNumber || "");
+                                      setPayNotes(p.notes || "");
+                                      setDrawerKind("payment");
+                                    },
+                                  },
+                                  {
+                                    id: "delete-payment",
+                                    label: "حذف سند الصرف",
+                                    icon: <Trash2 className="w-3.5 h-3.5" />,
+                                    tone: "danger",
+                                    confirmTitle: "حذف سند الصرف",
+                                    confirmMessage: `هل أنت متأكد من حذف سند الصرف (${p.voucherNumber}) بمبلغ ${fmtNum(p.amount)} ${p.currency}؟ سيتم إعادة رصيد الفاتورة المرتبطة وعكس القيد المحاسبي.`,
+                                    onClick: () => handleDeletePayment(p, true),
+                                  },
+                                ]}
+                              />
                             )}
                           </div>
                         </td>
@@ -1191,10 +1281,11 @@ export function ProcurementTab({
               />
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {vendors
+                {visibleVendorsAll
                   .filter((v) => (showArchivedVendors ? true : v.isActive !== false))
                   .map((v) => {
                     const isArchived = v.isActive === false;
+                    const isTestRec = isSyntheticTestRecord(v);
                     return (
                       <div
                         key={v.id}
@@ -1204,7 +1295,7 @@ export function ProcurementTab({
                             : "border-slate-200 dark:border-slate-700"
                         }`}
                       >
-                        <div className="flex justify-between items-center">
+                        <div className="flex justify-between items-start gap-2">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-mono font-bold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
                               {v.code} • COA {v.account.code}
@@ -1214,10 +1305,61 @@ export function ProcurementTab({
                                 مؤرشف
                               </span>
                             )}
+                            {isTestRec && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                                تجريبي
+                              </span>
+                            )}
                           </div>
-                          <span className="text-slate-500 font-mono text-[11px]">{v.phone}</span>
+                          {!readOnly && (
+                            <ActionOverflowMenu
+                              size="xs"
+                              align="end"
+                              label="خيارات البطاقة"
+                              items={[
+                                {
+                                  id: "edit",
+                                  label: "تعديل بيانات المورد",
+                                  icon: <Edit3 className="w-3.5 h-3.5" />,
+                                  onClick: () => {
+                                    setEditingVendorId(v.id);
+                                    setVNameAr(v.nameAr);
+                                    setVNameEn(v.nameEn || "");
+                                    setVPhone(v.phone);
+                                    setVTax(v.taxRegistration || "");
+                                    setDrawerKind("vendor");
+                                  },
+                                },
+                                {
+                                  id: "archive",
+                                  label: isArchived ? "استعادة المورد" : "أرشفة المورد",
+                                  icon: isArchived ? <RotateCcw className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />,
+                                  tone: isArchived ? "default" : "warning",
+                                  onClick: () => (isArchived ? handleRestoreVendor(v) : handleArchiveVendor(v)),
+                                },
+                                {
+                                  id: "delete",
+                                  label: isArchived ? "حذف نهائي" : "حذف المورد",
+                                  icon: <Trash2 className="w-3.5 h-3.5" />,
+                                  tone: "danger",
+                                  dividerBefore: true,
+                                  confirmTitle: `حذف المورد (${v.nameAr})`,
+                                  confirmMessage:
+                                    "في حال وجود حركات أو فواتير مرتبطة بهذا المورد سيتم أرشفته آلياً حفاظاً على التاريخ المالي، وإلا سيُحذف نهائياً.",
+                                  onClick: () => handleDeleteVendor(v, true),
+                                },
+                              ]}
+                            />
+                          )}
                         </div>
-                        <div className="font-extrabold text-sm">{v.nameAr}</div>
+                        <div className="font-extrabold text-sm text-slate-900 dark:text-white">{v.nameAr}</div>
+                        <div className="flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-300">
+                          <Phone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span className="font-semibold text-slate-500 dark:text-slate-400">رقم الهاتف:</span>
+                          <bdi dir="ltr" className="font-mono font-bold text-slate-800 dark:text-slate-100">
+                            {v.phone || "غير مسجل"}
+                          </bdi>
+                        </div>
                         <div className="grid grid-cols-3 gap-2 pt-2 border-t text-center tabular-nums">
                           <div>
                             <div className="text-[10px] text-slate-400">الفواتير</div>
@@ -1234,57 +1376,23 @@ export function ProcurementTab({
                         </div>
 
                         {!readOnly && (
-                          <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2">
-                            {!isArchived ? (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingVendorId(v.id);
-                                    setVNameAr(v.nameAr);
-                                    setVNameEn(v.nameEn || "");
-                                    setVPhone(v.phone);
-                                    setVTax(v.taxRegistration || "");
-                                    setDrawerKind("vendor");
-                                  }}
-                                  className="text-indigo-600 font-bold hover:underline inline-flex items-center gap-0.5"
-                                >
-                                  <Edit3 className="w-3 h-3" />
-                                  <span>تعديل</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleArchiveVendor(v)}
-                                  className="text-amber-700 dark:text-amber-400 font-bold hover:underline"
-                                >
-                                  أرشفة
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleDeleteVendor(v)}
-                                  className="text-rose-600 font-bold hover:underline"
-                                >
-                                  حذف
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleRestoreVendor(v)}
-                                  className="text-emerald-700 dark:text-emerald-400 font-bold hover:underline"
-                                >
-                                  استعادة
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleDeleteVendor(v)}
-                                  className="text-rose-600 font-bold hover:underline"
-                                >
-                                  حذف نهائي
-                                </button>
-                              </>
-                            )}
+                          <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingVendorId(v.id);
+                                setVNameAr(v.nameAr);
+                                setVNameEn(v.nameEn || "");
+                                setVPhone(v.phone);
+                                setVTax(v.taxRegistration || "");
+                                setDrawerKind("vendor");
+                              }}
+                              className="text-indigo-600 dark:text-indigo-400 font-bold hover:underline inline-flex items-center gap-1"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                              <span>تعديل البيانات</span>
+                            </button>
+                            <span className="text-[10px] text-slate-400">خيارات أخرى من ⋮</span>
                           </div>
                         )}
                       </div>
@@ -1314,12 +1422,11 @@ export function ProcurementTab({
                 <span className="text-[10px] text-amber-600">(مقفل حسب الصلاحية)</span>
               )}
             </label>
-            <input
-              type="date"
+            <UasDateInput
               value={poDate}
-              onChange={(e) => setPoDate(e.target.value)}
+              onChange={setPoDate}
               disabled={Boolean(editingPoId) && !canEditDate}
-              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 disabled:opacity-50"
+              allowClear={false}
             />
           </div>
           <div>
@@ -1480,12 +1587,11 @@ export function ProcurementTab({
                 <span className="text-[10px] text-amber-600">(مقفل حسب الصلاحية)</span>
               )}
             </label>
-            <input
-              type="date"
+            <UasDateInput
               value={billDate}
-              onChange={(e) => setBillDate(e.target.value)}
+              onChange={setBillDate}
               disabled={Boolean(editingBillId) && !canEditDate}
-              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 disabled:opacity-50"
+              allowClear={false}
             />
           </div>
           <div>
@@ -1640,12 +1746,11 @@ export function ProcurementTab({
                 <span className="text-[10px] text-amber-600">(مقفل حسب الصلاحية)</span>
               )}
             </label>
-            <input
-              type="date"
+            <UasDateInput
               value={payDate}
-              onChange={(e) => setPayDate(e.target.value)}
+              onChange={setPayDate}
               disabled={Boolean(editingPaymentId) && !canEditDate}
-              className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 disabled:opacity-50"
+              allowClear={false}
             />
           </div>
           <div>

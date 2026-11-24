@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Edit3, FolderTree, Plus, RefreshCw, Search } from "lucide-react";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
 import { fmtNum } from "@/lib/formulas";
+import { formatRefreshTimestamp } from "@/lib/uiFormatters";
 
 export interface CoaNodeItem {
   id: string;
@@ -110,11 +111,15 @@ export function CoaTreeTab({
     setExpanded((prev) => (Object.keys(prev).length > 0 ? prev : initExp));
   }, []);
 
-  const loadTree = useCallback(async () => {
+  const [lastRefreshedAt, setLastRefreshedAt] = useState("");
+
+  const loadTree = useCallback(async (manual = false) => {
     setLoading(true);
     try {
       const data = await fetchTreePayload();
       applyTreePayload(data);
+      setLastRefreshedAt(new Date().toISOString());
+      if (manual) onToast("✅ تم تحديث أرصدة وهيكل شجرة الحسابات");
     } catch {
       onToast("تعذر تحميل شجرة الحسابات");
     } finally {
@@ -478,11 +483,18 @@ export function CoaTreeTab({
             >
               طي الكل
             </button>
+            {lastRefreshedAt && (
+              <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                {formatRefreshTimestamp(lastRefreshedAt)}
+              </span>
+            )}
             <button
-              onClick={loadTree}
-              className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold flex items-center gap-1"
+              type="button"
+              onClick={() => void loadTree(true)}
+              disabled={loading}
+              className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold flex items-center gap-1 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
             >
-              <RefreshCw className="w-3.5 h-3.5" />
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
               <span>تحديث</span>
             </button>
             {!readOnly && canEdit && (

@@ -1,10 +1,24 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { Pencil, Plus, Printer, Send } from "lucide-react";
+import {
+  Archive,
+  Pencil,
+  Phone,
+  Plus,
+  Printer,
+  RefreshCw,
+  RotateCcw,
+  Send,
+  Trash2,
+} from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
+import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
+import { UasDateInput } from "@/components/UasDateInput";
 import { computeWorkerWageTotals, fmtNum } from "@/lib/formulas";
+import { formatIsoToDmy, formatRefreshTimestamp } from "@/lib/uiFormatters";
+import { filterOutSyntheticTestRecords, isSyntheticTestRecord } from "@/lib/testRecordHygiene";
 import {
   printUasDocument,
   resolveLetterheadFromProfile,
@@ -241,7 +255,13 @@ export function WorkersTab({
   }, []);
 
   React.useEffect(() => {
-    loadMasterWorkers();
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) void loadMasterWorkers();
+    });
+    return () => {
+      active = false;
+    };
   }, [loadMasterWorkers, workers]);
 
   const handleArchiveMasterWorker = React.useCallback(
@@ -284,9 +304,27 @@ export function WorkersTab({
     [loadMasterWorkers, onToast]
   );
 
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState("");
+  const [hideTestRecords, setHideTestRecords] = useState(false);
+
+  const handleRefreshAll = React.useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([loadMasterWorkers(), onRefreshState?.()]);
+      setLastRefreshedAt(new Date().toISOString());
+      onToast("✅ تم تحديث سجلات العمال والأجور بنجاح");
+    } catch {
+      onToast("تعذر تحديث بيانات العمال");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadMasterWorkers, onRefreshState, onToast]);
+
   const handleDeleteMasterWorker = React.useCallback(
-    async (w: WorkerMasterItem) => {
+    async (w: WorkerMasterItem, skipConfirm = false) => {
       if (
+        !skipConfirm &&
         !confirm(
           `هل أنت متأكد من حذف العامل (${w.name})؟ في حال وجود سجلات أجور أو قيود مرتبطة سيتم أرشفته آلياً حفاظاً على التاريخ المالي.`
         )
@@ -441,12 +479,11 @@ export function WorkersTab({
                   <span className="text-[10px] text-amber-600">(مقفل حسب الصلاحية)</span>
                 )}
               </label>
-              <input
+              <UasDateInput
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
-                type="date"
+                onChange={setDate}
                 disabled={Boolean(editingId) && !canEditDate}
-                className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 disabled:opacity-50"
+                allowClear={false}
               />
             </div>
             <div>
@@ -488,7 +525,7 @@ export function WorkersTab({
 
       {/* Sub-Tabs: Wages vs Directory */}
       <div className="card-surface rounded-2xl p-2 flex flex-wrap items-center justify-between gap-2 no-print">
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             onClick={() => setSubView("wages")}
@@ -507,8 +544,51 @@ export function WorkersTab({
               : "text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
               }`}
           >
-            دليل العمال وحسابات الذمم (2112xx) ({masterWorkers.length})
+            دليل العمال وحسابات الذمم (<bdi dir="ltr">2112xx</bdi>) ({masterWorkers.length})
           </button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {lastRefreshedAt && (
+            <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+              {formatRefreshTimestamp(lastRefreshedAt)}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => void handleRefreshAll()}
+            disabled={refreshing}
+            className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+            <span>تحديث</span>
+          </button>
+          <ActionOverflowMenu
+            testId="workers-toolbar-overflow"
+            label="خيارات العمال"
+            size="sm"
+            items={[
+              {
+                id: "toggle-archived",
+                label: showArchivedWorkers ? "إخفاء العمال المؤرشفين" : "إظهار العمال المؤرشفين",
+                icon: <Archive className="w-3.5 h-3.5" />,
+                onClick: () => {
+                  setSubView("directory");
+                  setShowArchivedWorkers((p) => !p);
+                },
+              },
+              {
+                id: "toggle-test",
+                label: hideTestRecords ? "إظهار السجلات التجريبية" : "إخفاء السجلات التجريبية",
+                onClick: () => setHideTestRecords((p) => !p),
+              },
+              {
+                id: "export-excel",
+                label: "تصدير أجور العمال Excel",
+                onClick: () => onExportWorkerExcel(filterWorker),
+              },
+            ]}
+          />
         </div>
       </div>
 
@@ -542,10 +622,11 @@ export function WorkersTab({
             />
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {masterWorkers
-                .filter((w) => (showArchivedWorkers ? true : w.isActive !== false))
+              {filterOutSyntheticTestRecords(masterWorkers, hideTestRecords)
+                .visible.filter((w) => (showArchivedWorkers ? true : w.isActive !== false))
                 .map((w) => {
                   const isArchived = w.isActive === false;
+                  const isTestWorker = isSyntheticTestRecord(w);
                   return (
                     <div
                       key={w.id}
@@ -554,7 +635,7 @@ export function WorkersTab({
                         : "border-slate-200 dark:border-slate-700"
                         }`}
                     >
-                      <div className="flex justify-between items-center">
+                      <div className="flex justify-between items-start gap-2">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="font-mono font-bold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
                             COA {w.account?.code || "2112xx"}
@@ -564,11 +645,68 @@ export function WorkersTab({
                               مؤرشف
                             </span>
                           )}
+                          {isTestWorker && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                              تجريبي
+                            </span>
+                          )}
                         </div>
-                        {w.phone && <span className="text-slate-500 font-mono text-[11px]">{w.phone}</span>}
+                        {!readOnly && (
+                          <ActionOverflowMenu
+                            size="xs"
+                            align="end"
+                            label="خيارات بطاقة العامل"
+                            items={[
+                              {
+                                id: "bank-payout",
+                                label: "صرف وتحويل بنكي للمستحقات",
+                                icon: <Send className="w-3.5 h-3.5" />,
+                                hidden: isArchived || (w.balanceDue ?? 0) <= 0,
+                                onClick: () => {
+                                  setPayoutInitialData({
+                                    sourceVoucherType: "WORKER_WAGE",
+                                    sourceVoucherId: `WRK-DIR-${w.id}`,
+                                    beneficiaryName: w.name,
+                                    beneficiaryAccountOrPhone: w.phone || "",
+                                    amount: w.balanceDue || 0,
+                                    currencyCode: "YER",
+                                    notes: `صرف مستحقات العامل: ${w.name}`,
+                                  });
+                                  setPayoutModalOpen(true);
+                                },
+                              },
+                              {
+                                id: "archive",
+                                label: isArchived ? "استعادة العامل" : "أرشفة العامل",
+                                icon: isArchived ? <RotateCcw className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />,
+                                tone: isArchived ? "default" : "warning",
+                                onClick: () =>
+                                  isArchived ? handleRestoreMasterWorker(w) : handleArchiveMasterWorker(w),
+                              },
+                              {
+                                id: "delete",
+                                label: isArchived ? "حذف نهائي" : "حذف العامل",
+                                icon: <Trash2 className="w-3.5 h-3.5" />,
+                                tone: "danger",
+                                dividerBefore: true,
+                                confirmTitle: `حذف العامل (${w.name})`,
+                                confirmMessage:
+                                  "في حال وجود سجلات أجور أو قيود مرتبطة بهذا العامل سيتم أرشفته آلياً حفاظاً على التاريخ المالي.",
+                                onClick: () => handleDeleteMasterWorker(w, true),
+                              },
+                            ]}
+                          />
+                        )}
                       </div>
 
-                      <div className="font-extrabold text-sm">{w.name}</div>
+                      <div className="font-extrabold text-sm text-slate-900 dark:text-white">{w.name}</div>
+                      <div className="flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-300">
+                        <Phone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span className="font-semibold text-slate-500 dark:text-slate-400">رقم الهاتف:</span>
+                        <bdi dir="ltr" className="font-mono font-bold text-slate-800 dark:text-slate-100">
+                          {w.phone || "غير مسجل"}
+                        </bdi>
+                      </div>
                       <div className="text-[11px] text-slate-500">
                         الأجر الافتراضي: <span className="font-mono font-bold tabular-nums">{fmtNum(w.defaultDailyWage ?? 0)}</span> ريال
                       </div>
@@ -588,64 +726,28 @@ export function WorkersTab({
                         </div>
                       </div>
 
-                      {!readOnly && (
-                        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2 flex-wrap">
-                          {!isArchived ? (
-                            <>
-                              {(w.balanceDue ?? 0) > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setPayoutInitialData({
-                                      sourceVoucherType: "WORKER_WAGE",
-                                      sourceVoucherId: `WRK-DIR-${w.id}`,
-                                      beneficiaryName: w.name,
-                                      beneficiaryAccountOrPhone: w.phone || "",
-                                      amount: w.balanceDue || 0,
-                                      currencyCode: "YER",
-                                      notes: `صرف مستحقات العامل: ${w.name}`,
-                                    });
-                                    setPayoutModalOpen(true);
-                                  }}
-                                  className="text-emerald-700 dark:text-emerald-400 font-bold hover:underline inline-flex items-center gap-0.5"
-                                >
-                                  <Send className="w-3 h-3" />
-                                  <span>تحويل بنكي</span>
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => void handleArchiveMasterWorker(w)}
-                                className="text-amber-700 dark:text-amber-400 font-bold hover:underline"
-                              >
-                                أرشفة
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void handleDeleteMasterWorker(w)}
-                                className="text-rose-600 font-bold hover:underline"
-                              >
-                                حذف
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => void handleRestoreMasterWorker(w)}
-                                className="text-emerald-700 dark:text-emerald-400 font-bold hover:underline"
-                              >
-                                استعادة
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void handleDeleteMasterWorker(w)}
-                                className="text-rose-600 font-bold hover:underline"
-                              >
-                                حذف نهائي
-                              </button>
-                            </>
-                          )}
+                      {!readOnly && !isArchived && (w.balanceDue ?? 0) > 0 && (
+                        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPayoutInitialData({
+                                sourceVoucherType: "WORKER_WAGE",
+                                sourceVoucherId: `WRK-DIR-${w.id}`,
+                                beneficiaryName: w.name,
+                                beneficiaryAccountOrPhone: w.phone || "",
+                                amount: w.balanceDue || 0,
+                                currencyCode: "YER",
+                                notes: `صرف مستحقات العامل: ${w.name}`,
+                              });
+                              setPayoutModalOpen(true);
+                            }}
+                            className="text-emerald-700 dark:text-emerald-400 font-bold hover:underline inline-flex items-center gap-1"
+                          >
+                            <Send className="w-3 h-3" />
+                            <span>تحويل بنكي للمستحقات</span>
+                          </button>
+                          <span className="text-[10px] text-slate-400">خيارات أخرى من ⋮</span>
                         </div>
                       )}
                     </div>
@@ -832,24 +934,30 @@ export function WorkersTab({
                             تم: {executedWorkerDispatches[w.id]}
                           </span>
                         )}
-                        {!readOnly && canEditRecords && onEditWorker && (
-                          <button
-                            type="button"
-                            onClick={() => openEditDrawer(w)}
-                            className="inline-flex items-center gap-1 text-indigo-600 hover:underline font-bold"
-                          >
-                            <Pencil className="w-3 h-3" />
-                            <span>تعديل</span>
-                          </button>
-                        )}
                         {!readOnly && (
-                          <button
-                            type="button"
-                            onClick={() => onDeleteWorker(w.id)}
-                            className="text-rose-600 hover:underline font-bold"
-                          >
-                            حذف
-                          </button>
+                          <ActionOverflowMenu
+                            size="xs"
+                            align="end"
+                            label="خيارات سجل الأجر"
+                            items={[
+                              {
+                                id: "edit",
+                                label: "تعديل سجل الأجر",
+                                icon: <Pencil className="w-3.5 h-3.5" />,
+                                hidden: !(canEditRecords && onEditWorker),
+                                onClick: () => openEditDrawer(w),
+                              },
+                              {
+                                id: "delete",
+                                label: "حذف سجل الأجر",
+                                icon: <Trash2 className="w-3.5 h-3.5" />,
+                                tone: "danger",
+                                confirmTitle: "حذف سجل أجر العامل",
+                                confirmMessage: `هل أنت متأكد من حذف سجل أجر العامل (${w.name}) بتاريخ ${formatIsoToDmy(w.date.slice(0, 10))}؟`,
+                                onClick: () => onDeleteWorker(w.id),
+                              },
+                            ]}
+                          />
                         )}
                       </td>
                     </tr>

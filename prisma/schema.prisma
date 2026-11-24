@@ -1499,5 +1499,140 @@ model TenantDevice {
   @@index([userId])
 }
 
+// =============================================================================
+// Phase 9: External Client Portal, Requests & WhatsApp Approval Queue
+// =============================================================================
+
+model ClientPortalAccount {
+  id               String    @id @default(cuid())
+  customerId       String?
+  fullName         String
+  tradeName        String?
+  phone            String    @unique
+  email            String    @unique
+  passwordHash     String
+  clientType       String    @default("DIRECT_CLIENT") // WHOLESALE | RETAIL | DISTRIBUTOR | DIRECT_CLIENT | OTHER
+  customClientType String?
+  preferredPickup  String    @default("السوق")
+  customFieldsJson String    @default("{}")
+  status           String    @default("PENDING_APPROVAL") // PENDING_APPROVAL | ACTIVE | REJECTED | SUSPENDED
+  notes            String?
+  approvedById     String?
+  approvedByName   String?
+  approvedAt       DateTime?
+  rejectedReason   String?
+  lastLoginAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  requests ClientGoodsRequest[]
+
+  @@index([status, createdAt])
+  @@index([customerId])
+}
+
+model ClientGoodsRequest {
+  id                  String                @id @default(cuid())
+  requestNumber       String                @unique
+  clientAccountId     String
+  clientAccount       ClientPortalAccount   @relation(fields: [clientAccountId], references: [id], onDelete: Cascade)
+  customerId          String?
+  status              String                @default("PENDING_REVIEW") // PENDING_REVIEW | CONFIRMED | READY_FOR_PICKUP | COMPLETED | CANCELLED | REJECTED
+  pickupType          String                @default("MARKET") // MARKET | BRANCH | WAREHOUSE | OTHER
+  pickupLocation      String                @default("السوق")
+  pickupNotes         String?
+  customDataJson      String                @default("{}")
+  reserveStock        Boolean               @default(false)
+  reservedSummaryJson String                @default("[]")
+  totalEstimated      Decimal               @default(0)
+  totalConfirmed      Decimal               @default(0)
+  currency            String                @default("YER")
+  projectId           String?
+  subProjectId        String?
+  harvestName         String?
+  linkedInvoiceId     String?
+  linkedSaleId        String?
+  linkedReceiptId     String?
+  reviewedById        String?
+  reviewedByName      String?
+  reviewedAt          DateTime?
+  readyAt             DateTime?
+  handedOverById      String?
+  handedOverByName    String?
+  handedOverAt        DateTime?
+  staffNotes          String?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  lines ClientGoodsRequestLine[]
+
+  @@index([clientAccountId, createdAt])
+  @@index([customerId, status])
+  @@index([status, createdAt])
+}
+
+model ClientGoodsRequestLine {
+  id              String             @id @default(cuid())
+  requestId       String
+  request         ClientGoodsRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  lineOrder       Int                @default(1)
+  itemId          String?
+  itemTitle       String
+  requestedQty    Decimal
+  confirmedQty    Decimal?
+  unitCode        String             @default("QAT_BUNCH") // QAT_BUNCH | BUNDLE | BAG | CARTON | KG | OTHER
+  unitLabel       String             @default("علاقية قات")
+  customUnitLabel String?
+  unitPrice       Decimal            @default(0)
+  lineTotal       Decimal            @default(0)
+  notes           String?
+
+  @@index([requestId])
+}
+
+model WhatsAppOutboxMessage {
+  id                   String    @id @default(cuid())
+  draftNumber          String    @unique
+  eventType            String    // CLIENT_APPROVED | REQUEST_RECEIVED | REQUEST_CONFIRMED | READY_FOR_PICKUP | HANDOVER_INVOICE | PAYMENT_RECEIPT | BALANCE_SUMMARY | CUSTOM
+  clientAccountId      String?
+  customerId           String?
+  requestId            String?
+  recipientName        String
+  recipientPhone       String
+  templateKey          String?
+  originalMessageText  String
+  finalMessageText     String
+  status               String    @default("PENDING_APPROVAL") // PENDING_APPROVAL | APPROVED_SENT | DISPATCHED_LINK | SKIPPED | FAILED
+  dispatchChannel      String    @default("WHATSAPP_LINK") // WHATSAPP_LINK | GATEWAY_API
+  approvedByUserId     String?
+  approvedByName       String?
+  approvedAt           DateTime?
+  sentAt               DateTime?
+  skippedReason        String?
+  providerResponseJson String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([clientAccountId, createdAt])
+  @@index([customerId, createdAt])
+}
+
+model TenantIntegrationSetting {
+  id                   String   @id @default("whatsapp") // e.g. "whatsapp" | "portal_form"
+  provider             String   @default("WHATSAPP_WEB_LINK") // WHATSAPP_WEB_LINK | CLOUD_API | CUSTOM_WEBHOOK
+  gatewayUrl           String?
+  credentialsEnc       String?
+  senderPhone          String?
+  defaultCountryCode   String   @default("967")
+  autoDraftEventsJson  String   @default("{}")
+  templatesJson        String   @default("{}")
+  configJson           String   @default("{}")
+  isActive             Boolean  @default(true)
+  updatedById          String?
+  updatedAt            DateTime @updatedAt
+}
+
+
 
 

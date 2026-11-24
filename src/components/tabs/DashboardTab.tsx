@@ -11,7 +11,9 @@ import {
   Tooltip,
 } from "chart.js";
 import { Bar, Doughnut } from "react-chartjs-2";
+import { RefreshCw } from "lucide-react";
 import { computeNetOperatingProfit, fmtNum, formatCurrencyVal, type CurrencyCode } from "@/lib/formulas";
+import { formatRefreshTimestamp } from "@/lib/uiFormatters";
 import { getDict } from "@/lib/i18n";
 import {
   printUasDocument,
@@ -39,6 +41,7 @@ interface DashboardTabProps {
   filteredWorkers: UasWorkerWage[];
   onExportExcel: () => void;
   onSwitchTab: (tab: TabId) => void;
+  onRefreshState?: () => Promise<void>;
   onToast: (msg: string) => void;
 }
 
@@ -53,8 +56,11 @@ export function DashboardTab({
   filteredWorkers,
   onExportExcel,
   onSwitchTab,
+  onRefreshState,
   onToast,
 }: DashboardTabProps) {
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState("");
   const dict = getDict(lang);
   const [searchVal, setSearchVal] = useState("");
 
@@ -247,6 +253,33 @@ export function DashboardTab({
           <p className="text-xs text-slate-500">{dict.dashSubtitle}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 no-print">
+          {lastRefreshedAt && (
+            <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+              {formatRefreshTimestamp(lastRefreshedAt, lang)}
+            </span>
+          )}
+          {onRefreshState && (
+            <button
+              type="button"
+              disabled={refreshing}
+              onClick={async () => {
+                setRefreshing(true);
+                try {
+                  await onRefreshState();
+                  setLastRefreshedAt(new Date().toISOString());
+                  onToast(lang === "ar" ? "✅ تم تحديث ملخص المشاريع والأرصدة" : "✅ Dashboard refreshed");
+                } catch {
+                  onToast(lang === "ar" ? "تعذر تحديث البيانات" : "Refresh failed");
+                } finally {
+                  setRefreshing(false);
+                }
+              }}
+              className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              <span>{lang === "ar" ? "تحديث" : "Refresh"}</span>
+            </button>
+          )}
           <button
             onClick={onExportExcel}
             className="px-3.5 py-2 rounded-xl accent-bg text-xs font-bold shadow-sm flex items-center gap-1.5"

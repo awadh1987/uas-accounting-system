@@ -3,13 +3,16 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
+  Archive,
   Briefcase,
   Edit3,
   FilePlus2,
   FolderKanban,
   Lock,
   Plus,
+  RotateCcw,
   Store,
+  Trash2,
   Unlock,
   Wallet,
 } from "lucide-react";
@@ -19,6 +22,7 @@ import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { EmptyState } from "@/components/EmptyState";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
 import { SelectWithOther } from "@/components/SelectWithOther";
+import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
 
 interface OwnerVendorOption {
   id: string;
@@ -293,8 +297,9 @@ export function ProjectsManagerTab({
   );
 
   const handleDeleteProject = useCallback(
-    async (proj: ApiProjectItem) => {
+    async (proj: ApiProjectItem, skipConfirm = false) => {
       if (
+        !skipConfirm &&
         !confirm(
           `هل أنت متأكد من حذف المشروع (${proj.nameAr})؟ في حال وجود حركات أو قيود أو دورات مرتبطة سيتم أرشفته آلياً حفاظاً على التاريخ المالي.`
         )
@@ -901,32 +906,33 @@ export function ProjectsManagerTab({
                         <span>تعديل</span>
                       </button>
                     )}
-                    {!readOnly && !isArchived && (
-                      <button
-                        type="button"
-                        onClick={() => void handleArchiveProject(proj)}
-                        className="px-2.5 py-1 rounded-lg border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 font-bold hover:bg-amber-50"
-                      >
-                        أرشفة
-                      </button>
-                    )}
-                    {!readOnly && isArchived && (
-                      <button
-                        type="button"
-                        onClick={() => void handleRestoreProject(proj)}
-                        className="px-2.5 py-1 rounded-lg border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 font-bold hover:bg-emerald-50"
-                      >
-                        استعادة
-                      </button>
-                    )}
                     {!readOnly && (
-                      <button
-                        type="button"
-                        onClick={() => void handleDeleteProject(proj)}
-                        className="px-2.5 py-1 rounded-lg border border-rose-300 dark:border-rose-700 text-rose-600 font-bold hover:bg-rose-50"
-                      >
-                        {isArchived ? "حذف نهائي" : "حذف"}
-                      </button>
+                      <ActionOverflowMenu
+                        size="xs"
+                        align="end"
+                        label="خيارات المشروع"
+                        items={[
+                          {
+                            id: "archive",
+                            label: isArchived ? "استعادة المشروع" : "أرشفة المشروع",
+                            icon: isArchived ? <RotateCcw className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />,
+                            tone: isArchived ? "default" : "warning",
+                            onClick: () =>
+                              isArchived ? handleRestoreProject(proj) : handleArchiveProject(proj),
+                          },
+                          {
+                            id: "delete",
+                            label: isArchived ? "حذف نهائي" : "حذف المشروع",
+                            icon: <Trash2 className="w-3.5 h-3.5" />,
+                            tone: "danger",
+                            dividerBefore: true,
+                            confirmTitle: `حذف المشروع (${proj.nameAr})`,
+                            confirmMessage:
+                              "في حال وجود حركات أو قيود أو دورات مرتبطة سيتم أرشفته آلياً حفاظاً على التاريخ المالي.",
+                            onClick: () => handleDeleteProject(proj, true),
+                          },
+                        ]}
+                      />
                     )}
                   </div>
                 </div>

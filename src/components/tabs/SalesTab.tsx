@@ -7,8 +7,11 @@ import {
   Pencil,
   Plus,
   Printer,
+  RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
+  Trash2,
   TrendingUp,
   Users,
   Wallet,
@@ -19,6 +22,8 @@ import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
 import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
 import { SelectWithOther } from "@/components/SelectWithOther";
+import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
+import { UasDateInput } from "@/components/UasDateInput";
 import {
   AccountingDirectionSelector,
   type CustomAccountPayload,
@@ -26,6 +31,8 @@ import {
 } from "@/components/AccountingDirectionSelector";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
 import { evaluateSaleAgainstHarvestStock } from "@/lib/harvestReconciliation";
+import { formatIsoToDmy, formatRefreshTimestamp } from "@/lib/uiFormatters";
+import { filterOutSyntheticTestRecords, isSyntheticTestRecord } from "@/lib/testRecordHygiene";
 import {
   printUasDocument,
   resolveLetterheadFromProfile,
@@ -85,6 +92,7 @@ interface SalesTabProps {
   onEditSale?: (id: string, payload: SalePayload) => Promise<boolean>;
   onDeleteSale: (id: string) => Promise<void>;
   onOpenSaleVoucher: (s: UasSaleTransaction) => void;
+  onRefreshState?: () => Promise<void>;
   onToast: (msg: string) => void;
 }
 
@@ -112,6 +120,7 @@ export function SalesTab({
   onEditSale,
   onDeleteSale,
   onOpenSaleVoucher,
+  onRefreshState,
   onToast,
 }: SalesTabProps) {
   const [projectId, setProjectId] = useState(projects[0]?.id || "");
@@ -163,6 +172,9 @@ export function SalesTab({
   const [filterOfficer, setFilterOfficer] = useState("ALL");
   const [filterDate, setFilterDate] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [hideTestRecords, setHideTestRecords] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState("");
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -368,7 +380,7 @@ export function SalesTab({
   }
 
   // Filtered Sales Logic
-  const visibleSales = useMemo(() => {
+  const filteredRawSales = useMemo(() => {
     return sales.filter((s) => {
       if (filterProject !== "ALL" && s.projectId !== filterProject) return false;
       if (filterSubProject !== "ALL" && s.subProjectId !== filterSubProject) return false;
@@ -386,6 +398,42 @@ export function SalesTab({
       return true;
     });
   }, [sales, filterProject, filterSubProject, filterOfficer, filterDate, searchQuery]);
+
+  const { visible: visibleSales, hiddenCount: hiddenTestSalesCount } = useMemo(
+    () => filterOutSyntheticTestRecords(filteredRawSales, hideTestRecords),
+    [filteredRawSales, hideTestRecords]
+  );
+
+  const hasActiveFilters =
+    filterProject !== "ALL" ||
+    filterSubProject !== "ALL" ||
+    filterOfficer !== "ALL" ||
+    Boolean(filterDate) ||
+    Boolean(searchQuery.trim()) ||
+    hideTestRecords;
+
+  const resetAllFilters = () => {
+    setFilterProject("ALL");
+    setFilterSubProject("ALL");
+    setFilterOfficer("ALL");
+    setFilterDate("");
+    setSearchQuery("");
+    setHideTestRecords(false);
+  };
+
+  const handleRefresh = async () => {
+    if (!onRefreshState) return;
+    setRefreshing(true);
+    try {
+      await onRefreshState();
+      setLastRefreshedAt(new Date().toISOString());
+      onToast("✅ تم تحديث سجل المبيعات والتحصيل من الخادم");
+    } catch {
+      onToast("تعذر تحديث سجل المبيعات");
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // Shift & Daily KPI aggregates
   const sumBundles = visibleSales.reduce((a, b) => a + Number(b.bundles), 0);
@@ -409,11 +457,9 @@ export function SalesTab({
         {/* KPI 1: Total Sales Volume */}
         <div className="card-surface rounded-2xl p-4 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
           <div>
-            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+            <div className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
               <Package className="w-3.5 h-3.5 text-sky-600" />
-              <span>
-                <bdi dir="auto">إجمالي حجم المبيعات (Sales Volume)</bdi>
-              </span>
+              <span>إجمالي حجم المبيعات</span>
             </div>
             <div className="text-xl font-black text-slate-900 dark:text-slate-100 mt-1 tabular-nums">
               {fmtNum(sumTotal)} <span className="text-xs font-normal text-slate-500">ريال</span>
@@ -430,11 +476,9 @@ export function SalesTab({
         {/* KPI 2: Cash Collections */}
         <div className="card-surface rounded-2xl p-4 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
           <div>
-            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+            <div className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
               <Wallet className="w-3.5 h-3.5 text-emerald-600" />
-              <span>
-                <bdi dir="auto">المقبوضات النقدية (Cash Collections)</bdi>
-              </span>
+              <span>المقبوضات النقدية</span>
             </div>
             <div className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-1 tabular-nums">
               {fmtNum(sumCredit)} <span className="text-xs font-normal text-slate-500">ريال</span>
@@ -451,11 +495,9 @@ export function SalesTab({
         {/* KPI 3: Receivables / Credit Due */}
         <div className="card-surface rounded-2xl p-4 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
           <div>
-            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+            <div className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
               <DollarSign className="w-3.5 h-3.5 text-rose-600" />
-              <span>
-                <bdi dir="auto">ديون العملاء الآجلة (Credit Due)</bdi>
-              </span>
+              <span>ديون العملاء الآجلة</span>
             </div>
             <div className="text-xl font-black text-rose-600 dark:text-rose-400 mt-1 tabular-nums">
               {fmtNum(sumDebit)} <span className="text-xs font-normal text-slate-500">ريال</span>
@@ -858,12 +900,11 @@ export function SalesTab({
                   <span className="text-[10px] text-amber-600">(مقفل حسب الصلاحية)</span>
                 )}
               </label>
-              <input
+              <UasDateInput
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
-                type="date"
+                onChange={setDate}
                 disabled={Boolean(editingId) && !canEditDate}
-                className="w-full rounded-xl border border-slate-300 bg-transparent px-2.5 py-2 disabled:opacity-50 font-mono"
+                allowClear={false}
               />
             </div>
             <div>
@@ -918,6 +959,11 @@ export function SalesTab({
             <p className="text-xs text-slate-500">
               عمليات بيع غير مقيدة بعدد، سندات قبض نقدية/آجلة، وترحيل محاسبي لجميع أجيال الدليل
             </p>
+            {lastRefreshedAt && (
+              <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold mt-0.5">
+                {formatRefreshTimestamp(lastRefreshedAt)}
+              </div>
+            )}
           </div>
           <div className="w-full sm:w-auto no-print">
             {/* Mobile Compact Sales Toolbar Dropdown */}
@@ -932,12 +978,36 @@ export function SalesTab({
                   <span>عملية بيع جديدة</span>
                 </button>
               )}
+              {onRefreshState && (
+                <button
+                  type="button"
+                  onClick={() => void handleRefresh()}
+                  disabled={refreshing}
+                  aria-label="تحديث"
+                  className="min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold inline-flex items-center gap-1"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+                </button>
+              )}
               <select
                 data-testid="sales-actions-select"
                 aria-label="خيارات سجل المبيعات"
                 value=""
                 onChange={(e) => {
-                  if (e.target.value === "export_pdf") {
+                  const act = e.target.value;
+                  if (act === "refresh") {
+                    void handleRefresh();
+                    return;
+                  }
+                  if (act === "reset_filters") {
+                    resetAllFilters();
+                    return;
+                  }
+                  if (act === "toggle_test") {
+                    setHideTestRecords((prev) => !prev);
+                    return;
+                  }
+                  if (act === "export_pdf") {
                     void printUasDocument({
                       titleAr: "تقرير سجل المبيعات والإيرادات اليومية",
                       titleEn: "Sales Ledger & Daily Revenue Report",
@@ -947,9 +1017,9 @@ export function SalesTab({
                       format: "A4_LANDSCAPE",
                       letterhead: resolveLetterheadFromProfile(enterpriseProfile),
                       summaryCards: [
-                        { labelAr: "إجمالي المبيعات", labelEn: "Total Sales", value: `${fmtNum(sumTotal)} YER`, tone: "indigo" },
-                        { labelAr: "التحصيل النقدي", labelEn: "Cash Collected", value: `${fmtNum(sumCredit)} YER`, tone: "emerald" },
-                        { labelAr: "المتبقي الآجل", labelEn: "Receivable", value: `${fmtNum(sumDebit)} YER`, tone: "rose" },
+                        { labelAr: "إجمالي المبيعات", labelEn: "Total Sales", value: `${fmtNum(sumTotal)} ريال`, tone: "indigo" },
+                        { labelAr: "التحصيل النقدي", labelEn: "Cash Collected", value: `${fmtNum(sumCredit)} ريال`, tone: "emerald" },
+                        { labelAr: "المتبقي الآجل", labelEn: "Receivable", value: `${fmtNum(sumDebit)} ريال`, tone: "rose" },
                         { labelAr: "إجمالي الكمية (الوحدات)", labelEn: "Total Quantity", value: `${fmtNum(sumBundles)} (${visibleSales.length})`, tone: "amber" },
                       ],
                       tables: [
@@ -968,7 +1038,7 @@ export function SalesTab({
                             { key: "debit", labelAr: "المتبقي", labelEn: "Due", numeric: true },
                           ],
                           rows: visibleSales.map((s) => ({
-                            date: s.date,
+                            date: formatIsoToDmy(s.date.slice(0, 10)),
                             voucherNo: s.voucherNo || s.sequenceNumber || "—",
                             customer: s.customer,
                             grade: s.grade,
@@ -993,12 +1063,32 @@ export function SalesTab({
                 className="min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100"
               >
                 <option value="">⋮ خيارات</option>
-                <option value="export_pdf">🖨️ تصدير تقرير PDF</option>
+                <option value="export_pdf">تصدير تقرير PDF</option>
+                {onRefreshState && <option value="refresh">تحديث السجل</option>}
+                <option value="toggle_test">
+                  {hideTestRecords
+                    ? `إظهار السجلات التجريبية (${hiddenTestSalesCount})`
+                    : `إخفاء السجلات التجريبية (${hiddenTestSalesCount})`}
+                </option>
+                <option value="reset_filters">إعادة ضبط الفلاتر</option>
               </select>
             </div>
 
             <div className="hidden md:flex flex-wrap items-center gap-2">
+            {onRefreshState && (
+              <button
+                type="button"
+                onClick={() => void handleRefresh()}
+                disabled={refreshing}
+                className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+                title="تحديث سجل المبيعات من الخادم"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+                <span>تحديث</span>
+              </button>
+            )}
             <button
+              type="button"
               onClick={() =>
                 void printUasDocument({
                   titleAr: "تقرير سجل المبيعات والإيرادات اليومية",
@@ -1009,9 +1099,9 @@ export function SalesTab({
                   format: "A4_LANDSCAPE",
                   letterhead: resolveLetterheadFromProfile(enterpriseProfile),
                   summaryCards: [
-                    { labelAr: "إجمالي المبيعات", labelEn: "Total Sales", value: `${fmtNum(sumTotal)} YER`, tone: "indigo" },
-                    { labelAr: "التحصيل النقدي", labelEn: "Cash Collected", value: `${fmtNum(sumCredit)} YER`, tone: "emerald" },
-                    { labelAr: "المتبقي الآجل", labelEn: "Receivable", value: `${fmtNum(sumDebit)} YER`, tone: "rose" },
+                    { labelAr: "إجمالي المبيعات", labelEn: "Total Sales", value: `${fmtNum(sumTotal)} ريال`, tone: "indigo" },
+                    { labelAr: "التحصيل النقدي", labelEn: "Cash Collected", value: `${fmtNum(sumCredit)} ريال`, tone: "emerald" },
+                    { labelAr: "المتبقي الآجل", labelEn: "Receivable", value: `${fmtNum(sumDebit)} ريال`, tone: "rose" },
                     { labelAr: "إجمالي الكمية (الوحدات)", labelEn: "Total Quantity", value: `${fmtNum(sumBundles)} (${visibleSales.length})`, tone: "amber" },
                   ],
                   tables: [
@@ -1030,7 +1120,7 @@ export function SalesTab({
                         { key: "debit", labelAr: "المتبقي", labelEn: "Due", numeric: true },
                       ],
                       rows: visibleSales.map((s) => ({
-                        date: s.date,
+                        date: formatIsoToDmy(s.date.slice(0, 10)),
                         voucherNo: s.voucherNo || s.sequenceNumber || "—",
                         customer: s.customer,
                         grade: s.grade,
@@ -1051,11 +1141,33 @@ export function SalesTab({
                   ],
                 })
               }
-              className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold inline-flex items-center gap-1"
+              className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold inline-flex items-center gap-1 hover:bg-slate-100 dark:hover:bg-slate-800"
             >
               <Printer className="w-3.5 h-3.5" />
               <span>تقرير PDF</span>
             </button>
+            <ActionOverflowMenu
+              testId="sales-toolbar-overflow"
+              label="خيارات المبيعات"
+              size="sm"
+              items={[
+                {
+                  id: "toggle-test",
+                  label: hideTestRecords
+                    ? `إظهار السجلات التجريبية (${hiddenTestSalesCount})`
+                    : `إخفاء السجلات التجريبية (${hiddenTestSalesCount})`,
+                  hidden: hiddenTestSalesCount === 0 && !hideTestRecords,
+                  onClick: () => setHideTestRecords((prev) => !prev),
+                },
+                {
+                  id: "reset-filters",
+                  label: "إعادة ضبط الفلاتر",
+                  icon: <RotateCcw className="w-3.5 h-3.5" />,
+                  hidden: !hasActiveFilters,
+                  onClick: resetAllFilters,
+                },
+              ]}
+            />
             {!readOnly && (
               <button
                 type="button"
@@ -1071,7 +1183,7 @@ export function SalesTab({
         </div>
 
         {/* Dynamic Multi-Filter Bar */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2.5 text-xs no-print border-t border-b border-slate-200 dark:border-slate-800 py-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 text-xs no-print border-t border-b border-slate-200 dark:border-slate-800 py-3 items-center">
           {/* Project Filter */}
           <select
             value={filterProject}
@@ -1079,7 +1191,7 @@ export function SalesTab({
               setFilterProject(e.target.value);
               setFilterSubProject("ALL");
             }}
-            className="rounded-xl border border-slate-300 bg-transparent px-2.5 py-1.5 font-bold"
+            className="w-full min-h-[38px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-1.5 font-bold"
           >
             <option value="ALL">كافة المشاريع</option>
             {projects.map((p) => (
@@ -1093,7 +1205,7 @@ export function SalesTab({
           <select
             value={filterSubProject}
             onChange={(e) => setFilterSubProject(e.target.value)}
-            className="rounded-xl border border-slate-300 bg-transparent px-2.5 py-1.5 font-semibold"
+            className="w-full min-h-[38px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-1.5 font-semibold"
           >
             <option value="ALL">كافة القطاعات الفرعية</option>
             {projects
@@ -1109,7 +1221,7 @@ export function SalesTab({
           <select
             value={filterOfficer}
             onChange={(e) => setFilterOfficer(e.target.value)}
-            className="rounded-xl border border-slate-300 bg-transparent px-2.5 py-1.5 font-semibold"
+            className="w-full min-h-[38px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-1.5 font-semibold"
           >
             <option value="ALL">كافة مسؤولي المبيعات</option>
             {officerOptions.map((off) => (
@@ -1119,23 +1231,24 @@ export function SalesTab({
             ))}
           </select>
 
-          {/* Date Filter */}
-          <input
-            type="date"
+          {/* Date Filter (dd / mm / yyyy) */}
+          <UasDateInput
             value={filterDate}
-            onChange={(e) => setFilterDate(e.target.value)}
-            className="rounded-xl border border-slate-300 bg-transparent px-2.5 py-1.5 font-mono"
+            onChange={setFilterDate}
+            placeholder="تصفية: يوم / شهر / سنة"
+            ariaLabel="تصفية المبيعات بالتاريخ"
+            inputClassName="min-h-[36px]"
           />
 
           {/* Free Text Search */}
           <div className="relative">
-            <Search className="w-3.5 h-3.5 absolute right-2.5 top-2.5 text-slate-400" />
+            <Search className="w-3.5 h-3.5 absolute right-2.5 top-3 text-slate-400" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="بحث بالرقم أو العميل أو السند..."
-              className="w-full rounded-xl border border-slate-300 bg-transparent pr-8 pl-2 py-1.5 text-xs"
+              className="w-full min-h-[38px] rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent pr-8 pl-2 py-1.5 text-xs"
             />
           </div>
         </div>
@@ -1143,7 +1256,25 @@ export function SalesTab({
         {visibleSales.length === 0 ? (
           <EmptyState
             title="لا توجد عمليات بيع مسجلة ضمن هذه المعايير"
-            description="اضغط على 'عملية بيع جديدة' أو قم بإلغاء بعض عوامل التصفية لعرض السجلات."
+            description={
+              hasActiveFilters
+                ? "هناك فلاتر نشطة حالياً قد تخفي السجلات. يمكنك إعادة ضبط الفلاتر أو تسجيل عملية بيع جديدة."
+                : "ابدأ بتسجيل أول عملية بيع لمتابعة المبيعات النقدية والآجلة وكشوفات العملاء."
+            }
+            actionLabel={
+              hasActiveFilters
+                ? "إعادة ضبط الفلاتر"
+                : !readOnly
+                ? "عملية بيع جديدة"
+                : undefined
+            }
+            onAction={
+              hasActiveFilters
+                ? resetAllFilters
+                : !readOnly
+                ? openCreateDrawer
+                : undefined
+            }
           />
         ) : (
           <table className="w-full text-xs text-right border-collapse">
@@ -1206,8 +1337,17 @@ export function SalesTab({
                     <td className="p-2.5 text-emerald-600 font-extrabold tabular-nums">{fmtNum(s.credit)}</td>
                     <td className="p-2.5 text-rose-600 font-extrabold tabular-nums">{fmtNum(s.debit)}</td>
                     <td className="p-2.5">
-                      <div className="font-mono text-slate-700 dark:text-slate-300">{s.date.slice(0, 10)}</div>
-                      <div className="text-[11px] text-slate-500 font-mono">سند: {s.voucherNo}</div>
+                      <div className="font-mono text-slate-700 dark:text-slate-300">
+                        <bdi dir="ltr">{formatIsoToDmy(s.date.slice(0, 10))}</bdi>
+                      </div>
+                      <div className="text-[11px] text-slate-500 font-mono flex items-center gap-1 flex-wrap">
+                        <span>سند: {s.voucherNo}</span>
+                        {isSyntheticTestRecord(s) && (
+                          <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                            تجريبي
+                          </span>
+                        )}
+                      </div>
                       {s.treasuryName && (
                         <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
                           🏦 {s.treasuryName}
@@ -1215,7 +1355,7 @@ export function SalesTab({
                       )}
                     </td>
                     <td className="p-2.5 no-print">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         <button
                           type="button"
                           onClick={() => onOpenSaleVoucher(s)}
@@ -1223,24 +1363,30 @@ export function SalesTab({
                         >
                           سند QR
                         </button>
-                        {!readOnly && canEditRecords && onEditSale && (
-                          <button
-                            type="button"
-                            onClick={() => openEditDrawer(s)}
-                            className="inline-flex items-center gap-1 text-indigo-600 hover:underline text-[11px] font-bold"
-                          >
-                            <Pencil className="w-3 h-3" />
-                            <span>تعديل</span>
-                          </button>
-                        )}
                         {!readOnly && (
-                          <button
-                            type="button"
-                            onClick={() => onDeleteSale(s.id)}
-                            className="text-rose-600 hover:underline text-[11px] font-bold"
-                          >
-                            حذف
-                          </button>
+                          <ActionOverflowMenu
+                            size="xs"
+                            align="end"
+                            label="خيارات عملية البيع"
+                            items={[
+                              {
+                                id: "edit",
+                                label: "تعديل العملية",
+                                icon: <Pencil className="w-3.5 h-3.5" />,
+                                hidden: !(canEditRecords && onEditSale),
+                                onClick: () => openEditDrawer(s),
+                              },
+                              {
+                                id: "delete",
+                                label: "حذف العملية",
+                                icon: <Trash2 className="w-3.5 h-3.5" />,
+                                tone: "danger",
+                                confirmTitle: "حذف عملية البيع",
+                                confirmMessage: `هل أنت متأكد من حذف عملية البيع (${s.voucherNo}) للعميل ${s.customer} بمبلغ ${fmtNum(s.total)} ريال؟`,
+                                onClick: () => onDeleteSale(s.id),
+                              },
+                            ]}
+                          />
                         )}
                       </div>
                     </td>

@@ -1,8 +1,21 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Edit3, Plus, Users } from "lucide-react";
+import {
+  Archive,
+  Edit3,
+  FileSpreadsheet,
+  Phone,
+  Plus,
+  Printer,
+  RefreshCw,
+  RotateCcw,
+  Trash2,
+  Users,
+} from "lucide-react";
 import { fmtNum } from "@/lib/formulas";
+import { formatMoney, formatRefreshTimestamp } from "@/lib/uiFormatters";
+import { filterOutSyntheticTestRecords, isSyntheticTestRecord } from "@/lib/testRecordHygiene";
 import {
   printUasDocument,
   resolveLetterheadFromProfile,
@@ -11,10 +24,13 @@ import {
   type PrintTableColumn,
   type UasPrintDocumentSpec,
 } from "@/lib/print/uasDocumentPrinter";
+import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
+import { EmptyState } from "@/components/EmptyState";
 import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
 import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
+import { TenantClientPortalAdminPanel } from "@/components/portal-admin/TenantClientPortalAdminPanel";
 import type { UasEnterpriseProfile, UasProject, UasSaleTransaction, UasUser } from "@/types/uas";
 
 interface CustomerMasterItem {
@@ -48,6 +64,7 @@ interface CustomersTabProps {
   canEditRecords?: boolean;
   onOpenSaleVoucher: (s: UasSaleTransaction) => void;
   onExportCustomerExcel: (customerFilter: string) => void;
+  onRefreshState?: () => Promise<void>;
   onToast?: (msg: string) => void;
 }
 
@@ -201,12 +218,19 @@ export function CustomersTab({
   canEditRecords = true,
   onOpenSaleVoucher,
   onExportCustomerExcel,
+  onRefreshState,
   onToast,
 }: CustomersTabProps) {
   const [selectedCustomer, setSelectedCustomer] = useState("ALL");
   const [customers, setCustomers] = useState<CustomerMasterItem[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [hideTestRecords, setHideTestRecords] = useState(false);
+  const [viewSection, setViewSection] = useState<
+    "cards" | "ledger" | "both" | "portal" | "whatsapp"
+  >("cards");
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState("");
   const [includeSaleDetails, setIncludeSaleDetails] = useState(true);
 
   // Edit Client drawer state
@@ -230,9 +254,22 @@ export function CustomersTab({
     }
   }, []);
 
+  const handleRefreshAll = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([loadCustomers(), onRefreshState?.()]);
+      setLastRefreshedAt(new Date().toISOString());
+      onToast?.("✅ تم تحديث دليل وكشوفات العملاء بنجاح");
+    } catch {
+      onToast?.("تعذر تحديث بيانات العملاء");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadCustomers, onRefreshState, onToast]);
+
   const handleArchiveCustomer = useCallback(
-    async (c: CustomerMasterItem) => {
-      if (!confirm(`هل أنت متأكد من أرشفة العميل (${c.nameAr})؟`)) return;
+    async (c: CustomerMasterItem, skipConfirm = false) => {
+      if (!skipConfirm && !confirm(`هل أنت متأكد من أرشفة العميل (${c.nameAr})؟`)) return;
       try {
         const res = await fetch("/api/system/lifecycle", {
           method: "POST",
@@ -272,8 +309,9 @@ export function CustomersTab({
   );
 
   const handleDeleteCustomer = useCallback(
-    async (c: CustomerMasterItem) => {
+    async (c: CustomerMasterItem, skipConfirm = false) => {
       if (
+        !skipConfirm &&
         !confirm(
           `هل أنت متأكد من حذف العميل (${c.nameAr})؟ في حال وجود حركات مرتبطة سيتم أرشفته آلياً حفاظاً على التاريخ المالي.`
         )
@@ -464,19 +502,24 @@ export function CustomersTab({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-base font-extrabold">
-              <bdi dir="auto">دليل العملاء وفواتير وكشوفات الحساب (Clients Directory & Statements)</bdi>
+              دليل العملاء وفواتير وكشوفات الحساب
             </h3>
             <p className="text-xs text-slate-500">
-              <bdi dir="auto">إنشاء وتعديل ملفات العملاء وحسابات الأستاذ العام (COA 112190xxx)، مراكز التكلفة، وتصدير الكشوفات</bdi>
+              إنشاء وتعديل ملفات العملاء وحسابات الأستاذ العام (<bdi dir="ltr">COA 112190xxx</bdi>)، مراكز التكلفة، وتصدير الكشوفات
             </p>
+            {lastRefreshedAt && (
+              <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold mt-0.5">
+                {formatRefreshTimestamp(lastRefreshedAt)}
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2 no-print">
             <select
               value={selectedCustomer}
               onChange={(e) => setSelectedCustomer(e.target.value)}
-              className="rounded-xl border border-slate-300 bg-transparent px-3 py-1.5 text-xs font-bold"
+              className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5 text-xs font-bold"
             >
-              <option value="ALL">جميع العملاء (All Customers)</option>
+              <option value="ALL">جميع العملاء</option>
               {customerNames.map((c) => (
                 <option key={c} value={c}>
                   {c}
@@ -485,13 +528,30 @@ export function CustomersTab({
             </select>
             <button
               type="button"
-              onClick={() => setShowArchived((v) => !v)}
-              className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-colors ${showArchived
-                ? "bg-amber-100 border-amber-300 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-200"
-                : "border-slate-300 text-slate-600 dark:text-slate-300"
-                }`}
+              onClick={() => void handleRefreshAll()}
+              disabled={refreshing}
+              className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+              title="تحديث دليل وكشوفات العملاء من الخادم"
             >
-              {showArchived ? "إخفاء المؤرشفين" : "إظهار المؤرشفين"}
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              <span>تحديث</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const spec = buildCustomerStatementPrintSpec({
+                  selectedCustomer,
+                  visibleRows,
+                  projects,
+                  includeSaleDetails,
+                  enterpriseProfile,
+                });
+                void printUasDocument(spec);
+              }}
+              className="px-3.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors inline-flex items-center gap-1.5"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>طباعة الفاتورة / الكشف PDF</span>
             </button>
             {!readOnly && (
               <button
@@ -503,49 +563,87 @@ export function CustomersTab({
                 <span>إضافة عميل جديد</span>
               </button>
             )}
-            <button
-              onClick={() => onExportCustomerExcel(selectedCustomer)}
-              className="px-3.5 py-1.5 rounded-xl border border-emerald-600/40 text-emerald-700 dark:text-emerald-300 text-xs font-bold"
-            >
-              تصدير كشف العملاء Excel
-            </button>
-            <label
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold cursor-pointer select-none hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors"
-              title={
-                includeSaleDetails
-                  ? "تضمين تفاصيل كل عملية بيع (الأصناف، الكميات، الأسعار، السندات)"
-                  : "تصدير كشف حساب إجمالي ملخص بدون تفاصيل الأصناف"
-              }
-            >
-              <input
-                type="checkbox"
-                data-testid="toggle-sale-details"
-                checked={includeSaleDetails}
-                onChange={(e) => setIncludeSaleDetails(e.target.checked)}
-                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5 cursor-pointer"
-              />
-              <span>تضمين تفاصيل كل عملية بيع (Include details for each sale)</span>
-            </label>
-            <button
-              onClick={() => {
-                const spec = buildCustomerStatementPrintSpec({
-                  selectedCustomer,
-                  visibleRows,
-                  projects,
-                  includeSaleDetails,
-                  enterpriseProfile,
-                });
-                void printUasDocument(spec);
-              }}
-              className="px-3.5 py-1.5 rounded-xl border border-slate-300 text-xs font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-            >
-              طباعة الفاتورة / الكشف PDF
-            </button>
+            <ActionOverflowMenu
+              testId="customers-toolbar-overflow"
+              label="خيارات دليل العملاء"
+              size="sm"
+              items={[
+                {
+                  id: "export-excel",
+                  label: "تصدير كشف العملاء Excel",
+                  icon: <FileSpreadsheet className="w-3.5 h-3.5" />,
+                  onClick: () => onExportCustomerExcel(selectedCustomer),
+                },
+                {
+                  id: "toggle-archived",
+                  label: showArchived ? "إخفاء المؤرشفين" : "إظهار المؤرشفين",
+                  icon: <Archive className="w-3.5 h-3.5" />,
+                  onClick: () => setShowArchived((v) => !v),
+                },
+                {
+                  id: "toggle-test-records",
+                  label: hideTestRecords ? "إظهار السجلات التجريبية" : "إخفاء السجلات التجريبية",
+                  onClick: () => setHideTestRecords((v) => !v),
+                },
+                {
+                  id: "toggle-details",
+                  label: includeSaleDetails
+                    ? "تبديل الكشف إلى: ملخص إجمالي"
+                    : "تبديل الكشف إلى: تضمين تفاصيل كل بيع",
+                  onClick: () => setIncludeSaleDetails((v) => !v),
+                },
+              ]}
+            />
           </div>
         </div>
 
+        {/* Clean Section Switcher & Print Detail Toggle (prevents bottom viewport collision) */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200 dark:border-slate-800 no-print">
+          <div className="inline-flex flex-wrap rounded-xl border border-slate-200 dark:border-slate-700 p-1 bg-slate-50 dark:bg-slate-900/60 text-xs gap-1">
+            {[
+              { id: "cards" as const, label: `بطاقات العملاء الموحدة (${customerNames.length})` },
+              { id: "ledger" as const, label: `سجل الحركات والفواتير (${visibleRows.length})` },
+              { id: "both" as const, label: "عرض مدمج" },
+              { id: "portal" as const, label: "بوابة العملاء والطلبات" },
+              { id: "whatsapp" as const, label: "اعتماد وإرسال واتساب" },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setViewSection(tab.id)}
+                className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                  viewSection === tab.id
+                    ? "accent-bg shadow-sm"
+                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          <label
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold cursor-pointer select-none hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors"
+            title={
+              includeSaleDetails
+                ? "تضمين تفاصيل كل عملية بيع (الأصناف، الكميات، الأسعار، السندات)"
+                : "تصدير كشف حساب إجمالي ملخص بدون تفاصيل الأصناف"
+            }
+          >
+            <input
+              type="checkbox"
+              data-testid="toggle-sale-details"
+              checked={includeSaleDetails}
+              onChange={(e) => setIncludeSaleDetails(e.target.checked)}
+              className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5 cursor-pointer"
+            />
+            <span>تضمين تفاصيل كل عملية بيع في PDF</span>
+          </label>
+        </div>
+
         {/* Single Unified Customer Cards Grid */}
-        <div className="space-y-2">
+        {(viewSection === "cards" || viewSection === "both") && (
+        <div className="space-y-2.5">
           <div className="text-xs font-extrabold text-slate-500 flex items-center justify-between">
             <span className="flex items-center gap-1.5">
               <Users className="w-3.5 h-3.5 text-emerald-600" />
@@ -554,11 +652,15 @@ export function CustomersTab({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-            {visibleCustomers.map((cName) => {
-              const master = customers.find((m) => m.nameAr === cName || m.name === cName);
-              const rows = allSales.filter((s) => s.customer === cName);
+            {filterOutSyntheticTestRecords(
+              visibleCustomers.map((cName) => {
+                const master = customers.find((m) => m.nameAr === cName || m.name === cName);
+                const rows = allSales.filter((s) => s.customer === cName);
+                return { cName, master, rows, name: cName, code: master?.code || "" };
+              }),
+              hideTestRecords
+            ).visible.map(({ cName, master, rows }) => {
               const isArchived = master ? master.isActive === false || Boolean(master.archivedAt) : false;
-
               if (!showArchived && isArchived) return null;
 
               const phone = master?.phone || rows[0]?.phone || "—";
@@ -566,6 +668,7 @@ export function CustomersTab({
               const glAccountCode = master?.account?.code || "112190xxx";
               const creditLimit = master?.creditLimit || 0;
               const costCenterBadge = master?.costCenter?.nameAr || (master?.costCenterId ? "مركز تكلفة" : null);
+              const isTestCustomer = isSyntheticTestRecord({ nameAr: cName, code, phone });
 
               const bundles = rows.reduce((a, b) => a + Number(b.bundles || 0), 0);
               const total = master ? master.totalInvoiced : rows.reduce((a, b) => a + Number(b.total || 0), 0);
@@ -580,8 +683,8 @@ export function CustomersTab({
                     : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
                     }`}
                 >
-                  {/* Top: Code + COA + CostCenter + Actions */}
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                  {/* Top: Code + COA + CostCenter + Overflow Menu */}
+                  <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="font-mono text-[10px] font-black px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
                         {code}
@@ -599,67 +702,80 @@ export function CustomersTab({
                           مؤرشف
                         </span>
                       )}
+                      {isTestCustomer && (
+                        <span className="px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200 text-[10px] font-bold">
+                          تجريبي
+                        </span>
+                      )}
                     </div>
 
-                    {/* Actions: Edit / Archive / Delete */}
-                    {!readOnly && canEditRecords && master && (
-                      <div className="flex items-center gap-2 no-print">
-                        <button
-                          type="button"
-                          onClick={() => openEditDrawer(master)}
-                          className="text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 font-bold inline-flex items-center gap-0.5"
-                          title="تعديل بيانات العميل"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                          <span>تعديل</span>
-                        </button>
-                        {isArchived ? (
-                          <button
-                            type="button"
-                            onClick={() => handleRestoreCustomer(master)}
-                            className="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 font-bold"
-                            title="استعادة العميل"
-                          >
-                            استعادة
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => handleArchiveCustomer(master)}
-                            className="text-amber-600 hover:text-amber-700 dark:text-amber-400 font-bold"
-                            title="أرشفة العميل"
-                          >
-                            أرشفة
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteCustomer(master)}
-                          className="text-rose-600 hover:text-rose-700 dark:text-rose-400 font-bold"
-                          title="حذف العميل"
-                        >
-                          حذف
-                        </button>
-                      </div>
-                    )}
+                    <ActionOverflowMenu
+                      size="xs"
+                      align="end"
+                      label="خيارات بطاقة العميل"
+                      items={[
+                        {
+                          id: "view-ledger",
+                          label: "عرض جدول الحركات والفواتير",
+                          onClick: () => {
+                            setSelectedCustomer(cName);
+                            setViewSection("ledger");
+                          },
+                        },
+                        {
+                          id: "edit",
+                          label: "تعديل بيانات العميل",
+                          icon: <Edit3 className="w-3.5 h-3.5" />,
+                          hidden: readOnly || !canEditRecords || !master,
+                          onClick: () => master && openEditDrawer(master),
+                        },
+                        {
+                          id: "archive",
+                          label: isArchived ? "استعادة العميل" : "أرشفة العميل",
+                          icon: isArchived ? <RotateCcw className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />,
+                          tone: isArchived ? "default" : "warning",
+                          hidden: readOnly || !canEditRecords || !master,
+                          onClick: () =>
+                            master
+                              ? isArchived
+                                ? handleRestoreCustomer(master)
+                                : handleArchiveCustomer(master, true)
+                              : undefined,
+                        },
+                        {
+                          id: "delete",
+                          label: "حذف العميل",
+                          icon: <Trash2 className="w-3.5 h-3.5" />,
+                          tone: "danger",
+                          dividerBefore: true,
+                          hidden: readOnly || !canEditRecords || !master,
+                          confirmTitle: `حذف العميل (${cName})`,
+                          confirmMessage:
+                            "في حال وجود فواتير أو قيود مرتبطة بهذا العميل سيتم أرشفته آلياً حفاظاً على التاريخ المالي.",
+                          onClick: () => master && handleDeleteCustomer(master, true),
+                        },
+                      ]}
+                    />
                   </div>
 
                   {/* Middle: Customer Name, Phone, Credit Limit */}
                   <div className="flex items-center justify-between gap-2">
-                    <div>
+                    <div className="min-w-0">
                       <h4 className="font-black text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                        <Users className="w-4 h-4 text-emerald-600" />
-                        <bdi dir="auto">{cName}</bdi>
+                        <Users className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <bdi dir="auto" className="truncate">{cName}</bdi>
                       </h4>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        <span>هاتف: {phone}</span>
+                      <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
+                        <Phone className="w-3 h-3 text-emerald-600 shrink-0" />
+                        <span>هاتف:</span>
+                        <bdi dir="ltr" className="font-mono font-bold text-slate-700 dark:text-slate-200">{phone}</bdi>
                         {rows.length > 0 && <span> • العمليات: {rows.length}</span>}
                       </p>
                     </div>
-                    <div className="text-end">
+                    <div className="text-end shrink-0">
                       <div className="text-[10px] text-slate-500">الحد الائتماني</div>
-                      <div className="font-extrabold text-xs text-slate-700 dark:text-slate-300">
-                        {fmtNum(creditLimit)} YER
+                      <div className="font-extrabold text-xs text-slate-700 dark:text-slate-300 tabular-nums">
+                        {formatMoney(creditLimit, "YER")}
                       </div>
                     </div>
                   </div>
@@ -668,8 +784,8 @@ export function CustomersTab({
                   <div className="grid grid-cols-3 gap-2 pt-2.5 border-t border-slate-100 dark:border-slate-800 text-xs">
                     <div className="bg-slate-50 dark:bg-slate-800/50 p-2 rounded-xl text-center">
                       <div className="text-[10px] text-slate-500">إجمالي الفواتير</div>
-                      <div className="font-black text-slate-900 dark:text-slate-100 text-xs mt-0.5">
-                        {fmtNum(total)} ريال
+                      <div className="font-black text-slate-900 dark:text-slate-100 text-xs mt-0.5 tabular-nums">
+                        {formatMoney(total, "YER")}
                       </div>
                       {bundles > 0 && (
                         <div className="text-[9px] text-slate-400 mt-0.5">
@@ -679,14 +795,14 @@ export function CustomersTab({
                     </div>
                     <div className="bg-emerald-50 dark:bg-emerald-950/30 p-2 rounded-xl text-center">
                       <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-bold">دائن (مسدد)</div>
-                      <div className="font-black text-emerald-700 dark:text-emerald-400 text-xs mt-0.5">
-                        {fmtNum(credit)} ريال
+                      <div className="font-black text-emerald-700 dark:text-emerald-400 text-xs mt-0.5 tabular-nums">
+                        {formatMoney(credit, "YER")}
                       </div>
                     </div>
                     <div className="bg-rose-50 dark:bg-rose-950/30 p-2 rounded-xl text-center">
                       <div className="text-[10px] text-rose-700 dark:text-rose-400 font-bold">مدين (متبقي)</div>
-                      <div className="font-black text-rose-700 dark:text-rose-400 text-xs mt-0.5">
-                        {fmtNum(debit)} ريال
+                      <div className="font-black text-rose-700 dark:text-rose-400 text-xs mt-0.5 tabular-nums">
+                        {formatMoney(debit, "YER")}
                       </div>
                     </div>
                   </div>
@@ -695,8 +811,30 @@ export function CustomersTab({
             })}
           </div>
         </div>
+        )}
 
-        <div className="overflow-x-auto pt-2">
+        {(viewSection === "ledger" || viewSection === "both") && (
+        <div className="overflow-x-auto pt-2 space-y-2 border-t border-slate-100 dark:border-slate-800">
+          <div className="flex items-center justify-between text-xs font-extrabold text-slate-500 pt-1">
+            <span>جدول العمليات وكشوفات الحساب ({visibleRows.length})</span>
+            {selectedCustomer !== "ALL" && (
+              <button
+                type="button"
+                onClick={() => setSelectedCustomer("ALL")}
+                className="text-emerald-600 hover:underline font-bold"
+              >
+                عرض جميع العملاء
+              </button>
+            )}
+          </div>
+          {visibleRows.length === 0 ? (
+            <EmptyState
+              title="لا توجد حركات مبيعات أو فواتير مطابقة"
+              description="اختر عميلاً آخر أو اضغط على تحديث لعرض الحركات المالية."
+              actionLabel={selectedCustomer !== "ALL" ? "إظهار جميع العملاء" : undefined}
+              onAction={selectedCustomer !== "ALL" ? () => setSelectedCustomer("ALL") : undefined}
+            />
+          ) : (
           <table className="w-full text-xs text-right border-collapse">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-800/60">
@@ -719,19 +857,20 @@ export function CustomersTab({
                 return (
                   <tr key={s.id}>
                     <td className="p-2.5 font-bold">{s.customer}</td>
-                    <td className="p-2.5">{s.phone}</td>
+                    <td className="p-2.5 font-mono"><bdi dir="ltr">{s.phone}</bdi></td>
                     <td className="p-2.5">
                       {proj ? proj.name : ""} — {s.harvest}
                     </td>
                     <td className="p-2.5">{s.batch}</td>
                     <td className="p-2.5">{s.grade}</td>
-                    <td className="p-2.5 font-bold">{fmtNum(s.bundles)}</td>
-                    <td className="p-2.5">{fmtNum(s.price)}</td>
-                    <td className="p-2.5 font-extrabold">{fmtNum(s.total)}</td>
-                    <td className="p-2.5 text-emerald-600 font-bold">{fmtNum(s.credit)}</td>
-                    <td className="p-2.5 text-rose-600 font-bold">{fmtNum(s.debit)}</td>
+                    <td className="p-2.5 font-bold tabular-nums">{fmtNum(s.bundles)}</td>
+                    <td className="p-2.5 tabular-nums">{fmtNum(s.price)}</td>
+                    <td className="p-2.5 font-extrabold tabular-nums">{fmtNum(s.total)}</td>
+                    <td className="p-2.5 text-emerald-600 font-bold tabular-nums">{fmtNum(s.credit)}</td>
+                    <td className="p-2.5 text-rose-600 font-bold tabular-nums">{fmtNum(s.debit)}</td>
                     <td className="p-2.5 no-print">
                       <button
+                        type="button"
                         onClick={() => onOpenSaleVoucher(s)}
                         className="px-2.5 py-1 rounded-lg accent-bg text-[11px] font-bold"
                       >
@@ -743,7 +882,21 @@ export function CustomersTab({
               })}
             </tbody>
           </table>
+          )}
         </div>
+        )}
+
+        {(viewSection === "portal" || viewSection === "whatsapp") && (
+          <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
+            <TenantClientPortalAdminPanel
+              key={viewSection}
+              initialSection={viewSection === "whatsapp" ? "whatsapp" : "requests"}
+              canManageSettings={currentUser?.role === "SUPER_ADMIN" || currentUser?.role === "CHIEF_ACCOUNTANT"}
+              onRefreshState={onRefreshState}
+              onToast={(m) => onToast?.(m)}
+            />
+          </div>
+        )}
       </div>
     </section>
   );

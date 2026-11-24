@@ -51,7 +51,6 @@ const GROUP_ICONS: Record<ErpGroupId, React.ComponentType<{ className?: string }
 };
 
 export function SidebarNav({
-  orgName: _orgName,
   logoText,
   enterpriseProfile,
   lang,
@@ -112,6 +111,11 @@ export function SidebarNav({
                   <span className="truncate">
                     {resolveEffectiveTagline(enterpriseProfile, lang)}
                   </span>
+                  {enterpriseProfile?.tenantSlug && enterpriseProfile.tenantSlug !== "default" && (
+                    <span className="px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-mono text-[9px] shrink-0">
+                      <bdi dir="ltr">{enterpriseProfile.tenantSlug}</bdi>
+                    </span>
+                  )}
                 </div>
               </div>
             )}
