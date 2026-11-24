@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:cloud": "UAS_BUILD_TARGET=cloud NEXT_PUBLIC_UAS_BUILD_TARGET=cloud next build && node scripts/sync-standalone.mjs",
+    "deploy:sync": "node scripts/sync-standalone.mjs",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",

@@ -651,8 +651,8 @@ export function LoginView({
                 </a>
 
                 <a
-                  href="/downloads/uas-latest.apk"
-                  download="UAS-Accounting.apk"
+                  href="/downloads/UAS-Mobile-Release-qat.world.apk"
+                  download="UAS-Mobile-Release-qat.world.apk"
                   className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-emerald-500/40 hover:border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition shadow-xs"
                 >
                   <Smartphone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
