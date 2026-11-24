@@ -3132,6 +3132,21 @@ async function handleOfflineAndroidApiRequestCore(
     return jsonResponse({ rows, totals, offline: true }, 200);
   }
 
+  if (pathname === "/api/ai/vision") {
+    return jsonResponse(
+      {
+        success: false,
+        code: "VISION_OFFLINE_OR_UNCONFIGURED",
+        offline: true,
+        errorAr:
+          "استخراج الصور بالذكاء الاصطناعي (Vision OCR) يتطلب اتصالاً بالإنترنت مع خادم qat.world. يمكنك إدخال السند أو كشف القطفة عبر الدردشة الأوفلاين مباشرة.",
+        errorEn:
+          "Multimodal Vision OCR requires an online connection to qat.world. You can still type the expense or harvest batch directly in offline chat.",
+      },
+      503
+    );
+  }
+
   if (pathname === "/api/ai/briefing") {
     const state = loadOfflineAndroidState(s);
     const tenantSlug = normalizeMemoryTenantSlug(

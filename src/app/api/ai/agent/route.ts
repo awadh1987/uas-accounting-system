@@ -91,13 +91,29 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       ? (body.conversationHistory as Array<{ role: "user" | "assistant"; text: string }>)
       : undefined;
 
+    const imageAttachmentRaw =
+      body.imageAttachment && typeof body.imageAttachment === "object"
+        ? (body.imageAttachment as Record<string, unknown>)
+        : null;
+    const imageAttachment =
+      imageAttachmentRaw && typeof imageAttachmentRaw.imageBase64 === "string"
+        ? {
+            imageBase64: imageAttachmentRaw.imageBase64,
+            mimeType: String(imageAttachmentRaw.mimeType ?? "image/jpeg"),
+            fileName:
+              typeof imageAttachmentRaw.fileName === "string"
+                ? imageAttachmentRaw.fileName
+                : undefined,
+          }
+        : undefined;
+
     const tenantSlug = normalizeMemoryTenantSlug(
       getActiveTenantId() || workspaceContext?.tenantSlug
     );
     const activeMemories = retrieveServerCopilotMemories({
       tenantSlug,
       userId: actor.userId,
-      query: prompt,
+      query: prompt || "قطفة علاقي مصروف مبيعات",
       activeTab: workspaceContext?.activeTab,
       limit: 8,
     });
@@ -107,6 +123,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       workspaceContext,
       explicitTool,
       conversationHistory,
+      imageAttachment,
       memories: activeMemories,
       skipLocalLearning: true,
       enableLocalOllamaProbe: body.enableLocalOllamaProbe === true,

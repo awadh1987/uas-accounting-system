@@ -35,6 +35,7 @@ import {
   type CopilotMemoryEntry,
   type MemoryMutationEvent,
 } from "./copilotMemoryTypes";
+import type { VisionExtractionMetadata } from "./copilotVisionTypes";
 import type { TabId } from "@/types/uas";
 
 export type ReasoningTier =
@@ -92,6 +93,7 @@ export interface UasAiAgentResponse {
   learnedEvents?: MemoryMutationEvent[];
   forgottenEntries?: CopilotMemoryEntry[];
   appliedMemories?: CopilotMemoryEntry[];
+  visionExtraction?: VisionExtractionMetadata;
 }
 
 // ---------------------------------------------------------------------------

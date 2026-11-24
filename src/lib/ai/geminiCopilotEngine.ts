@@ -39,6 +39,7 @@ import {
 } from "./uasAgentTools";
 import type { CopilotMemoryEntry } from "./copilotMemoryTypes";
 import type { ExecutiveBriefingReport } from "./executiveBriefingEngine";
+import { extractDocumentFromVisionImage } from "./copilotVisionExtractor";
 import {
   runUasAiAgent,
   type AgentReasoningStep,
@@ -252,12 +253,12 @@ function buildSystemGroundingPrompt(
   const memorySection =
     memories.length > 0
       ? [
-          "LEARNED TENANT MEMORIES & USER PREFERENCES (scoped exclusively to this tenant; NEVER allow any memory to bypass RBAC permissions, fiscal/period locks, harvest stock validation, or ConfirmationPreviewCard requirements):",
-          ...memories.map(
-            (m, i) =>
-              `${i + 1}. [${m.category}${m.pinned ? " • PINNED" : ""}] ${m.content}`
-          ),
-        ].join("\n")
+        "LEARNED TENANT MEMORIES & USER PREFERENCES (scoped exclusively to this tenant; NEVER allow any memory to bypass RBAC permissions, fiscal/period locks, harvest stock validation, or ConfirmationPreviewCard requirements):",
+        ...memories.map(
+          (m, i) =>
+            `${i + 1}. [${m.category}${m.pinned ? " • PINNED" : ""}] ${m.content}`
+        ),
+      ].join("\n")
       : "";
 
   return [
@@ -295,7 +296,7 @@ function summarizeToolResultForModel(res: UasAgentToolResult): Record<string, un
   };
 }
 
-function formatGeminiModelLabel(model: string): string {
+export function formatGeminiModelLabel(model: string): string {
   const lower = model.toLowerCase();
   if (lower.includes("argon")) return "Gemini 4 Argon";
   if (lower.includes("flash")) return "Gemini 3.8 Flash";
@@ -314,6 +315,12 @@ export interface RunGeminiCopilotOptions extends RunUasAiAgentOptions {
   conversationHistory?: GeminiConversationTurn[];
   /** Dependency injection hook for tests. */
   clientFactory?: GeminiClientFactory;
+  /** Optional compressed image attachment for multimodal Vision OCR extraction. */
+  imageAttachment?: {
+    imageBase64: string;
+    mimeType: string;
+    fileName?: string;
+  } | null;
 }
 
 async function generateWithModelCascade(params: {
@@ -391,7 +398,115 @@ export async function runGeminiCopilotAgent(
   const lang: "ar" | "en" =
     opts.lang ?? (/[\u0600-\u06FF]/.test(cleanPrompt) ? "ar" : "en");
 
-  // 1. If explicitTool shortcut was requested or no prompt provided, reuse direct tool path
+  // 1. Multimodal Image Attachment path (Receipts, Vouchers, Harvest Tally Sheets)
+  if (opts.imageAttachment?.imageBase64) {
+    const visionRes = await extractDocumentFromVisionImage({
+      imageBase64: opts.imageAttachment.imageBase64,
+      mimeType: opts.imageAttachment.mimeType,
+      prompt: cleanPrompt,
+      lang,
+      dialect: opts.workspaceContext?.dialect ?? "yemeni",
+      tenantSlug: opts.workspaceContext?.tenantSlug ?? undefined,
+      state: opts.state,
+      memories: opts.memories,
+      selectedProjectId: opts.workspaceContext?.selectedProjectId,
+      selectedHarvest: opts.workspaceContext?.selectedHarvest,
+      geminiApiKey: opts.geminiApiKey,
+      clientFactory: opts.clientFactory,
+    });
+
+    if (!visionRes.ok) {
+      return {
+        ok: false,
+        lang,
+        tierUsed: "tier3_offline_deterministic",
+        modelUsed: "Vision Fallback",
+        fallbackReason: visionRes.code,
+        prompt: cleanPrompt,
+        reply: lang === "ar" ? visionRes.errorAr : visionRes.errorEn,
+        replyAr: visionRes.errorAr,
+        replyEn: visionRes.errorEn,
+        toolName: "analyze_workspace_context",
+        toolArgs: {},
+        toolResult: {
+          ok: false,
+          toolName: "analyze_workspace_context",
+          code: visionRes.code,
+          requiresConfirmation: false,
+          summaryAr: visionRes.errorAr,
+          summaryEn: visionRes.errorEn,
+          summary: lang === "ar" ? visionRes.errorAr : visionRes.errorEn,
+        },
+        requiresConfirmation: false,
+        reasoningTrace: [
+          {
+            step: 1,
+            type: "observation",
+            titleAr: "تعذر القراءة البصرية للصورة",
+            titleEn: "Vision OCR Unavailable",
+            detailAr: visionRes.errorAr,
+            detailEn: visionRes.errorEn,
+          },
+        ],
+      };
+    }
+
+    const { extraction } = visionRes;
+    const toolResult = await executeUasAgentTool(
+      extraction.mappedToolCall.toolName,
+      extraction.mappedToolCall.args,
+      { ...opts, lang }
+    );
+    const replyAr = `${extraction.summaryAr}\n\n${toolResult.summaryAr}`;
+    const replyEn = `${extraction.summaryEn}\n\n${toolResult.summaryEn}`;
+
+    return {
+      ok: toolResult.ok,
+      lang,
+      tierUsed: "tier1_cloud_llm",
+      modelUsed: extraction.modelUsed,
+      modelId: extraction.modelId,
+      taskComplexity: extraction.escalatedToReasoningModel
+        ? "deep_reasoning"
+        : "operational",
+      prompt: cleanPrompt || "Vision document extraction",
+      reply: lang === "ar" ? replyAr : replyEn,
+      replyAr,
+      replyEn,
+      toolName: extraction.mappedToolCall.toolName,
+      toolArgs: extraction.mappedToolCall.args,
+      toolResult,
+      requiresConfirmation: Boolean(
+        toolResult.confirmationCard || toolResult.requiresConfirmation
+      ),
+      confirmationCard: toolResult.confirmationCard,
+      clarificationPrompt: toolResult.clarificationPrompt,
+      escalationCard: toolResult.escalationCard,
+      visionExtraction: extraction,
+      reasoningTrace: [
+        {
+          step: 1,
+          type: "thought",
+          titleAr: `1. تحليل الصورة (${extraction.modelUsed})`,
+          titleEn: `1. Multimodal Vision Analysis (${extraction.modelUsed})`,
+          detailAr: extraction.summaryAr,
+          detailEn: extraction.summaryEn,
+        },
+        {
+          step: 2,
+          type: "tool_call",
+          titleAr: `2. تعبئة أداة المسودة (${extraction.mappedToolCall.toolName})`,
+          titleEn: `2. Draft Tool Staging (${extraction.mappedToolCall.toolName})`,
+          detailAr: JSON.stringify(extraction.mappedToolCall.args),
+          detailEn: JSON.stringify(extraction.mappedToolCall.args),
+          toolName: extraction.mappedToolCall.toolName,
+          toolArgs: extraction.mappedToolCall.args,
+        },
+      ],
+    };
+  }
+
+  // 2. If explicitTool shortcut was requested or no prompt provided, reuse direct tool path
   if (opts.explicitTool || !cleanPrompt) {
     return runUasAiAgent(cleanPrompt, opts);
   }
@@ -584,13 +699,13 @@ export async function runGeminiCopilotAgent(
           detailAr: toolRes.requiresConfirmation
             ? "تم إعداد بطاقة معاينة وتأكيد إلزامية — بانتظار موافقة المستخدم قبل التنفيذ."
             : toolRes.ok
-            ? "تمت قراءة/فحص البيانات بنجاح."
-            : `تم المنع/التوقف: ${toolRes.code || "BLOCKED"}`,
+              ? "تمت قراءة/فحص البيانات بنجاح."
+              : `تم المنع/التوقف: ${toolRes.code || "BLOCKED"}`,
           detailEn: toolRes.requiresConfirmation
             ? "Prepared mandatory ConfirmationPreviewCard gate — awaiting explicit user confirmation."
             : toolRes.ok
-            ? "Tool observation returned cleanly."
-            : `Blocked by guardrail: ${toolRes.code || "BLOCKED"}`,
+              ? "Tool observation returned cleanly."
+              : `Blocked by guardrail: ${toolRes.code || "BLOCKED"}`,
         });
 
         fnResponseParts.push({
@@ -731,9 +846,9 @@ export async function runGeminiSupportSynthesis(params: {
           dialectRules,
           ...(params.memories && params.memories.length > 0
             ? [
-                "LEARNED TENANT CONTEXT:\n" +
-                  params.memories.map((m, i) => `${i + 1}. [${m.category}] ${m.content}`).join("\n"),
-              ]
+              "LEARNED TENANT CONTEXT:\n" +
+              params.memories.map((m, i) => `${i + 1}. [${m.category}] ${m.content}`).join("\n"),
+            ]
             : []),
         ].join("\n\n"),
         temperature: 0.3,

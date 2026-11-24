@@ -24,6 +24,7 @@ import {
   FolderClock,
   Headphones,
   HelpCircle,
+  Image as ImageIcon,
   KeyRound,
   Mail,
   MessageSquare,
@@ -65,6 +66,14 @@ import {
   saveCachedExecutiveBriefing,
   type ExecutiveBriefingReport,
 } from "@/lib/ai/executiveBriefingEngine";
+import {
+  compressImageFileForVision,
+  type CompressedVisionImage,
+} from "@/lib/ai/clientImageCompression";
+import {
+  MAX_VISION_IMAGE_BYTES,
+  type VisionExtractionMetadata,
+} from "@/lib/ai/copilotVisionTypes";
 import {
   UAS_SUPPORT_CHAPTERS,
   type SupportChapter,
@@ -192,6 +201,7 @@ interface CopilotAgentResponse extends Partial<UasAgentToolResult> {
   learnedEvents?: MemoryMutationEvent[];
   forgottenEntries?: CopilotMemoryEntry[];
   appliedMemoriesCount?: number;
+  visionExtraction?: VisionExtractionMetadata;
 }
 
 
@@ -287,6 +297,10 @@ export function UasAiCopilot({
   const [docExtractBusy, setDocExtractBusy] = useState(false);
   const [docPostBusy, setDocPostBusy] = useState(false);
   const docFileInputRef = useRef<HTMLInputElement | null>(null);
+  const visionCameraInputRef = useRef<HTMLInputElement | null>(null);
+  const visionImageInputRef = useRef<HTMLInputElement | null>(null);
+  const [pendingVisionImage, setPendingVisionImage] = useState<CompressedVisionImage | null>(null);
+  const [visionCompressBusy, setVisionCompressBusy] = useState(false);
 
   // User Manual search & selected chapter state
   const [manualSearch, setManualSearch] = useState("");
@@ -911,6 +925,39 @@ export function UasAiCopilot({
     }
   }
 
+  async function handleVisionImageSelected(file?: File | null) {
+    if (!file) return;
+    setVisionCompressBusy(true);
+    try {
+      const compressed = await compressImageFileForVision(file, {
+        maxDimension: 1600,
+        quality: 0.82,
+      });
+      if (compressed.compressedBytes > MAX_VISION_IMAGE_BYTES) {
+        onToast(
+          isAr
+            ? "حجم الصورة بعد الضغط لا يزال يتجاوز 6 ميجابايت؛ يرجى التقاط صورة أوضح وأصغر."
+            : "Compressed image still exceeds 6 MB limit; please select a smaller image."
+        );
+        return;
+      }
+      setPendingVisionImage(compressed);
+      onToast(
+        isAr
+          ? `📷 تم تجهيز الصورة (${Math.max(1, Math.round(compressed.compressedBytes / 1024))} KB) — اضغط إرسال لتحليلها`
+          : `📷 Image ready (${Math.max(1, Math.round(compressed.compressedBytes / 1024))} KB) — press Send to analyze`
+      );
+    } catch {
+      onToast(
+        isAr ? "تعذر قراءة أو ضغط الصورة المحددة." : "Failed to read or compress selected image."
+      );
+    } finally {
+      setVisionCompressBusy(false);
+      if (visionCameraInputRef.current) visionCameraInputRef.current.value = "";
+      if (visionImageInputRef.current) visionImageInputRef.current.value = "";
+    }
+  }
+
   function updatePendingDraft(updater: (prev: ExtractedDocumentDraft) => ExtractedDocumentDraft) {
     setPendingDocDraft((prev) => {
       if (!prev) return null;
@@ -1417,8 +1464,15 @@ export function UasAiCopilot({
     baseMessages?: CopilotChatMessage[],
     editedDraftContext?: string
   ) {
-    const prompt = (overrideText ?? inputPrompt).trim();
-    if (!prompt || busy) return;
+    const attachedImage = overrideText ? null : pendingVisionImage;
+    const rawTypedPrompt = (overrideText ?? inputPrompt).trim();
+    if ((!rawTypedPrompt && !attachedImage) || busy) return;
+
+    const prompt =
+      rawTypedPrompt ||
+      (isAr
+        ? "استخرج بيانات هذه الصورة وجهّز مسودة القيد أو السند أو كشف القطفة"
+        : "Extract fields from this image and prepare the matching draft card");
 
     if (!activeThreadId) {
       const newTh = createThread(currentUser?.id, prompt.slice(0, 42), prompt.slice(0, 42));
@@ -1436,6 +1490,12 @@ export function UasAiCopilot({
       role: "user",
       text: prompt,
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      ...(attachedImage
+        ? {
+            imagePreviewUrl: attachedImage.previewDataUrl,
+            imageFileName: attachedImage.fileName,
+          }
+        : {}),
     };
     if (baseMessages) {
       setMessages([...baseMessages, userMsg]);
@@ -1443,13 +1503,36 @@ export function UasAiCopilot({
       setMessages((prev) => [...prev, userMsg]);
     }
     if (!overrideText) setInputPrompt("");
+    if (attachedImage) setPendingVisionImage(null);
     setBusy(true);
 
     try {
       let agentRes: CopilotAgentResponse | null = null;
       const shouldUseOfflineDirectly = isOfflineClientContext();
 
-      if (!shouldUseOfflineDirectly) {
+      if (shouldUseOfflineDirectly && attachedImage) {
+        const offlineVisionNoticeAr =
+          "📵 **ملاحظة وضع الأوفلاين:** تحليل الصور بالذكاء الاصطناعي (Vision OCR) يتطلب اتصالاً بالإنترنت مع خادم `qat.world`. تم حفظ ملاحظة الصورة في المحادثة، ويمكنك كتابة بيانات القطفة أو السند مباشرةً في الدردشة لتجهيزها محلياً دون إنترنت.";
+        const offlineVisionNoticeEn =
+          "📵 **Offline Notice:** Multimodal Vision OCR requires an online connection to `qat.world`. Your image attachment note was kept locally, and you can type the receipt or harvest details directly in chat to stage a local draft.";
+        agentRes = rawTypedPrompt
+          ? await runUasAiAgent(rawTypedPrompt, {
+              user: currentUser ?? "SUPER_ADMIN",
+              lang,
+              state,
+              workspaceContext: mergedWorkspaceContext,
+              diagnostics: clientDiagnostics,
+            })
+          : {
+              ok: false,
+              tierUsed: "tier3_offline_deterministic",
+              modelUsed: "Offline Local Engine",
+              reply: isAr ? offlineVisionNoticeAr : offlineVisionNoticeEn,
+              replyAr: offlineVisionNoticeAr,
+              replyEn: offlineVisionNoticeEn,
+              requiresConfirmation: false,
+            };
+      } else if (!shouldUseOfflineDirectly) {
         try {
           const headers = buildCopilotRequestHeaders();
           const res = await fetch("/api/ai/agent", {
@@ -1460,6 +1543,15 @@ export function UasAiCopilot({
               lang,
               workspaceContext: mergedWorkspaceContext,
               conversationHistory: historySnapshot,
+              ...(attachedImage
+                ? {
+                    imageAttachment: {
+                      imageBase64: attachedImage.base64Data,
+                      mimeType: attachedImage.mimeType,
+                      fileName: attachedImage.fileName,
+                    },
+                  }
+                : {}),
               ...(editedDraftContext ? { editedDraftContext } : {}),
               actor: currentUser
                 ? {
@@ -1541,6 +1633,7 @@ export function UasAiCopilot({
         clarificationPrompt: agentRes.clarificationPrompt,
         escalationCard: agentRes.escalationCard,
         learnedEvents: agentRes.learnedEvents,
+        visionExtraction: agentRes.visionExtraction,
       };
 
       if (agentRes.learnedEvents && agentRes.learnedEvents.length > 0) {
@@ -2478,7 +2571,50 @@ export function UasAiCopilot({
                               </button>
                             </div>
                           )}
+                          {msg.imagePreviewUrl && (
+                            <div className="mb-1.5">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={msg.imagePreviewUrl}
+                                alt={msg.imageFileName || "Attached receipt or harvest sheet"}
+                                className="max-h-40 max-w-full rounded-xl border border-white/25 object-cover shadow-sm"
+                              />
+                              {msg.imageFileName && (
+                                <div className="text-[10px] opacity-80 mt-0.5 font-mono truncate">
+                                  📷 {msg.imageFileName}
+                                </div>
+                              )}
+                            </div>
+                          )}
                           <div className="whitespace-pre-line leading-relaxed">{msg.text}</div>
+                        </div>
+                      )}
+
+                      {/* Vision Extraction Confidence & Arithmetic Discrepancy Badges */}
+                      {msg.visionExtraction && (
+                        <div
+                          data-testid={`vision-badges-${msg.id}`}
+                          className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]"
+                        >
+                          <span className="px-2 py-0.5 rounded-lg bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 font-bold border border-indigo-500/25">
+                            {isAr
+                              ? `ثقة القراءة: ${Math.round(msg.visionExtraction.confidence * 100)}%`
+                              : `Confidence: ${Math.round(msg.visionExtraction.confidence * 100)}%`}
+                          </span>
+                          {msg.visionExtraction.escalatedToReasoningModel && (
+                            <span className="px-2 py-0.5 rounded-lg bg-purple-500/15 text-purple-700 dark:text-purple-300 font-bold border border-purple-500/25">
+                              {isAr ? "تحقق متعمق (Argon)" : "Deep Verify (Argon)"}
+                            </span>
+                          )}
+                          {msg.visionExtraction.arithmeticMismatch && (
+                            <span className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-700 dark:text-rose-300 font-bold border border-rose-500/30 w-full">
+                              {isAr
+                                ? msg.visionExtraction.discrepancyNoteAr ||
+                                  "⚠️ عدم تطابق حسابي بين مجموع البنود والإجمالي"
+                                : msg.visionExtraction.discrepancyNoteEn ||
+                                  "⚠️ Arithmetic mismatch between items sum and total"}
+                            </span>
+                          )}
                         </div>
                       )}
 
@@ -3306,11 +3442,59 @@ export function UasAiCopilot({
                 <input
                   ref={docFileInputRef}
                   type="file"
-                  accept="image/*,.pdf,.txt,.csv"
-                  capture="environment"
+                  accept=".pdf,.txt,.csv,image/*"
                   className="hidden"
                   onChange={(e) => void handleDocumentFileSelected(e.target.files?.[0])}
                 />
+                <input
+                  ref={visionCameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={(e) => void handleVisionImageSelected(e.target.files?.[0])}
+                />
+                <input
+                  ref={visionImageInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={(e) => void handleVisionImageSelected(e.target.files?.[0])}
+                />
+
+                {pendingVisionImage && (
+                  <div
+                    data-testid="copilot-vision-preview"
+                    className="mb-2 p-2 rounded-xl bg-white dark:bg-slate-900 border border-emerald-500/40 flex items-center justify-between gap-2"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={pendingVisionImage.previewDataUrl}
+                        alt={pendingVisionImage.fileName}
+                        className="w-11 h-11 rounded-lg object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                      />
+                      <div className="min-w-0 text-[10px]">
+                        <div className="font-bold text-slate-800 dark:text-slate-100 truncate">
+                          {pendingVisionImage.fileName}
+                        </div>
+                        <div className="text-emerald-700 dark:text-emerald-300 font-mono">
+                          {Math.max(1, Math.round(pendingVisionImage.compressedBytes / 1024))} KB •{" "}
+                          {isAr ? "جاهز للتحليل البصري" : "Ready for Vision OCR"}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="copilot-vision-remove-btn"
+                      onClick={() => setPendingVisionImage(null)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition"
+                      title={isAr ? "إزالة الصورة" : "Remove image"}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
 
                 <form
                   onSubmit={(e) => {
@@ -3321,13 +3505,35 @@ export function UasAiCopilot({
                 >
                   <button
                     type="button"
+                    data-testid="copilot-vision-camera-btn"
+                    disabled={visionCompressBusy || busy}
+                    onClick={() => visionCameraInputRef.current?.click()}
+                    className="px-2 py-2.5 rounded-xl border bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-emerald-700 dark:text-emerald-300 hover:border-emerald-500 transition shrink-0 disabled:opacity-50 inline-flex items-center gap-1 text-[10px] font-bold"
+                    title={isAr ? "تصوير بالكاميرا (كشف قطفة / سند / فاتورة)" : "Camera Capture (Receipt / Harvest Sheet)"}
+                  >
+                    <Camera className={`w-3.5 h-3.5 ${visionCompressBusy ? "animate-pulse" : ""}`} />
+                    <span className="hidden sm:inline">{isAr ? "كاميرا" : "Camera"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="copilot-vision-upload-btn"
+                    disabled={visionCompressBusy || busy}
+                    onClick={() => visionImageInputRef.current?.click()}
+                    className="px-2 py-2.5 rounded-xl border bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-sky-700 dark:text-sky-300 hover:border-sky-500 transition shrink-0 disabled:opacity-50 inline-flex items-center gap-1 text-[10px] font-bold"
+                    title={isAr ? "رفع صورة مستند أو كشف يدوي" : "Upload Receipt or Sheet Image"}
+                  >
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">{isAr ? "صورة" : "Image"}</span>
+                  </button>
+                  <button
+                    type="button"
                     data-testid="copilot-doc-upload-btn"
                     disabled={docExtractBusy}
                     onClick={() => docFileInputRef.current?.click()}
                     className="p-2.5 rounded-xl border bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-500 transition shrink-0 disabled:opacity-50"
-                    title={isAr ? "إرفاق / تصوير فاتورة أو مستند للاستخراج" : "Upload / Capture Invoice or Receipt"}
+                    title={isAr ? "استخراج PDF أو CSV أو ملف مستند" : "Extract PDF / CSV Document"}
                   >
-                    {docExtractBusy ? <Camera className="w-4 h-4 animate-pulse text-indigo-600" /> : <Paperclip className="w-4 h-4" />}
+                    {docExtractBusy ? <Sparkles className="w-4 h-4 animate-pulse text-indigo-600" /> : <Paperclip className="w-4 h-4" />}
                   </button>
                   <button
                     type="button"
@@ -3358,7 +3564,7 @@ export function UasAiCopilot({
 
                   <button
                     type="submit"
-                    disabled={busy || !inputPrompt.trim()}
+                    disabled={busy || (!inputPrompt.trim() && !pendingVisionImage)}
                     className="p-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50 transition shrink-0"
                   >
                     <Send className="w-4 h-4" />
