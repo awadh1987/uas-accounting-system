@@ -237,9 +237,15 @@ test("deleteConfirmedDummyProjects deletes only validated test projects and prot
 test("Responsive dropdown layouts and manual voice send safety exist across Copilot and UAS views", () => {
   const copilotSrc = fs.readFileSync(path.join(REPO_ROOT, "src/components/UasAiCopilot.tsx"), "utf8");
   assert.ok(copilotSrc.includes('data-testid="copilot-pane-select"'));
+  assert.ok(copilotSrc.includes('data-testid="copilot-header-actions-btn"'));
+  assert.ok(copilotSrc.includes('data-testid="copilot-context-actions-select"'));
+  assert.ok(copilotSrc.includes('data-testid="copilot-attach-menu-btn"'));
   assert.ok(copilotSrc.includes('data-testid="copilot-quick-actions-select"'));
   assert.ok(copilotSrc.includes('data-testid="copilot-manual-chapter-select"'));
   assert.ok(copilotSrc.includes("copilot-citations-select-"));
+  assert.ok(copilotSrc.includes("manual-section-jump-"));
+  assert.ok(copilotSrc.includes("max-h-[82dvh]"));
+  assert.ok(copilotSrc.includes("overflow-x-hidden"));
   assert.ok(copilotSrc.includes("splitTextForSequentialSpeech("));
   assert.ok(
     !/rec\.onend\s*=\s*\(\)\s*=>\s*\{[\s\S]{0,300}handleSendPrompt\(flushed\)/.test(copilotSrc),
@@ -266,4 +272,10 @@ test("Responsive dropdown layouts and manual voice send safety exist across Copi
 
   const projSrc = fs.readFileSync(path.join(REPO_ROOT, "src/components/ProjectsManagerTab.tsx"), "utf8");
   assert.ok(projSrc.includes("project-cycles-select-"));
+
+  const treasurySrc = fs.readFileSync(path.join(REPO_ROOT, "src/components/tabs/TreasuryTab.tsx"), "utf8");
+  assert.ok(treasurySrc.includes('data-testid="treasury-actions-select"'));
+
+  const salesSrc = fs.readFileSync(path.join(REPO_ROOT, "src/components/tabs/SalesTab.tsx"), "utf8");
+  assert.ok(salesSrc.includes('data-testid="sales-actions-select"'));
 });

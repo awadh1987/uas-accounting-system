@@ -919,7 +919,85 @@ export function SalesTab({
               عمليات بيع غير مقيدة بعدد، سندات قبض نقدية/آجلة، وترحيل محاسبي لجميع أجيال الدليل
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2 no-print">
+          <div className="w-full sm:w-auto no-print">
+            {/* Mobile Compact Sales Toolbar Dropdown */}
+            <div className="md:hidden w-full flex items-center gap-2">
+              {!readOnly && (
+                <button
+                  type="button"
+                  onClick={openCreateDrawer}
+                  className="flex-1 min-h-[42px] px-3.5 py-2 rounded-xl accent-bg text-xs font-extrabold inline-flex items-center justify-center gap-1.5 shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>عملية بيع جديدة</span>
+                </button>
+              )}
+              <select
+                data-testid="sales-actions-select"
+                aria-label="خيارات سجل المبيعات"
+                value=""
+                onChange={(e) => {
+                  if (e.target.value === "export_pdf") {
+                    void printUasDocument({
+                      titleAr: "تقرير سجل المبيعات والإيرادات اليومية",
+                      titleEn: "Sales Ledger & Daily Revenue Report",
+                      documentNumber: `RPT-SALES-${new Date().toISOString().slice(0, 10)}`,
+                      currency: "YER",
+                      status: "POSTED",
+                      format: "A4_LANDSCAPE",
+                      letterhead: resolveLetterheadFromProfile(enterpriseProfile),
+                      summaryCards: [
+                        { labelAr: "إجمالي المبيعات", labelEn: "Total Sales", value: `${fmtNum(sumTotal)} YER`, tone: "indigo" },
+                        { labelAr: "التحصيل النقدي", labelEn: "Cash Collected", value: `${fmtNum(sumCredit)} YER`, tone: "emerald" },
+                        { labelAr: "المتبقي الآجل", labelEn: "Receivable", value: `${fmtNum(sumDebit)} YER`, tone: "rose" },
+                        { labelAr: "إجمالي الكمية (الوحدات)", labelEn: "Total Quantity", value: `${fmtNum(sumBundles)} (${visibleSales.length})`, tone: "amber" },
+                      ],
+                      tables: [
+                        {
+                          headingAr: "تفاصيل عمليات البيع",
+                          headingEn: "Sales Transactions",
+                          columns: [
+                            { key: "date", labelAr: "التاريخ", labelEn: "Date" },
+                            { key: "voucherNo", labelAr: "رقم السند", labelEn: "Voucher" },
+                            { key: "customer", labelAr: "العميل", labelEn: "Customer" },
+                            { key: "grade", labelAr: "الصنف", labelEn: "Grade" },
+                            { key: "bundles", labelAr: "الكمية / الوحدة", labelEn: "Qty / UoM", numeric: true },
+                            { key: "price", labelAr: "السعر", labelEn: "Price", numeric: true },
+                            { key: "total", labelAr: "الإجمالي", labelEn: "Total", numeric: true },
+                            { key: "credit", labelAr: "المدفوع", labelEn: "Paid", numeric: true },
+                            { key: "debit", labelAr: "المتبقي", labelEn: "Due", numeric: true },
+                          ],
+                          rows: visibleSales.map((s) => ({
+                            date: s.date,
+                            voucherNo: s.voucherNo || s.sequenceNumber || "—",
+                            customer: s.customer,
+                            grade: s.grade,
+                            bundles: fmtNum(s.bundles),
+                            price: fmtNum(s.price),
+                            total: fmtNum(s.total),
+                            credit: fmtNum(s.credit),
+                            debit: fmtNum(s.debit),
+                          })),
+                          totalsRow: {
+                            date: "الإجمالي",
+                            bundles: fmtNum(sumBundles),
+                            total: fmtNum(sumTotal),
+                            credit: fmtNum(sumCredit),
+                            debit: fmtNum(sumDebit),
+                          },
+                        },
+                      ],
+                    });
+                  }
+                }}
+                className="min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100"
+              >
+                <option value="">⋮ خيارات</option>
+                <option value="export_pdf">🖨️ تصدير تقرير PDF</option>
+              </select>
+            </div>
+
+            <div className="hidden md:flex flex-wrap items-center gap-2">
             <button
               onClick={() =>
                 void printUasDocument({
@@ -988,6 +1066,7 @@ export function SalesTab({
                 <span>عملية بيع جديدة</span>
               </button>
             )}
+            </div>
           </div>
         </div>
 

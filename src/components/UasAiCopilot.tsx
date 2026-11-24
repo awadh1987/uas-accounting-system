@@ -29,6 +29,7 @@ import {
   MessageSquarePlus,
   Mic,
   MicOff,
+  MoreVertical,
   Package,
   Paperclip,
   Phone,
@@ -257,6 +258,34 @@ export function UasAiCopilot({
   const isAr = lang === "ar" || (lang !== "en" && docRtl);
   const [open, setOpen] = useState(false);
   const [activePane, setActivePane] = useState<"copilot" | "threads" | "support" | "manual" | "memory" | "archive">("copilot");
+  const [headerActionsOpen, setHeaderActionsOpen] = useState(false);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const headerActionsRef = useRef<HTMLDivElement | null>(null);
+  const attachMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (headerActionsRef.current && !headerActionsRef.current.contains(target)) {
+        setHeaderActionsOpen(false);
+      }
+      if (attachMenuRef.current && !attachMenuRef.current.contains(target)) {
+        setAttachMenuOpen(false);
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setHeaderActionsOpen(false);
+        setAttachMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener("keydown", handleEsc);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+      document.removeEventListener("keydown", handleEsc);
+    };
+  }, []);
   const [inputPrompt, setInputPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -380,9 +409,9 @@ export function UasAiCopilot({
     () =>
       normalizeMemoryTenantSlug(
         workspaceContext?.tenantSlug ||
-          state.enterpriseProfile?.tenantSlug ||
-          getStoredTenantId() ||
-          "default"
+        state.enterpriseProfile?.tenantSlug ||
+        getStoredTenantId() ||
+        "default"
       ),
     [workspaceContext?.tenantSlug, state.enterpriseProfile?.tenantSlug]
   );
@@ -564,7 +593,7 @@ export function UasAiCopilot({
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) loaded = parsed;
         }
-      } catch {}
+      } catch { }
     }
     setMessages(loaded || [welcomeMessage]);
 
@@ -607,7 +636,7 @@ export function UasAiCopilot({
       } else {
         try {
           window.localStorage.removeItem(historyStorageKey);
-        } catch {}
+        } catch { }
       }
     }
   }, [messages, historyStorageKey, activeThreadId, currentUser?.id]);
@@ -671,7 +700,7 @@ export function UasAiCopilot({
         const voices = window.speechSynthesis.getVoices?.() ?? [];
         const preferredVoice = isAr
           ? voices.find((v) => /ar-ye/i.test(v.lang)) ||
-            voices.find((v) => /ar-sa|ar-ae|ar-/i.test(v.lang))
+          voices.find((v) => /ar-sa|ar-ae|ar-/i.test(v.lang))
           : voices.find((v) => /en-/i.test(v.lang));
         if (preferredVoice) utterance.voice = preferredVoice;
         let settled = false;
@@ -959,7 +988,7 @@ export function UasAiCopilot({
           setVoiceLang("ar-SA");
           try {
             rec.abort();
-          } catch {}
+          } catch { }
           startSpeechEngine("ar-SA");
           return;
         }
@@ -1136,10 +1165,10 @@ export function UasAiCopilot({
           draft: pendingDocDraft,
           actor: currentUser
             ? {
-                userId: currentUser.id,
-                userDisplay: currentUser.name,
-                userRole: currentUser.role,
-              }
+              userId: currentUser.id,
+              userDisplay: currentUser.name,
+              userRole: currentUser.role,
+            }
             : undefined,
         }),
       });
@@ -1147,7 +1176,7 @@ export function UasAiCopilot({
       if (!res.ok || !res.data?.success) {
         onToast(
           res.data?.error ||
-            (isAr ? "تعذر ترحيل المستند المستخرج" : "Failed to post extracted document")
+          (isAr ? "تعذر ترحيل المستند المستخرج" : "Failed to post extracted document")
         );
         return;
       }
@@ -1298,7 +1327,7 @@ export function UasAiCopilot({
 
   const messageSeqRef = useRef(1);
   const getNextMsgId = useCallback((prefix: string): string => {
-  const seq = messageSeqRef.current++;
+    const seq = messageSeqRef.current++;
     return `${prefix}-${seq}`;
   }, []);
 
@@ -1375,7 +1404,7 @@ export function UasAiCopilot({
     } finally {
       setMemoryBusy(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTenantSlug, offlineMode, currentUser?.id]);
 
   const refreshExecutiveBriefing = useCallback(
@@ -1402,18 +1431,18 @@ export function UasAiCopilot({
         const headers = buildCopilotRequestHeaders();
         const res = forceRefresh
           ? await fetch("/api/ai/briefing", {
-              method: "POST",
-              headers,
-              body: JSON.stringify({
-                lang: isAr ? "ar" : "en",
-                dialect,
-                refresh: true,
-              }),
-            })
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              lang: isAr ? "ar" : "en",
+              dialect,
+              refresh: true,
+            }),
+          })
           : await fetch(
-              `/api/ai/briefing?lang=${isAr ? "ar" : "en"}&dialect=${dialect}`,
-              { headers }
-            );
+            `/api/ai/briefing?lang=${isAr ? "ar" : "en"}&dialect=${dialect}`,
+            { headers }
+          );
         if (res.ok) {
           const data = (await res.json()) as ExecutiveBriefingReport & { success?: boolean };
           if (data && data.counts) {
@@ -1495,7 +1524,7 @@ export function UasAiCopilot({
     } finally {
       setArchiveBusy(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     activeTenantSlug,
     offlineMode,
@@ -1520,14 +1549,14 @@ export function UasAiCopilot({
       const payload =
         ev.action === "forgotten"
           ? {
-              action: "upsert",
-              ...ev.entry,
-            }
+            action: "upsert",
+            ...ev.entry,
+          }
           : {
-              action: "undo",
-              id: ev.entry.id,
-              previousEntry: ev.previousEntry ?? undefined,
-            };
+            action: "undo",
+            id: ev.entry.id,
+            previousEntry: ev.previousEntry ?? undefined,
+          };
 
       if (!isOfflineClientContext()) {
         const res = await fetch("/api/ai/memory", {
@@ -1559,9 +1588,9 @@ export function UasAiCopilot({
         prev.map((m) =>
           m.id === msgId
             ? {
-                ...m,
-                learnedEvents: (m.learnedEvents ?? []).filter((x) => x.entry.id !== ev.entry.id),
-              }
+              ...m,
+              learnedEvents: (m.learnedEvents ?? []).filter((x) => x.entry.id !== ev.entry.id),
+            }
             : m
         )
       );
@@ -1618,8 +1647,8 @@ export function UasAiCopilot({
         action === "delete"
           ? { action: "delete", id: mem.id }
           : action === "pin"
-          ? { action: "pin", id: mem.id, pinned: !mem.pinned }
-          : { action: "toggle", id: mem.id, active: !mem.active };
+            ? { action: "pin", id: mem.id, pinned: !mem.pinned }
+            : { action: "toggle", id: mem.id, active: !mem.active };
 
       if (!isOfflineClientContext()) {
         const res = await fetch("/api/ai/memory", {
@@ -1640,15 +1669,15 @@ export function UasAiCopilot({
           action === "delete"
             ? current.filter((m) => m.id !== mem.id)
             : current.map((m) =>
-                m.id === mem.id
-                  ? {
-                      ...m,
-                      pinned: action === "pin" ? !mem.pinned : m.pinned,
-                      active: action === "toggle" ? !mem.active : m.active,
-                      updatedAt: new Date().toISOString(),
-                    }
-                  : m
-              );
+              m.id === mem.id
+                ? {
+                  ...m,
+                  pinned: action === "pin" ? !mem.pinned : m.pinned,
+                  active: action === "toggle" ? !mem.active : m.active,
+                  updatedAt: new Date().toISOString(),
+                }
+                : m
+            );
         saveLocalCopilotMemories(activeTenantSlug, next);
         setMemories(next);
       }
@@ -1690,9 +1719,9 @@ export function UasAiCopilot({
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       ...(attachedImage
         ? {
-            imagePreviewUrl: attachedImage.previewDataUrl,
-            imageFileName: attachedImage.fileName,
-          }
+          imagePreviewUrl: attachedImage.previewDataUrl,
+          imageFileName: attachedImage.fileName,
+        }
         : {}),
     };
     if (baseMessages) {
@@ -1768,20 +1797,20 @@ export function UasAiCopilot({
               conversationHistory: historySnapshot,
               ...(attachedImage
                 ? {
-                    imageAttachment: {
-                      imageBase64: attachedImage.base64Data,
-                      mimeType: attachedImage.mimeType,
-                      fileName: attachedImage.fileName,
-                    },
-                  }
+                  imageAttachment: {
+                    imageBase64: attachedImage.base64Data,
+                    mimeType: attachedImage.mimeType,
+                    fileName: attachedImage.fileName,
+                  },
+                }
                 : {}),
               ...(editedDraftContext ? { editedDraftContext } : {}),
               actor: currentUser
                 ? {
-                    userId: currentUser.id,
-                    userDisplay: currentUser.name,
-                    userRole: currentUser.role,
-                  }
+                  userId: currentUser.id,
+                  userDisplay: currentUser.name,
+                  userRole: currentUser.role,
+                }
                 : undefined,
             }),
           });
@@ -1910,10 +1939,10 @@ export function UasAiCopilot({
               lang,
               actor: currentUser
                 ? {
-                    userId: currentUser.id,
-                    userDisplay: currentUser.name,
-                    userRole: currentUser.role,
-                  }
+                  userId: currentUser.id,
+                  userDisplay: currentUser.name,
+                  userRole: currentUser.role,
+                }
                 : undefined,
             }),
           });
@@ -1986,25 +2015,25 @@ export function UasAiCopilot({
           const mutPayload: Record<string, unknown> =
             card.operationType === "RECEIPT_VOUCHER" || card.operationType === "PAYMENT_VOUCHER"
               ? {
-                  voucherNo: entryNumber,
-                  type: card.operationType === "RECEIPT_VOUCHER" ? "تحصيل من عميل" : "دفع لمستفيد",
-                  targetName: card.partyName || String(p.partyName || "طرف"),
-                  amount: Number(p.amount ?? card.totalDebit ?? 0),
-                  date: card.date,
-                  notes: `${isAr ? card.narrationAr : card.narrationEn}${card.sourceAttachment ? ` [source_doc:${card.sourceAttachment.attachmentId} | ${card.sourceAttachment.attachmentUrl}]` : ""}`,
-                  ...(card.sourceAttachment ? { sourceAttachment: card.sourceAttachment } : {}),
-                  executed_by_ai: true,
-                }
+                voucherNo: entryNumber,
+                type: card.operationType === "RECEIPT_VOUCHER" ? "تحصيل من عميل" : "دفع لمستفيد",
+                targetName: card.partyName || String(p.partyName || "طرف"),
+                amount: Number(p.amount ?? card.totalDebit ?? 0),
+                date: card.date,
+                notes: `${isAr ? card.narrationAr : card.narrationEn}${card.sourceAttachment ? ` [source_doc:${card.sourceAttachment.attachmentId} | ${card.sourceAttachment.attachmentUrl}]` : ""}`,
+                ...(card.sourceAttachment ? { sourceAttachment: card.sourceAttachment } : {}),
+                executed_by_ai: true,
+              }
               : {
-                  ...p,
-                  ...(card.sourceAttachment
-                    ? {
-                        notes: `${String(p.notes || "")} [source_doc:${card.sourceAttachment.attachmentId} | ${card.sourceAttachment.attachmentUrl}]`.trim(),
-                        sourceAttachment: card.sourceAttachment,
-                      }
-                    : {}),
-                  executed_by_ai: true,
-                };
+                ...p,
+                ...(card.sourceAttachment
+                  ? {
+                    notes: `${String(p.notes || "")} [source_doc:${card.sourceAttachment.attachmentId} | ${card.sourceAttachment.attachmentUrl}]`.trim(),
+                    sourceAttachment: card.sourceAttachment,
+                  }
+                  : {}),
+                executed_by_ai: true,
+              };
 
           const mutRes = await executeMutation({
             endpoint: targetRoute.endpoint,
@@ -2031,14 +2060,14 @@ export function UasAiCopilot({
         prev.map((m) =>
           m.id === msgId
             ? {
-                ...m,
-                confirmedResult: {
-                  executed: true,
-                  entryNumber,
-                  summary: summaryText,
-                  ...(linkedAttachment ? { sourceAttachment: linkedAttachment } : {}),
-                },
-              }
+              ...m,
+              confirmedResult: {
+                executed: true,
+                entryNumber,
+                summary: summaryText,
+                ...(linkedAttachment ? { sourceAttachment: linkedAttachment } : {}),
+              },
+            }
             : m
         )
       );
@@ -2078,10 +2107,10 @@ export function UasAiCopilot({
               lang,
               actor: currentUser
                 ? {
-                    userId: currentUser.id,
-                    userDisplay: currentUser.name,
-                    userRole: currentUser.role,
-                  }
+                  userId: currentUser.id,
+                  userDisplay: currentUser.name,
+                  userRole: currentUser.role,
+                }
                 : undefined,
             }),
           });
@@ -2108,13 +2137,13 @@ export function UasAiCopilot({
         prev.map((m) =>
           m.id === msgId
             ? {
-                ...m,
-                confirmedResult: {
-                  executed: true,
-                  entryNumber: draftNumber,
-                  summary: summaryText,
-                },
-              }
+              ...m,
+              confirmedResult: {
+                executed: true,
+                entryNumber: draftNumber,
+                summary: summaryText,
+              },
+            }
             : m
         )
       );
@@ -2201,21 +2230,21 @@ export function UasAiCopilot({
 
   const quickPrompts = isAr
     ? [
-        "تحليل الوضع الحالي عبر الأقسام",
-        ...(tabQuickPromptsAr[activeTab] || []),
-        "أنشئ عميل جديد شركة النور هاتف 771234567 وحد ائتماني 500000",
-        "أنشئ مشروع جديد مزرعة الجوف بموازنة 3000000",
-        "اعرض ملخص ميزان المراجعة وقائمة الدخل",
-        "تشخيص حالة الترخيص ومقاعد الـ 7 مستخدمين",
-      ]
+      "تحليل الوضع الحالي عبر الأقسام",
+      ...(tabQuickPromptsAr[activeTab] || []),
+      "أنشئ عميل جديد شركة النور هاتف 771234567 وحد ائتماني 500000",
+      "أنشئ مشروع جديد مزرعة الجوف بموازنة 3000000",
+      "اعرض ملخص ميزان المراجعة وقائمة الدخل",
+      "تشخيص حالة الترخيص ومقاعد الـ 7 مستخدمين",
+    ]
     : [
-        "Analyze current workspace briefing",
-        ...(tabQuickPromptsEn[activeTab] || []),
-        "Create customer Al-Noor Co phone 771234567 credit limit 500000",
-        "Create project Al-Jawf Farm budget 3000000",
-        "Generate Trial Balance and P&L report summary",
-        "Diagnose system health and 7-user license seats",
-      ];
+      "Analyze current workspace briefing",
+      ...(tabQuickPromptsEn[activeTab] || []),
+      "Create customer Al-Noor Co phone 771234567 credit limit 500000",
+      "Create project Al-Jawf Farm budget 3000000",
+      "Generate Trial Balance and P&L report summary",
+      "Diagnose system health and 7-user license seats",
+    ];
 
   return (
     <>
@@ -2321,35 +2350,34 @@ export function UasAiCopilot({
       {open && (
         <div
           dir={isAr ? "rtl" : "ltr"}
-          className={`${
-            isAr ? "left-3 sm:left-5" : "right-3 sm:right-5"
-          } fixed bottom-20 md:bottom-6 z-50 w-[calc(100vw-1.5rem)] ${
-            isExpandedWidth ? "sm:w-[640px]" : "sm:w-[470px]"
-          } max-h-[85vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-900 dark:text-slate-100 transition-all`}
+          data-testid="uas-ai-copilot-drawer"
+          className={`inset-x-2 sm:inset-x-auto ${isAr ? "sm:left-5" : "sm:right-5"
+            } fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom,0px))] md:bottom-6 z-50 w-auto ${isExpandedWidth ? "sm:w-[640px]" : "sm:w-[470px]"
+            } max-h-[82dvh] min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden overflow-x-hidden text-slate-900 dark:text-slate-100 transition-all`}
         >
-          {/* Header */}
-          <div className="p-4 bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 text-white flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-2xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-300 shrink-0">
-                <Bot className="w-5 h-5" />
+          {/* Compact Mobile-Responsive Header with Consolidated Actions Dropdown */}
+          <div className="px-3.5 py-3 bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 text-white flex items-center justify-between gap-2 min-w-0">
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-2xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-300 shrink-0">
+                <Bot className="w-4 h-4 sm:w-5 sm:h-5" />
               </div>
-              <div>
-                <div className="text-xs font-black flex items-center gap-1.5">
-                  <span>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-black flex items-center gap-1.5 min-w-0">
+                  <span className="truncate">
                     {isAr
-                      ? "وكيل UAS المحاسبي الذكي وخدمة العملاء"
-                      : "UAS Reasoning ERP Copilot & Support"}
+                      ? "وكيل UAS المحاسبي الذكي"
+                      : "UAS Reasoning Copilot"}
                   </span>
                   <span
                     data-testid="uas-ai-runtime-badge"
-                    className="px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 font-mono text-[9px]"
+                    className="shrink-0 px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 font-mono text-[9px]"
                   >
                     {mergedWorkspaceContext.isOffline
-                      ? "Offline Local Engine"
+                      ? "Offline"
                       : "Online • Gemini"}
                   </span>
                 </div>
-                <div className="text-[10px] text-slate-300">
+                <div className="text-[10px] text-slate-300 truncate">
                   {isAr
                     ? `الدور: ${currentUser?.role || "زائر"} • الشاشة: ${activeTab} • المقاعد: ${clientDiagnostics.used_users}/${clientDiagnostics.max_users}`
                     : `Role: ${currentUser?.role || "Guest"} • Tab: ${activeTab} • Seats: ${clientDiagnostics.used_users}/${clientDiagnostics.max_users}`}
@@ -2357,83 +2385,154 @@ export function UasAiCopilot({
               </div>
             </div>
 
-            <div className="flex items-center gap-1.5">
-              {isAr && (
+            <div className="flex items-center gap-1.5 shrink-0">
+              <div className="relative" ref={headerActionsRef}>
                 <button
                   type="button"
-                  data-testid="uas-ai-copilot-dialect-btn"
-                  onClick={handleToggleDialect}
-                  className="px-2 py-1 rounded-xl border border-white/15 bg-white/5 hover:bg-white/15 text-[10px] font-bold text-amber-200 transition"
-                  title="التبديل بين اللهجة اليمنية والعربية الفصحى"
+                  data-testid="copilot-header-actions-btn"
+                  aria-expanded={headerActionsOpen}
+                  aria-haspopup="menu"
+                  onClick={() => setHeaderActionsOpen((prev) => !prev)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-white/15 bg-white/10 hover:bg-white/20 text-xs font-bold text-slate-100 transition min-h-[36px]"
+                  title={isAr ? "خيارات وإجراءات المساعد" : "Copilot Options & Actions"}
                 >
-                  {dialect === "yemeni" ? "🇾🇪 يمني" : "📖 فصحى"}
+                  <MoreVertical className="w-4 h-4" />
+                  <span className="text-[11px]">{isAr ? "خيارات" : "Actions"}</span>
                 </button>
-              )}
-              <button
-                type="button"
-                data-testid="uas-ai-copilot-expand-btn"
-                onClick={() => setIsExpandedWidth((v) => !v)}
-                className="hidden sm:inline-flex px-2 py-1 rounded-xl border border-white/10 text-[10px] font-bold text-slate-300 hover:text-emerald-300 hover:bg-white/10 transition"
-                title={isAr ? "توسيع / تضييق النافذة" : "Toggle Width"}
-              >
-                {isExpandedWidth ? (isAr ? "ضيق" : "Compact") : (isAr ? "توسيع" : "Wide")}
-              </button>
-              <button
-                type="button"
-                data-testid="uas-ai-copilot-new-chat-btn"
-                onClick={handleNewChat}
-                className="p-1.5 rounded-xl border border-white/10 text-slate-300 hover:text-emerald-300 hover:bg-white/10 transition"
-                title={isAr ? "محادثة جديدة" : "New Chat"}
-              >
-                <MessageSquarePlus className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                data-testid="uas-ai-copilot-export-pdf-btn"
-                onClick={() => handlePrintConversation()}
-                className="p-1.5 rounded-xl border border-white/10 text-slate-300 hover:text-emerald-300 hover:bg-white/10 transition"
-                title={isAr ? "طباعة / تصدير PDF للمحادثة الحالية" : "Print / Export Conversation PDF"}
-              >
-                <Printer className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                data-testid="uas-ai-copilot-clear-history-btn"
-                onClick={handleClearHistory}
-                className="p-1.5 rounded-xl border border-white/10 text-slate-300 hover:text-rose-300 hover:bg-white/10 transition"
-                title={isAr ? "مسح السجل" : "Clear Thread"}
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setTtsEnabled((v) => !v)}
-                className={`p-1.5 rounded-xl border text-xs transition ${
-                  ttsEnabled
-                    ? "bg-emerald-500/20 border-emerald-400/40 text-emerald-300"
-                    : "border-white/10 text-slate-400 hover:text-white"
-                }`}
-                title={isAr ? "تفعيل/إيقاف القراءة الصوتية (TTS)" : "Toggle Voice Readout (TTS)"}
-              >
-                {ttsEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-              </button>
-              {/* Minimize / Hide Button in Drawer Header */}
-              <button
-                type="button"
-                data-testid="uas-ai-copilot-header-hide-btn"
-                onClick={() => {
-                  setOpen(false);
-                  handleToggleMinimize(true);
-                }}
-                className="p-1.5 rounded-xl border border-white/10 text-slate-300 hover:text-white hover:bg-white/10 transition"
-                title={isAr ? "إخفاء المساعد (تصغير)" : "Minimize / Hide Copilot"}
-              >
-                <ChevronDown className="w-4 h-4" />
-              </button>
+
+                {headerActionsOpen && (
+                  <div
+                    data-testid="copilot-header-actions-menu"
+                    role="menu"
+                    className={`absolute ${isAr ? "left-0" : "right-0"
+                      } mt-2 w-60 max-w-[80vw] rounded-2xl bg-slate-900 text-slate-100 border border-slate-700 shadow-2xl p-1.5 z-50 space-y-1 text-xs`}
+                  >
+                    {isAr && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        data-testid="uas-ai-copilot-dialect-btn"
+                        onClick={() => {
+                          handleToggleDialect();
+                          setHeaderActionsOpen(false);
+                        }}
+                        className="w-full min-h-[40px] px-3 py-2 rounded-xl hover:bg-white/10 flex items-center justify-between gap-2 font-bold text-amber-200 transition text-start"
+                      >
+                        <span>
+                          {dialect === "yemeni"
+                            ? "🇾🇪 اللهجة: يمني طبيعي"
+                            : "📖 اللهجة: عربية فصحى"}
+                        </span>
+                        <span className="text-[10px] text-slate-400">تبديل</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setTtsEnabled((v) => !v);
+                        setHeaderActionsOpen(false);
+                      }}
+                      className="w-full min-h-[40px] px-3 py-2 rounded-xl hover:bg-white/10 flex items-center justify-between gap-2 font-bold transition text-start"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        {ttsEnabled ? (
+                          <Volume2 className="w-4 h-4 text-emerald-400" />
+                        ) : (
+                          <VolumeX className="w-4 h-4 text-slate-400" />
+                        )}
+                        <span>{isAr ? "القراءة الصوتية التلقائية" : "Auto Voice Readout"}</span>
+                      </span>
+                      <span className="text-[10px] font-mono text-emerald-300">
+                        {ttsEnabled ? "ON" : "OFF"}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="uas-ai-copilot-new-chat-btn"
+                      onClick={() => {
+                        handleNewChat();
+                        setHeaderActionsOpen(false);
+                      }}
+                      className="w-full min-h-[40px] px-3 py-2 rounded-xl hover:bg-white/10 flex items-center gap-2 font-bold transition text-start"
+                    >
+                      <MessageSquarePlus className="w-4 h-4 text-emerald-400" />
+                      <span>{isAr ? "محادثة جديدة" : "New Conversation"}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="uas-ai-copilot-export-pdf-btn"
+                      onClick={() => {
+                        handlePrintConversation();
+                        setHeaderActionsOpen(false);
+                      }}
+                      className="w-full min-h-[40px] px-3 py-2 rounded-xl hover:bg-white/10 flex items-center gap-2 font-bold transition text-start"
+                    >
+                      <Printer className="w-4 h-4 text-sky-400" />
+                      <span>{isAr ? "طباعة / تصدير PDF" : "Print / Export PDF"}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="uas-ai-copilot-expand-btn"
+                      onClick={() => {
+                        setIsExpandedWidth((v) => !v);
+                        setHeaderActionsOpen(false);
+                      }}
+                      className="hidden sm:flex w-full min-h-[40px] px-3 py-2 rounded-xl hover:bg-white/10 items-center gap-2 font-bold transition text-start"
+                    >
+                      <ArrowUpRight className="w-4 h-4 text-slate-300" />
+                      <span>
+                        {isExpandedWidth
+                          ? isAr ? "تصغير عرض النافذة" : "Compact Width"
+                          : isAr ? "توسيع عرض النافذة" : "Expand Width"}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="uas-ai-copilot-header-hide-btn"
+                      onClick={() => {
+                        setHeaderActionsOpen(false);
+                        setOpen(false);
+                        handleToggleMinimize(true);
+                      }}
+                      className="w-full min-h-[40px] px-3 py-2 rounded-xl hover:bg-white/10 flex items-center gap-2 font-bold transition text-start"
+                    >
+                      <ChevronDown className="w-4 h-4 text-slate-300" />
+                      <span>{isAr ? "تصغير لأيقونة عائمة" : "Minimize Pill"}</span>
+                    </button>
+
+                    <div className="border-t border-slate-800 my-1" />
+
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="uas-ai-copilot-clear-history-btn"
+                      onClick={() => {
+                        handleClearHistory();
+                        setHeaderActionsOpen(false);
+                      }}
+                      className="w-full min-h-[40px] px-3 py-2 rounded-xl hover:bg-rose-950/60 text-rose-300 flex items-center gap-2 font-bold transition text-start"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>{isAr ? "مسح سجل المحادثة الحالية" : "Clear Current Thread"}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="p-1.5 rounded-xl border border-white/10 text-slate-300 hover:text-white hover:bg-white/10 transition"
+                className="p-2 rounded-xl border border-white/15 bg-white/5 text-slate-200 hover:text-white hover:bg-white/15 transition min-h-[36px] min-w-[36px] flex items-center justify-center"
                 title={isAr ? "إغلاق النافذة" : "Close Window"}
               >
                 <X className="w-4 h-4" />
@@ -2481,108 +2580,76 @@ export function UasAiCopilot({
           {/* =============================================================== */}
           {activePane === "copilot" && (
             <>
-              {/* Live Workspace Context & Sync Status Strip */}
-              <div className="px-3.5 py-2 bg-slate-100/80 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-[10px]">
-                <div className="flex flex-wrap items-center gap-1.5 text-slate-600 dark:text-slate-300 font-bold">
-                  <span className="px-2 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
-                    {isAr ? `القسم: ${activeTab}` : `Tab: ${activeTab}`}
-                  </span>
-                  {mergedWorkspaceContext.selectedHarvest && (
-                    <span className="px-2 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
-                      {mergedWorkspaceContext.selectedHarvest}
-                    </span>
-                  )}
-                  {(mergedWorkspaceContext.offlineQueueCount ?? 0) > 0 && (
-                    <span className="px-2 py-0.5 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-300 font-mono">
-                      {isAr
-                        ? `طابور: ${mergedWorkspaceContext.offlineQueueCount}`
-                        : `Queued: ${mergedWorkspaceContext.offlineQueueCount}`}
-                    </span>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  data-testid="copilot-analyze-context-btn"
-                  onClick={() =>
-                    handleSendPrompt(
-                      isAr ? "تحليل الوضع الحالي عبر الأقسام" : "Analyze current workspace briefing"
-                    )
-                  }
-                  className="px-2 py-0.5 rounded-lg bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-700 dark:text-emerald-300 font-black transition"
-                >
-                  {isAr ? "⚡ فحص ذكي للسياق" : "⚡ Analyze Context"}
-                </button>
-              </div>
-
-              {/* Compact Collapsible Daily Executive Briefing & Low-Stock / Overdue Alerts */}
+              {/* Single-Row Collapsible Daily Briefing & Context Actions Dropdown */}
               <div
                 data-testid="copilot-executive-briefing-banner"
-                className="px-3.5 py-2 bg-gradient-to-r from-amber-500/10 via-emerald-500/5 to-sky-500/10 border-b border-slate-200 dark:border-slate-800 text-[11px]"
+                className="px-3 py-2 bg-gradient-to-r from-amber-500/10 via-emerald-500/5 to-sky-500/10 border-b border-slate-200 dark:border-slate-800 text-[11px] shrink-0"
               >
-                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                <div className="flex items-center justify-between gap-2 min-w-0">
                   <button
                     type="button"
                     data-testid="copilot-briefing-toggle"
                     onClick={() => setBriefingExpanded((v) => !v)}
-                    className="flex flex-wrap items-center gap-1.5 font-black text-slate-800 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-300 transition text-start"
+                    className="flex items-center gap-1.5 min-w-0 font-black text-slate-800 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-300 transition text-start"
                   >
                     <Bell className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-                    <span>{isAr ? "ملخص اليوم والتنبيهات" : "Daily Briefing & Alerts"}</span>
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-rose-500/15 text-rose-700 dark:text-rose-300 text-[10px]">
+                    <span className="truncate">{isAr ? "التنبيهات والملخص" : "Briefing"}</span>
+                    <span className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-rose-500/15 text-rose-700 dark:text-rose-300 text-[10px]">
                       <Package className="w-3 h-3" />
-                      {isAr
-                        ? `نقص المخزون: ${activeBriefing.counts.lowStockCount}`
-                        : `Low Stock: ${activeBriefing.counts.lowStockCount}`}
+                      {activeBriefing.counts.lowStockCount}
                     </span>
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-800 dark:text-amber-300 text-[10px]">
+                    <span className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-800 dark:text-amber-300 text-[10px]">
                       <CreditCard className="w-3 h-3" />
-                      {isAr
-                        ? `ذمم متأخرة: ${activeBriefing.counts.overdueReceivablesCount}`
-                        : `Overdue: ${activeBriefing.counts.overdueReceivablesCount}`}
+                      {activeBriefing.counts.overdueReceivablesCount}
                     </span>
                     {briefingExpanded ? (
-                      <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
+                      <ChevronUp className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                     ) : (
-                      <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                      <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                     )}
                   </button>
 
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      data-testid="copilot-briefing-speak-btn"
-                      onClick={() =>
-                        void speakText(
-                          activeBriefing.briefing,
-                          "daily-briefing-banner",
-                          true
-                        )
-                      }
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-emerald-700 dark:text-emerald-300 font-bold text-[10px] hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition"
-                      title={isAr ? "استماع لملخص اليوم بصوت طبيعي" : "Read Executive Briefing Aloud"}
-                    >
-                      {speakingMsgId === "daily-briefing-banner" ? (
-                        <VolumeX className="w-3 h-3" />
-                      ) : (
-                        <Volume2 className="w-3 h-3" />
-                      )}
-                      <span>{isAr ? "استماع" : "Read Aloud"}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      data-testid="copilot-briefing-refresh-btn"
-                      disabled={briefingBusy}
-                      onClick={() => {
+                  <select
+                    data-testid="copilot-context-actions-select"
+                    aria-label={isAr ? "إجراءات السياق والملخص" : "Context & Briefing Actions"}
+                    value=""
+                    disabled={briefingBusy || busy}
+                    onChange={(e) => {
+                      const act = e.target.value;
+                      if (!act) return;
+                      if (act === "analyze_context") {
+                        void handleSendPrompt(
+                          isAr ? "تحليل الوضع الحالي عبر الأقسام" : "Analyze current workspace briefing"
+                        );
+                      } else if (act === "speak_briefing") {
+                        void speakText(activeBriefing.briefing, "daily-briefing-banner", true);
+                      } else if (act === "refresh_briefing") {
                         setBriefingExpanded(true);
                         void refreshExecutiveBriefing(true);
-                      }}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-[10px] transition"
-                    >
-                      <RefreshCw className={`w-3 h-3 ${briefingBusy ? "animate-spin" : ""}`} />
-                      <span>{isAr ? "تحديث الملخص" : "Generate Briefing"}</span>
-                    </button>
-                  </div>
+                      } else if (act === "open_active_tab") {
+                        onNavigateTab(activeTab);
+                      }
+                    }}
+                    className="max-w-[52%] min-h-[36px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1 text-[11px] font-bold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 shrink-0"
+                  >
+                    <option value="">
+                      {isAr ? `⚡ سياق (${activeTab})...` : `⚡ Actions (${activeTab})...`}
+                    </option>
+                    <option value="analyze_context">
+                      {isAr ? "⚡ فحص ذكي للسياق" : "⚡ Analyze Context"}
+                    </option>
+                    <option value="speak_briefing">
+                      {speakingMsgId === "daily-briefing-banner"
+                        ? isAr ? "⏹️ إيقاف قراءة الملخص" : "⏹️ Stop Reading"
+                        : isAr ? "🔊 استماع لملخص اليوم" : "🔊 Read Briefing Aloud"}
+                    </option>
+                    <option value="refresh_briefing">
+                      {isAr ? "🔄 تحديث ملخص اليوم" : "🔄 Refresh Briefing"}
+                    </option>
+                    <option value="open_active_tab">
+                      {isAr ? `↗ فتح القسم (${activeTab})` : `↗ Jump to (${activeTab})`}
+                    </option>
+                  </select>
                 </div>
 
                 {briefingExpanded && (
@@ -2650,7 +2717,7 @@ export function UasAiCopilot({
                 )}
               </div>
 
-              <div className="flex-1 overflow-y-auto p-3.5 space-y-3 max-h-[52vh]">
+              <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-3 sm:p-3.5 space-y-3">
                 {/* Quick Actions Dropdown */}
                 <div className="flex items-center gap-2">
                   <select
@@ -2680,22 +2747,19 @@ export function UasAiCopilot({
                 {displayedMessages.map((msg) => (
                   <div
                     key={msg.id}
-                    className={`group relative flex flex-col ${
-                      msg.role === "user" ? "items-end" : "items-start"
-                    }`}
+                    className={`group relative flex flex-col ${msg.role === "user" ? "items-end" : "items-start"
+                      }`}
                   >
                     <div
-                      className={`relative max-w-[94%] rounded-2xl p-3 text-xs space-y-2 ${
-                        msg.role === "user"
+                      className={`relative max-w-[94%] rounded-2xl p-3 text-xs space-y-2 ${msg.role === "user"
                           ? "bg-emerald-600 text-white rounded-br-none"
                           : "bg-slate-100 dark:bg-slate-800/90 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-bl-none"
-                      }`}
+                        }`}
                     >
                       {/* Bubble Action Bar: Edit (user) & Delete */}
                       <div
-                        className={`absolute -top-3 ${
-                          msg.role === "user" ? "left-2" : "right-2"
-                        } flex items-center gap-1 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10`}
+                        className={`absolute -top-3 ${msg.role === "user" ? "left-2" : "right-2"
+                          } flex items-center gap-1 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10`}
                       >
                         {msg.role === "user" && editingMessageId !== msg.id && (
                           <button
@@ -2770,11 +2834,10 @@ export function UasAiCopilot({
                                 type="button"
                                 data-testid={`msg-speak-btn-${msg.id}`}
                                 onClick={() => void speakText(msg.text, msg.id, true)}
-                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-sans text-[10px] font-bold transition ${
-                                  speakingMsgId === msg.id
+                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-sans text-[10px] font-bold transition ${speakingMsgId === msg.id
                                     ? "bg-rose-500/15 text-rose-600 dark:text-rose-300"
                                     : "bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
-                                }`}
+                                  }`}
                                 title={
                                   speakingMsgId === msg.id
                                     ? isAr ? "إيقاف القراءة الصوتية" : "Stop Audio"
@@ -2790,16 +2853,16 @@ export function UasAiCopilot({
                                   {audioLoadingMsgId === msg.id
                                     ? isAr ? "جاري التوليد..." : "Loading..."
                                     : speakingMsgId === msg.id
-                                    ? speakingProgress && speakingProgress.total > 1
-                                      ? isAr
-                                        ? `إيقاف (${speakingProgress.current}/${speakingProgress.total})`
-                                        : `Stop (${speakingProgress.current}/${speakingProgress.total})`
+                                      ? speakingProgress && speakingProgress.total > 1
+                                        ? isAr
+                                          ? `إيقاف (${speakingProgress.current}/${speakingProgress.total})`
+                                          : `Stop (${speakingProgress.current}/${speakingProgress.total})`
+                                        : isAr
+                                          ? "إيقاف"
+                                          : "Stop"
                                       : isAr
-                                      ? "إيقاف"
-                                      : "Stop"
-                                    : isAr
-                                    ? "استماع"
-                                    : "Listen"}
+                                        ? "استماع"
+                                        : "Listen"}
                                 </span>
                               </button>
                             </div>
@@ -2843,9 +2906,9 @@ export function UasAiCopilot({
                             <span className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-700 dark:text-rose-300 font-bold border border-rose-500/30 w-full">
                               {isAr
                                 ? msg.visionExtraction.discrepancyNoteAr ||
-                                  "⚠️ عدم تطابق حسابي بين مجموع البنود والإجمالي"
+                                "⚠️ عدم تطابق حسابي بين مجموع البنود والإجمالي"
                                 : msg.visionExtraction.discrepancyNoteEn ||
-                                  "⚠️ Arithmetic mismatch between items sum and total"}
+                                "⚠️ Arithmetic mismatch between items sum and total"}
                             </span>
                           )}
                         </div>
@@ -2918,8 +2981,8 @@ export function UasAiCopilot({
                                         ? "تم النسيان:"
                                         : "Forgotten:"
                                       : isAr
-                                      ? "تم التعلم والحفظ:"
-                                      : "Learned & Saved:"}
+                                        ? "تم التعلم والحفظ:"
+                                        : "Learned & Saved:"}
                                   </span>
                                   <span className="text-slate-700 dark:text-slate-200">
                                     {ev.entry.content}
@@ -3009,13 +3072,12 @@ export function UasAiCopilot({
                                 {msg.confirmationCard.preFlightChecks.map((chk) => (
                                   <span
                                     key={chk.key}
-                                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
-                                      chk.status === "blocked"
+                                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border ${chk.status === "blocked"
                                         ? "bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300"
                                         : chk.status === "warning"
-                                        ? "bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300"
-                                        : "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
-                                    }`}
+                                          ? "bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300"
+                                          : "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
+                                      }`}
                                   >
                                     {isAr ? chk.labelAr : chk.labelEn}
                                   </span>
@@ -3261,30 +3323,30 @@ export function UasAiCopilot({
                                       ? "جاري التنفيذ..."
                                       : "Processing..."
                                     : msg.confirmationCard.operationType === "EXPORT_CLIENT_REPORT"
-                                    ? isAr ? "فتح كشف الحساب والطباعة" : "Open Statement & Print"
-                                    : isAr
-                                    ? msg.confirmationCard.confirmButtonLabelAr || "تنفيذ وترحيل"
-                                    : msg.confirmationCard.confirmButtonLabelEn || "Execute & Post"}
+                                      ? isAr ? "فتح كشف الحساب والطباعة" : "Open Statement & Print"
+                                      : isAr
+                                        ? msg.confirmationCard.confirmButtonLabelAr || "تنفيذ وترحيل"
+                                        : msg.confirmationCard.confirmButtonLabelEn || "Execute & Post"}
                                 </span>
                               </button>
 
                               {!["CREATE_CUSTOMER", "CREATE_VENDOR", "CREATE_PROJECT", "EXPORT_CLIENT_REPORT"].includes(
                                 msg.confirmationCard.operationType
                               ) && (
-                                <button
-                                  type="button"
-                                  data-testid="ai-save-draft-btn"
-                                  disabled={confirmingId === msg.id}
-                                  onClick={() =>
-                                    handleSaveAsDraft(msg.id, msg.confirmationCard!)
-                                  }
-                                  className="py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-sm flex items-center justify-center gap-1.5 disabled:opacity-50 transition"
-                                  title={isAr ? "حفظ كمسودة عمل لمراجعتها لاحقاً" : "Save as workspace draft"}
-                                >
-                                  <FileText className="w-3.5 h-3.5" />
-                                  <span>{isAr ? "حفظ كمسودة" : "Save Draft"}</span>
-                                </button>
-                              )}
+                                  <button
+                                    type="button"
+                                    data-testid="ai-save-draft-btn"
+                                    disabled={confirmingId === msg.id}
+                                    onClick={() =>
+                                      handleSaveAsDraft(msg.id, msg.confirmationCard!)
+                                    }
+                                    className="py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-sm flex items-center justify-center gap-1.5 disabled:opacity-50 transition"
+                                    title={isAr ? "حفظ كمسودة عمل لمراجعتها لاحقاً" : "Save as workspace draft"}
+                                  >
+                                    <FileText className="w-3.5 h-3.5" />
+                                    <span>{isAr ? "حفظ كمسودة" : "Save Draft"}</span>
+                                  </button>
+                                )}
 
                               <button
                                 type="button"
@@ -3522,11 +3584,10 @@ export function UasAiCopilot({
                       {pendingDocDraft.warnings.map((w, idx) => (
                         <div
                           key={idx}
-                          className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 ${
-                            w.severity === "error"
+                          className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 ${w.severity === "error"
                               ? "bg-rose-500/15 text-rose-700 dark:text-rose-300"
                               : "bg-amber-500/15 text-amber-800 dark:text-amber-300"
-                          }`}
+                            }`}
                         >
                           <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                           <span>{isAr ? w.messageAr : w.messageEn}</span>
@@ -3652,8 +3713,8 @@ export function UasAiCopilot({
                             ? "جاري الترحيل..."
                             : "Posting..."
                           : isAr
-                          ? "تأكيد الترحيل"
-                          : "Confirm Post"}
+                            ? "تأكيد الترحيل"
+                            : "Confirm Post"}
                       </span>
                     </button>
                     <button
@@ -3727,11 +3788,11 @@ export function UasAiCopilot({
                           ? `🎙️ ${interimTranscript.slice(0, 26)}... (أوقف المايك ثم اضغط إرسال)`
                           : `🎙️ ${interimTranscript.slice(0, 26)}... (stop mic & tap Send)`
                         : isAr
-                        ? "🎙️ جاري الاستماع... تحدث بهدوء ثم اضغط إرسال"
-                        : "🎙️ Listening... speak freely, then tap Send"
+                          ? "🎙️ جاري الاستماع... تحدث بهدوء ثم اضغط إرسال"
+                          : "🎙️ Listening... speak freely, then tap Send"
                       : isAr
-                      ? "بوابة تأكيد القيود مفعلة 🛡️"
-                      : "Mandatory Write Gate Active 🛡️"}
+                        ? "بوابة تأكيد القيود مفعلة 🛡️"
+                        : "Mandatory Write Gate Active 🛡️"}
                   </span>
                 </div>
 
@@ -3797,49 +3858,113 @@ export function UasAiCopilot({
                     e.preventDefault();
                     handleSendPrompt();
                   }}
-                  className="flex items-center gap-1.5"
+                  className="flex items-center gap-1.5 min-w-0"
                 >
-                  <button
-                    type="button"
-                    data-testid="copilot-vision-camera-btn"
-                    disabled={visionCompressBusy || busy}
-                    onClick={() => visionCameraInputRef.current?.click()}
-                    className="px-2 py-2.5 rounded-xl border bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-emerald-700 dark:text-emerald-300 hover:border-emerald-500 transition shrink-0 disabled:opacity-50 inline-flex items-center gap-1 text-[10px] font-bold"
-                    title={isAr ? "تصوير بالكاميرا (كشف قطفة / سند / فاتورة)" : "Camera Capture (Receipt / Harvest Sheet)"}
-                  >
-                    <Camera className={`w-3.5 h-3.5 ${visionCompressBusy ? "animate-pulse" : ""}`} />
-                    <span className="hidden sm:inline">{isAr ? "كاميرا" : "Camera"}</span>
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="copilot-vision-upload-btn"
-                    disabled={visionCompressBusy || busy}
-                    onClick={() => visionImageInputRef.current?.click()}
-                    className="px-2 py-2.5 rounded-xl border bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-sky-700 dark:text-sky-300 hover:border-sky-500 transition shrink-0 disabled:opacity-50 inline-flex items-center gap-1 text-[10px] font-bold"
-                    title={isAr ? "رفع صورة مستند أو كشف يدوي" : "Upload Receipt or Sheet Image"}
-                  >
-                    <ImageIcon className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">{isAr ? "صورة" : "Image"}</span>
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="copilot-doc-upload-btn"
-                    disabled={docExtractBusy}
-                    onClick={() => docFileInputRef.current?.click()}
-                    className="p-2.5 rounded-xl border bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-500 transition shrink-0 disabled:opacity-50"
-                    title={isAr ? "استخراج PDF أو CSV أو ملف مستند" : "Extract PDF / CSV Document"}
-                  >
-                    {docExtractBusy ? <Sparkles className="w-4 h-4 animate-pulse text-indigo-600" /> : <Paperclip className="w-4 h-4" />}
-                  </button>
+                  {/* Consolidated Mobile Attach Dropdown + Desktop Inline Buttons */}
+                  <div className="relative sm:hidden shrink-0" ref={attachMenuRef}>
+                    <button
+                      type="button"
+                      data-testid="copilot-attach-menu-btn"
+                      aria-expanded={attachMenuOpen}
+                      aria-haspopup="menu"
+                      disabled={visionCompressBusy || docExtractBusy || busy}
+                      onClick={() => setAttachMenuOpen((prev) => !prev)}
+                      className="min-h-[42px] px-2.5 py-2 rounded-xl border bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-emerald-500 transition inline-flex items-center gap-1 text-xs font-bold disabled:opacity-50"
+                      title={isAr ? "إرفاق صورة أو كاميرا أو مستند" : "Attach Camera, Image or Document"}
+                    >
+                      <Paperclip className="w-4 h-4 text-emerald-600" />
+                    </button>
+
+                    {attachMenuOpen && (
+                      <div
+                        data-testid="copilot-attach-menu"
+                        role="menu"
+                        className={`absolute bottom-full mb-2 ${isAr ? "right-0" : "left-0"
+                          } w-52 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-2xl p-1.5 z-50 space-y-1 text-xs`}
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setAttachMenuOpen(false);
+                            visionCameraInputRef.current?.click();
+                          }}
+                          className="w-full min-h-[40px] px-3 py-2 rounded-xl hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 flex items-center gap-2 font-bold text-start"
+                        >
+                          <Camera className="w-4 h-4" />
+                          <span>{isAr ? "تصوير بالكاميرا" : "Camera Capture"}</span>
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setAttachMenuOpen(false);
+                            visionImageInputRef.current?.click();
+                          }}
+                          className="w-full min-h-[40px] px-3 py-2 rounded-xl hover:bg-sky-50 dark:hover:bg-sky-950/30 text-sky-700 dark:text-sky-300 flex items-center gap-2 font-bold text-start"
+                        >
+                          <ImageIcon className="w-4 h-4" />
+                          <span>{isAr ? "رفع صورة مستند" : "Upload Image"}</span>
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setAttachMenuOpen(false);
+                            docFileInputRef.current?.click();
+                          }}
+                          className="w-full min-h-[40px] px-3 py-2 rounded-xl hover:bg-indigo-50 dark:hover:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 flex items-center gap-2 font-bold text-start"
+                        >
+                          <Paperclip className="w-4 h-4" />
+                          <span>{isAr ? "ملف PDF أو CSV" : "Extract PDF / CSV"}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="hidden sm:flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      data-testid="copilot-vision-camera-btn"
+                      disabled={visionCompressBusy || busy}
+                      onClick={() => visionCameraInputRef.current?.click()}
+                      className="px-2 py-2.5 rounded-xl border bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-emerald-700 dark:text-emerald-300 hover:border-emerald-500 transition shrink-0 disabled:opacity-50 inline-flex items-center gap-1 text-[10px] font-bold"
+                      title={isAr ? "تصوير بالكاميرا (كشف قطفة / سند / فاتورة)" : "Camera Capture (Receipt / Harvest Sheet)"}
+                    >
+                      <Camera className={`w-3.5 h-3.5 ${visionCompressBusy ? "animate-pulse" : ""}`} />
+                      <span>{isAr ? "كاميرا" : "Camera"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="copilot-vision-upload-btn"
+                      disabled={visionCompressBusy || busy}
+                      onClick={() => visionImageInputRef.current?.click()}
+                      className="px-2 py-2.5 rounded-xl border bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-sky-700 dark:text-sky-300 hover:border-sky-500 transition shrink-0 disabled:opacity-50 inline-flex items-center gap-1 text-[10px] font-bold"
+                      title={isAr ? "رفع صورة مستند أو كشف يدوي" : "Upload Receipt or Sheet Image"}
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>{isAr ? "صورة" : "Image"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="copilot-doc-upload-btn"
+                      disabled={docExtractBusy}
+                      onClick={() => docFileInputRef.current?.click()}
+                      className="p-2.5 rounded-xl border bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-500 transition shrink-0 disabled:opacity-50"
+                      title={isAr ? "استخراج PDF أو CSV أو ملف مستند" : "Extract PDF / CSV Document"}
+                    >
+                      {docExtractBusy ? <Sparkles className="w-4 h-4 animate-pulse text-indigo-600" /> : <Paperclip className="w-4 h-4" />}
+                    </button>
+                  </div>
+
                   <button
                     type="button"
                     data-testid="copilot-voice-mic-btn"
                     onClick={toggleVoiceListening}
-                    className={`p-2.5 rounded-xl border transition shrink-0 ${
-                      listening
+                    className={`min-h-[42px] p-2.5 rounded-xl border transition shrink-0 ${listening
                         ? "bg-rose-600 text-white border-rose-500 animate-pulse"
                         : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-emerald-500"
-                    }`}
+                      }`}
                     title={isAr ? "إدخال صوتي (عربي / إنجليزي)" : "Voice Input (AR / EN)"}
                   >
                     {listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
@@ -3852,16 +3977,16 @@ export function UasAiCopilot({
                     onChange={(e) => setInputPrompt(e.target.value)}
                     placeholder={
                       isAr
-                        ? "اكتب أو تحدث بأمرك (قيد، سند، رصيد، تقرير، أو سؤال دعم)..."
-                        : "Ask or command (journal, voucher, balance, report, manual)..."
+                        ? "اكتب أو تحدث بأمرك..."
+                        : "Ask or command..."
                     }
-                    className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                    className="flex-1 min-w-0 min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
                   />
 
                   <button
                     type="submit"
                     disabled={busy || (!inputPrompt.trim() && !pendingVisionImage)}
-                    className="p-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50 transition shrink-0"
+                    className="min-h-[42px] p-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50 transition shrink-0"
                   >
                     <Send className="w-4 h-4" />
                   </button>
@@ -3874,7 +3999,7 @@ export function UasAiCopilot({
           {/* PANE 2: CONVERSATION THREADS & ARCHIVE                         */}
           {/* =============================================================== */}
           {activePane === "threads" && (
-            <div className="flex-1 overflow-y-auto p-3.5 space-y-3 max-h-[52vh]">
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-3.5 space-y-3">
               {/* Top controls: New Chat button & Active/Archived segmented tabs */}
               <div className="flex items-center justify-between gap-2">
                 <button
@@ -3893,11 +4018,10 @@ export function UasAiCopilot({
                     type="button"
                     data-testid="copilot-threads-tab-active"
                     onClick={() => setThreadTab("active")}
-                    className={`px-3 py-1 rounded-lg transition ${
-                      threadTab === "active"
+                    className={`px-3 py-1 rounded-lg transition ${threadTab === "active"
                         ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
                         : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-                    }`}
+                      }`}
                   >
                     {isAr ? `النشطة (${allThreads.filter((t) => !t.isArchived).length})` : `Active (${allThreads.filter((t) => !t.isArchived).length})`}
                   </button>
@@ -3905,11 +4029,10 @@ export function UasAiCopilot({
                     type="button"
                     data-testid="copilot-threads-tab-archived"
                     onClick={() => setThreadTab("archived")}
-                    className={`px-3 py-1 rounded-lg transition ${
-                      threadTab === "archived"
+                    className={`px-3 py-1 rounded-lg transition ${threadTab === "archived"
                         ? "bg-white dark:bg-slate-900 text-amber-600 dark:text-amber-400 shadow-sm"
                         : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-                    }`}
+                      }`}
                   >
                     {isAr ? `المؤرشفة (${allThreads.filter((t) => t.isArchived).length})` : `Archived (${allThreads.filter((t) => t.isArchived).length})`}
                   </button>
@@ -3958,11 +4081,10 @@ export function UasAiCopilot({
                         <div
                           key={th.id}
                           data-testid={`thread-card-${th.id}`}
-                          className={`p-3 rounded-2xl border transition space-y-2 ${
-                            isActive
+                          className={`p-3 rounded-2xl border transition space-y-2 ${isActive
                               ? "border-emerald-500/50 bg-emerald-50/40 dark:bg-emerald-950/20"
                               : "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700"
-                          }`}
+                            }`}
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="space-y-0.5 flex-1 min-w-0">
@@ -4062,13 +4184,12 @@ export function UasAiCopilot({
           {/* PANE 3: LIVE CUSTOMER SERVICE DIAGNOSTICS                      */}
           {/* =============================================================== */}
           {activePane === "support" && (
-            <div className="p-4 space-y-3.5 overflow-y-auto max-h-[60vh] text-xs">
+            <div className="flex-1 min-h-0 p-4 space-y-3.5 overflow-y-auto overflow-x-hidden text-xs">
               <div
-                className={`p-3.5 rounded-2xl border ${
-                  liveDiagnosticReport.healthy
+                className={`p-3.5 rounded-2xl border ${liveDiagnosticReport.healthy
                     ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200"
                     : "bg-rose-50 dark:bg-rose-950/30 border-rose-300 dark:border-rose-800 text-rose-900 dark:text-rose-200"
-                }`}
+                  }`}
               >
                 <div className="flex items-center justify-between gap-2 font-black text-sm">
                   <span className="flex items-center gap-1.5">
@@ -4133,7 +4254,7 @@ export function UasAiCopilot({
           {/* PANE 3: SEARCHABLE 7-CHAPTER BILINGUAL USER MANUAL             */}
           {/* =============================================================== */}
           {activePane === "manual" && (
-            <div className="p-3.5 space-y-3 overflow-y-auto max-h-[62vh] text-xs">
+            <div className="flex-1 min-h-0 p-3.5 space-y-3 overflow-y-auto overflow-x-hidden text-xs">
               {/* Instant Offline Manual Search */}
               <div className="relative">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute top-2.5 start-3" />
@@ -4218,7 +4339,7 @@ export function UasAiCopilot({
           {/* PANE 4: TENANT-SCOPED COPILOT MEMORY & RULES MANAGER            */}
           {/* =============================================================== */}
           {activePane === "memory" && (
-            <div className="p-3.5 space-y-3 overflow-y-auto max-h-[62vh] text-xs">
+            <div className="flex-1 min-h-0 p-3.5 space-y-3 overflow-y-auto overflow-x-hidden text-xs">
               <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between gap-2">
                 <div>
                   <div className="font-black text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
@@ -4309,11 +4430,10 @@ export function UasAiCopilot({
                     .map((mem) => (
                       <div
                         key={mem.id}
-                        className={`p-3 rounded-2xl border space-y-1.5 ${
-                          mem.active
+                        className={`p-3 rounded-2xl border space-y-1.5 ${mem.active
                             ? "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
                             : "border-slate-200/60 dark:border-slate-800/50 bg-slate-100/60 dark:bg-slate-900/40 opacity-65"
-                        }`}
+                          }`}
                       >
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex flex-wrap items-center gap-1.5">
@@ -4334,11 +4454,10 @@ export function UasAiCopilot({
                               type="button"
                               disabled={memoryBusy}
                               onClick={() => void handleMutateMemory(mem, "pin")}
-                              className={`p-1 rounded-lg transition ${
-                                mem.pinned
+                              className={`p-1 rounded-lg transition ${mem.pinned
                                   ? "text-amber-600 bg-amber-500/10"
                                   : "text-slate-400 hover:text-amber-600"
-                              }`}
+                                }`}
                               title={isAr ? "تثبيت / إلغاء التثبيت" : "Pin / Unpin"}
                             >
                               <Pin className="w-3.5 h-3.5" />
@@ -4387,7 +4506,7 @@ export function UasAiCopilot({
           {/* PANE 5: TENANT-SCOPED SEARCHABLE VISION SCANS ARCHIVE           */}
           {/* =============================================================== */}
           {activePane === "archive" && (
-            <div className="p-3.5 space-y-3 overflow-y-auto max-h-[62vh] text-xs">
+            <div className="flex-1 min-h-0 p-3.5 space-y-3 overflow-y-auto overflow-x-hidden text-xs">
               <div className="p-3 rounded-2xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-between gap-2">
                 <div>
                   <div className="font-black text-sky-900 dark:text-sky-200 flex items-center gap-1.5">
@@ -4583,30 +4702,60 @@ function ManualSectionCard({
           ))}
         </ol>
       </div>
-      <div className="flex flex-wrap gap-1.5 pt-1">
-        {section.relatedAction === "open_license_modal" && (
-          <button
-            type="button"
-            onClick={onOpenLicenseModal}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-300 font-bold text-[10px]"
-          >
-            <KeyRound className="w-3 h-3" />
-            <span>{isAr ? "فتح نافذة الترخيص والمقاعد" : "Open License Modal"}</span>
-          </button>
-        )}
-        {section.targetTab && (
-          <button
-            type="button"
-            onClick={() => onNavigateTab(section.targetTab!)}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-bold text-[10px]"
-          >
-            <ArrowUpRight className="w-3 h-3" />
-            <span>
-              {isAr ? `الانتقال إلى (${section.targetTab})` : `Go to (${section.targetTab})`}
-            </span>
-          </button>
-        )}
-      </div>
+      {(section.relatedAction === "open_license_modal" || section.targetTab) && (
+        <div className="pt-1">
+          <div className="md:hidden">
+            <select
+              data-testid={`manual-section-jump-${section.id}`}
+              value=""
+              onChange={(e) => {
+                const act = e.target.value;
+                if (act === "open_license") onOpenLicenseModal();
+                else if (act.startsWith("tab:")) onNavigateTab(act.slice(4) as TabId);
+              }}
+              className="w-full min-h-[40px] rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-bold text-emerald-800 dark:text-emerald-200 focus:outline-none"
+            >
+              <option value="">
+                {isAr ? "🔗 انتقال سريع أو إجراء..." : "🔗 Jump to Module / Action..."}
+              </option>
+              {section.targetTab && (
+                <option value={`tab:${section.targetTab}`}>
+                  {isAr ? `↗ الانتقال إلى (${section.targetTab})` : `↗ Go to (${section.targetTab})`}
+                </option>
+              )}
+              {section.relatedAction === "open_license_modal" && (
+                <option value="open_license">
+                  {isAr ? "🔑 فتح نافذة الترخيص والمقاعد" : "🔑 Open License Modal"}
+                </option>
+              )}
+            </select>
+          </div>
+          <div className="hidden md:flex flex-wrap gap-1.5">
+            {section.relatedAction === "open_license_modal" && (
+              <button
+                type="button"
+                onClick={onOpenLicenseModal}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-300 font-bold text-[10px]"
+              >
+                <KeyRound className="w-3 h-3" />
+                <span>{isAr ? "فتح نافذة الترخيص والمقاعد" : "Open License Modal"}</span>
+              </button>
+            )}
+            {section.targetTab && (
+              <button
+                type="button"
+                onClick={() => onNavigateTab(section.targetTab!)}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-bold text-[10px]"
+              >
+                <ArrowUpRight className="w-3 h-3" />
+                <span>
+                  {isAr ? `الانتقال إلى (${section.targetTab})` : `Go to (${section.targetTab})`}
+                </span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

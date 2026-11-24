@@ -709,7 +709,57 @@ export function TreasuryTab({
               إنشاء وربط الصناديق والحسابات البنكية والمحافظ (الكريمي، جوالي، جيب، ون كاش، فلوسك) بحسابات الجيل السادس (Gen-6) وبوابات الدفع الإلكتروني والمطابقة الآلية
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="w-full md:w-auto">
+            {/* Mobile / Narrow Action Dropdown */}
+            <div className="md:hidden w-full">
+              <select
+                data-testid="treasury-actions-select"
+                aria-label="إجراءات الخزينة والبنوك"
+                value=""
+                onChange={(e) => {
+                  const act = e.target.value;
+                  if (act === "toggle_archived") {
+                    setShowArchivedTreasuries((p) => !p);
+                  } else if (act === "dispatch" && !readOnly && canManageTreasury) {
+                    setPayoutInitialData({
+                      sourceVoucherType: "TREASURY_TRANSFER",
+                      sourceVoucherId: `DISP-${Date.now()}`,
+                      beneficiaryName: "",
+                      beneficiaryAccountOrPhone: "",
+                      amount: 0,
+                      currencyCode: "YER",
+                      notes: "صرف أو تحويل بنكي مباشر",
+                    });
+                    setPayoutModalOpen(true);
+                  } else if (act === "fx_transfer" && !readOnly && canManageTreasury && treasuryAccounts.length >= 2) {
+                    setTxFromId(treasuryAccounts[0]?.id || "");
+                    setTxToId(treasuryAccounts[1]?.id || treasuryAccounts[0]?.id || "");
+                    setTransferDrawerOpen(true);
+                  } else if (act === "add_treasury" && !readOnly && canManageTreasury) {
+                    openCreateTreasury();
+                  }
+                }}
+                className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-extrabold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+              >
+                <option value="">
+                  {`⚡ إجراءات الخزينة (1 SAR = ${exchangeRates.SAR || 425} YER)...`}
+                </option>
+                {!readOnly && canManageTreasury && (
+                  <>
+                    <option value="add_treasury">➕ إضافة صندوق / بنك / محفظة</option>
+                    <option value="dispatch">💸 تنفيذ تحويل بنكي / محفظة</option>
+                    {treasuryAccounts.length >= 2 && (
+                      <option value="fx_transfer">🔁 تحويل بين الخزائن (FX)</option>
+                    )}
+                  </>
+                )}
+                <option value="toggle_archived">
+                  {showArchivedTreasuries ? "🙈 إخفاء الحسابات المؤرشفة" : "👁️ إظهار الحسابات المؤرشفة"}
+                </option>
+              </select>
+            </div>
+
+            <div className="hidden md:flex flex-wrap items-center gap-2">
             <div className="text-xs font-bold accent-badge px-3 py-1.5 rounded-xl tabular-nums">
               1 SAR = {exchangeRates.SAR || 425} YER | 1 USD = {fmtNum(exchangeRates.USD || 1620)} YER
             </div>
@@ -776,6 +826,7 @@ export function TreasuryTab({
                 </button>
               </>
             )}
+            </div>
           </div>
         </div>
 
