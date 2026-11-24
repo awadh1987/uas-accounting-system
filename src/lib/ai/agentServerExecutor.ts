@@ -33,6 +33,7 @@ import {
 import { collectServerSupportDiagnostics } from "@/lib/supportDiagnosticsServer";
 import { collectServerBriefingInputs } from "./executiveBriefingServer";
 import { normalizeMemoryTenantSlug } from "./copilotMemoryTypes";
+import { deleteConfirmedDummyProjects } from "@/lib/dummyProjectCleanupServer";
 import {
   linkArchivedAttachmentToRecord,
   listTenantVisionAttachments,
@@ -314,9 +315,21 @@ export async function executeConfirmedAiAction(input: {
     TREASURY_TRANSFER: "treasury",
     TOGGLE_PERIOD_LOCK: "audit",
     ADD_HARVEST_CYCLE: "projects",
+    CLEANUP_DUMMY_PROJECTS: "projects",
   };
   const requiredModule = moduleMap[op] || "ledger";
-  if (op === "TOGGLE_PERIOD_LOCK") {
+  if (op === "CLEANUP_DUMMY_PROJECTS") {
+    if (role !== "SUPER_ADMIN" && role !== "PROJECT_MANAGER") {
+      return {
+        ok: false,
+        status: 403,
+        code: "RBAC_FORBIDDEN",
+        executed_by_ai: false,
+        summaryAr: `⛔ غير مصرح: تنظيف المشاريع الاختبارية محصور بالمدير العام ومدير المشاريع (دورك: ${role}).`,
+        summaryEn: `⛔ RBAC Blocked: Cleanup of dummy/test projects requires SUPER_ADMIN or PROJECT_MANAGER (role: ${role}).`,
+      };
+    }
+  } else if (op === "TOGGLE_PERIOD_LOCK") {
     if (!canLockPeriod(targetUser)) {
       return {
         ok: false,
@@ -1031,6 +1044,36 @@ export async function executeConfirmedAiAction(input: {
       entryNumber: harvestName,
       summaryAr: `✅ **تمت إضافة القطفة (${harvestName}) للمشروع بنجاح!** [executed_by_ai: true]`,
       summaryEn: `✅ **Harvest cycle "${harvestName}" added to project!** [executed_by_ai: true]`,
+    };
+  }
+
+  if (op === "CLEANUP_DUMMY_PROJECTS") {
+    const payload = confirmationCard.executionPayload || {};
+    const projectIds = Array.isArray(payload.projectIds)
+      ? payload.projectIds.map((id) => String(id).trim()).filter(Boolean)
+      : [];
+    const cleanupResult = await deleteConfirmedDummyProjects({
+      projectIds,
+      actor: {
+        userId: actor.userId,
+        userDisplay: actor.userDisplay,
+        userRole: actor.userRole,
+      },
+      tenantSlug: resolvedTenantSlug,
+    });
+    return {
+      ok: true,
+      status: 200,
+      executed_by_ai: true,
+      entryNumber: `CLEANUP-${cleanupResult.deletedCount}`,
+      summaryAr:
+        cleanupResult.deletedCount > 0
+          ? `✅ **تم تنظيف (${cleanupResult.deletedCount}) مشروع اختباري/وهمي بنجاح** في المنشأة (${cleanupResult.tenantSlug}) وتوثيق العملية في سجل التدقيق [executed_by_ai: true].`
+          : `ℹ️ لم يتم العثور على أي مشاريع اختبارية متبقية للحذف في المنشأة (${cleanupResult.tenantSlug}).`,
+      summaryEn:
+        cleanupResult.deletedCount > 0
+          ? `✅ **Cleaned up ${cleanupResult.deletedCount} dummy/test project(s)** in tenant (${cleanupResult.tenantSlug}) and recorded AuditLog [executed_by_ai: true].`
+          : `ℹ️ No remaining dummy/test projects needed removal in tenant (${cleanupResult.tenantSlug}).`,
     };
   }
 

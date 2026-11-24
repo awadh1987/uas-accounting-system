@@ -139,8 +139,8 @@ export async function checkMicrophoneDiagnostics(
           status.state === "granted"
             ? "granted"
             : status.state === "denied"
-            ? "denied"
-            : "prompt",
+              ? "denied"
+              : "prompt",
         canRequest: status.state !== "denied",
         isNativeAndroid: isNative,
         unusedAppRestrictionsEnabled: false,
@@ -222,49 +222,128 @@ export function openUnusedAppRestrictionsSettings(winOverride?: NativeWindowLike
 }
 
 /**
- * Accumulates finalized and interim speech recognition segments and flushes
- * any pending interim transcript cleanly on stop / `onend` so speech never gets lost.
+ * Merges consecutive or cumulative SpeechRecognition segments while eliminating
+ * Android WebView / Chromium word repetition, prefix supersets, and suffix-prefix overlaps.
+ */
+export function mergeSpeechTranscriptSegments(segments: string[]): string {
+  const mergedWords: string[] = [];
+
+  for (const rawSeg of segments) {
+    const clean = String(rawSeg || "").replace(/\s+/g, " ").trim();
+    if (!clean) continue;
+    const words = clean.split(" ");
+
+    if (mergedWords.length === 0) {
+      // Collapse accidental immediate duplicate inside first phrase only if repeated whole half
+      mergedWords.push(...words);
+      continue;
+    }
+
+    // Check if the new segment starts with a suffix of existing mergedWords
+    let overlap = 0;
+    const maxCheck = Math.min(mergedWords.length, words.length);
+    for (let k = maxCheck; k >= 1; k--) {
+      let allMatch = true;
+      for (let i = 0; i < k; i++) {
+        if (mergedWords[mergedWords.length - k + i] !== words[i]) {
+          allMatch = false;
+          break;
+        }
+      }
+      if (allMatch) {
+        overlap = k;
+        break;
+      }
+    }
+
+    if (overlap > 0) {
+      mergedWords.push(...words.slice(overlap));
+    } else {
+      // Also check if incoming cumulative phrase is a superset containing tail tokens
+      const prevJoined = mergedWords.join(" ");
+      if (clean.startsWith(prevJoined)) {
+        const tail = clean.slice(prevJoined.length).trim();
+        if (tail) mergedWords.push(...tail.split(" "));
+      } else if (!prevJoined.endsWith(clean)) {
+        // Avoid immediate single-word stuttering across rapid final chunks
+        const dedupedWords =
+          words[0] === mergedWords[mergedWords.length - 1] ? words.slice(1) : words;
+        mergedWords.push(...dedupedWords);
+      }
+    }
+  }
+
+  return mergedWords.join(" ").trim();
+}
+
+/**
+ * Accumulates finalized and interim speech recognition segments cleanly on top of any
+ * preserved manual `baseDraft` text, eliminating duplicate words and flushing safely
+ * without premature auto-submit.
  */
 export function createSpeechTranscriptAccumulator() {
+  let baseDraft = "";
   let finalText = "";
   let interimText = "";
   let flushed = false;
 
+  const combineWithBase = (...parts: string[]): string => {
+    const cleanSpoken = mergeSpeechTranscriptSegments(parts);
+    return mergeSpeechTranscriptSegments([baseDraft, cleanSpoken].filter(Boolean));
+  };
+
   return {
     ingestResults(results: ArrayLike<{ isFinal?: boolean; 0?: { transcript?: string } }> | undefined) {
-      if (!results) return { finalText, interimText, combined: (finalText + " " + interimText).trim() };
-      let nextFinal = "";
-      let nextInterim = "";
+      if (!results) {
+        return {
+          finalText,
+          interimText,
+          combined: combineWithBase(finalText, interimText),
+        };
+      }
+      const finalSegments: string[] = [];
+      const interimSegments: string[] = [];
       for (let i = 0; i < results.length; i++) {
         const res = results[i];
-        const txt = String(res?.[0]?.transcript || "").trim();
+        const txt = String(res?.[0]?.transcript || "").replace(/\s+/g, " ").trim();
         if (!txt) continue;
         if (res?.isFinal) {
-          nextFinal = nextFinal ? `${nextFinal} ${txt}` : txt;
+          finalSegments.push(txt);
         } else {
-          nextInterim = nextInterim ? `${nextInterim} ${txt}` : txt;
+          interimSegments.push(txt);
         }
       }
-      if (nextFinal) finalText = nextFinal;
-      interimText = nextInterim;
+      if (finalSegments.length > 0) {
+        finalText = mergeSpeechTranscriptSegments(finalSegments);
+      }
+      interimText = mergeSpeechTranscriptSegments(interimSegments);
       return {
         finalText,
         interimText,
-        combined: [finalText, interimText].filter(Boolean).join(" ").trim(),
+        combined: combineWithBase(finalText, interimText),
       };
     },
+    commitExternalFinal(spokenText: string): string {
+      const clean = String(spokenText || "").replace(/\s+/g, " ").trim();
+      if (clean) {
+        finalText = mergeSpeechTranscriptSegments([finalText, clean].filter(Boolean));
+      }
+      interimText = "";
+      return combineWithBase(finalText);
+    },
     getCombined(): string {
-      return [finalText, interimText].filter(Boolean).join(" ").trim();
+      return combineWithBase(finalText, interimText);
     },
     flushOnStop(): string {
       if (flushed) return "";
       flushed = true;
-      const committed = [finalText, interimText].filter(Boolean).join(" ").trim();
+      const committed = combineWithBase(finalText, interimText);
       finalText = "";
       interimText = "";
       return committed;
     },
-    reset() {
+    reset(nextBaseDraft = "") {
+      baseDraft = String(nextBaseDraft || "").trim();
       finalText = "";
       interimText = "";
       flushed = false;

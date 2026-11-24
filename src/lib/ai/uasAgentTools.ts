@@ -28,6 +28,7 @@ import {
   reconcileHarvestInventory,
 } from "@/lib/harvestReconciliation";
 import type { CopilotMemoryEntry } from "./copilotMemoryTypes";
+import { identifyDummyTestProjects } from "@/lib/dummyProjectRules";
 import {
   filterVisionArchiveAttachments,
   type VisionSourceAttachment,
@@ -73,7 +74,8 @@ export type UasAgentToolName =
   | "toggle_period_lock"
   | "add_harvest_cycle"
   | "get_daily_executive_briefing"
-  | "search_archived_scans";
+  | "search_archived_scans"
+  | "cleanup_dummy_projects";
 
 export interface UasWorkspaceContext {
   activeTab?: TabId;
@@ -168,7 +170,8 @@ export interface ConfirmationPreviewCard {
     | "draft_worker_wage"
     | "draft_treasury_transfer"
     | "toggle_period_lock"
-    | "add_harvest_cycle";
+    | "add_harvest_cycle"
+    | "cleanup_dummy_projects";
   operationType:
     | "JOURNAL_ENTRY"
     | "RECEIPT_VOUCHER"
@@ -185,7 +188,8 @@ export interface ConfirmationPreviewCard {
     | "RECORD_WORKER_WAGE"
     | "TREASURY_TRANSFER"
     | "TOGGLE_PERIOD_LOCK"
-    | "ADD_HARVEST_CYCLE";
+    | "ADD_HARVEST_CYCLE"
+    | "CLEANUP_DUMMY_PROJECTS";
   titleAr: string;
   titleEn: string;
   narrationAr: string;
@@ -587,6 +591,18 @@ export const UAS_AGENT_TOOL_SCHEMAS: UasAgentToolSchema[] = [
       dateTo: "optional end date YYYY-MM-DD",
       linkedCode: "optional linked voucher number or harvest batch ID",
       q: "optional search keyword",
+    },
+  },
+  {
+    name: "cleanup_dummy_projects",
+    isWriteTool: true,
+    descriptionAr:
+      "فحص وتنظيف المشاريع الوهمية أو مشاريع الاختبار التلقائي (PRJ-Pxxxxxxx / SMOKE / TEST) داخل المنشأة النشطة فقط مع معاينة إجبارية قبل الحذف ودون المساس بأي مزرعة أو مشروع حقيقي (محصور بالمدير العام ومدير المشاريع).",
+    descriptionEn:
+      "Inspect (dryRun) or prepare confirmed cleanup of leftover automated test/dummy projects (PRJ-Pxxxxxxx / SMOKE / TEST) strictly within the active tenant without touching real farms (SUPER_ADMIN or PROJECT_MANAGER only; requires ConfirmationPreviewCard).",
+    parameters: {
+      dryRun: "optional boolean: true to only list detected test projects without staging deletion",
+      projectIds: "optional array of candidate IDs to limit cleanup subset",
     },
   },
 ];
@@ -3820,6 +3836,163 @@ export async function executeUasAgentTool(
             matches.length > 0
               ? `🗂️ **Archived Scans (${matches.length} matched):**\n${listEn}`
               : "🗂️ **Scans Archive:** No archived scans matched the current filter for this tenant.",
+        },
+        ctx
+      );
+    }
+
+    // -----------------------------------------------------------------------
+    // 28. cleanup_dummy_projects
+    // -----------------------------------------------------------------------
+    case "cleanup_dummy_projects": {
+      const effectiveUser = ctx.user ?? "EXTERNAL_AUDITOR";
+      const role = normalizeRole(effectiveUser);
+      if (role !== "SUPER_ADMIN" && role !== "PROJECT_MANAGER") {
+        return makeResult(
+          lang,
+          {
+            ok: false,
+            toolName,
+            code: "RBAC_FORBIDDEN",
+            requiresConfirmation: false,
+            summaryAr: `⛔ غير مصرح: فحص أو تنظيف المشاريع الاختبارية محصور بالمدير العام (SUPER_ADMIN) ومدير المشاريع (PROJECT_MANAGER) — دورك الحالي: ${role}.`,
+            summaryEn: `⛔ RBAC Blocked: Cleanup of dummy/test projects is restricted to SUPER_ADMIN or PROJECT_MANAGER (your role: ${role}).`,
+          },
+          ctx
+        );
+      }
+
+      const tenantSlug = ctx.workspaceContext?.tenantSlug || ctx.state?.enterpriseProfile?.tenantSlug || "default";
+      const allProjects = ctx.state?.projects ?? [];
+      const detected = identifyDummyTestProjects(allProjects);
+
+      const requestedIds = Array.isArray(args.projectIds)
+        ? new Set(args.projectIds.map((x) => String(x).trim()).filter(Boolean))
+        : null;
+      const targets = requestedIds
+        ? detected.filter((c) => requestedIds.has(c.id))
+        : detected;
+
+      const preservedCount = allProjects.length - targets.length;
+      if (targets.length === 0) {
+        return makeResult(
+          lang,
+          {
+            ok: true,
+            toolName,
+            requiresConfirmation: false,
+            data: {
+              tenantSlug,
+              dryRun: Boolean(args.dryRun),
+              candidateCount: 0,
+              preservedCount,
+              candidates: [],
+            },
+            summaryAr: `✅ **لا توجد مشاريع وهمية أو اختبارية في مساحة المنشأة (${tenantSlug}):** جميع المشاريع الحالية (${allProjects.length}) مشاريع حقيقية ومصانة.`,
+            summaryEn: `✅ **No dummy or automated-test projects found in tenant (${tenantSlug}):** all ${allProjects.length} active projects are real and preserved.`,
+          },
+          ctx
+        );
+      }
+
+      const sampleList = targets
+        .slice(0, 8)
+        .map((c) => `\`${c.code || c.id}\` (${c.name})`)
+        .join("، ");
+      const remainingSuffixAr =
+        targets.length > 8 ? ` ... و(${targets.length - 8}) مشاريع اختبارية أخرى` : "";
+      const remainingSuffixEn =
+        targets.length > 8 ? ` ... and ${targets.length - 8} more` : "";
+
+      if (Boolean(args.dryRun)) {
+        return makeResult(
+          lang,
+          {
+            ok: true,
+            toolName,
+            requiresConfirmation: false,
+            data: {
+              tenantSlug,
+              dryRun: true,
+              candidateCount: targets.length,
+              preservedCount,
+              candidates: targets,
+            },
+            summaryAr: `🔍 **معاينة أولية (Dry Run) لتنظيف المشاريع الاختبارية في (${tenantSlug}):**\n- عدد المشاريع الاختبارية المكتشفة: **${targets.length}**\n- المشاريع الحقيقية المحمية (لن تمس): **${preservedCount}**\n- أمثلة: ${sampleList}${remainingSuffixAr}\n\nلطلب مسودة الحذف الآمن، اكتب: «نظف المشاريع التجريبية».`,
+            summaryEn: `🔍 **Dry Run Preview in tenant (${tenantSlug}):**\n- Detected dummy/test projects: **${targets.length}**\n- Real projects preserved: **${preservedCount}**\n- Samples: ${sampleList}${remainingSuffixEn}\n\nSay "cleanup dummy projects" to stage confirmed deletion.`,
+          },
+          ctx
+        );
+      }
+
+      const card: ConfirmationPreviewCard = {
+        actionId: `ai-cleanup-dummy-${Date.now()}`,
+        toolName: "cleanup_dummy_projects",
+        operationType: "CLEANUP_DUMMY_PROJECTS",
+        titleAr: `تنظيف ${targets.length} مشروع اختباري/وهمي`,
+        titleEn: `Clean Up ${targets.length} Dummy/Test Projects`,
+        narrationAr: `تنظيف ${targets.length} مشروع اختباري في المنشأة (${tenantSlug}) مع الحفاظ الكامل على ${preservedCount} مشروع حقيقي`,
+        narrationEn: `Clean up ${targets.length} dummy/test projects in tenant (${tenantSlug}) while preserving ${preservedCount} real projects`,
+        date: todayIso,
+        currency: ctx.workspaceContext?.currency || "YER",
+        totalDebit: 0,
+        totalCredit: 0,
+        isBalanced: true,
+        lines: [],
+        preFlightChecks: [
+          {
+            key: "tenant_isolation",
+            status: "ok",
+            labelAr: `نطاق المنشأة: ${tenantSlug}`,
+            labelEn: `Tenant Scope: ${tenantSlug}`,
+          },
+          {
+            key: "dummy_matches",
+            status: "warning",
+            labelAr: `مشاريع اختبارية مرشحة للحذف: ${targets.length} (${targets.slice(0, 3).map((c) => c.code).join(", ")}${targets.length > 3 ? "..." : ""})`,
+            labelEn: `Dummy/Test candidates: ${targets.length} (${targets.slice(0, 3).map((c) => c.code).join(", ")}${targets.length > 3 ? "..." : ""})`,
+          },
+          {
+            key: "real_preserved",
+            status: "ok",
+            labelAr: `مشاريع حقيقية مصانة (لن تحذف): ${preservedCount}`,
+            labelEn: `Real Projects Preserved: ${preservedCount}`,
+          },
+        ],
+        warningsAr: [
+          "⚠️ سيؤدي الاعتماد إلى حذف سجلات المشاريع الاختبارية ودوراتها المرتبطة وتوثيق العملية في سجل التدقيق.",
+        ],
+        warningsEn: [
+          "⚠️ Confirmation removes only the listed automated-test projects & linked test rows and records an AuditLog entry.",
+        ],
+        endpoint: "/api/ai/agent",
+        httpMethod: "POST",
+        confirmButtonLabelAr: `تأكيد تنظيف (${targets.length}) مشروع اختباري 🧹`,
+        confirmButtonLabelEn: `Confirm Cleanup (${targets.length} Test Projects) 🧹`,
+        confirmButtonLabel: `تأكيد التنظيف / Confirm Cleanup (${targets.length})`,
+        executionPayload: {
+          operationType: "CLEANUP_DUMMY_PROJECTS",
+          tenantSlug,
+          projectIds: targets.map((c) => c.id),
+          candidateCodes: targets.map((c) => c.code || c.name),
+        },
+      };
+
+      return makeResult(
+        lang,
+        {
+          ok: true,
+          toolName,
+          requiresConfirmation: true,
+          confirmationCard: card,
+          data: {
+            tenantSlug,
+            candidateCount: targets.length,
+            preservedCount,
+            candidates: targets,
+          },
+          summaryAr: `🧹 **بطاقة تأكيد تنظيف المشاريع الوهمية والاختبارية جاهزة (${tenantSlug}):**\n- المرشح للحذف الآمن: **${targets.length}** مشروع اختباري (${sampleList}${remainingSuffixAr})\n- المحفوظة بدون مساس: **${preservedCount}** مشروع حقيقي.\n\nيرجى مراجعة البطاقة والضغط على **تأكيد التنظيف** للتنفيذ الفعلي.`,
+          summaryEn: `🧹 **Dummy Project Cleanup Confirmation Ready (${tenantSlug}):**\n- Eligible test projects: **${targets.length}** (${sampleList}${remainingSuffixEn})\n- Real projects preserved untouched: **${preservedCount}**.\n\nPlease review the card below and click **Confirm Cleanup** to execute.`,
         },
         ctx
       );

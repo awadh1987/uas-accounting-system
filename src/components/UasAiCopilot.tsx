@@ -8,7 +8,6 @@ import {
   ArrowUpRight,
   Ban,
   Bell,
-  BookOpen,
   Bot,
   Brain,
   Camera,
@@ -21,7 +20,6 @@ import {
   Edit3,
   ExternalLink,
   FileText,
-  FolderClock,
   Headphones,
   HelpCircle,
   Image as ImageIcon,
@@ -79,6 +77,7 @@ import {
   type VisionExtractionMetadata,
   type VisionSourceAttachment,
 } from "@/lib/ai/copilotVisionTypes";
+import { identifyDummyTestProjects } from "@/lib/dummyProjectRules";
 import {
   UAS_SUPPORT_CHAPTERS,
   type SupportChapter,
@@ -117,7 +116,7 @@ import {
 } from "@/lib/ai/conversationArchiveEngine";
 import {
   buildCopilotGreetingFallback,
-  formatSpokenTextForGeminiTts,
+  splitTextForSequentialSpeech,
   type CopilotDialectMode,
 } from "@/lib/ai/yemeniLocalization";
 import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
@@ -357,9 +356,15 @@ export function UasAiCopilot({
     return "yemeni";
   });
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
+  const [speakingProgress, setSpeakingProgress] = useState<{ current: number; total: number } | null>(null);
   const [audioLoadingMsgId, setAudioLoadingMsgId] = useState<string | null>(null);
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
   const activeAudioUrlRef = useRef<string | null>(null);
+  const speechSessionRef = useRef(0);
+  const inputPromptRef = useRef(inputPrompt);
+  useEffect(() => {
+    inputPromptRef.current = inputPrompt;
+  }, [inputPrompt]);
 
   const handleToggleDialect = () => {
     setDialect((prev) => {
@@ -614,8 +619,11 @@ export function UasAiCopilot({
   }, [displayedMessages, open]);
 
   function stopSpeechPlayback() {
+    speechSessionRef.current += 1;
     if (activeAudioRef.current) {
       try {
+        activeAudioRef.current.onended = null;
+        activeAudioRef.current.onerror = null;
         activeAudioRef.current.pause();
         activeAudioRef.current.currentTime = 0;
       } catch {
@@ -639,38 +647,133 @@ export function UasAiCopilot({
       }
     }
     setSpeakingMsgId(null);
+    setSpeakingProgress(null);
     setAudioLoadingMsgId(null);
   }
 
-  function speakViaBrowserFallback(text: string, msgId?: string) {
+  function playSingleBrowserChunk(
+    chunkText: string,
+    sessionId: number
+  ): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (
+        typeof window === "undefined" ||
+        !("speechSynthesis" in window) ||
+        speechSessionRef.current !== sessionId
+      ) {
+        resolve(false);
+        return;
+      }
+      try {
+        const utterance = new SpeechSynthesisUtterance(chunkText);
+        utterance.lang = isAr ? "ar-YE" : "en-US";
+        utterance.rate = isAr ? 0.96 : 1.0;
+        const voices = window.speechSynthesis.getVoices?.() ?? [];
+        const preferredVoice = isAr
+          ? voices.find((v) => /ar-ye/i.test(v.lang)) ||
+            voices.find((v) => /ar-sa|ar-ae|ar-/i.test(v.lang))
+          : voices.find((v) => /en-/i.test(v.lang));
+        if (preferredVoice) utterance.voice = preferredVoice;
+        let settled = false;
+        const finish = (ok: boolean) => {
+          if (settled) return;
+          settled = true;
+          resolve(ok);
+        };
+        utterance.onend = () => finish(speechSessionRef.current === sessionId);
+        utterance.onerror = () => finish(false);
+        // Safety watchdog only if engine hangs silently without firing onend
+        const estMs = Math.max(12000, chunkText.length * 140);
+        setTimeout(() => finish(speechSessionRef.current === sessionId), estMs);
+        window.speechSynthesis.speak(utterance);
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  async function speakChunksViaBrowserFallback(
+    chunks: string[],
+    msgId: string | undefined,
+    sessionId: number,
+    startIdx = 0
+  ) {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      setSpeakingMsgId(null);
+      if (speechSessionRef.current === sessionId) {
+        setSpeakingMsgId(null);
+        setSpeakingProgress(null);
+      }
       return;
     }
     try {
       window.speechSynthesis.cancel();
-      const spoken = formatSpokenTextForGeminiTts(text, {
-        lang: isAr ? "ar" : "en",
-        dialect,
-        maxChars: 500,
-      });
-      if (!spoken) return;
-      const utterance = new SpeechSynthesisUtterance(spoken);
-      utterance.lang = isAr ? "ar-YE" : "en-US";
-      utterance.rate = isAr ? 0.96 : 1.0;
-      const voices = window.speechSynthesis.getVoices?.() ?? [];
-      const preferredVoice = isAr
-        ? voices.find((v) => /ar-ye/i.test(v.lang)) ||
-          voices.find((v) => /ar-sa|ar-ae|ar-/i.test(v.lang))
-        : voices.find((v) => /en-/i.test(v.lang));
-      if (preferredVoice) utterance.voice = preferredVoice;
       if (msgId) setSpeakingMsgId(msgId);
-      utterance.onend = () => setSpeakingMsgId(null);
-      utterance.onerror = () => setSpeakingMsgId(null);
-      window.speechSynthesis.speak(utterance);
-    } catch {
-      setSpeakingMsgId(null);
+      for (let i = startIdx; i < chunks.length; i++) {
+        if (speechSessionRef.current !== sessionId) return;
+        setSpeakingProgress({ current: i + 1, total: chunks.length });
+        await playSingleBrowserChunk(chunks[i], sessionId);
+      }
+    } finally {
+      if (speechSessionRef.current === sessionId) {
+        setSpeakingMsgId(null);
+        setSpeakingProgress(null);
+      }
     }
+  }
+
+  function playAudioBlobChunk(blob: Blob, sessionId: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (speechSessionRef.current !== sessionId) {
+        resolve(false);
+        return;
+      }
+      const objectUrl = URL.createObjectURL(blob);
+      activeAudioUrlRef.current = objectUrl;
+      const audio = new Audio(objectUrl);
+      activeAudioRef.current = audio;
+
+      let settled = false;
+      const cleanup = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        if (activeAudioRef.current === audio) {
+          activeAudioRef.current = null;
+        }
+        if (activeAudioUrlRef.current === objectUrl) {
+          try {
+            URL.revokeObjectURL(objectUrl);
+          } catch {
+            // ignore
+          }
+          activeAudioUrlRef.current = null;
+        }
+        resolve(ok);
+      };
+
+      audio.onended = () => cleanup(speechSessionRef.current === sessionId);
+      audio.onerror = () => cleanup(false);
+      audio.play().catch(() => cleanup(false));
+    });
+  }
+
+  async function fetchGeminiSpeechChunk(chunkText: string): Promise<Blob | null> {
+    try {
+      const res = await fetch("/api/ai/speak", {
+        method: "POST",
+        headers: buildCopilotRequestHeaders(),
+        body: JSON.stringify({
+          text: chunkText,
+          lang: isAr ? "ar" : "en",
+          dialect,
+        }),
+      });
+      if (res.ok && (res.headers.get("content-type") || "").includes("audio/")) {
+        return await res.blob();
+      }
+    } catch {
+      // Fallback handled by caller
+    }
+    return null;
   }
 
   async function speakText(text: string, msgId?: string, forcePlay = false) {
@@ -683,51 +786,62 @@ export function UasAiCopilot({
     }
 
     stopSpeechPlayback();
+    const sessionId = speechSessionRef.current;
 
-    const clean = formatSpokenTextForGeminiTts(text, {
+    const chunks = splitTextForSequentialSpeech(text, {
       lang: isAr ? "ar" : "en",
       dialect,
-      maxChars: 680,
+      maxChunkChars: 420,
     });
-    if (!clean) return;
+    if (chunks.length === 0) return;
 
     if (!isOfflineClientContext()) {
       try {
         if (msgId) setAudioLoadingMsgId(msgId);
-        const res = await fetch("/api/ai/speak", {
-          method: "POST",
-          headers: buildCopilotRequestHeaders(),
-          body: JSON.stringify({
-            text: clean,
-            lang: isAr ? "ar" : "en",
-            dialect,
-          }),
-        });
+        let nextBlobPromise: Promise<Blob | null> | null = fetchGeminiSpeechChunk(chunks[0]);
 
-        if (res.ok && (res.headers.get("content-type") || "").includes("audio/")) {
-          const blob = await res.blob();
-          const objectUrl = URL.createObjectURL(blob);
-          activeAudioUrlRef.current = objectUrl;
-          const audio = new Audio(objectUrl);
-          activeAudioRef.current = audio;
+        for (let i = 0; i < chunks.length; i++) {
+          if (speechSessionRef.current !== sessionId) return;
+          const blob = await nextBlobPromise;
+          if (speechSessionRef.current !== sessionId) return;
+
+          // Prefetch next chunk in parallel while playing current chunk so multi-part replies flow seamlessly
+          nextBlobPromise =
+            i + 1 < chunks.length ? fetchGeminiSpeechChunk(chunks[i + 1]) : null;
+
+          if (!blob) {
+            setAudioLoadingMsgId(null);
+            await speakChunksViaBrowserFallback(chunks, msgId, sessionId, i);
+            return;
+          }
+
           if (msgId) setSpeakingMsgId(msgId);
+          setSpeakingProgress({ current: i + 1, total: chunks.length });
           setAudioLoadingMsgId(null);
-          audio.onended = () => stopSpeechPlayback();
-          audio.onerror = () => {
-            stopSpeechPlayback();
-            speakViaBrowserFallback(clean, msgId);
-          };
-          await audio.play();
-          return;
+
+          const playedOk = await playAudioBlobChunk(blob, sessionId);
+          if (!playedOk) {
+            if (speechSessionRef.current === sessionId) {
+              await speakChunksViaBrowserFallback(chunks, msgId, sessionId, i);
+            }
+            return;
+          }
         }
+
+        if (speechSessionRef.current === sessionId) {
+          stopSpeechPlayback();
+        }
+        return;
       } catch {
         // Fallback smoothly to browser speechSynthesis
       } finally {
-        setAudioLoadingMsgId(null);
+        if (speechSessionRef.current === sessionId) {
+          setAudioLoadingMsgId(null);
+        }
       }
     }
 
-    speakViaBrowserFallback(clean, msgId);
+    await speakChunksViaBrowserFallback(chunks, msgId, sessionId, 0);
   }
 
   async function toggleVoiceListening() {
@@ -743,8 +857,8 @@ export function UasAiCopilot({
       setInterimTranscript("");
       if (flushed) {
         setInputPrompt(flushed);
-        await handleSendPrompt(flushed);
       }
+      textInputRef.current?.focus();
       return;
     }
 
@@ -774,6 +888,7 @@ export function UasAiCopilot({
     if (capPlugins?.SpeechRecognition) {
       try {
         isStartingVoiceRef.current = true;
+        const baseDraft = inputPromptRef.current.trim();
         await capPlugins.SpeechRecognition.requestPermissions?.();
         setListening(true);
         const res = await capPlugins.SpeechRecognition.start({
@@ -783,13 +898,15 @@ export function UasAiCopilot({
           partialResults: true,
           popup: true,
         });
-        const transcript = Array.isArray(res?.matches) ? res.matches[0] : "";
+        const spoken = Array.isArray(res?.matches) ? res.matches[0] : "";
         setListening(false);
         isStartingVoiceRef.current = false;
         setInterimTranscript("");
-        if (transcript) {
-          setInputPrompt(transcript);
-          await handleSendPrompt(transcript);
+        if (spoken) {
+          transcriptAccRef.current.reset(baseDraft);
+          const merged = transcriptAccRef.current.commitExternalFinal(spoken);
+          setInputPrompt(merged);
+          textInputRef.current?.focus();
         }
         return;
       } catch {
@@ -812,7 +929,7 @@ export function UasAiCopilot({
     }
 
     const startSpeechEngine = (targetLocale: string) => {
-      transcriptAccRef.current.reset();
+      transcriptAccRef.current.reset(inputPromptRef.current.trim());
       isStartingVoiceRef.current = true;
       const rec = new SpeechRec();
       rec.lang = targetLocale;
@@ -870,8 +987,8 @@ export function UasAiCopilot({
         setInterimTranscript("");
         if (flushed) {
           setInputPrompt(flushed);
-          void handleSendPrompt(flushed);
         }
+        textInputRef.current?.focus();
       };
 
       recognitionRef.current = rec;
@@ -1825,6 +1942,28 @@ export function UasAiCopilot({
             ? `📄 كشف حساب العميل (${card.partyName || "كافة العملاء"}) جاهز للطباعة وتصدير PDF.`
             : `📄 Client statement for (${card.partyName || "All Clients"}) is ready for export.`;
           onNavigateTab("customers");
+        } else if (card.operationType === "CLEANUP_DUMMY_PROJECTS") {
+          const rawIds = Array.isArray(p.projectIds) ? p.projectIds.map((x) => String(x)) : [];
+          const allowedDummyIds = new Set(
+            identifyDummyTestProjects(state.projects || [])
+              .filter((c) => rawIds.length === 0 || rawIds.includes(c.id))
+              .map((c) => c.id)
+          );
+          const nextState: UasBootstrapState = {
+            ...state,
+            projects: (state.projects || []).filter((pr) => !allowedDummyIds.has(pr.id)),
+            sales: (state.sales || []).filter((s) => !allowedDummyIds.has(s.projectId)),
+            expenses: (state.expenses || []).filter((e) => !allowedDummyIds.has(e.projectId)),
+            inventoryBatches: (state.inventoryBatches || []).filter(
+              (b) => !allowedDummyIds.has(b.projectId)
+            ),
+          };
+          onApplyState?.(nextState, mergedWorkspaceContext.offlineQueueCount ?? 0);
+          entryNumber = `CLEANUP-${allowedDummyIds.size}`;
+          summaryText = isAr
+            ? `✅ تم تنظيف (${allowedDummyIds.size}) مشروع اختباري/وهمي محلياً بنجاح مع الحفاظ على كافة المشاريع الحقيقية.`
+            : `✅ Locally cleaned up ${allowedDummyIds.size} dummy/test projects while preserving all real projects.`;
+          onNavigateTab("projects");
         } else if (actorUser) {
           const endpointMap: Partial<Record<ConfirmationPreviewCard["operationType"], { endpoint: string; nav: TabId }>> = {
             RECORD_HARVEST_BATCH: { endpoint: "/api/inventory", nav: "inventory" },
@@ -2302,102 +2441,39 @@ export function UasAiCopilot({
             </div>
           </div>
 
-          {/* 4-Tab Switcher: AI Copilot | Threads & Archive | Live Diagnostics | User Manual */}
-          <div className="flex border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 text-xs font-black">
-            <button
-              type="button"
-              onClick={() => setActivePane("copilot")}
-              className={`flex-1 py-2.5 px-2 border-b-2 flex items-center justify-center gap-1.5 transition ${
-                activePane === "copilot"
-                  ? "border-emerald-600 text-emerald-600 dark:text-emerald-400 bg-white dark:bg-slate-900"
-                  : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-              }`}
-            >
-              <Cpu className="w-3.5 h-3.5" />
-              <span>{isAr ? "المساعد الذكي" : "AI Copilot"}</span>
-            </button>
-
-            <button
-              type="button"
-              data-testid="copilot-threads-tab"
-              onClick={() => {
-                setAllThreads(loadAllThreads(currentUser?.id));
-                setActivePane("threads");
+          {/* Accessible Compact View Dropdown Switcher */}
+          <div className="px-3.5 py-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 flex items-center justify-between gap-2">
+            <label htmlFor="uas-copilot-pane-select" className="text-[11px] font-black text-slate-500 dark:text-slate-400 shrink-0">
+              {isAr ? "النافذة:" : "View:"}
+            </label>
+            <select
+              id="uas-copilot-pane-select"
+              data-testid="copilot-pane-select"
+              value={activePane}
+              onChange={(e) => {
+                const next = e.target.value as "copilot" | "threads" | "support" | "manual" | "memory" | "archive";
+                setActivePane(next);
+                if (next === "threads") {
+                  setAllThreads(loadAllThreads(currentUser?.id));
+                } else if (next === "memory") {
+                  void refreshTenantMemories();
+                } else if (next === "archive") {
+                  void refreshVisionArchive();
+                }
               }}
-              className={`flex-1 py-2.5 px-2 border-b-2 flex items-center justify-center gap-1.5 transition ${
-                activePane === "threads"
-                  ? "border-emerald-600 text-emerald-600 dark:text-emerald-400 bg-white dark:bg-slate-900"
-                  : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-              }`}
+              className="flex-1 min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-black text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
             >
-              <FolderClock className="w-3.5 h-3.5" />
-              <span>{isAr ? "السجلات والأرشيف" : "Threads & Archive"}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActivePane("support")}
-              className={`flex-1 py-2.5 px-2 border-b-2 flex items-center justify-center gap-1.5 transition ${
-                activePane === "support"
-                  ? "border-emerald-600 text-emerald-600 dark:text-emerald-400 bg-white dark:bg-slate-900"
-                  : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-              }`}
-            >
-              <HelpCircle className="w-3.5 h-3.5" />
-              <span>{isAr ? "التشخيص والدعم" : "Diagnostics"}</span>
-            </button>
-
-            <button
-              type="button"
-              data-testid="copilot-user-manual-tab"
-              onClick={() => setActivePane("manual")}
-              className={`flex-1 py-2.5 px-2 border-b-2 flex items-center justify-center gap-1.5 transition ${
-                activePane === "manual"
-                  ? "border-emerald-600 text-emerald-600 dark:text-emerald-400 bg-white dark:bg-slate-900"
-                  : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-              }`}
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              <span>{isAr ? "دليل (7)" : "Manual (7)"}</span>
-            </button>
-
-            <button
-              type="button"
-              data-testid="copilot-memory-tab"
-              onClick={() => {
-                setActivePane("memory");
-                void refreshTenantMemories();
-              }}
-              className={`flex-1 py-2.5 px-2 border-b-2 flex items-center justify-center gap-1.5 transition ${
-                activePane === "memory"
-                  ? "border-emerald-600 text-emerald-600 dark:text-emerald-400 bg-white dark:bg-slate-900"
-                  : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-              }`}
-            >
-              <Brain className="w-3.5 h-3.5" />
-              <span>
+              <option value="copilot">{isAr ? "🤖 المساعد الذكي" : "🤖 AI Copilot"}</option>
+              <option value="threads">{isAr ? "🗂️ السجلات والأرشيف" : "🗂️ Threads & Archive"}</option>
+              <option value="support">{isAr ? "🩺 التشخيص والدعم" : "🩺 Diagnostics & Support"}</option>
+              <option value="manual">{isAr ? "📖 دليل المستخدم (7)" : "📖 User Manual (7)"}</option>
+              <option value="memory">
                 {isAr
-                  ? `ذاكرة المساعد (${memories.filter((m) => m.active).length})`
-                  : `Memory (${memories.filter((m) => m.active).length})`}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              data-testid="copilot-archive-tab"
-              onClick={() => {
-                setActivePane("archive");
-                void refreshVisionArchive();
-              }}
-              className={`flex-1 py-2.5 px-2 border-b-2 flex items-center justify-center gap-1.5 transition ${
-                activePane === "archive"
-                  ? "border-emerald-600 text-emerald-600 dark:text-emerald-400 bg-white dark:bg-slate-900"
-                  : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-              }`}
-            >
-              <ImageIcon className="w-3.5 h-3.5" />
-              <span>{isAr ? "أرشيف المسح" : "Scans"}</span>
-            </button>
+                  ? `🧠 ذاكرة المساعد (${memories.filter((m) => m.active).length})`
+                  : `🧠 Copilot Memory (${memories.filter((m) => m.active).length})`}
+              </option>
+              <option value="archive">{isAr ? "🖼️ أرشيف المسح البصري" : "🖼️ Vision Scans Archive"}</option>
+            </select>
           </div>
 
           {/* =============================================================== */}
@@ -2575,18 +2651,29 @@ export function UasAiCopilot({
               </div>
 
               <div className="flex-1 overflow-y-auto p-3.5 space-y-3 max-h-[52vh]">
-                {/* Quick suggestion chips */}
-                <div className="flex flex-wrap gap-1.5">
-                  {quickPrompts.map((qp, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => handleSendPrompt(qp)}
-                      className="text-[11px] px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-emerald-500/15 hover:text-emerald-700 dark:hover:text-emerald-300 border border-slate-200 dark:border-slate-700 transition text-start"
-                    >
-                      {qp}
-                    </button>
-                  ))}
+                {/* Quick Actions Dropdown */}
+                <div className="flex items-center gap-2">
+                  <select
+                    data-testid="copilot-quick-actions-select"
+                    value=""
+                    disabled={busy}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val) {
+                        void handleSendPrompt(val);
+                      }
+                    }}
+                    className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100/90 dark:bg-slate-800 px-3 py-1.5 text-[11px] font-bold text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                  >
+                    <option value="">
+                      {isAr ? "⚡ اختر أمراً أو إجراءً سريعاً..." : "⚡ Select a Quick Action / Prompt..."}
+                    </option>
+                    {quickPrompts.map((qp, idx) => (
+                      <option key={idx} value={qp}>
+                        {qp}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Messages */}
@@ -2703,8 +2790,16 @@ export function UasAiCopilot({
                                   {audioLoadingMsgId === msg.id
                                     ? isAr ? "جاري التوليد..." : "Loading..."
                                     : speakingMsgId === msg.id
-                                    ? isAr ? "إيقاف" : "Stop"
-                                    : isAr ? "استماع" : "Listen"}
+                                    ? speakingProgress && speakingProgress.total > 1
+                                      ? isAr
+                                        ? `إيقاف (${speakingProgress.current}/${speakingProgress.total})`
+                                        : `Stop (${speakingProgress.current}/${speakingProgress.total})`
+                                      : isAr
+                                      ? "إيقاف"
+                                      : "Stop"
+                                    : isAr
+                                    ? "استماع"
+                                    : "Listen"}
                                 </span>
                               </button>
                             </div>
@@ -3369,24 +3464,31 @@ export function UasAiCopilot({
                         </div>
                       )}
 
-                      {/* Citations & Navigation Links */}
+                      {/* Citations & Navigation Links Dropdown */}
                       {msg.citations && msg.citations.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-1.5 pt-1.5">
-                          <span className="text-[10px] font-bold text-slate-400">
-                            {isAr ? "المراجع والروابط:" : "Citations & Links:"}
-                          </span>
-                          {msg.citations.map((c, i) => (
-                            <button
-                              key={i}
-                              type="button"
-                              data-testid={`citation-link-${i}`}
-                              onClick={() => onNavigateTab(c.tab)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-teal-500/15 hover:bg-teal-500/25 text-teal-700 dark:text-teal-300 font-bold text-[11px] border border-teal-500/20 transition"
-                            >
-                              <ArrowUpRight className="w-3 h-3" />
-                              <span>{isAr ? c.labelAr : c.labelEn}</span>
-                            </button>
-                          ))}
+                        <div className="pt-1.5">
+                          <select
+                            data-testid={`copilot-citations-select-${msg.id}`}
+                            value=""
+                            onChange={(e) => {
+                              const nextTab = e.target.value as TabId;
+                              if (nextTab) {
+                                onNavigateTab(nextTab);
+                              }
+                            }}
+                            className="w-full min-h-[38px] rounded-xl bg-teal-500/10 border border-teal-500/25 px-2.5 py-1 text-[11px] font-bold text-teal-800 dark:text-teal-200 focus:outline-none focus:ring-2 focus:ring-teal-500/40"
+                          >
+                            <option value="">
+                              {isAr
+                                ? `🔗 المراجع والروابط (${msg.citations.length}) — اختر للانتقال`
+                                : `🔗 Citations & Links (${msg.citations.length}) — Select to navigate`}
+                            </option>
+                            {msg.citations.map((c, i) => (
+                              <option key={i} value={c.tab}>
+                                ↗ {isAr ? c.labelAr : c.labelEn}
+                              </option>
+                            ))}
+                          </select>
                         </div>
                       )}
                     </div>
@@ -3621,10 +3723,12 @@ export function UasAiCopilot({
                   <span>
                     {listening
                       ? interimTranscript
-                        ? `🎙️ ${interimTranscript.slice(0, 32)}...`
+                        ? isAr
+                          ? `🎙️ ${interimTranscript.slice(0, 26)}... (أوقف المايك ثم اضغط إرسال)`
+                          : `🎙️ ${interimTranscript.slice(0, 26)}... (stop mic & tap Send)`
                         : isAr
-                        ? "🎙️ جاري الاستماع... تحدث الآن"
-                        : "🎙️ Listening... speak now"
+                        ? "🎙️ جاري الاستماع... تحدث بهدوء ثم اضغط إرسال"
+                        : "🎙️ Listening... speak freely, then tap Send"
                       : isAr
                       ? "بوابة تأكيد القيود مفعلة 🛡️"
                       : "Mandatory Write Gate Active 🛡️"}
@@ -4066,22 +4170,22 @@ export function UasAiCopilot({
                 </div>
               ) : (
                 <>
-                  {/* Chapter Pills (1..7) */}
-                  <div className="flex flex-wrap gap-1.5">
-                    {UAS_SUPPORT_CHAPTERS.map((ch) => (
-                      <button
-                        key={ch.id}
-                        type="button"
-                        onClick={() => setSelectedChapterNum(ch.chapterNumber)}
-                        className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition ${
-                          selectedChapterNum === ch.chapterNumber
-                            ? "bg-emerald-600 text-white border-emerald-600"
-                            : "bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                        }`}
-                      >
-                        {isAr ? `فصل ${ch.chapterNumber}` : `Ch ${ch.chapterNumber}`}
-                      </button>
-                    ))}
+                  {/* Chapter Dropdown (1..7) */}
+                  <div>
+                    <select
+                      data-testid="copilot-manual-chapter-select"
+                      value={selectedChapterNum}
+                      onChange={(e) => setSelectedChapterNum(Number(e.target.value))}
+                      className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-black text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                    >
+                      {UAS_SUPPORT_CHAPTERS.map((ch) => (
+                        <option key={ch.id} value={ch.chapterNumber}>
+                          {isAr
+                            ? `الفصل ${ch.chapterNumber}: ${ch.titleAr}`
+                            : `Chapter ${ch.chapterNumber}: ${ch.titleEn}`}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   {/* Active Chapter Header & Sections */}

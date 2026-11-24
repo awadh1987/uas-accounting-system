@@ -709,24 +709,42 @@ export function ProcurementTab({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5 text-xs">
-            {[
-              { id: "pos" as const, label: `أوامر الشراء والاستلام (${pos.length})`, Icon: ClipboardCheck },
-              { id: "bills" as const, label: `فواتير الموردين (${bills.length})`, Icon: FileText },
-              { id: "payments" as const, label: `سندات الصرف (${payments.length})`, Icon: Wallet },
-              { id: "vendors" as const, label: `دليل الموردين (${vendors.length})`, Icon: Store },
-            ].map(({ id, label, Icon }) => (
-              <button
-                key={id}
-                onClick={() => setSubTab(id)}
-                className={`px-3 py-2 rounded-xl font-bold flex items-center gap-1.5 ${
-                  subTab === id ? "accent-bg" : "border border-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
-                }`}
+          <div className="flex flex-wrap items-center gap-1.5 text-xs w-full md:w-auto">
+            {/* Mobile / Narrow Viewport Procurement Sub-Tab Dropdown */}
+            <div className="md:hidden flex-1 min-w-[200px]">
+              <select
+                data-testid="procurement-subtab-select"
+                aria-label="أقسام المشتريات"
+                value={subTab}
+                onChange={(e) => setSubTab(e.target.value as "pos" | "bills" | "payments" | "vendors")}
+                className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-extrabold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
               >
-                <Icon className="w-3.5 h-3.5" />
-                <span>{label}</span>
-              </button>
-            ))}
+                <option value="pos">{`أوامر الشراء والاستلام (${pos.length})`}</option>
+                <option value="bills">{`فواتير الموردين (${bills.length})`}</option>
+                <option value="payments">{`سندات الصرف (${payments.length})`}</option>
+                <option value="vendors">{`دليل الموردين (${vendors.length})`}</option>
+              </select>
+            </div>
+
+            <div className="hidden md:flex flex-wrap items-center gap-1.5">
+              {[
+                { id: "pos" as const, label: `أوامر الشراء والاستلام (${pos.length})`, Icon: ClipboardCheck },
+                { id: "bills" as const, label: `فواتير الموردين (${bills.length})`, Icon: FileText },
+                { id: "payments" as const, label: `سندات الصرف (${payments.length})`, Icon: Wallet },
+                { id: "vendors" as const, label: `دليل الموردين (${vendors.length})`, Icon: Store },
+              ].map(({ id, label, Icon }) => (
+                <button
+                  key={id}
+                  onClick={() => setSubTab(id)}
+                  className={`px-3 py-2 rounded-xl font-bold flex items-center gap-1.5 ${
+                    subTab === id ? "accent-bg" : "border border-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
 
             {!readOnly && (
               <button

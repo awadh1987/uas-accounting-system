@@ -479,7 +479,19 @@ export function FinancialReportsTab({
           </div>
 
           <div className="flex flex-wrap gap-2 no-print items-center">
-            <div className="inline-flex rounded-xl border border-slate-300 dark:border-slate-700 overflow-hidden text-[11px] font-bold">
+            <div className="md:hidden w-full sm:w-auto">
+              <select
+                data-testid="financial-currency-mode-select"
+                aria-label="وضع عرض العملة"
+                value={currencyDisplayMode}
+                onChange={(e) => setCurrencyDisplayMode(e.target.value as "BASE_YER" | "TX_CURRENCY")}
+                className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+              >
+                <option value="BASE_YER">عملة الأساس (YER)</option>
+                <option value="TX_CURRENCY">عملة المعاملة (FX)</option>
+              </select>
+            </div>
+            <div className="hidden md:inline-flex rounded-xl border border-slate-300 dark:border-slate-700 overflow-hidden text-[11px] font-bold">
               <button
                 type="button"
                 onClick={() => setCurrencyDisplayMode("BASE_YER")}
@@ -803,30 +815,53 @@ export function FinancialReportsTab({
         </div>
 
         {/* Sub-Report Switcher */}
-        <div className="flex flex-wrap gap-2 text-xs no-print">
-          {[
-            { id: "tb" as const, label: "ميزان المراجعة (Trial Balance)" },
-            { id: "pl" as const, label: "قائمة الدخل (Profit & Loss)" },
-            { id: "bs" as const, label: "الميزانية العمومية (Balance Sheet)" },
-            { id: "cf" as const, label: "التدفقات النقدية (Cash Flow IAS 7)" },
-            { id: "equity" as const, label: "التغيرات في حقوق الملكية" },
-            { id: "aging" as const, label: "أعمار الذمم (AR/AP Aging)" },
-            { id: "statements" as const, label: "كشوف الحسابات التفصيلية" },
-            { id: "tax" as const, label: "ملخص الضرائب (VAT / WHT)" },
-            { id: "ratios" as const, label: "المؤشرات والنسب المالية" },
-            { id: "budget" as const, label: "الموازنة مقابل الفعلي (Budget Variance)" },
-            { id: "cc" as const, label: "تقرير مراكز التكلفة (Cost Center P&L)" },
-          ].map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setReportTab(t.id)}
-              className={`px-3.5 py-2 rounded-xl font-extrabold ${
-                reportTab === t.id ? "accent-bg" : "border border-slate-300"
-              }`}
+        <div className="no-print">
+          <div className="md:hidden">
+            <select
+              data-testid="financial-report-tab-select"
+              aria-label="اختر التقرير المالي"
+              value={reportTab}
+              onChange={(e) => setReportTab(e.target.value as typeof reportTab)}
+              className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-extrabold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
             >
-              {t.label}
-            </button>
-          ))}
+              <option value="tb">ميزان المراجعة (Trial Balance)</option>
+              <option value="pl">قائمة الدخل (Profit &amp; Loss)</option>
+              <option value="bs">الميزانية العمومية (Balance Sheet)</option>
+              <option value="cf">التدفقات النقدية (Cash Flow IAS 7)</option>
+              <option value="equity">التغيرات في حقوق الملكية</option>
+              <option value="aging">أعمار الذمم (AR/AP Aging)</option>
+              <option value="statements">كشوف الحسابات التفصيلية</option>
+              <option value="tax">ملخص الضرائب (VAT / WHT)</option>
+              <option value="ratios">المؤشرات والنسب المالية</option>
+              <option value="budget">الموازنة مقابل الفعلي (Budget Variance)</option>
+              <option value="cc">تقرير مراكز التكلفة (Cost Center P&amp;L)</option>
+            </select>
+          </div>
+          <div className="hidden md:flex flex-wrap gap-2 text-xs">
+            {[
+              { id: "tb" as const, label: "ميزان المراجعة (Trial Balance)" },
+              { id: "pl" as const, label: "قائمة الدخل (Profit & Loss)" },
+              { id: "bs" as const, label: "الميزانية العمومية (Balance Sheet)" },
+              { id: "cf" as const, label: "التدفقات النقدية (Cash Flow IAS 7)" },
+              { id: "equity" as const, label: "التغيرات في حقوق الملكية" },
+              { id: "aging" as const, label: "أعمار الذمم (AR/AP Aging)" },
+              { id: "statements" as const, label: "كشوف الحسابات التفصيلية" },
+              { id: "tax" as const, label: "ملخص الضرائب (VAT / WHT)" },
+              { id: "ratios" as const, label: "المؤشرات والنسب المالية" },
+              { id: "budget" as const, label: "الموازنة مقابل الفعلي (Budget Variance)" },
+              { id: "cc" as const, label: "تقرير مراكز التكلفة (Cost Center P&L)" },
+            ].map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setReportTab(t.id)}
+                className={`px-3.5 py-2 rounded-xl font-extrabold ${
+                  reportTab === t.id ? "accent-bg" : "border border-slate-300"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {loading && <div className="py-10 text-center text-xs text-slate-500">جاري احتساب القوائم المالية...</div>}

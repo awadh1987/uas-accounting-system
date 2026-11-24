@@ -1285,115 +1285,158 @@ export function SystemTab({
   return (
     <section className="space-y-6">
       {/* Admin Sub-Tabs Navigation */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 dark:border-slate-700/80 pb-3 no-print">
-        <button
-          type="button"
-          onClick={() => handleSelectSubTab("branding")}
-          className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-            activeSubTab === "branding"
-              ? "accent-bg shadow-sm"
-              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-          }`}
-        >
-          <Palette className="w-4 h-4" />
-          <span>{isAr ? "الهوية المؤسسية وإدارة الصفحة (Branding & CMS)" : "Branding & Landing CMS"}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => handleSelectSubTab("users")}
-          className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-            activeSubTab === "users"
-              ? "accent-bg shadow-sm"
-              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-          }`}
-        >
-          <Shield className="w-4 h-4" />
-          <span>{isAr ? "المستخدمين وحوكمة الصلاحيات (Users & RBAC)" : "Users & RBAC Matrix"}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => handleSelectSubTab("accounting")}
-          className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-            activeSubTab === "accounting"
-              ? "accent-bg shadow-sm"
-              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-          }`}
-        >
-          <FileText className="w-4 h-4" />
-          <span>{isAr ? "الإعدادات المحاسبية والتشغيلية (Accounting Settings)" : "Accounting & Operational Settings"}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => handleSelectSubTab("tenant-config")}
-          className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-            activeSubTab === "tenant-config"
-              ? "accent-bg shadow-sm"
-              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-          }`}
-        >
-          <Globe className="w-4 h-4" />
-          <span>{isAr ? "إعدادات مساحة المنشأة (Tenant Config)" : "Tenant Admin Config"}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => handleSelectSubTab("devices")}
-          className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-            activeSubTab === "devices"
-              ? "accent-bg shadow-sm"
-              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-          }`}
-        >
-          <Smartphone className="w-4 h-4" />
-          <span>{isAr ? "أجهزة المنشأة والمزامنة (Devices)" : "Tenant Devices Control"}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => handleSelectSubTab("security")}
-          className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-            activeSubTab === "security"
-              ? "accent-bg shadow-sm"
-              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-          }`}
-        >
-          <Sliders className="w-4 h-4" />
-          <span>{isAr ? "إعدادات النظام والأمان والربط (Settings & Connectivity)" : "System Settings & Connectivity"}</span>
-        </button>
-        {isPlatformSuperadmin && (
-          <>
-            <button
-              type="button"
-              onClick={() => handleSelectSubTab("superadmin-licenses")}
-              className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-                activeSubTab === "superadmin-licenses"
-                  ? "accent-bg shadow-sm"
-                  : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
-              }`}
-            >
-              <KeyRound className="w-4 h-4" />
-              <span>
-                {isAr
-                  ? "مولد التراخيص والمنشآت (Superadmin)"
-                  : "Superadmin License Generator"}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSelectSubTab("control-panel")}
-              className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
-                activeSubTab === "control-panel"
-                  ? "accent-bg shadow-sm"
-                  : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30"
-              }`}
-            >
-              <ShieldCheck className="w-4 h-4" />
-              <span>
-                {isAr
-                  ? "لوحة تحكم المنصة (الحوكمة الكاملة)"
-                  : "Platform Control Panel"}
-              </span>
-            </button>
-          </>
-        )}
+      <div className="border-b border-slate-200 dark:border-slate-700/80 pb-3 no-print">
+        {/* Mobile / Narrow Viewport Accessible Admin Dropdown */}
+        <div className="md:hidden">
+          <select
+            data-testid="system-subtab-select"
+            aria-label={isAr ? "قسم إدارة النظام" : "System Administration Section"}
+            value={activeSubTab}
+            onChange={(e) => handleSelectSubTab(e.target.value as typeof activeSubTab)}
+            className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-extrabold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+          >
+            <option value="branding">
+              {isAr ? "الهوية المؤسسية وإدارة الصفحة (Branding & CMS)" : "Branding & Landing CMS"}
+            </option>
+            <option value="users">
+              {isAr ? "المستخدمين وحوكمة الصلاحيات (Users & RBAC)" : "Users & RBAC Matrix"}
+            </option>
+            <option value="accounting">
+              {isAr ? "الإعدادات المحاسبية والتشغيلية (Accounting Settings)" : "Accounting & Operational Settings"}
+            </option>
+            <option value="tenant-config">
+              {isAr ? "إعدادات مساحة المنشأة (Tenant Config)" : "Tenant Admin Config"}
+            </option>
+            <option value="devices">
+              {isAr ? "أجهزة المنشأة والمزامنة (Devices)" : "Tenant Devices Control"}
+            </option>
+            <option value="security">
+              {isAr ? "إعدادات النظام والأمان والربط (Settings & Connectivity)" : "System Settings & Connectivity"}
+            </option>
+            {isPlatformSuperadmin && (
+              <>
+                <option value="superadmin-licenses">
+                  {isAr ? "مولد التراخيص والمنشآت (Superadmin)" : "Superadmin License Generator"}
+                </option>
+                <option value="control-panel">
+                  {isAr ? "لوحة تحكم المنصة (الحوكمة الكاملة)" : "Platform Control Panel"}
+                </option>
+              </>
+            )}
+          </select>
+        </div>
+
+        {/* Desktop Admin Sub-Tab Strip */}
+        <div className="hidden md:flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => handleSelectSubTab("branding")}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+              activeSubTab === "branding"
+                ? "accent-bg shadow-sm"
+                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+            }`}
+          >
+            <Palette className="w-4 h-4" />
+            <span>{isAr ? "الهوية المؤسسية وإدارة الصفحة (Branding & CMS)" : "Branding & Landing CMS"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSelectSubTab("users")}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+              activeSubTab === "users"
+                ? "accent-bg shadow-sm"
+                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+            }`}
+          >
+            <Shield className="w-4 h-4" />
+            <span>{isAr ? "المستخدمين وحوكمة الصلاحيات (Users & RBAC)" : "Users & RBAC Matrix"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSelectSubTab("accounting")}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+              activeSubTab === "accounting"
+                ? "accent-bg shadow-sm"
+                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+            }`}
+          >
+            <FileText className="w-4 h-4" />
+            <span>{isAr ? "الإعدادات المحاسبية والتشغيلية (Accounting Settings)" : "Accounting & Operational Settings"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSelectSubTab("tenant-config")}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+              activeSubTab === "tenant-config"
+                ? "accent-bg shadow-sm"
+                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+            }`}
+          >
+            <Globe className="w-4 h-4" />
+            <span>{isAr ? "إعدادات مساحة المنشأة (Tenant Config)" : "Tenant Admin Config"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSelectSubTab("devices")}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+              activeSubTab === "devices"
+                ? "accent-bg shadow-sm"
+                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+            }`}
+          >
+            <Smartphone className="w-4 h-4" />
+            <span>{isAr ? "أجهزة المنشأة والمزامنة (Devices)" : "Tenant Devices Control"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSelectSubTab("security")}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+              activeSubTab === "security"
+                ? "accent-bg shadow-sm"
+                : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+            }`}
+          >
+            <Sliders className="w-4 h-4" />
+            <span>{isAr ? "إعدادات النظام والأمان والربط (Settings & Connectivity)" : "System Settings & Connectivity"}</span>
+          </button>
+          {isPlatformSuperadmin && (
+            <>
+              <button
+                type="button"
+                onClick={() => handleSelectSubTab("superadmin-licenses")}
+                className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+                  activeSubTab === "superadmin-licenses"
+                    ? "accent-bg shadow-sm"
+                    : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
+                }`}
+              >
+                <KeyRound className="w-4 h-4" />
+                <span>
+                  {isAr
+                    ? "مولد التراخيص والمنشآت (Superadmin)"
+                    : "Superadmin License Generator"}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectSubTab("control-panel")}
+                className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${
+                  activeSubTab === "control-panel"
+                    ? "accent-bg shadow-sm"
+                    : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30"
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>
+                  {isAr
+                    ? "لوحة تحكم المنصة (الحوكمة الكاملة)"
+                    : "Platform Control Panel"}
+                </span>
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {isPlatformSuperadmin && activeSubTab === "superadmin-licenses" && SuperadminLicenseGeneratorPanel && (

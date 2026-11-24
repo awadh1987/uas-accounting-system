@@ -13,7 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import {
-  formatSpokenTextForGeminiTts,
+  splitTextForSequentialSpeech,
   type CopilotDialectMode,
 } from "@/lib/ai/yemeniLocalization";
 
@@ -47,6 +47,31 @@ function wrapPcm16ToWavBuffer(pcmBytes: Buffer, sampleRate = 24000, channels = 1
   return Buffer.concat([header, pcmBytes]);
 }
 
+function concatWavBuffers(wavBuffers: Buffer[]): Buffer {
+  if (wavBuffers.length === 1) return wavBuffers[0];
+  const pcmParts: Buffer[] = [];
+  let sampleRate = 24000;
+  let channels = 1;
+
+  for (let idx = 0; idx < wavBuffers.length; idx++) {
+    const buf = wavBuffers[idx];
+    if (
+      buf.length > 44 &&
+      buf.subarray(0, 4).toString("ascii") === "RIFF" &&
+      buf.subarray(8, 12).toString("ascii") === "WAVE"
+    ) {
+      if (idx === 0) {
+        channels = buf.readUInt16LE(22) || 1;
+        sampleRate = buf.readUInt32LE(24) || 24000;
+      }
+      pcmParts.push(buf.subarray(44));
+    } else {
+      pcmParts.push(buf);
+    }
+  }
+  return wrapPcm16ToWavBuffer(Buffer.concat(pcmParts), sampleRate, channels);
+}
+
 export async function synthesizeGeminiSpeechAudio(params: {
   text: string;
   lang?: "ar" | "en";
@@ -66,8 +91,12 @@ export async function synthesizeGeminiSpeechAudio(params: {
       ? "ar"
       : "en";
   const dialect: CopilotDialectMode = params.dialect === "msa" ? "msa" : "yemeni";
-  const spoken = formatSpokenTextForGeminiTts(params.text, { lang, dialect, maxChars: 680 });
-  if (!spoken) {
+  const chunks = splitTextForSequentialSpeech(params.text, {
+    lang,
+    dialect,
+    maxChunkChars: 650,
+  });
+  if (chunks.length === 0) {
     return { ok: false, reason: "EMPTY_SPOKEN_TEXT" };
   }
 
@@ -92,39 +121,53 @@ export async function synthesizeGeminiSpeechAudio(params: {
 
   for (const model of modelQueue) {
     try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: `${deliveryInstruction}\n\n${spoken}`,
-        config: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName },
+      const chunkWavBuffers: Buffer[] = [];
+      let allSucceeded = true;
+
+      for (const chunkText of chunks) {
+        const response = await ai.models.generateContent({
+          model,
+          contents: `${deliveryInstruction}\n\n${chunkText}`,
+          config: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName },
+              },
             },
           },
-        },
-      });
-      const audioPart = response.candidates?.[0]?.content?.parts?.find(
-        (p) => Boolean(p.inlineData?.data)
-      );
-      const rawData = audioPart?.inlineData?.data;
-      const mime = audioPart?.inlineData?.mimeType || "audio/wav";
-      if (!rawData) {
-        lastError = `${model}: EMPTY_AUDIO_PART`;
-        continue;
+        });
+        const audioPart = response.candidates?.[0]?.content?.parts?.find(
+          (p) => Boolean(p.inlineData?.data)
+        );
+        const rawData = audioPart?.inlineData?.data;
+        const mime = audioPart?.inlineData?.mimeType || "audio/wav";
+        if (!rawData) {
+          lastError = `${model}: EMPTY_AUDIO_PART`;
+          allSucceeded = false;
+          break;
+        }
+
+        const decoded = Buffer.from(rawData, "base64");
+        if (
+          mime.toLowerCase().includes("wav") ||
+          (decoded.length > 4 && decoded.subarray(0, 4).toString("ascii") === "RIFF")
+        ) {
+          chunkWavBuffers.push(decoded);
+        } else {
+          const rateMatch = mime.match(/rate=(\d+)/i);
+          const sampleRate = rateMatch ? Number(rateMatch[1]) : 24000;
+          chunkWavBuffers.push(wrapPcm16ToWavBuffer(decoded, sampleRate, 1));
+        }
       }
 
-      const decoded = Buffer.from(rawData, "base64");
-      let wavBuffer: Buffer;
-      if (mime.toLowerCase().includes("wav") || (decoded.length > 4 && decoded.subarray(0, 4).toString("ascii") === "RIFF")) {
-        wavBuffer = decoded;
-      } else {
-        const rateMatch = mime.match(/rate=(\d+)/i);
-        const sampleRate = rateMatch ? Number(rateMatch[1]) : 24000;
-        wavBuffer = wrapPcm16ToWavBuffer(decoded, sampleRate, 1);
+      if (allSucceeded && chunkWavBuffers.length > 0) {
+        return {
+          ok: true,
+          wavBuffer: concatWavBuffers(chunkWavBuffers),
+          model,
+        };
       }
-
-      return { ok: true, wavBuffer, model };
     } catch (err: unknown) {
       lastError = err instanceof Error ? err.message : String(err);
       console.warn(`[GeminiSpeak] Model ${model} failed:`, lastError.slice(0, 200));

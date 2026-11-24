@@ -84,12 +84,12 @@ export function formatSpokenTextForGeminiTts(
   opts: { lang?: "ar" | "en"; dialect?: CopilotDialectMode; maxChars?: number } = {}
 ): string {
   const lang = opts.lang ?? (/[\u0600-\u06FF]/.test(rawText) ? "ar" : "en");
-  const maxChars = opts.maxChars ?? 650;
+  const maxChars = opts.maxChars ?? 12000;
 
   let clean = String(rawText ?? "")
     .replace(/\[[^\]]+\]\([^)]+\)/g, " ")
     .replace(/https?:\/\/\S+/g, " ")
-    .replace(/[`*_~>#|•✅✓❌⛔⚠️🚨🔍📊📈📦🛡️🔒🔓📡🧠💳💰🏦👷🌱📄❓📖]/g, " ")
+    .replace(/[`*_~>#|•✅✓❌⛔⚠️🚨🔍📊📈📦🛡️🔒🔓📡🧠💳💰🏦👷🌱📄❓📖📷📵🗂️🔗⚡]/g, " ")
     .replace(/\r?\n+/g, "، ")
     .replace(/\s+/g, " ")
     .trim();
@@ -111,4 +111,67 @@ export function formatSpokenTextForGeminiTts(
   }
 
   return clean.slice(0, maxChars).trim();
+}
+
+/**
+ * Splits a full Copilot response into natural sentence/clause chunks so Gemini TTS
+ * and Web SpeechSynthesis play the ENTIRE response from start to finish without
+ * ever truncating mid-reply or stalling browser utterances.
+ */
+export function splitTextForSequentialSpeech(
+  rawText: string,
+  opts: { lang?: "ar" | "en"; dialect?: CopilotDialectMode; maxChunkChars?: number } = {}
+): string[] {
+  const fullClean = formatSpokenTextForGeminiTts(rawText, {
+    ...opts,
+    maxChars: 12000,
+  });
+  if (!fullClean) return [];
+
+  const maxChunk = Math.max(140, opts.maxChunkChars ?? 420);
+  if (fullClean.length <= maxChunk) return [fullClean];
+
+  // Break cleanly along sentence/clause delimiters while keeping punctuation attached
+  const clauses = fullClean
+    .split(/(?<=[.!؟?؛،\n])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const chunks: string[] = [];
+  let buffer = "";
+
+  const pushWordSplit = (longStr: string) => {
+    const words = longStr.split(/\s+/).filter(Boolean);
+    let piece = "";
+    for (const w of words) {
+      if (piece && piece.length + 1 + w.length > maxChunk) {
+        chunks.push(piece);
+        piece = w;
+      } else {
+        piece = piece ? `${piece} ${w}` : w;
+      }
+    }
+    if (piece) chunks.push(piece);
+  };
+
+  for (const clause of clauses) {
+    if (clause.length > maxChunk) {
+      if (buffer) {
+        chunks.push(buffer);
+        buffer = "";
+      }
+      pushWordSplit(clause);
+      continue;
+    }
+
+    if (buffer && buffer.length + 1 + clause.length > maxChunk) {
+      chunks.push(buffer);
+      buffer = clause;
+    } else {
+      buffer = buffer ? `${buffer} ${clause}` : clause;
+    }
+  }
+  if (buffer) chunks.push(buffer);
+
+  return chunks;
 }

@@ -1358,8 +1358,34 @@ export function UasAppShell() {
 
               {/* Unified Hub Sub-Tab Bar */}
               {visibleSubTabs.length > 0 && (
-                <div className="card-surface rounded-2xl p-2 flex flex-wrap items-center justify-between gap-2 no-print">
-                  <div className="flex flex-wrap items-center gap-1.5">
+                <div className="card-surface rounded-2xl p-2 flex flex-col md:flex-row md:flex-wrap md:items-center md:justify-between gap-2 no-print">
+                  {/* Mobile / Narrow Viewport Accessible Sub-Tab Dropdown */}
+                  <div className="md:hidden w-full">
+                    <select
+                      data-testid="app-subtabs-select"
+                      aria-label={lang === "ar" ? "القسم الفرعي" : "Module Section"}
+                      value={
+                        visibleSubTabs.some(
+                          (sub) => sub.id === activeTab || (sub.id === "sales" && activeTab === "customers")
+                        )
+                          ? activeTab === "customers"
+                            ? "sales"
+                            : activeTab
+                          : visibleSubTabs[0]?.id ?? ""
+                      }
+                      onChange={(e) => navigateToTab(e.target.value as TabId)}
+                      className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-extrabold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                    >
+                      {visibleSubTabs.map((sub) => (
+                        <option key={sub.id} value={sub.id}>
+                          {lang === "ar" ? sub.labelAr : sub.labelEn}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Desktop Horizontal Sub-Tab Bar */}
+                  <div className="hidden md:flex flex-wrap items-center gap-1.5">
                     {visibleSubTabs.map((sub) => {
                       const isSubActive =
                         activeTab === sub.id ||
@@ -1383,7 +1409,32 @@ export function UasAppShell() {
 
                   {/* Inner toggle inside Commercial -> Sales & Clients */}
                   {(activeTab === "sales" || activeTab === "customers") && (
-                    <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl text-[11px] font-bold">
+                    <>
+                      <div className="md:hidden w-full">
+                        <select
+                          data-testid="sales-view-mode-select"
+                          aria-label={lang === "ar" ? "عرض المبيعات" : "Sales View Mode"}
+                          value={
+                            salesViewMode === "customers" || activeTab === "customers"
+                              ? "customers"
+                              : "sales"
+                          }
+                          onChange={(e) => {
+                            const next = e.target.value as "sales" | "customers";
+                            setSalesViewMode(next);
+                            setActiveTab(next);
+                          }}
+                          className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                        >
+                          <option value="sales">
+                            {lang === "ar" ? "🧾 فواتير المبيعات" : "🧾 Sales Invoices"}
+                          </option>
+                          <option value="customers">
+                            {lang === "ar" ? "👥 كشوفات العملاء" : "👥 Client Ledgers"}
+                          </option>
+                        </select>
+                      </div>
+                      <div className="hidden md:flex items-center gap-1 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl text-[11px] font-bold">
                       <button
                         type="button"
                         onClick={() => {
@@ -1414,7 +1465,8 @@ export function UasAppShell() {
                         <Users className="w-3.5 h-3.5" />
                         <span>{lang === "ar" ? "كشوفات العملاء" : "Client Ledgers"}</span>
                       </button>
-                    </div>
+                      </div>
+                    </>
                   )}
                 </div>
               )}

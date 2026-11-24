@@ -361,6 +361,28 @@ export function parseBilingualAgentIntent(
     };
   }
 
+  // 0.2 Dummy / Test Project Cleanup (Dry-Run Detection or Confirmed Cleanup Card)
+  if (
+    /(?:المشاريع\s+(?:التجريبي[هة]|الوهمي[هة]|الاختباري[هة])|مشاريع\s+(?:تجريبي[هة]|وهمي[هة]|اختباري[هة])|تنظيف\s+المشاريع|حذف\s+المشاريع\s+(?:التجريبي[هة]|الوهمي[هة]|الاختباري[هة])|dummy\s+projects?|test\s+projects?|cleanup\s+(?:dummy|test)\s+projects?)/i.test(
+      norm
+    )
+  ) {
+    const isDryRun =
+      /(?:فحص|معاين[هة]|استعراض|اعرض|عرض|كم\s+عدد|check|scan|inspect|list|dry[- ]?run|preview)/i.test(
+        norm
+      ) && !/(?:نظف|تنظيف|احذف|حذف|امسح|clean(?:up)?|delete|remove|purge)/i.test(norm);
+    return {
+      toolName: "cleanup_dummy_projects",
+      args: { dryRun: isDryRun },
+      thoughtAr: isDryRun
+        ? "تحليل النية: فحص (معاينة أولية) لاكتشاف المشاريع الوهمية أو الاختبارية داخل المنشأة."
+        : "تحليل النية: تجهيز بطاقة تأكيد لتنظيف المشاريع الوهمية والاختبارية مع حماية المشاريع الحقيقية.",
+      thoughtEn: isDryRun
+        ? "Intent parsed: Dry-run scan for leftover dummy or automated-test projects in active tenant."
+        : "Intent parsed: Stage ConfirmationPreviewCard to safely clean up dummy/test projects.",
+    };
+  }
+
   // 1. Check explicit navigation intent ("افتح قسم ...", "انتقل إلى ...", "open ...", "navigate to ...", "go to ...")
   const navMatch = raw.match(
     /^(?:افتح|انتقل\s+(?:إلى|الى)|اذهب\s+(?:إلى|الى)|اعرض\s+(?:قسم|شاشة|تبويب)|open|navigate\s+to|go\s+to|show\s+tab)\s+(.+)$/i

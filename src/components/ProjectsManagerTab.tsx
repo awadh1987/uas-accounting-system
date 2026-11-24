@@ -1074,7 +1074,35 @@ export function ProjectsManagerTab({
                 {/* Harvest Cycles with Lock Switches */}
                 <div>
                   <div className="font-bold text-slate-500 mb-1.5">دورات الحصاد والقطفات (إغلاق الفترة المحاسبية):</div>
-                  <div className="flex flex-wrap gap-2">
+                  {proj.harvestCycles.length > 0 && (
+                    <div className="md:hidden mb-2">
+                      <select
+                        data-testid={`project-cycles-select-${proj.id}`}
+                        aria-label={`دورات الحصاد لمشروع ${proj.name}`}
+                        disabled={readOnly || !canLock}
+                        value=""
+                        onChange={async (e) => {
+                          const cycleName = e.target.value;
+                          if (!cycleName || readOnly || !canLock) return;
+                          await onTogglePeriodLock(`${proj.id}::${cycleName}`);
+                          await loadPortfolioData();
+                        }}
+                        className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 disabled:opacity-65"
+                      >
+                        <option value="">
+                          {readOnly || !canLock
+                            ? "استعراض دورات الحصاد..."
+                            : "اختر دورة حصاد لتبديل الإقفال/الفتح..."}
+                        </option>
+                        {proj.harvestCycles.map((hc) => (
+                          <option key={hc.id} value={hc.name}>
+                            {`${hc.isLocked ? "🔒 مغلقة" : "🔓 مفتوحة"} — ${hc.name}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div className="hidden md:flex flex-wrap gap-2">
                     {proj.harvestCycles.map((hc) => (
                       <button
                         key={hc.id}

@@ -43,7 +43,31 @@ function memoryStorage(): OfflineStorageLike {
 
 describe("Phase 1 — Accounting-Core: 6-Generation COA & Cost Centers", () => {
   after(async () => {
-    await prisma.$disconnect();
+    try {
+      if (createdProjectIds.length > 0) {
+        const invs = await prisma.salesInvoice.findMany({
+          where: { projectId: { in: createdProjectIds } },
+          select: { id: true, journalEntryId: true },
+        });
+        const invIds = invs.map((i) => i.id);
+        if (invIds.length > 0) {
+          await prisma.salesInvoiceItem.deleteMany({ where: { invoiceId: { in: invIds } } });
+          await prisma.salesInvoice.deleteMany({ where: { id: { in: invIds } } });
+        }
+        await prisma.project.deleteMany({ where: { id: { in: createdProjectIds } } });
+      }
+      if (createdCustomerIds.length > 0) {
+        await prisma.customer.deleteMany({ where: { id: { in: createdCustomerIds } } });
+      }
+      if (createdCostCenterIds.length > 0) {
+        await prisma.journalEntryLine.deleteMany({
+          where: { costCenterId: { in: createdCostCenterIds } },
+        });
+        await prisma.costCenter.deleteMany({ where: { id: { in: createdCostCenterIds } } });
+      }
+    } finally {
+      await prisma.$disconnect();
+    }
   });
 
   it("(a) builds the 6-generation hierarchy, rolls up balances and enforces postable leaves", async () => {
