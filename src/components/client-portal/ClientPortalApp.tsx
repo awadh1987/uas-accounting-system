@@ -286,10 +286,10 @@ function apiUrl(path: string): string {
 }
 
 export function ClientPortalApp({
-  onBackHome,
+  onBackHomeAction,
   initialAuthTab,
 }: {
-  onBackHome?: () => void;
+  onBackHomeAction?: () => void;
   initialAuthTab?: "login" | "register";
 }) {
   const [loadingConfig, setLoadingConfig] = useState(true);
@@ -1689,10 +1689,10 @@ export function ClientPortalApp({
                 <span>خروج</span>
               </button>
             )}
-            {onBackHome ? (
+            {onBackHomeAction ? (
               <button
                 type="button"
-                onClick={onBackHome}
+                onClick={onBackHomeAction}
                 className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold inline-flex items-center gap-1"
               >
                 <ArrowRight className="w-3.5 h-3.5" />

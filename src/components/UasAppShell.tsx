@@ -1242,7 +1242,7 @@ export function UasAppShell() {
       {viewMode === "client_portal" ? (
         <ClientPortalApp
           initialAuthTab={clientPortalInitialTab}
-          onBackHome={() => setViewMode("landing")}
+          onBackHomeAction={() => setViewMode("landing")}
         />
       ) : viewMode === "landing" ? (
         <LandingPage
