@@ -89,6 +89,9 @@ describe("Phase 23 — clean sector titles & commercial/inbound-outbound capabil
     assert.ok(shell.includes('data-testid="workspace-sector-tab-commercial"'));
     assert.ok(!shell.includes("المبيعات، المخزون وفرز المحصول، بوابة العملاء، والمحاسبة الشاملة"));
     assert.ok(!shell.includes("السلع الغذائية، غير الغذائية، المحروقات، المستودعات والرحلات (POD)"));
+    assert.ok(shell.includes("pt-2 sm:pt-2.5 md:pt-3"));
+    const css = read("src/app/globals.css");
+    assert.ok(css.includes(".card-surface:not(.fixed):not(.sticky):not(.absolute)"));
   });
 
   it("MultiUnitInventoryPanel supports item card editing, landed cost, bulk import, and inbound/outbound refs", () => {

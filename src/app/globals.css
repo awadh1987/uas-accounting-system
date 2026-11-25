@@ -171,13 +171,21 @@ table tbody tr:hover {
 /* Phase 16: GPU-friendly Pointer-Reactive Light (hover devices & motion-safe only) */
 @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
 
+  .card-surface:not(.fixed):not(.sticky):not(.absolute),
+  .uas-light-card:not(.fixed):not(.sticky):not(.absolute),
+  .uas-light-btn:not(.fixed):not(.sticky):not(.absolute),
+  .uas-light-tab:not(.fixed):not(.sticky):not(.absolute),
+  button.accent-bg:not(.fixed):not(.sticky):not(.absolute),
+  [data-uas-light]:not(.fixed):not(.sticky):not(.absolute) {
+    position: relative;
+  }
+
   .card-surface,
   .uas-light-card,
   .uas-light-btn,
   .uas-light-tab,
   button.accent-bg,
   [data-uas-light] {
-    position: relative;
     isolation: isolate;
   }
 
