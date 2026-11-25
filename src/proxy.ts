@@ -46,6 +46,7 @@ export const config = {
     "/payments",
     "/dashboard",
     "/sales",
+    "/sales/:path*",
     "/inventory",
     "/customers",
     "/accounting",

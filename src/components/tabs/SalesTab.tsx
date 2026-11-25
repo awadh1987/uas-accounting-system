@@ -519,7 +519,7 @@ export function SalesTab({
             }`}
           >
             <TrendingUp className="w-3.5 h-3.5" />
-            <span>سجل المبيعات والفواتير</span>
+            <span>فواتير المبيعات</span>
           </button>
           <button
             type="button"
@@ -532,7 +532,7 @@ export function SalesTab({
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            <span>بوابة العملاء والطلبات ونشر الأسعار</span>
+            <span>بوابة العملاء والتحكم والأسعار</span>
           </button>
         </div>
         {onOpenClientPortalAdmin && salesSubView === "portal" && (
@@ -541,7 +541,7 @@ export function SalesTab({
             onClick={onOpenClientPortalAdmin}
             className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-[11px] font-bold hover:bg-slate-100 dark:hover:bg-slate-800"
           >
-            فتح كشوفات وحسابات العملاء
+            فتح حسابات وكشوفات العملاء
           </button>
         )}
       </div>

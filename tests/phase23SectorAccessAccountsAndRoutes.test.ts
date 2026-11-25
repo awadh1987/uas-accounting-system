@@ -20,8 +20,13 @@ import {
 import {
   isClientPortalPath,
   resolvePortalRouteSection,
+  resolveCanonicalPortalPath,
   CLIENT_PORTAL_ROUTE_SECTIONS,
 } from "../src/lib/clientPortal/portalRoutes";
+import {
+  resolveWorkspaceRouteSection,
+  resolveCanonicalWorkspacePath,
+} from "../src/lib/tenant/workspaceRoutes";
 
 const root = process.cwd();
 const read = (rel: string) => fs.readFileSync(path.join(root, rel), "utf8");
@@ -270,5 +275,90 @@ describe("Phase 23 — sector isolation + tenant-side control panel", () => {
     const route = read("src/app/api/client-portal/requests/route.ts");
     assert.ok(route.includes("sectorAccess.allowedSectors"));
     assert.ok(route.includes("clientAccountId: auth.account.id"));
+  });
+});
+
+describe("Phase 24 — subdomain URL sync, inventory field layout & 4-part separated navigation", () => {
+  it("resolves /client/portal/orders, /client/portal/invoices & canonical portal paths", () => {
+    assert.equal(resolvePortalRouteSection("/client/portal/orders")?.tab, "requests");
+    assert.equal(resolvePortalRouteSection("/client/portal/invoices")?.tab, "statement");
+    assert.equal(resolvePortalRouteSection("/client/portal/invoices")?.stmtTab, "bills");
+    assert.equal(
+      resolveCanonicalPortalPath({ portalTab: "new_request", activeSector: "HARVEST" }),
+      "/client/portal/harvest"
+    );
+    assert.equal(
+      resolveCanonicalPortalPath({ portalTab: "new_request", activeSector: "COMMERCIAL" }),
+      "/client/portal/commercial"
+    );
+    assert.equal(resolveCanonicalPortalPath({ portalTab: "requests" }), "/client/portal/orders");
+    assert.equal(
+      resolveCanonicalPortalPath({ portalTab: "statement", stmtTab: "bills" }),
+      "/client/portal/invoices"
+    );
+    assert.equal(
+      resolveCanonicalPortalPath({ portalTab: "statement", stmtTab: "ledger" }),
+      "/client/portal/statement"
+    );
+    const portal = read("src/components/client-portal/ClientPortalApp.tsx");
+    assert.ok(portal.includes("resolveCanonicalPortalPath("));
+    assert.ok(portal.includes("window.history.replaceState"));
+    assert.ok(read("src/app/api/public/tenant/route.ts").includes('"/client/portal/"'));
+  });
+
+  it("resolves /sales/portal, /sales/ledgers, /sales/invoices & syncs 4-part workspace paths", () => {
+    assert.ok(fs.existsSync(path.join(root, "src/app/sales/page.tsx")));
+    assert.ok(fs.existsSync(path.join(root, "src/app/sales/[sub]/page.tsx")));
+    assert.ok(read("src/proxy.ts").includes('"/sales/:path*"'));
+    assert.equal(resolveWorkspaceRouteSection("/sales/portal")?.customersSection, "portal");
+    assert.equal(resolveWorkspaceRouteSection("/sales/ledgers")?.customersSection, "cards");
+    assert.equal(resolveWorkspaceRouteSection("/sales/invoices")?.tab, "sales");
+    assert.equal(resolveWorkspaceRouteSection("/procurement")?.tab, "procurement");
+    assert.equal(resolveWorkspaceRouteSection("/harvest")?.tab, "dashboard");
+    assert.equal(resolveWorkspaceRouteSection("/commercial")?.sector, "COMMERCIAL");
+    assert.equal(
+      resolveCanonicalWorkspacePath({
+        activeTab: "customers",
+        activeTradingSector: "HARVEST",
+        customersInitialSection: "portal",
+      }),
+      "/sales/portal"
+    );
+    assert.equal(
+      resolveCanonicalWorkspacePath({
+        activeTab: "customers",
+        activeTradingSector: "HARVEST",
+        customersInitialSection: "cards",
+      }),
+      "/sales/ledgers"
+    );
+    assert.equal(
+      resolveCanonicalWorkspacePath({
+        activeTab: "sales",
+        activeTradingSector: "HARVEST",
+      }),
+      "/sales/invoices"
+    );
+  });
+
+  it("fixes الصنف المخزني alignment/label and enforces dark option contrast & 4-part separation", () => {
+    const inv = read("src/components/MultiUnitInventoryPanel.tsx");
+    assert.ok(inv.includes("items-end"));
+    assert.ok(!inv.includes("sm:col-span-2 lg:col-span-2 w-full min-w-0 truncate"));
+    assert.ok(read("src/components/CommercialSectorWorkspace.tsx").includes("sm:col-span-12 grid"));
+    assert.ok(read("src/app/globals.css").includes("select option,"));
+    const shell = read("src/components/UasAppShell.tsx");
+    for (const tid of [
+      'data-testid="workspace-4part-nav"',
+      'data-testid="workspace-part-sales-portal"',
+      'data-testid="workspace-nav-client-portal"',
+      'data-testid="workspace-nav-client-ledgers"',
+      'data-testid="workspace-nav-sales-invoices"',
+      'data-testid="workspace-part-procurement"',
+      'data-testid="workspace-sector-tab-harvest"',
+      'data-testid="workspace-sector-tab-commercial"',
+    ]) {
+      assert.ok(shell.includes(tid), tid);
+    }
   });
 });

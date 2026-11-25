@@ -597,7 +597,7 @@ export function CommercialSectorWorkspace({
                 <span>نشر</span>
               </button>
             </div>
-            <div className="sm:col-span-6 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            <div className="sm:col-span-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-2.5 pt-2 border-t border-slate-100 dark:border-slate-800 items-center">
               <input
                 value={catProducer}
                 onChange={(e) => setCatProducer(e.target.value)}
@@ -713,14 +713,14 @@ export function CommercialSectorWorkspace({
         <div className="space-y-4">
           <form
             onSubmit={handleCreateGrn}
-            className="card-surface rounded-2xl p-4 border border-slate-200 dark:border-slate-700 grid grid-cols-1 sm:grid-cols-6 gap-2.5 items-end"
+            className="card-surface rounded-2xl p-4 border border-slate-200 dark:border-slate-700 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5 items-end"
           >
             <div>
               <label className="block font-bold mb-1">الصنف المخزني</label>
               <select
                 value={grnItemId}
                 onChange={(e) => setGrnItemId(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 font-bold"
+                className="w-full min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold"
               >
                 {inventorySuggestions.map((s) => (
                   <option key={s.id} value={s.id}>
@@ -734,7 +734,7 @@ export function CommercialSectorWorkspace({
               <select
                 value={grnWarehouseId}
                 onChange={(e) => setGrnWarehouseId(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 font-bold"
+                className="w-full min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold"
               >
                 {warehouses.map((w) => (
                   <option key={w.id} value={w.id}>
@@ -748,7 +748,7 @@ export function CommercialSectorWorkspace({
               <select
                 value={grnVendorId}
                 onChange={(e) => setGrnVendorId(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 font-bold"
+                className="w-full min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold"
               >
                 <option value="">استلام مباشر</option>
                 {vendors.map((v) => (

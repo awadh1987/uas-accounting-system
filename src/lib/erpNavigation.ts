@@ -49,8 +49,8 @@ export const ERP_GROUPS: ErpGroupDef[] = [
     descriptionAr: "المبيعات وبوابة العملاء والطلبات، كشوفات العملاء، والمشتريات والموردون",
     descriptionEn: "Sales & Client Portal, Client Ledgers, and Procurement & Vendors",
     subTabs: [
-      { id: "sales", subdomain: "commercial/sales", labelAr: "المبيعات وبوابة العملاء", labelEn: "Sales & Client Portal" },
-      { id: "procurement", subdomain: "commercial/procurement", labelAr: "المشتريات والموردون", labelEn: "Procurement & Vendors" },
+      { id: "sales", subdomain: "sales/invoices", labelAr: "المبيعات وبوابة العملاء", labelEn: "Sales & Client Portal" },
+      { id: "procurement", subdomain: "procurement", labelAr: "المشتريات والموردون", labelEn: "Procurement & Vendors" },
     ],
   },
   {

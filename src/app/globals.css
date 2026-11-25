@@ -105,6 +105,18 @@ table {
   font-variant-numeric: tabular-nums;
 }
 
+select,
+input,
+textarea {
+  box-sizing: border-box;
+}
+
+select option,
+select optgroup {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+}
+
 table thead th {
   position: sticky;
   top: 0;

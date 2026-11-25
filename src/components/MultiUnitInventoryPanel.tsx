@@ -1097,7 +1097,7 @@ export function MultiUnitInventoryPanel({
               </div>
 
               {conversions.map((row, idx) => (
-                <div key={idx} className="grid grid-cols-1 sm:grid-cols-5 gap-2 items-center pt-1">
+                <div key={idx} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 items-center pt-1">
                   <select
                     value={row.unitId}
                     onChange={(e) => {
@@ -1105,7 +1105,7 @@ export function MultiUnitInventoryPanel({
                       next[idx].unitId = e.target.value;
                       setConversions(next);
                     }}
-                    className="rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5 font-bold"
+                    className="w-full min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold"
                   >
                     {units.map((u) => (
                       <option key={u.id} value={u.id}>{u.nameAr}</option>
@@ -1326,61 +1326,76 @@ export function MultiUnitInventoryPanel({
               )}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 items-stretch">
-              <select
-                dir={isAr ? "rtl" : "ltr"}
-                aria-label={isAr ? "الصنف المخزني" : "Inventory Item"}
-                title={
-                  activeMovItem
-                    ? `${activeMovItem.nameAr} (${activeMovItem.sku})`
-                    : isAr
-                    ? "اختر الصنف"
-                    : "Select item"
-                }
-                value={movItemId}
-                onChange={(e) => {
-                  setMovItemId(e.target.value);
-                  const it = items.find((x) => x.id === e.target.value);
-                  if (it) setMovUnitId(it.baseUnitId);
-                }}
-                className="sm:col-span-2 lg:col-span-2 w-full min-w-0 truncate rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold text-right"
-              >
-                {items.map((it) => (
-                  <option key={it.id} value={it.id} title={`${it.nameAr} (${it.sku})`}>
-                    {it.nameAr} ({it.sku})
-                  </option>
-                ))}
-              </select>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+              <div className="sm:col-span-2 lg:col-span-2 min-w-0">
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                  {isAr ? "الصنف المخزني" : "Inventory Item"}
+                </label>
+                <select
+                  dir={isAr ? "rtl" : "ltr"}
+                  aria-label={isAr ? "الصنف المخزني" : "Inventory Item"}
+                  title={
+                    activeMovItem
+                      ? `${activeMovItem.nameAr} (${activeMovItem.sku})`
+                      : isAr
+                      ? "اختر الصنف"
+                      : "Select item"
+                  }
+                  value={movItemId}
+                  onChange={(e) => {
+                    setMovItemId(e.target.value);
+                    const it = items.find((x) => x.id === e.target.value);
+                    if (it) setMovUnitId(it.baseUnitId);
+                  }}
+                  className="w-full min-h-[40px] min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold text-right shadow-none focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                >
+                  {items.map((it) => (
+                    <option key={it.id} value={it.id} title={`${it.nameAr} (${it.sku})`}>
+                      {it.nameAr} ({it.sku})
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-              <select
-                value={movType}
-                onChange={(e) => setMovType(e.target.value)}
-                className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 font-bold"
-              >
-                <option value="PURCHASE_IN">{isAr ? "توريد مشتريات (+)" : "Purchase In (+)"}</option>
-                <option value="SALE_OUT">{isAr ? "صرف مبيعات (-)" : "Sale Out (-)"}</option>
-                <option value="ADJUSTMENT_IN">{isAr ? "تسوية بالزيادة (+)" : "Adjustment In (+)"}</option>
-                <option value="ADJUSTMENT_OUT">{isAr ? "تسوية بالعجز (-)" : "Adjustment Out (-)"}</option>
-                <option value="OPENING">{isAr ? "رصيد افتتاحي (+)" : "Opening Stock (+)"}</option>
-              </select>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                  {isAr ? "نوع الحركة" : "Movement Type"}
+                </label>
+                <select
+                  value={movType}
+                  onChange={(e) => setMovType(e.target.value)}
+                  className="w-full min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold"
+                >
+                  <option value="PURCHASE_IN">{isAr ? "توريد مشتريات (+)" : "Purchase In (+)"}</option>
+                  <option value="SALE_OUT">{isAr ? "صرف مبيعات (-)" : "Sale Out (-)"}</option>
+                  <option value="ADJUSTMENT_IN">{isAr ? "تسوية بالزيادة (+)" : "Adjustment In (+)"}</option>
+                  <option value="ADJUSTMENT_OUT">{isAr ? "تسوية بالعجز (-)" : "Adjustment Out (-)"}</option>
+                  <option value="OPENING">{isAr ? "رصيد افتتاحي (+)" : "Opening Stock (+)"}</option>
+                </select>
+              </div>
 
-              <select
-                value={movUnitId}
-                onChange={(e) => setMovUnitId(e.target.value)}
-                className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 font-bold"
-              >
-                {activeMovItem?.baseUnit && (
-                  <option value={activeMovItem.baseUnitId}>
-                    {activeMovItem.baseUnit.nameAr} (×1)
-                  </option>
-                )}
-                {activeMovItem?.conversions?.map((c) => (
-                  <option key={c.id} value={c.unitId}>
-                    {c.customUnitLabel || c.unit?.nameAr} (×{c.factorToBase})
-                  </option>
-                ))}
-                <option value="OTHER">{isAr ? "➕ وحدة أخرى مخصصة" : "➕ Other / Custom Unit"}</option>
-              </select>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                  {isAr ? "وحدة القياس" : "Unit"}
+                </label>
+                <select
+                  value={movUnitId}
+                  onChange={(e) => setMovUnitId(e.target.value)}
+                  className="w-full min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold"
+                >
+                  {activeMovItem?.baseUnit && (
+                    <option value={activeMovItem.baseUnitId}>
+                      {activeMovItem.baseUnit.nameAr} (×1)
+                    </option>
+                  )}
+                  {activeMovItem?.conversions?.map((c) => (
+                    <option key={c.id} value={c.unitId}>
+                      {c.customUnitLabel || c.unit?.nameAr} (×{c.factorToBase})
+                    </option>
+                  ))}
+                  <option value="OTHER">{isAr ? "➕ وحدة أخرى مخصصة" : "➕ Other / Custom Unit"}</option>
+                </select>
+              </div>
 
               <input
                 type="number"
@@ -1390,7 +1405,7 @@ export function MultiUnitInventoryPanel({
                 value={movQty}
                 onChange={(e) => setMovQty(e.target.value)}
                 placeholder={isAr ? "الكمية" : "Qty"}
-                className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 font-mono font-bold"
+                className="w-full min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-mono font-bold"
               />
 
               <input
@@ -1400,7 +1415,7 @@ export function MultiUnitInventoryPanel({
                 value={movUnitCost}
                 onChange={(e) => setMovUnitCost(e.target.value)}
                 placeholder={isAr ? "تكلفة الوحدة" : "Unit Cost"}
-                className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 font-mono"
+                className="w-full min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-mono"
               />
 
               <input
@@ -1408,7 +1423,7 @@ export function MultiUnitInventoryPanel({
                 value={movReference}
                 onChange={(e) => setMovReference(e.target.value)}
                 placeholder={isAr ? "رقم السند / المرجع" : "Voucher / Ref #"}
-                className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 font-mono"
+                className="w-full min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-mono"
               />
 
               <input
@@ -1416,7 +1431,7 @@ export function MultiUnitInventoryPanel({
                 value={movNotes}
                 onChange={(e) => setMovNotes(e.target.value)}
                 placeholder={isAr ? "استلام من: / الجهة / ملاحظات" : "Source / Destination / Notes"}
-                className="sm:col-span-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5"
+                className="sm:col-span-2 w-full min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2"
               />
 
               <CostCenterSelector value={movCostCenterId} onChange={setMovCostCenterId} />

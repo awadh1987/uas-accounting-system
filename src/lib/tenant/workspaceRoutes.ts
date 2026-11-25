@@ -4,6 +4,8 @@ import type { SectorType } from "@/lib/clientPortal/portalPolicy";
 export interface WorkspaceRouteSection {
   tab: TabId;
   sector?: SectorType;
+  customersSection?: "cards" | "portal" | "ledger" | "both" | "whatsapp";
+  salesViewMode?: "sales" | "customers" | "procurement" | "inventory" | "portal";
 }
 
 /**
@@ -14,21 +16,27 @@ export const WORKSPACE_ROUTE_SECTIONS: Record<string, WorkspaceRouteSection> = {
   harvest: { tab: "dashboard", sector: "HARVEST" },
   commercial: { tab: "commercial", sector: "COMMERCIAL" },
   "inbound-outbound": { tab: "inventory", sector: "HARVEST" },
-  payments: { tab: "treasury" },
-  dashboard: { tab: "dashboard" },
-  sales: { tab: "sales" },
-  inventory: { tab: "inventory" },
-  customers: { tab: "customers" },
-  accounting: { tab: "coa" },
-  coa: { tab: "coa" },
-  ledger: { tab: "ledger" },
-  procurement: { tab: "procurement" },
-  reports: { tab: "reports" },
-  projects: { tab: "projects" },
-  expenses: { tab: "expenses" },
-  workers: { tab: "workers" },
-  system: { tab: "system" },
-  audit: { tab: "audit" },
+  payments: { tab: "treasury", sector: "HARVEST" },
+  dashboard: { tab: "dashboard", sector: "HARVEST" },
+  sales: { tab: "sales", sector: "HARVEST", salesViewMode: "sales" },
+  inventory: { tab: "inventory", sector: "HARVEST" },
+  customers: { tab: "customers", sector: "HARVEST", customersSection: "cards" },
+  accounting: { tab: "coa", sector: "HARVEST" },
+  coa: { tab: "coa", sector: "HARVEST" },
+  ledger: { tab: "ledger", sector: "HARVEST" },
+  procurement: { tab: "procurement", sector: "HARVEST" },
+  reports: { tab: "reports", sector: "HARVEST" },
+  projects: { tab: "projects", sector: "HARVEST" },
+  expenses: { tab: "expenses", sector: "HARVEST" },
+  workers: { tab: "workers", sector: "HARVEST" },
+  system: { tab: "system", sector: "HARVEST" },
+  audit: { tab: "audit", sector: "HARVEST" },
+};
+
+export const WORKSPACE_SALES_SUBSECTIONS: Record<string, WorkspaceRouteSection> = {
+  portal: { tab: "customers", sector: "HARVEST", customersSection: "portal" },
+  ledgers: { tab: "customers", sector: "HARVEST", customersSection: "cards" },
+  invoices: { tab: "sales", sector: "HARVEST", salesViewMode: "sales" },
 };
 
 export function resolveWorkspaceRouteSection(
@@ -36,7 +44,13 @@ export function resolveWorkspaceRouteSection(
   search = ""
 ): WorkspaceRouteSection | null {
   const clean = String(pathname || "").toLowerCase().replace(/^\/+|\/+$/g, "");
-  if (!clean || clean.includes("/")) return null;
+  if (!clean) return null;
+  if (clean.startsWith("sales/")) {
+    const sub = clean.slice("sales/".length);
+    if (!sub || sub.includes("/")) return null;
+    return WORKSPACE_SALES_SUBSECTIONS[sub] || null;
+  }
+  if (clean.includes("/")) return null;
   const matched = WORKSPACE_ROUTE_SECTIONS[clean];
   if (!matched) return null;
   if (clean === "inbound-outbound" && search) {
@@ -51,4 +65,53 @@ export function resolveWorkspaceRouteSection(
     }
   }
   return matched;
+}
+
+export function resolveCanonicalWorkspacePath(params: {
+  activeTab: TabId;
+  activeTradingSector: SectorType;
+  customersInitialSection?: "cards" | "portal" | "ledger" | "both" | "whatsapp";
+  salesViewMode?: "sales" | "customers" | "procurement" | "inventory" | "portal";
+  preferHarvestPath?: boolean;
+  currentPath?: string;
+}): string {
+  if (params.activeTradingSector === "COMMERCIAL" || params.activeTab === "commercial") {
+    return "/commercial";
+  }
+  switch (params.activeTab) {
+    case "customers":
+      return params.customersInitialSection === "portal"
+        ? "/sales/portal"
+        : "/sales/ledgers";
+    case "sales":
+      return params.salesViewMode === "portal" ? "/sales/portal" : "/sales/invoices";
+    case "procurement":
+      return "/procurement";
+    case "treasury":
+      return "/payments";
+    case "inventory":
+      return params.currentPath === "/inventory" ? "/inventory" : "/inbound-outbound";
+    case "coa":
+      return params.currentPath === "/coa" ? "/coa" : "/accounting";
+    case "ledger":
+      return "/ledger";
+    case "reports":
+      return "/reports";
+    case "projects":
+      return "/projects";
+    case "expenses":
+      return "/expenses";
+    case "workers":
+      return "/workers";
+    case "system":
+      return "/system";
+    case "audit":
+      return "/audit";
+    case "dashboard":
+    default:
+      if (params.preferHarvestPath || params.currentPath === "/harvest") {
+        return "/harvest";
+      }
+      return "/dashboard";
+  }
 }

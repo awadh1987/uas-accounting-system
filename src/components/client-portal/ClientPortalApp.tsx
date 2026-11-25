@@ -1,6 +1,6 @@
 "use client";
 
-import { resolvePortalRouteSection } from "@/lib/clientPortal/portalRoutes";
+import { resolveCanonicalPortalPath, resolvePortalRouteSection } from "@/lib/clientPortal/portalRoutes";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
@@ -639,7 +639,13 @@ export function ClientPortalApp({
     resubmitTarget?: ClientPaymentReceiptView | null;
   }>({});
 
-  const [stmtTab, setStmtTab] = useState<"bills" | "receipts" | "ledger" | "notifications">("bills");
+  const [stmtTab, setStmtTab] = useState<"bills" | "receipts" | "ledger" | "notifications">(() => {
+    if (typeof window !== "undefined") {
+      const routed = resolvePortalRouteSection(window.location.pathname);
+      if (routed?.stmtTab) return routed.stmtTab;
+    }
+    return "bills";
+  });
   const [billStatusFilter, setBillStatusFilter] = useState<"ALL" | "OPEN" | "PAID">("ALL");
   const [stmtSummary, setStmtSummary] = useState<ClientStatementSummaryView>({
     creditLimit: 0,
@@ -1056,6 +1062,35 @@ export function ClientPortalApp({
       active = false;
     };
   }, [loadConfig, syncProfile]);
+
+  // Sync browser URL continuously on HTTP/HTTPS origins (skip Capacitor/WebView/standalone shells)
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      !/^https?:$/i.test(window.location.protocol) ||
+      isInstalledClientApp()
+    ) {
+      return;
+    }
+    if (account?.status === "ACTIVE") {
+      const targetPath = resolveCanonicalPortalPath({
+        portalTab,
+        activeSector,
+        stmtTab,
+      });
+      const currentClean = window.location.pathname.replace(/\/+$/, "") || "/";
+      const targetClean = targetPath.replace(/\/+$/, "") || "/";
+      if (currentClean !== targetClean) {
+        try {
+          const sp = new URLSearchParams(window.location.search);
+          const nextSearch = sp.toString() ? `?${sp.toString()}` : "";
+          window.history.replaceState(null, "", `${targetPath}${nextSearch}`);
+        } catch {
+          // ignore history errors
+        }
+      }
+    }
+  }, [account?.status, portalTab, activeSector, stmtTab]);
 
   useEffect(() => {
     if (account?.status !== "ACTIVE" || portalTab !== "requests") return;
@@ -3737,11 +3772,11 @@ export function ClientPortalApp({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-6 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5 items-center">
                   <select
                     value={reqFilterStatus}
                     onChange={(e) => setReqFilterStatus(e.target.value)}
-                    className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-bold"
+                    className="w-full min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
                   >
                     <option value="ALL">جميع الحالات</option>
                     <option value="PENDING_REVIEW">قيد المراجعة</option>
@@ -3756,7 +3791,7 @@ export function ClientPortalApp({
                     onChange={(e) =>
                       setReqArchiveView(e.target.value as "ALL" | "ACTIVE" | "ARCHIVED")
                     }
-                    className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-bold"
+                    className="w-full min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
                   >
                     <option value="ALL">النشطة والمؤرشفة</option>
                     <option value="ACTIVE">غير المؤرشفة فقط</option>

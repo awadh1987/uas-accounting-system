@@ -149,7 +149,10 @@ export async function GET(req: NextRequest) {
             avatarChar: (c.tradeName || c.fullName || "ع").trim().charAt(0) || "ع",
             avatarColor: c.avatarColor || "#059669",
             clientType: c.clientType || "DIRECT_CLIENT",
-            loginUrl: effectiveSlug ? `/portal?slug=${encodeURIComponent(effectiveSlug)}` : "/portal",
+            loginUrl:
+              resolutionSource === "subdomain" || !effectiveSlug
+                ? "/client/portal/"
+                : `/client/portal/?slug=${encodeURIComponent(effectiveSlug)}`,
           }))
           .filter((c) => c.displayName.length > 0)
       : [];

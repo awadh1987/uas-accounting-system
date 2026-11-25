@@ -624,7 +624,7 @@ export function CustomersTab({
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200 dark:border-slate-800 no-print">
           <div className="inline-flex flex-wrap rounded-xl border border-slate-200 dark:border-slate-700 p-1 bg-slate-50 dark:bg-slate-900/60 text-xs gap-1">
             {[
-              { id: "cards" as const, label: `بطاقات العملاء الموحدة (${customerNames.length})` },
+              { id: "cards" as const, label: `حسابات العملاء الموحدة (${customerNames.length})` },
               { id: "ledger" as const, label: `سجل الحركات والفواتير (${visibleRows.length})` },
               { id: "both" as const, label: "عرض مدمج" },
               { id: "portal" as const, label: "بوابة العملاء والطلبات" },

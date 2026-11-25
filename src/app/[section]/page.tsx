@@ -5,7 +5,9 @@ import { WORKSPACE_ROUTE_SECTIONS } from "@/lib/tenant/workspaceRoutes";
 export const dynamicParams = false;
 
 export function generateStaticParams() {
-  return Object.keys(WORKSPACE_ROUTE_SECTIONS).map((section) => ({ section }));
+  return Object.keys(WORKSPACE_ROUTE_SECTIONS)
+    .filter((section) => section !== "sales")
+    .map((section) => ({ section }));
 }
 
 /** Dedicated tenant workspace sub-paths: /harvest, /commercial, /inbound-outbound, /payments, etc. */

@@ -55,7 +55,13 @@ export function ApprovalRulesMatrixPanel({ readOnly = false, onToast }: Approval
   }, []);
 
   useEffect(() => {
-    void loadRules();
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) void loadRules();
+    });
+    return () => {
+      active = false;
+    };
   }, [loadRules]);
 
   async function handleAddRule(e: React.FormEvent) {
@@ -116,15 +122,15 @@ export function ApprovalRulesMatrixPanel({ readOnly = false, onToast }: Approval
       </div>
 
       {!readOnly && (
-        <form onSubmit={handleAddRule} className="grid grid-cols-1 sm:grid-cols-6 gap-2 text-xs">
-          <select value={mod} onChange={(e) => setMod(e.target.value)} className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-2 font-bold">
+        <form onSubmit={handleAddRule} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5 items-center text-xs">
+          <select value={mod} onChange={(e) => setMod(e.target.value)} className="min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold">
             {MODULES.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
-          <select value={actionType} onChange={(e) => setActionType(e.target.value)} className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-2 font-bold">
+          <select value={actionType} onChange={(e) => setActionType(e.target.value)} className="min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold">
             {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
-          <input type="number" min={0} value={minAmountBase} onChange={(e) => setMinAmountBase(e.target.value)} placeholder="الحد الأدنى (YER)" className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-2 font-mono" />
-          <select value={requiredRole} onChange={(e) => setRequiredRole(e.target.value)} className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-2 font-bold">
+          <input type="number" min={0} value={minAmountBase} onChange={(e) => setMinAmountBase(e.target.value)} placeholder="الحد الأدنى (YER)" className="min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-mono" />
+          <select value={requiredRole} onChange={(e) => setRequiredRole(e.target.value)} className="min-h-[40px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold">
             {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
           <label className="flex items-center gap-1.5 px-2 text-[11px] font-bold">

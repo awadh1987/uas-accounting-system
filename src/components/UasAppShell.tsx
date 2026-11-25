@@ -36,7 +36,11 @@ import { TreasuryTab } from "@/components/tabs/TreasuryTab";
 import { WorkersTab } from "@/components/tabs/WorkersTab";
 import { TabErrorBoundary } from "@/components/TabErrorBoundary";
 import { ClientPortalApp } from "@/components/client-portal/ClientPortalApp";
-import { resolveWorkspaceRouteSection } from "@/lib/tenant/workspaceRoutes";
+import { resolveCanonicalPortalPath } from "@/lib/clientPortal/portalRoutes";
+import {
+  resolveCanonicalWorkspacePath,
+  resolveWorkspaceRouteSection,
+} from "@/lib/tenant/workspaceRoutes";
 import {
   executeMutation,
   fetchBootstrapState,
@@ -205,6 +209,7 @@ export function UasAppShell() {
     useState<BeforeInstallPromptEvent | null>(null);
 
   const hydratedRef = useRef(false);
+  const preferHarvestPathRef = useRef(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -403,9 +408,20 @@ export function UasAppShell() {
         }
         const pathRoute = resolveWorkspaceRouteSection(window.location.pathname, window.location.search);
         if (pathRoute) {
-          if (!targetTab) targetTab = pathRoute.tab;
+          targetTab = pathRoute.tab;
           if (pathRoute.sector) {
             setActiveTradingSector(pathRoute.sector);
+          }
+          if (pathRoute.customersSection) {
+            setCustomersInitialSection(pathRoute.customersSection);
+          }
+          if (pathRoute.salesViewMode === "customers" || pathRoute.tab === "customers") {
+            targetSalesView = "customers";
+          } else if (pathRoute.salesViewMode === "sales" || pathRoute.tab === "sales") {
+            targetSalesView = "sales";
+          }
+          if (window.location.pathname.replace(/\/+$/, "") === "/harvest") {
+            preferHarvestPathRef.current = true;
           }
         }
         if (!targetTab) {
@@ -413,9 +429,11 @@ export function UasAppShell() {
           if (storedTab) targetTab = storedTab as TabId;
         }
 
-        const storedSalesView = window.sessionStorage.getItem("uas_sales_view_mode");
-        if (storedSalesView === "customers" || targetTab === "customers") {
-          targetSalesView = "customers";
+        if (!pathRoute) {
+          const storedSalesView = window.sessionStorage.getItem("uas_sales_view_mode");
+          if (storedSalesView === "customers" || targetTab === "customers") {
+            targetSalesView = "customers";
+          }
         }
       }
 
@@ -513,13 +531,16 @@ export function UasAppShell() {
     }
   }, [viewMode]);
 
-  // Synchronize activeTab, salesViewMode and hash across tab changes
+  // Synchronize activeTab, salesViewMode, hash and clean subdomain paths across tab/sector changes
   useEffect(() => {
     if (!hydratedRef.current) return;
     if (typeof window === "undefined") return;
 
     window.sessionStorage.setItem("uas_active_tab", activeTab);
     window.sessionStorage.setItem("uas_sales_view_mode", salesViewMode);
+
+    const canSyncCleanPath =
+      /^https?:$/i.test(window.location.protocol) && !isInstalledClientApp();
 
     if (viewMode === "erp") {
       let expectedHash = `#/${activeTab}`;
@@ -528,9 +549,50 @@ export function UasAppShell() {
         expectedHash = `#/system/${currentSub}`;
       } else if (activeTab === "customers") {
         expectedHash = "#/customers";
+      } else if (activeTradingSector === "COMMERCIAL") {
+        expectedHash = "#/commercial";
       }
-      if (window.location.hash !== expectedHash) {
+      if (canSyncCleanPath && typeof window.history.replaceState === "function") {
+        const currentClean = window.location.pathname.replace(/\/+$/, "") || "/";
+        const targetPath = resolveCanonicalWorkspacePath({
+          activeTab,
+          activeTradingSector,
+          customersInitialSection,
+          salesViewMode,
+          preferHarvestPath: preferHarvestPathRef.current,
+          currentPath: currentClean,
+        });
+        if (currentClean !== targetPath || window.location.hash !== expectedHash) {
+          try {
+            window.history.replaceState(
+              null,
+              "",
+              `${targetPath}${window.location.search}${expectedHash}`
+            );
+          } catch {
+            if (window.location.hash !== expectedHash) {
+              window.location.hash = expectedHash;
+            }
+          }
+        }
+      } else if (window.location.hash !== expectedHash) {
         window.location.hash = expectedHash;
+      }
+    } else if (viewMode === "client_portal") {
+      if (canSyncCleanPath && typeof window.history.replaceState === "function") {
+        const targetPortalPath = resolveCanonicalPortalPath({
+          portalTab: clientPortalInitialSection || "new_request",
+          activeSector: "HARVEST",
+        });
+        const currentClean = window.location.pathname.replace(/\/+$/, "") || "/";
+        const targetClean = targetPortalPath.replace(/\/+$/, "") || "/";
+        if (currentClean !== targetClean || window.location.hash) {
+          try {
+            window.history.replaceState(null, "", `${targetPortalPath}${window.location.search}`);
+          } catch {
+            // ignore
+          }
+        }
       }
     } else if (viewMode === "login") {
       if (window.location.hash !== "#/login") {
@@ -545,7 +607,14 @@ export function UasAppShell() {
         }
       }
     }
-  }, [activeTab, salesViewMode, viewMode]);
+  }, [
+    activeTab,
+    activeTradingSector,
+    customersInitialSection,
+    salesViewMode,
+    viewMode,
+    clientPortalInitialSection,
+  ]);
 
   // Listen to browser hash navigation
   useEffect(() => {
@@ -1030,6 +1099,15 @@ export function UasAppShell() {
     (nextTab: TabId) => {
       if (currentUser?.mustChangePassword) {
         return;
+      }
+      if (nextTab === "commercial") {
+        preferHarvestPathRef.current = false;
+        setActiveTradingSector("COMMERCIAL");
+        return;
+      }
+      setActiveTradingSector("HARVEST");
+      if (nextTab !== "dashboard") {
+        preferHarvestPathRef.current = false;
       }
       if (nextTab === "customers") {
         if (!canAccessModule(activeUser, "customers")) {
@@ -1548,16 +1626,156 @@ export function UasAppShell() {
                 </div>
               )}
 
-              {/* Dual Trading Sector Top Switcher (Section 1: Harvest vs Section 2: Commercial Bulk/Partial) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 no-print">
+              {/* Organized 4-Part Navigation: 1) Sales & Client Portal (separated from sectors), 2) Procurement & Vendors, 3) Harvest Sector, 4) Commercial Sector */}
+              <div
+                data-testid="workspace-4part-nav"
+                className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5 no-print"
+              >
+                {/* Part 1: Sales & Client Portal */}
+                <div
+                  data-testid="workspace-part-sales-portal"
+                  className={`p-3 rounded-2xl border transition flex flex-col justify-between gap-2 ${
+                    activeTradingSector !== "COMMERCIAL" &&
+                    (activeTab === "sales" || activeTab === "customers")
+                      ? "border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/40 shadow-sm"
+                      : "card-surface border-slate-200 dark:border-slate-700 hover:border-emerald-300"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-xl bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+                        <Users className="w-4 h-4" />
+                      </div>
+                      <span className="text-xs font-black truncate">
+                        {lang === "ar" ? "المبيعات وبوابة العملاء" : "Sales & Client Portal"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1 text-[10px] font-extrabold">
+                    <button
+                      type="button"
+                      data-testid="workspace-nav-client-portal"
+                      onClick={() => {
+                        preferHarvestPathRef.current = false;
+                        setActiveTradingSector("HARVEST");
+                        setCustomersInitialSection("portal");
+                        setSalesViewMode("customers");
+                        navigateToTab("customers");
+                      }}
+                      className={`px-2 py-1 rounded-lg transition ${
+                        activeTradingSector !== "COMMERCIAL" &&
+                        activeTab === "customers" &&
+                        customersInitialSection === "portal"
+                          ? "accent-bg shadow-xs"
+                          : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                      }`}
+                    >
+                      {lang === "ar" ? "بوابة العملاء" : "Client Portal"}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="workspace-nav-client-ledgers"
+                      onClick={() => {
+                        preferHarvestPathRef.current = false;
+                        setActiveTradingSector("HARVEST");
+                        setCustomersInitialSection("cards");
+                        setSalesViewMode("customers");
+                        navigateToTab("customers");
+                      }}
+                      className={`px-2 py-1 rounded-lg transition ${
+                        activeTradingSector !== "COMMERCIAL" &&
+                        activeTab === "customers" &&
+                        customersInitialSection !== "portal"
+                          ? "accent-bg shadow-xs"
+                          : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                      }`}
+                    >
+                      {lang === "ar" ? "حسابات العملاء" : "Client Ledgers"}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="workspace-nav-sales-invoices"
+                      onClick={() => {
+                        preferHarvestPathRef.current = false;
+                        setActiveTradingSector("HARVEST");
+                        setSalesViewMode("sales");
+                        navigateToTab("sales");
+                      }}
+                      className={`px-2 py-1 rounded-lg transition ${
+                        activeTradingSector !== "COMMERCIAL" && activeTab === "sales"
+                          ? "accent-bg shadow-xs"
+                          : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                      }`}
+                    >
+                      {lang === "ar" ? "فواتير المبيعات" : "Sales Invoices"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Part 2: Procurement & Vendors */}
+                <button
+                  type="button"
+                  data-testid="workspace-part-procurement"
+                  onClick={() => {
+                    preferHarvestPathRef.current = false;
+                    setActiveTradingSector("HARVEST");
+                    navigateToTab("procurement");
+                  }}
+                  className={`p-3 rounded-2xl border text-start transition flex items-center justify-between gap-2 ${
+                    activeTradingSector !== "COMMERCIAL" && activeTab === "procurement"
+                      ? "border-sky-500 bg-sky-50/80 dark:bg-sky-950/40 shadow-sm"
+                      : "card-surface border-slate-200 dark:border-slate-700 hover:border-sky-300"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-xl bg-sky-100 dark:bg-sky-950 text-sky-700 dark:text-sky-300 flex items-center justify-center shrink-0">
+                      <Receipt className="w-4 h-4" />
+                    </div>
+                    <div className="text-xs sm:text-sm font-black truncate">
+                      {lang === "ar" ? "المشتريات والموردون" : "Procurement & Vendors"}
+                    </div>
+                  </div>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${
+                      activeTradingSector !== "COMMERCIAL" && activeTab === "procurement"
+                        ? "bg-sky-600 text-white"
+                        : "bg-slate-100 dark:bg-slate-800 text-slate-500"
+                    }`}
+                  >
+                    {activeTradingSector !== "COMMERCIAL" && activeTab === "procurement"
+                      ? lang === "ar"
+                        ? "نشط"
+                        : "Active"
+                      : lang === "ar"
+                      ? "فتح"
+                      : "Open"}
+                  </span>
+                </button>
+
+                {/* Part 3: Agricultural Sector */}
                 <button
                   type="button"
                   data-testid="workspace-sector-tab-harvest"
-                  onClick={() => setActiveTradingSector("HARVEST")}
-                  className={`p-3 rounded-2xl border text-start transition flex items-center justify-between gap-2 ${activeTradingSector === "HARVEST"
-                    ? "border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/40 shadow-sm"
-                    : "card-surface border-slate-200 dark:border-slate-700 hover:border-emerald-300"
-                    }`}
+                  onClick={() => {
+                    preferHarvestPathRef.current = true;
+                    setActiveTradingSector("HARVEST");
+                    if (
+                      activeTab === "sales" ||
+                      activeTab === "customers" ||
+                      activeTab === "procurement" ||
+                      activeTab === "commercial"
+                    ) {
+                      navigateToTab("dashboard");
+                    }
+                  }}
+                  className={`p-3 rounded-2xl border text-start transition flex items-center justify-between gap-2 ${
+                    activeTradingSector === "HARVEST" &&
+                    activeTab !== "sales" &&
+                    activeTab !== "customers" &&
+                    activeTab !== "procurement"
+                      ? "border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/40 shadow-sm"
+                      : "card-surface border-slate-200 dark:border-slate-700 hover:border-emerald-300"
+                  }`}
                 >
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
@@ -1570,23 +1788,41 @@ export function UasAppShell() {
                     </div>
                   </div>
                   <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${activeTradingSector === "HARVEST"
-                      ? "accent-bg"
-                      : "bg-slate-100 dark:bg-slate-800 text-slate-500"
-                      }`}
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${
+                      activeTradingSector === "HARVEST" &&
+                      activeTab !== "sales" &&
+                      activeTab !== "customers" &&
+                      activeTab !== "procurement"
+                        ? "accent-bg"
+                        : "bg-slate-100 dark:bg-slate-800 text-slate-500"
+                    }`}
                   >
-                    {activeTradingSector === "HARVEST" ? (lang === "ar" ? "نشط" : "Active") : (lang === "ar" ? "فتح" : "Open")}
+                    {activeTradingSector === "HARVEST" &&
+                    activeTab !== "sales" &&
+                    activeTab !== "customers" &&
+                    activeTab !== "procurement"
+                      ? lang === "ar"
+                        ? "نشط"
+                        : "Active"
+                      : lang === "ar"
+                      ? "فتح"
+                      : "Open"}
                   </span>
                 </button>
 
+                {/* Part 4: Commercial Sector */}
                 <button
                   type="button"
                   data-testid="workspace-sector-tab-commercial"
-                  onClick={() => setActiveTradingSector("COMMERCIAL")}
-                  className={`p-3 rounded-2xl border text-start transition flex items-center justify-between gap-2 ${activeTradingSector === "COMMERCIAL"
-                    ? "border-amber-500 bg-amber-50/80 dark:bg-amber-950/40 shadow-sm"
-                    : "card-surface border-slate-200 dark:border-slate-700 hover:border-amber-300"
-                    }`}
+                  onClick={() => {
+                    preferHarvestPathRef.current = false;
+                    setActiveTradingSector("COMMERCIAL");
+                  }}
+                  className={`p-3 rounded-2xl border text-start transition flex items-center justify-between gap-2 ${
+                    activeTradingSector === "COMMERCIAL"
+                      ? "border-amber-500 bg-amber-50/80 dark:bg-amber-950/40 shadow-sm"
+                      : "card-surface border-slate-200 dark:border-slate-700 hover:border-amber-300"
+                  }`}
                 >
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0">
@@ -1599,12 +1835,19 @@ export function UasAppShell() {
                     </div>
                   </div>
                   <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${activeTradingSector === "COMMERCIAL"
-                      ? "bg-amber-600 text-white"
-                      : "bg-slate-100 dark:bg-slate-800 text-slate-500"
-                      }`}
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${
+                      activeTradingSector === "COMMERCIAL"
+                        ? "bg-amber-600 text-white"
+                        : "bg-slate-100 dark:bg-slate-800 text-slate-500"
+                    }`}
                   >
-                    {activeTradingSector === "COMMERCIAL" ? (lang === "ar" ? "نشط" : "Active") : (lang === "ar" ? "فتح" : "Open")}
+                    {activeTradingSector === "COMMERCIAL"
+                      ? lang === "ar"
+                        ? "نشط"
+                        : "Active"
+                      : lang === "ar"
+                      ? "فتح"
+                      : "Open"}
                   </span>
                 </button>
               </div>
@@ -1701,10 +1944,10 @@ export function UasAppShell() {
                                 {lang === "ar" ? "🧾 فواتير المبيعات" : "🧾 Sales Invoices"}
                               </option>
                               <option value="customers">
-                                {lang === "ar" ? "👥 كشوفات العملاء" : "👥 Client Ledgers"}
+                                {lang === "ar" ? "👥 حسابات العملاء" : "👥 Client Ledgers"}
                               </option>
                               <option value="portal">
-                                {lang === "ar" ? "🌐 إدارة بوابة العملاء والطلبات" : "🌐 Client Portal Admin"}
+                                {lang === "ar" ? "🌐 بوابة العملاء" : "🌐 Client Portal"}
                               </option>
                             </select>
                           </div>
@@ -1737,7 +1980,7 @@ export function UasAppShell() {
                                 }`}
                             >
                               <Users className="w-3.5 h-3.5" />
-                              <span>{lang === "ar" ? "كشوفات العملاء" : "Client Ledgers"}</span>
+                              <span>{lang === "ar" ? "حسابات العملاء" : "Client Ledgers"}</span>
                             </button>
                             <button
                               type="button"
