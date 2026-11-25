@@ -23,6 +23,7 @@ import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
 import { SelectWithOther } from "@/components/SelectWithOther";
 import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
+import { TenantClientPortalAdminPanel } from "@/components/portal-admin/TenantClientPortalAdminPanel";
 import { UasDateInput } from "@/components/UasDateInput";
 import { PhoneContactInput } from "@/components/PhoneContactInput";
 import {
@@ -168,6 +169,7 @@ export function SalesTab({
       : selectedGradePreset;
 
   const [costCenterId, setCostCenterId] = useState("");
+  const [salesSubView, setSalesSubView] = useState<"sales" | "portal">("sales");
 
   // Filters
   const [filterProject, setFilterProject] = useState("ALL");
@@ -503,6 +505,58 @@ export function SalesTab({
 
   return (
     <section className="space-y-6">
+      {/* Prominent In-Place Client Portal & Sales Switch inside Sales */}
+      <div className="card-surface rounded-2xl p-2 flex flex-wrap items-center justify-between gap-2 border border-slate-200 dark:border-slate-800 no-print">
+        <div className="flex flex-wrap items-center gap-1.5 text-xs font-extrabold">
+          <button
+            type="button"
+            data-testid="sales-subview-sales"
+            onClick={() => setSalesSubView("sales")}
+            className={`px-3.5 py-2 rounded-xl transition inline-flex items-center gap-1.5 ${
+              salesSubView === "sales"
+                ? "accent-bg shadow-sm"
+                : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+            }`}
+          >
+            <TrendingUp className="w-3.5 h-3.5" />
+            <span>سجل المبيعات والفواتير</span>
+          </button>
+          <button
+            type="button"
+            data-testid="sales-subview-portal"
+            onClick={() => setSalesSubView("portal")}
+            className={`px-3.5 py-2 rounded-xl transition inline-flex items-center gap-1.5 ${
+              salesSubView === "portal"
+                ? "accent-bg shadow-sm"
+                : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+            }`}
+          >
+            <Users className="w-3.5 h-3.5" />
+            <span>بوابة العملاء والطلبات ونشر الأسعار</span>
+          </button>
+        </div>
+        {onOpenClientPortalAdmin && salesSubView === "portal" && (
+          <button
+            type="button"
+            onClick={onOpenClientPortalAdmin}
+            className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-[11px] font-bold hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            فتح كشوفات وحسابات العملاء
+          </button>
+        )}
+      </div>
+
+      {salesSubView === "portal" ? (
+        <div data-testid="sales-embedded-client-portal" className="card-surface rounded-2xl p-5 border border-slate-200 dark:border-slate-800">
+          <TenantClientPortalAdminPanel
+            initialSection="requests"
+            canManageSettings={canEditRecords}
+            onRefreshState={onRefreshState}
+            onToast={onToast}
+          />
+        </div>
+      ) : (
+        <>
       {/* 1. Daily Sales Multi-Officer KPI Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {/* KPI 1: Total Sales Volume */}
@@ -1319,7 +1373,7 @@ export function SalesTab({
                 <button
                   type="button"
                   data-testid="sales-open-portal-admin"
-                  onClick={onOpenClientPortalAdmin}
+                  onClick={() => setSalesSubView("portal")}
                   className="px-3 py-1.5 rounded-xl border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold inline-flex items-center gap-1 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition"
                 >
                   <Users className="w-3.5 h-3.5" />
@@ -1590,6 +1644,8 @@ export function SalesTab({
           </table>
         )}
       </div>
+        </>
+      )}
     </section>
   );
 }

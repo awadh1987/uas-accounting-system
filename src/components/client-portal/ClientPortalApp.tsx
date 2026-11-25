@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link";
 import * as XLSX from "xlsx";
 import {
+  Archive,
   ArrowRight,
   Bell,
   Camera,
@@ -15,6 +16,8 @@ import {
   CreditCard,
   Download,
   Edit3,
+  Eye,
+  EyeOff,
   FileSpreadsheet,
   History,
   KeyRound,
@@ -39,6 +42,13 @@ import { UasDateInput } from "@/components/UasDateInput";
 import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
 import { PhoneContactInput } from "@/components/PhoneContactInput";
 import { SvgAvatar } from "@/components/SvgAvatar";
+import { ThemeSwitcherControl } from "@/components/ThemeSwitcherControl";
+import {
+  PORTAL_THEME_STORAGE_KEY,
+  applyThemeToDocument,
+  readStoredThemePreset,
+} from "@/lib/themeEngine";
+import type { ThemeName } from "@/types/uas";
 import {
   BulkItemImportModal,
   QuickRepeatBasketPanel,
@@ -49,11 +59,13 @@ import {
   type ParsedBulkRequestRow,
   type QuickRepeatBasketItem,
 } from "@/lib/clientPortal/bulkRequestParser";
-import type {
-  AmendmentDiffEntry,
-  ClientCatalogBoardItemView,
-  ClientCatalogBoardStats,
-  RequestAmendmentSnapshot,
+import { appendCatalogBoardItemLine } from "@/lib/clientPortal/orderLineBuilder";
+import {
+  computeClientCatalogBoardStats,
+  type AmendmentDiffEntry,
+  type ClientCatalogBoardItemView,
+  type ClientCatalogBoardStats,
+  type RequestAmendmentSnapshot,
 } from "@/lib/clientPortal/portalTypes";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
 import {
@@ -63,6 +75,7 @@ import {
 import {
   buildTenantExportFilename,
   formatIsoToDmy,
+  formatIsoToDmyTime,
   formatMoney,
   formatRefreshTimestamp,
   resolveExportSignature,
@@ -225,6 +238,8 @@ interface ClientRequestLineView {
   displayUnitLabel: string;
   unitPrice: number;
   lineTotal: number;
+  catalogBoardItemId?: string | null;
+  saleMode?: string;
   notes: string | null;
 }
 
@@ -232,6 +247,8 @@ interface ClientRequestView {
   id: string;
   requestNumber: string;
   pickupPassCode?: string;
+  sectorType?: string;
+  submissionType?: string;
   status: string;
   statusLabelAr: string;
   pickupType: string;
@@ -250,12 +267,26 @@ interface ClientRequestView {
   afterSnapshot?: RequestAmendmentSnapshot | null;
   revisionNumber?: number;
   returnedToClientAt?: string | null;
+  returnedToClientAtDisplay?: string | null;
   returnedByName?: string | null;
   clientResponseStatus?: string | null;
   clientResponseStatusLabelAr?: string | null;
   clientResponseNote?: string | null;
   clientRespondedAt?: string | null;
+  clientRespondedAtDisplay?: string | null;
+  isArchivedByClient?: boolean;
+  isHiddenByClient?: boolean;
   createdAt: string;
+  createdAtDisplay?: string;
+  updatedAt?: string;
+  updatedAtDisplay?: string;
+  approvedAt?: string | null;
+  approvedAtDisplay?: string | null;
+  handedOverAt?: string | null;
+  handedOverAtDisplay?: string | null;
+  canClientCancel?: boolean;
+  canArchiveOrHide?: boolean;
+  canSafelyDelete?: boolean;
   lines: ClientRequestLineView[];
 }
 
@@ -289,12 +320,14 @@ interface StatementRowView {
 interface DraftLineRow {
   rowKey: string;
   lineId?: string;
+  catalogBoardItemId?: string | null;
   itemId: string;
   itemTitle: string;
   requestedQty: string;
   unitCode: string;
   customUnitLabel: string;
   unitPrice: string;
+  saleMode?: "BULK" | "PARTIAL";
   notes: string;
 }
 
@@ -394,6 +427,9 @@ export function ClientPortalApp({
   const [tenantNameAr, setTenantNameAr] = useState("بوابة العملاء");
   const [tenantSlug, setTenantSlug] = useState("default");
   const [brandColor, setBrandColor] = useState("#059669");
+  const [portalTheme, setPortalTheme] = useState<ThemeName>(() =>
+    readStoredThemePreset(PORTAL_THEME_STORAGE_KEY, "emerald")
+  );
   const [logoUrl, setLogoUrl] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [formConfig, setFormConfig] = useState<TenantFormConfig | null>(null);
@@ -497,6 +533,9 @@ export function ClientPortalApp({
     },
   ]);
   const [submittingReq, setSubmittingReq] = useState(false);
+  const [activeSector, setActiveSector] = useState<"HARVEST" | "COMMERCIAL">("HARVEST");
+  const [submissionType, setSubmissionType] = useState<"catalog_order" | "client_goods_registration">("catalog_order");
+  const [commercialCategoryGroup, setCommercialCategoryGroup] = useState<"FOOD" | "NON_FOOD" | "FUEL" | "GENERAL_COMMERCIAL">("FOOD");
   const [editingRequestId, setEditingRequestId] = useState<string | null>(null);
   const [reqError, setReqError] = useState<string | null>(null);
   const [confirmedReceipt, setConfirmedReceipt] = useState<ClientRequestView | null>(null);
@@ -507,6 +546,9 @@ export function ClientPortalApp({
   const [reqFilterFrom, setReqFilterFrom] = useState("");
   const [reqFilterTo, setReqFilterTo] = useState("");
   const [reqFilterQuery, setReqFilterQuery] = useState("");
+  const [reqIncludeHidden, setReqIncludeHidden] = useState(false);
+  const [reqArchiveView, setReqArchiveView] = useState<"ALL" | "ACTIVE" | "ARCHIVED">("ALL");
+  const [selectedReqIds, setSelectedReqIds] = useState<Record<string, boolean>>({});
   const [reqLoading, setReqLoading] = useState(false);
   const [reqRefreshedAt, setReqRefreshedAt] = useState("");
 
@@ -545,6 +587,21 @@ export function ClientPortalApp({
   const [newPassInput, setNewPassInput] = useState("");
   const [confirmPassInput, setConfirmPassInput] = useState("");
   const [changingPass, setChangingPass] = useState(false);
+
+  useEffect(() => {
+    applyThemeToDocument(portalTheme, brandColor, PORTAL_THEME_STORAGE_KEY);
+    if (
+      portalTheme !== "system" ||
+      typeof window === "undefined" ||
+      typeof window.matchMedia !== "function"
+    ) {
+      return;
+    }
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => applyThemeToDocument("system", brandColor, PORTAL_THEME_STORAGE_KEY);
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, [portalTheme, brandColor]);
 
   const showNotice = useCallback((msg: string) => {
     setToast(msg);
@@ -667,6 +724,7 @@ export function ClientPortalApp({
       if (reqFilterFrom) qs.set("fromDate", reqFilterFrom);
       if (reqFilterTo) qs.set("toDate", reqFilterTo);
       if (reqFilterQuery.trim()) qs.set("q", reqFilterQuery.trim());
+      if (reqIncludeHidden) qs.set("includeHidden", "1");
       const res = await fetch(apiUrl(`/api/client-portal/requests?${qs.toString()}`), {
         cache: "no-store",
         credentials: "include",
@@ -681,7 +739,7 @@ export function ClientPortalApp({
     } finally {
       setReqLoading(false);
     }
-  }, [account, reqFilterStatus, reqFilterFrom, reqFilterTo, reqFilterQuery, showNotice]);
+  }, [account, reqFilterStatus, reqFilterFrom, reqFilterTo, reqFilterQuery, reqIncludeHidden, showNotice]);
 
   const loadStatement = useCallback(async (manual = false) => {
     if (!account || account.status !== "ACTIVE") return;
@@ -1279,12 +1337,14 @@ export function ClientPortalApp({
       req.lines.map((l, idx) => ({
         rowKey: `edit-${Date.now()}-${idx}`,
         lineId: l.id,
+        catalogBoardItemId: l.catalogBoardItemId || null,
         itemId: l.itemId || "__CUSTOM__",
         itemTitle: l.itemTitle,
         requestedQty: String(l.confirmedQty ?? l.requestedQty),
         unitCode: l.unitCode || "QAT_BUNCH",
         customUnitLabel: l.customUnitLabel || "",
         unitPrice: l.unitPrice > 0 ? String(l.unitPrice) : "",
+        saleMode: l.saleMode === "PARTIAL" ? "PARTIAL" : "BULK",
         notes: l.notes || "",
       }))
     );
@@ -1343,16 +1403,22 @@ export function ClientPortalApp({
         headers: resolveClientHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           ...(editingRequestId ? { action: "EDIT" } : {}),
+          sectorType: activeSector,
+          submissionType,
           pickupType: activePickupOpt?.type || "MARKET",
           pickupLocation: activePickupOpt?.labelAr || "السوق",
           customPickupLocation: isCustomPickupSelected ? customPickupText.trim() : undefined,
           pickupNotes,
-          customData: reqCustomData,
+          customData: {
+            ...reqCustomData,
+            ...(activeSector === "COMMERCIAL" ? { commercialCategoryGroup } : {}),
+          },
           lines: lines.map((l) => {
             const uOpt = formConfig?.unitOptions.find((u) => u.code === l.unitCode);
             const pNum = Number(l.unitPrice);
             return {
               ...(editingRequestId && l.lineId ? { id: l.lineId } : {}),
+              catalogBoardItemId: l.catalogBoardItemId || null,
               itemId: l.itemId && l.itemId !== "__CUSTOM__" ? l.itemId : null,
               itemTitle: l.itemTitle.trim(),
               requestedQty: Number(l.requestedQty),
@@ -1360,6 +1426,7 @@ export function ClientPortalApp({
               unitLabel: uOpt?.labelAr || "علاقية قات",
               customUnitLabel: l.unitCode === "OTHER" ? l.customUnitLabel.trim() : null,
               unitPrice: Number.isFinite(pNum) && pNum > 0 ? pNum : undefined,
+              saleMode: l.saleMode || "BULK",
               notes: l.notes.trim() || null,
             };
           }),
@@ -1445,41 +1512,42 @@ export function ClientPortalApp({
     if (item.pickupLocation) {
       loadPickupIntoBuilder(item.pickupLocation, undefined, pickupNotes);
     }
-    const targetItemId = item.inventoryItemId || item.id;
     setLines((prev) => {
-      const cleaned = prev.filter((x) => x.itemTitle.trim() !== "");
-      const existingIdx = cleaned.findIndex(
-        (x) =>
-          x.itemTitle.trim() === item.titleAr.trim() &&
-          x.unitCode === item.unitCode &&
-          x.customUnitLabel.trim() === (item.customUnitLabel || "").trim()
-      );
-      if (existingIdx >= 0) {
-        return cleaned.map((x, idx) =>
-          idx === existingIdx
-            ? {
-              ...x,
-              requestedQty: String((Number(x.requestedQty) || 0) + qty),
-              unitPrice: item.unitPrice > 0 ? String(item.unitPrice) : x.unitPrice,
-            }
-            : x
-        );
-      }
-      return [
-        ...cleaned,
-        {
-          rowKey: `board-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          itemId: targetItemId,
-          itemTitle: item.titleAr,
-          requestedQty: String(qty),
-          unitCode: item.unitCode || "QAT_BUNCH",
-          customUnitLabel: item.customUnitLabel || "",
-          unitPrice: item.unitPrice > 0 ? String(item.unitPrice) : "",
-          notes: item.gradeLabel ? `الفرز: ${item.gradeLabel}` : "",
-        },
-      ];
+      const mappedInput = prev.map((x) => ({
+        id: x.lineId,
+        localKey: x.rowKey,
+        catalogBoardItemId: x.catalogBoardItemId || null,
+        itemId: x.itemId || null,
+        itemTitle: x.itemTitle,
+        requestedQty: Number(x.requestedQty) || 1,
+        unitCode: x.unitCode,
+        unitLabel: x.unitCode,
+        customUnitLabel: x.customUnitLabel,
+        unitPrice: Number(x.unitPrice) || 0,
+        saleMode: x.saleMode,
+        notes: x.notes,
+      }));
+      const { nextLines } = appendCatalogBoardItemLine(mappedInput, item, {
+        requestedQty: qty,
+      });
+      return nextLines.map((nl) => {
+        const prevMatch = prev.find((p) => p.rowKey === nl.localKey);
+        if (prevMatch) return prevMatch;
+        return {
+          rowKey: nl.localKey,
+          catalogBoardItemId: nl.catalogBoardItemId || item.id,
+          itemId: nl.itemId || "",
+          itemTitle: nl.itemTitle,
+          requestedQty: String(nl.requestedQty),
+          unitCode: nl.unitCode || "QAT_BUNCH",
+          customUnitLabel: nl.customUnitLabel || "",
+          unitPrice: nl.unitPrice > 0 ? String(nl.unitPrice) : "",
+          saleMode: nl.saleMode === "PARTIAL" ? "PARTIAL" : "BULK",
+          notes: nl.notes || "",
+        };
+      });
     });
-    showNotice(`✅ تم إضافة (${item.titleAr} × ${qty}) إلى تسجيل طلب`);
+    showNotice(`✅ تم إضافة (${item.titleAr} × ${qty}) كسطر مستقل في تسجيل طلب`);
   }
 
   function handleApplyBulkRows(parsedRows: ParsedBulkRequestRow[], mode: "merge" | "replace") {
@@ -1581,23 +1649,61 @@ export function ClientPortalApp({
     }
   }
 
-  async function handleCancelPendingRequest(reqId: string) {
+  async function handleRequestLifecycle(
+    reqId: string,
+    action: "CANCEL" | "ARCHIVE" | "UNARCHIVE" | "HIDE" | "UNHIDE" | "DELETE"
+  ) {
     try {
       const res = await fetch(apiUrl(`/api/client-portal/requests/${reqId}`), {
         method: "PATCH",
         credentials: "include",
-        headers: resolveClientHeaders(),
+        headers: resolveClientHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ action }),
       });
       const data = (await res.json()) as { error?: string; message?: string };
       if (!res.ok) {
-        showNotice(data.error || "تعذر إلغاء الطلب");
+        showNotice(data.error || "تعذر تنفيذ الإجراء على الطلب");
         return;
       }
-      showNotice(data.message || "تم إلغاء الطلب");
+      showNotice(data.message || "✅ تم تحديث حالة الطلب");
       void loadRequests(false);
     } catch {
       showNotice("تعذر تنفيذ العملية");
     }
+  }
+
+  async function handleBulkHideRequests(useSelectedOnly: boolean) {
+    const pickedIds = useSelectedOnly
+      ? Object.entries(selectedReqIds)
+          .filter(([, checked]) => checked)
+          .map(([id]) => id)
+      : undefined;
+    try {
+      const res = await fetch(apiUrl("/api/client-portal/requests"), {
+        method: "PATCH",
+        credentials: "include",
+        headers: resolveClientHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          action: "BULK_HIDE",
+          ...(pickedIds && pickedIds.length > 0 ? { requestIds: pickedIds } : {}),
+          includeArchived: true,
+        }),
+      });
+      const data = (await res.json()) as { message?: string; error?: string };
+      if (!res.ok) {
+        showNotice(data.error || "تعذر تنفيذ الإخفاء الجماعي");
+        return;
+      }
+      setSelectedReqIds({});
+      showNotice(data.message || "✅ تم الإخفاء الجماعي بنجاح");
+      void loadRequests(false);
+    } catch {
+      showNotice("تعذر الاتصال بالخادم أثناء الإخفاء الجماعي");
+    }
+  }
+
+  async function handleCancelPendingRequest(reqId: string) {
+    await handleRequestLifecycle(reqId, "CANCEL");
   }
 
   function handleExportStatementExcel() {
@@ -1757,6 +1863,7 @@ export function ClientPortalApp({
         { labelAr: "الجوال", labelEn: "Phone", value: account?.phone || "" },
         { labelAr: "موقع الاستلام", labelEn: "Pickup", value: req.pickupLocation },
         { labelAr: "حالة الطلب", labelEn: "Status", value: req.statusLabelAr },
+        { labelAr: "التاريخ والوقت", labelEn: "Date & Time", value: req.createdAtDisplay || formatIsoToDmyTime(req.createdAt) },
       ],
       tables: [
         {
@@ -1827,6 +1934,13 @@ export function ClientPortalApp({
           </div>
 
           <div className="flex items-center gap-2 text-xs">
+            <ThemeSwitcherControl
+              theme={portalTheme}
+              lang="ar"
+              compact
+              testId="portal-theme-switcher"
+              onChangeTheme={(next) => setPortalTheme(next)}
+            />
             {account && (
               <button
                 type="button"
@@ -2332,6 +2446,60 @@ export function ClientPortalApp({
               </div>
             )}
 
+            {/* Dual Trading Sector Top Switcher (Section 1 Harvest vs Section 2 Commercial) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                data-testid="portal-sector-tab-harvest"
+                onClick={() => {
+                  setActiveSector("HARVEST");
+                  setSubmissionType("catalog_order");
+                }}
+                className={`p-3.5 rounded-2xl border text-right transition flex items-center justify-between gap-2 ${
+                  activeSector === "HARVEST"
+                    ? "border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/40 shadow-sm"
+                    : "card-surface border-slate-200 dark:border-slate-700 hover:border-emerald-300"
+                }`}
+              >
+                <div>
+                  <div className="font-black text-xs text-slate-900 dark:text-white">
+                    1. القطاع الحالي — تجارة المحصول والفرز والزراعة
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    قوائم الفرز اليومية، علاقيات القات وأخرى، ونقاط الاستلام المباشر
+                  </div>
+                </div>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${activeSector === "HARVEST" ? "accent-bg" : "bg-slate-100 dark:bg-slate-800 text-slate-500"}`}>
+                  {activeSector === "HARVEST" ? "نشط" : "فتح"}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                data-testid="portal-sector-tab-commercial"
+                onClick={() => {
+                  setActiveSector("COMMERCIAL");
+                }}
+                className={`p-3.5 rounded-2xl border text-right transition flex items-center justify-between gap-2 ${
+                  activeSector === "COMMERCIAL"
+                    ? "border-amber-500 bg-amber-50/80 dark:bg-amber-950/40 shadow-sm"
+                    : "card-surface border-slate-200 dark:border-slate-700 hover:border-amber-300"
+                }`}
+              >
+                <div>
+                  <div className="font-black text-xs text-slate-900 dark:text-white">
+                    2. القطاع التجاري — تجارة الجملة والتجزئة والسلع
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    البضائع الكاملة والجزئية، المواد الغذائية، غير الغذائية، المحروقات والوقود
+                  </div>
+                </div>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${activeSector === "COMMERCIAL" ? "bg-amber-600 text-white" : "bg-slate-100 dark:bg-slate-800 text-slate-500"}`}>
+                  {activeSector === "COMMERCIAL" ? "نشط" : "فتح"}
+                </span>
+              </button>
+            </div>
+
             {/* Portal Top Summary + Sub-Tabs */}
             <div className="card-surface rounded-2xl p-4 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2398,20 +2566,31 @@ export function ClientPortalApp({
             </div>
 
             {/* TAB 0: TENANT-PUBLISHED INVENTORY, GRADING & PRICING BOARD */}
-            {portalTab === "catalog" && (
-              <ClientCatalogPricingBoard
-                boardItems={boardItems}
-                boardStats={boardStats}
-                draftLines={lines}
-                loading={boardLoading}
-                onRefresh={() => void refreshCatalogBoard()}
-                onAddToOrder={handleAddCatalogItemToOrder}
-                onGoToOrder={() => {
-                  setConfirmedReceipt(null);
-                  setPortalTab("new_request");
-                }}
-              />
-            )}
+            {portalTab === "catalog" && (() => {
+              const sectorBoardItems = boardItems.filter((item) => {
+                const itemSec = (item.sectorType || "HARVEST").toUpperCase();
+                if (activeSector === "COMMERCIAL") return itemSec === "COMMERCIAL";
+                return itemSec !== "COMMERCIAL";
+              });
+              const displayItems =
+                activeSector === "HARVEST" && sectorBoardItems.length === 0 && boardItems.every((b) => !b.sectorType)
+                  ? boardItems
+                  : sectorBoardItems;
+              return (
+                <ClientCatalogPricingBoard
+                  boardItems={displayItems}
+                  boardStats={computeClientCatalogBoardStats(displayItems)}
+                  draftLines={lines}
+                  loading={boardLoading}
+                  onRefresh={() => void refreshCatalogBoard()}
+                  onAddToOrder={handleAddCatalogItemToOrder}
+                  onGoToOrder={() => {
+                    setConfirmedReceipt(null);
+                    setPortalTab("new_request");
+                  }}
+                />
+              );
+            })()}
 
             {/* TAB 1: NEW REQUEST / PICKUP ORDER */}
             {portalTab === "new_request" && (
@@ -2469,8 +2648,10 @@ export function ClientPortalApp({
                         <strong>{confirmedReceipt.pickupLocation}</strong>
                       </div>
                       <div>
-                        <span className="text-slate-500">التاريخ: </span>
-                        <bdi dir="ltr" className="font-mono">{formatIsoToDmy(confirmedReceipt.createdAt.slice(0, 10))}</bdi>
+                        <span className="text-slate-500">التاريخ والوقت: </span>
+                        <bdi dir="ltr" className="font-mono">
+                          {confirmedReceipt.createdAtDisplay || formatIsoToDmyTime(confirmedReceipt.createdAt)}
+                        </bdi>
                       </div>
                     </div>
                     <div className="font-black text-emerald-700 dark:text-emerald-300">
@@ -2544,6 +2725,45 @@ export function ClientPortalApp({
                       </button>
                     )}
                   </div>
+
+                  {activeSector === "COMMERCIAL" && (
+                    <div className="p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-bold mb-1">تصنيف البضائع في القطاع التجاري</label>
+                        <select
+                          value={commercialCategoryGroup}
+                          onChange={(e) =>
+                            setCommercialCategoryGroup(
+                              e.target.value as "FOOD" | "NON_FOOD" | "FUEL" | "GENERAL_COMMERCIAL"
+                            )
+                          }
+                          className="w-full rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
+                        >
+                          <option value="FOOD">مواد غذائية (جملة وتجزئة)</option>
+                          <option value="NON_FOOD">بضائع استهلاكية وغير غذائية</option>
+                          <option value="FUEL">محروقات ووقود وطاقة</option>
+                          <option value="GENERAL_COMMERCIAL">تجارة عامة ومواد متعددة</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block font-bold mb-1">نوع تقديم الطلب التجاري</label>
+                        <select
+                          value={submissionType}
+                          onChange={(e) =>
+                            setSubmissionType(
+                              e.target.value === "client_goods_registration"
+                                ? "client_goods_registration"
+                                : "catalog_order"
+                            )
+                          }
+                          className="w-full rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
+                        >
+                          <option value="catalog_order">طلب من كتالوج الأصناف المنشورة</option>
+                          <option value="client_goods_registration">تسجيل بضاعة / طلب جملة وتجزئة مخصص</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
 
                   {reqError && (
                     <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 font-bold flex flex-wrap items-center justify-between gap-2">
@@ -3028,7 +3248,7 @@ export function ClientPortalApp({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-6 gap-2">
                   <select
                     value={reqFilterStatus}
                     onChange={(e) => setReqFilterStatus(e.target.value)}
@@ -3042,6 +3262,17 @@ export function ClientPortalApp({
                     <option value="COMPLETED">تم الاستلام</option>
                     <option value="CANCELLED">ملغى</option>
                   </select>
+                  <select
+                    value={reqArchiveView}
+                    onChange={(e) =>
+                      setReqArchiveView(e.target.value as "ALL" | "ACTIVE" | "ARCHIVED")
+                    }
+                    className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-bold"
+                  >
+                    <option value="ALL">النشطة والمؤرشفة</option>
+                    <option value="ACTIVE">غير المؤرشفة فقط</option>
+                    <option value="ARCHIVED">الأرشيف فقط</option>
+                  </select>
                   <UasDateInput value={reqFilterFrom} onChange={setReqFilterFrom} placeholder="من: يوم / شهر / سنة" />
                   <UasDateInput value={reqFilterTo} onChange={setReqFilterTo} placeholder="إلى: يوم / شهر / سنة" />
                   <input
@@ -3051,6 +3282,40 @@ export function ClientPortalApp({
                     placeholder="بحث برقم الطلب أو الصنف..."
                     className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
                   />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      data-testid="portal-bulk-hide-completed-btn"
+                      onClick={() => void handleBulkHideRequests(false)}
+                      className="px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-bold inline-flex items-center gap-1"
+                    >
+                      <EyeOff className="w-3.5 h-3.5" />
+                      <span>إخفاء جماعي للمكتمل/الملغى</span>
+                    </button>
+                    {Object.values(selectedReqIds).some(Boolean) && (
+                      <button
+                        type="button"
+                        data-testid="portal-bulk-hide-selected-btn"
+                        onClick={() => void handleBulkHideRequests(true)}
+                        className="px-2.5 py-2 rounded-xl bg-slate-800 text-white font-bold inline-flex items-center gap-1"
+                      >
+                        <EyeOff className="w-3.5 h-3.5" />
+                        <span>إخفاء المحدد ({Object.values(selectedReqIds).filter(Boolean).length})</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setReqIncludeHidden((prev) => !prev)}
+                      className={`px-2.5 py-2 rounded-xl border font-bold inline-flex items-center gap-1 ${
+                        reqIncludeHidden
+                          ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-200"
+                          : "border-slate-300 dark:border-slate-700"
+                      }`}
+                    >
+                      {reqIncludeHidden ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                      <span>{reqIncludeHidden ? "إخفاء المخفية" : "عرض المخفية"}</span>
+                    </button>
+                  </div>
                 </div>
 
                 {requestsList.length === 0 ? (
@@ -3082,7 +3347,13 @@ export function ClientPortalApp({
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {requestsList.map((r) => {
+                    {requestsList
+                      .filter((r) => {
+                        if (reqArchiveView === "ACTIVE") return !r.isArchivedByClient;
+                        if (reqArchiveView === "ARCHIVED") return Boolean(r.isArchivedByClient);
+                        return true;
+                      })
+                      .map((r) => {
                       const stepperStages = [
                         { key: "PENDING_REVIEW", label: "قيد المراجعة" },
                         { key: "RETURNED_TO_CLIENT", label: "معاد للموافقة" },
@@ -3099,26 +3370,63 @@ export function ClientPortalApp({
                         !r.linkedSaleId &&
                         !r.linkedInvoiceId;
                       const canClientCancelPending =
-                        r.status === "PENDING_REVIEW" &&
-                        !r.reserveStock &&
-                        !r.linkedSalesRecordId &&
-                        !r.linkedSaleId &&
-                        !r.linkedInvoiceId;
+                        r.canClientCancel ??
+                        ((r.status === "PENDING_REVIEW" || r.status === "RETURNED_TO_CLIENT") &&
+                          !r.reserveStock &&
+                          !r.linkedSalesRecordId &&
+                          !r.linkedSaleId &&
+                          !r.linkedInvoiceId);
+                      const canArchiveHide =
+                        r.canArchiveOrHide ??
+                        (["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status) || Boolean(r.isArchivedByClient));
+                      const canSafeDelete =
+                        r.canSafelyDelete ??
+                        (["CANCELLED", "REJECTED", "PENDING_REVIEW", "RETURNED_TO_CLIENT"].includes(r.status) &&
+                          !r.reserveStock &&
+                          !r.linkedSalesRecordId &&
+                          !r.linkedSaleId &&
+                          !r.linkedInvoiceId);
                       return (
                         <div key={r.id} className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-2 flex-wrap">
+                              {canArchiveHide && (
+                                <input
+                                  type="checkbox"
+                                  aria-label={`تحديد ${r.requestNumber}`}
+                                  checked={Boolean(selectedReqIds[r.id])}
+                                  onChange={(e) =>
+                                    setSelectedReqIds((prev) => ({
+                                      ...prev,
+                                      [r.id]: e.target.checked,
+                                    }))
+                                  }
+                                  className="rounded border-slate-300"
+                                />
+                              )}
                               <span className="font-mono font-black px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
                                 <bdi dir="ltr">{r.requestNumber}</bdi>
                               </span>
                               <span
                                 className={`px-2.5 py-0.5 rounded-full font-extrabold ${r.status === "RETURNED_TO_CLIENT"
                                   ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200"
+                                  : r.status === "CANCELLED" || r.status === "REJECTED"
+                                  ? "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200"
                                   : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
                                   }`}
                               >
                                 {r.statusLabelAr}
                               </span>
+                              {r.isArchivedByClient && (
+                                <span className="px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-bold">
+                                  مؤرشف
+                                </span>
+                              )}
+                              {r.isHiddenByClient && (
+                                <span className="px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-200 text-[10px] font-bold">
+                                  مخفي
+                                </span>
+                              )}
                               {r.clientResponseStatus === "PENDING_STAFF_APPROVAL" && (
                                 <span
                                   data-testid={`portal-pending-staff-badge-${r.id}`}
@@ -3136,11 +3444,12 @@ export function ClientPortalApp({
                                 <MapPin className="w-3.5 h-3.5 text-emerald-600" />
                                 {r.pickupLocation}
                               </span>
-                              <span className="font-mono text-slate-400">
-                                <bdi dir="ltr">{formatIsoToDmy(r.createdAt.slice(0, 10))}</bdi>
+                              <span className="font-mono text-slate-500 inline-flex items-center gap-1">
+                                <Clock className="w-3 h-3" />
+                                <bdi dir="ltr">{r.createdAtDisplay || formatIsoToDmyTime(r.createdAt)}</bdi>
                               </span>
                             </div>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                               {canClientModifyPending && (
                                 <button
                                   type="button"
@@ -3150,6 +3459,17 @@ export function ClientPortalApp({
                                 >
                                   <Edit3 className="w-3 h-3" />
                                   <span>تعديل الطلب</span>
+                                </button>
+                              )}
+                              {canClientCancelPending && (
+                                <button
+                                  type="button"
+                                  data-testid={`portal-cancel-req-${r.id}`}
+                                  onClick={() => void handleCancelPendingRequest(r.id)}
+                                  className="px-2.5 py-1 rounded-xl border border-rose-400 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-bold text-[11px] inline-flex items-center gap-1"
+                                >
+                                  <XCircle className="w-3 h-3" />
+                                  <span>إلغاء الطلب</span>
                                 </button>
                               )}
                               <button
@@ -3185,14 +3505,50 @@ export function ClientPortalApp({
                                     onClick: () => printReceiptSpec(r),
                                   },
                                   {
+                                    id: "archive",
+                                    label: r.isArchivedByClient ? "إلغاء الأرشفة" : "أرشفة",
+                                    icon: <Archive className="w-3.5 h-3.5" />,
+                                    hidden: !canArchiveHide,
+                                    onClick: () =>
+                                      handleRequestLifecycle(
+                                        r.id,
+                                        r.isArchivedByClient ? "UNARCHIVE" : "ARCHIVE"
+                                      ),
+                                  },
+                                  {
+                                    id: "hide",
+                                    label: r.isHiddenByClient ? "إظهار الطلب" : "إخفاء",
+                                    icon: r.isHiddenByClient ? (
+                                      <Eye className="w-3.5 h-3.5" />
+                                    ) : (
+                                      <EyeOff className="w-3.5 h-3.5" />
+                                    ),
+                                    hidden: !canArchiveHide,
+                                    onClick: () =>
+                                      handleRequestLifecycle(
+                                        r.id,
+                                        r.isHiddenByClient ? "UNHIDE" : "HIDE"
+                                      ),
+                                  },
+                                  {
                                     id: "cancel",
                                     label: "إلغاء الطلب",
                                     icon: <XCircle className="w-3.5 h-3.5" />,
                                     tone: "danger",
                                     hidden: !canClientCancelPending,
                                     confirmTitle: `إلغاء الطلب (${r.requestNumber})`,
-                                    confirmMessage: "هل أنت متأكد من إلغاء هذا الطلب؟",
+                                    confirmMessage: "هل أنت متأكد من إلغاء هذا الطلب قبل معالجة الإدارة؟",
                                     onClick: () => handleCancelPendingRequest(r.id),
+                                  },
+                                  {
+                                    id: "delete-safe",
+                                    label: "حذف نهائي (للطلبات الملغاة/غير المرحّلة)",
+                                    icon: <Trash2 className="w-3.5 h-3.5" />,
+                                    tone: "danger",
+                                    hidden: !canSafeDelete,
+                                    confirmTitle: `حذف الطلب (${r.requestNumber})`,
+                                    confirmMessage: "سيتم حذف الطلب غير المرحّل نهائياً دون المساس بأي قيود مالية. هل تريد المتابعة؟",
+                                    onClick: () => handleRequestLifecycle(r.id, "DELETE"),
                                   },
                                 ]}
                               />
@@ -3283,7 +3639,7 @@ export function ClientPortalApp({
                                 {r.returnedByName && (
                                   <span className="text-[11px] text-amber-800 dark:text-amber-300">
                                     بواسطة: {r.returnedByName}
-                                    {r.returnedToClientAt ? ` • ${formatIsoToDmy(r.returnedToClientAt.slice(0, 10))}` : ""}
+                                    {r.returnedToClientAt ? ` • ${r.returnedToClientAtDisplay || formatIsoToDmyTime(r.returnedToClientAt)}` : ""}
                                   </span>
                                 )}
                               </div>
@@ -3760,7 +4116,7 @@ export function ClientPortalApp({
                                 </span>
                               </div>
                               <span className="font-mono text-[10px] text-slate-400">
-                                <bdi dir="ltr">{formatIsoToDmy(n.createdAt.slice(0, 10))}</bdi>
+                                <bdi dir="ltr">{formatIsoToDmyTime(n.createdAt)}</bdi>
                               </span>
                             </div>
                             <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">

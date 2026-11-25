@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma, withTenantRoute } from "@/lib/prisma";
+import { withTenantRoute } from "@/lib/prisma";
 import { corsOptionsResponse, jsonError } from "@/lib/apiHelpers";
 import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
 import { resolveAuthenticatedClient } from "@/lib/clientPortal/clientAuth";
 import {
   clientRespondToAmendedRequest,
-  serializeRequest,
+  lifecycleClientGoodsRequest,
   updatePendingClientRequest,
+  type ClientOrStaffLifecycleAction,
 } from "@/lib/clientPortal/portalService";
 import { resolveTenantCloudUrl } from "@/lib/serverConnection";
 
@@ -46,6 +47,7 @@ export const PATCH = withTenantRoute(async function PATCH(
         pickupNotes: body.pickupNotes !== undefined ? String(body.pickupNotes || "") : undefined,
         lines: rawLines.map((l) => ({
           id: l.id ? String(l.id) : undefined,
+          catalogBoardItemId: l.catalogBoardItemId ? String(l.catalogBoardItemId) : null,
           itemId: l.itemId ? String(l.itemId) : null,
           itemTitle: String(l.itemTitle || ""),
           requestedQty: Number(l.requestedQty || 0),
@@ -53,6 +55,7 @@ export const PATCH = withTenantRoute(async function PATCH(
           unitLabel: String(l.unitLabel || "علاقية قات"),
           customUnitLabel: l.customUnitLabel ? String(l.customUnitLabel) : null,
           unitPrice: l.unitPrice !== undefined ? Number(l.unitPrice) : undefined,
+          saleMode: l.saleMode ? String(l.saleMode) : undefined,
           notes: l.notes ? String(l.notes) : null,
         })),
       });
@@ -85,41 +88,79 @@ export const PATCH = withTenantRoute(async function PATCH(
       });
     }
 
-    const existing = await prisma.clientGoodsRequest.findUnique({
-      where: { id },
-      include: { lines: { orderBy: { lineOrder: "asc" } } },
+    const allowedLifecycleActions: ClientOrStaffLifecycleAction[] = [
+      "CANCEL",
+      "ARCHIVE",
+      "UNARCHIVE",
+      "HIDE",
+      "UNHIDE",
+      "DELETE",
+    ];
+    if (!allowedLifecycleActions.includes(action as ClientOrStaffLifecycleAction)) {
+      return jsonError("إجراء غير معروف على الطلب", 400);
+    }
+
+    const res = await lifecycleClientGoodsRequest({
+      requestId: id,
+      actorScope: "CLIENT",
+      clientAccountId: auth.account.id,
+      action: action as ClientOrStaffLifecycleAction,
+      actorName: auth.account.fullName,
+      tenantSlug: auth.scope.tenantSlug,
     });
 
-    if (!existing || existing.clientAccountId !== auth.account.id) {
-      return jsonError("الطلب غير موجود أو غير مصرح بالوصول إليه", 404);
-    }
+    const messages: Record<ClientOrStaffLifecycleAction, string> = {
+      CANCEL: "تم إلغاء الطلب بنجاح قبل معالجة الإدارة",
+      ARCHIVE: "تمت أرشفة الطلب بنجاح",
+      UNARCHIVE: "تمت استعادة الطلب من الأرشيف",
+      HIDE: "تم إخفاء الطلب من القائمة الظاهرة",
+      UNHIDE: "تم إظهار الطلب في القائمة",
+      DELETE: "تم حذف الطلب غير المرحّل بأمان",
+    };
 
-    if (
-      existing.status !== "PENDING_REVIEW" ||
-      existing.reserveStock ||
-      existing.linkedSalesRecordId ||
-      existing.linkedSaleId ||
-      existing.linkedDraftId
-    ) {
-      return jsonError(
-        "يمكن إلغاء الطلب فقط عندما يكون بحالة (قيد المراجعة) وقبل الاعتماد أو حجز المخزون",
-        400
-      );
+    return NextResponse.json({
+      success: true,
+      deleted: Boolean(res.deleted),
+      deletedId: res.deletedId,
+      request: res.request,
+      message: messages[action as ClientOrStaffLifecycleAction],
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "تعذر تحديث حالة الطلب";
+    if (msg.startsWith("NOT_FOUND:")) {
+      return jsonError(msg.replace(/^NOT_FOUND:\s*/, ""), 404);
     }
+    return jsonError(msg, 400);
+  }
+});
 
-    const updated = await prisma.clientGoodsRequest.update({
-      where: { id: existing.id },
-      data: { status: "CANCELLED" },
-      include: { lines: { orderBy: { lineOrder: "asc" } } },
+export const DELETE = withTenantRoute(async function DELETE(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    await ensurePortalSchemaReady();
+    const auth = await resolveAuthenticatedClient(req);
+    if (!auth.ok) return jsonError(auth.error, auth.status);
+
+    const { id } = await context.params;
+    const res = await lifecycleClientGoodsRequest({
+      requestId: id,
+      actorScope: "CLIENT",
+      clientAccountId: auth.account.id,
+      action: "DELETE",
+      actorName: auth.account.fullName,
+      tenantSlug: auth.scope.tenantSlug,
     });
 
     return NextResponse.json({
       success: true,
-      request: serializeRequest(updated),
-      message: "تم إلغاء الطلب بنجاح",
+      deleted: true,
+      deletedId: res.deletedId,
+      message: "تم حذف الطلب غير المرحّل بأمان",
     });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "تعذر تحديث حالة الطلب";
+    const msg = err instanceof Error ? err.message : "تعذر حذف الطلب";
     if (msg.startsWith("NOT_FOUND:")) {
       return jsonError(msg.replace(/^NOT_FOUND:\s*/, ""), 404);
     }

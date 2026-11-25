@@ -27,6 +27,26 @@ export function formatIsoToDmy(isoOrDate?: string | Date | null): string {
   return trimmed;
 }
 
+export function formatIsoToTimeHm(isoOrDate?: string | Date | null): string {
+  if (!isoOrDate) return "";
+  const dt = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
+  if (Number.isNaN(dt.getTime())) {
+    const timeMatch = /(\d{2}):(\d{2})/.exec(String(isoOrDate));
+    return timeMatch ? `${timeMatch[1]}:${timeMatch[2]}` : "";
+  }
+  const hh = String(dt.getUTCHours()).padStart(2, "0");
+  const mm = String(dt.getUTCMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+export function formatIsoToDmyTime(isoOrDate?: string | Date | null): string {
+  if (!isoOrDate) return "";
+  const dmy = formatIsoToDmy(isoOrDate);
+  const hm = formatIsoToTimeHm(isoOrDate);
+  if (dmy && hm) return `${dmy} — ${hm}`;
+  return dmy || hm || "";
+}
+
 export function parseDmyOrIsoToIso(input?: string | null): string | null {
   if (!input) return null;
   const trimmed = input.trim();

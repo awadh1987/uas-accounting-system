@@ -4,6 +4,7 @@ import { corsOptionsResponse, jsonError } from "@/lib/apiHelpers";
 import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
 import { resolveAuthenticatedClient } from "@/lib/clientPortal/clientAuth";
 import {
+  bulkHideClientGoodsRequests,
   createClientGoodsRequest,
   serializeRequest,
 } from "@/lib/clientPortal/portalService";
@@ -26,6 +27,9 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const status = (searchParams.get("status") || "ALL").trim().toUpperCase();
+    const sectorType = (searchParams.get("sectorType") || "ALL").trim().toUpperCase();
+    const includeHidden = searchParams.get("includeHidden") === "1";
+    const includeArchived = searchParams.get("includeArchived") !== "0";
     const fromDate = (searchParams.get("fromDate") || "").trim();
     const toDate = (searchParams.get("toDate") || "").trim();
     const q = (searchParams.get("q") || "").trim().toLowerCase();
@@ -37,12 +41,15 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
       },
       include: { lines: { orderBy: { lineOrder: "asc" } } },
       orderBy: { createdAt: "desc" },
-      take: 150,
+      take: 250,
     });
 
     const filtered = rows
       .map(serializeRequest)
       .filter((r) => {
+        if (!includeHidden && r.isHiddenByClient) return false;
+        if (!includeArchived && r.isArchivedByClient) return false;
+        if (sectorType && sectorType !== "ALL" && r.sectorType !== sectorType) return false;
         const d = r.createdAt.slice(0, 10);
         if (fromDate && d < fromDate) return false;
         if (toDate && d > toDate) return false;
@@ -78,6 +85,8 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
 
     const request = await createClientGoodsRequest({
       clientAccountId: auth.account.id,
+      sectorType: body.sectorType ? String(body.sectorType) : undefined,
+      submissionType: body.submissionType ? String(body.submissionType) : undefined,
       pickupType: body.pickupType ? String(body.pickupType) : undefined,
       pickupLocation: String(body.pickupLocation || ""),
       customPickupLocation: body.customPickupLocation ? String(body.customPickupLocation) : undefined,
@@ -87,6 +96,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
           ? (body.customData as Record<string, unknown>)
           : undefined,
       lines: rawLines.map((l) => ({
+        catalogBoardItemId: l.catalogBoardItemId ? String(l.catalogBoardItemId) : null,
         itemId: l.itemId ? String(l.itemId) : null,
         itemTitle: String(l.itemTitle || ""),
         requestedQty: Number(l.requestedQty || 0),
@@ -94,6 +104,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         unitLabel: String(l.unitLabel || "علاقية قات"),
         customUnitLabel: l.customUnitLabel ? String(l.customUnitLabel) : null,
         unitPrice: l.unitPrice !== undefined ? Number(l.unitPrice) : undefined,
+        saleMode: l.saleMode ? String(l.saleMode) : undefined,
         notes: l.notes ? String(l.notes) : null,
       })),
     });
@@ -108,6 +119,44 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "تعذر إرسال الطلب";
+    return jsonError(msg, 400);
+  }
+});
+
+export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
+  try {
+    await ensurePortalSchemaReady();
+    const auth = await resolveAuthenticatedClient(req);
+    if (!auth.ok) return jsonError(auth.error, auth.status);
+
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+    const action = String(body.action || "BULK_HIDE").trim().toUpperCase();
+    if (action !== "BULK_HIDE" && action !== "HIDE_COMPLETED") {
+      return jsonError("إجراء غير معروف", 400);
+    }
+
+    const requestIds = Array.isArray(body.requestIds)
+      ? body.requestIds.map((id) => String(id)).filter(Boolean)
+      : undefined;
+
+    const result = await bulkHideClientGoodsRequests({
+      actorScope: "CLIENT",
+      clientAccountId: auth.account.id,
+      requestIds,
+      includeArchived: Boolean(body.includeArchived ?? true),
+    });
+
+    return NextResponse.json({
+      success: true,
+      updatedCount: result.updatedCount,
+      ids: result.ids,
+      message:
+        result.updatedCount > 0
+          ? `✅ تم إخفاء ${result.updatedCount} طلب من السجل الظاهر (دون حذف القيود المحاسبية)`
+          : "لا توجد طلبات مكتملة أو ملغاة أو مؤرشفة لإخفائها",
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "تعذر تنفيذ الإخفاء الجماعي";
     return jsonError(msg, 400);
   }
 });

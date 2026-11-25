@@ -1344,6 +1344,17 @@ CREATE TABLE "ClientGoodsRequest" (
     "handedOverByName" TEXT,
     "handedOverAt" DATETIME,
     "staffNotes" TEXT,
+    "sectorType" TEXT NOT NULL DEFAULT 'HARVEST',
+    "submissionType" TEXT NOT NULL DEFAULT 'catalog_order',
+    "isArchived" BOOLEAN NOT NULL DEFAULT false,
+    "archivedAt" DATETIME,
+    "archivedBy" TEXT,
+    "isArchivedByClient" BOOLEAN NOT NULL DEFAULT false,
+    "archivedByClientAt" DATETIME,
+    "isHiddenByClient" BOOLEAN NOT NULL DEFAULT false,
+    "hiddenByClientAt" DATETIME,
+    "isHiddenByStaff" BOOLEAN NOT NULL DEFAULT false,
+    "hiddenByStaffAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "ClientGoodsRequest_clientAccountId_fkey" FOREIGN KEY ("clientAccountId") REFERENCES "ClientPortalAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE
@@ -1355,6 +1366,7 @@ CREATE TABLE "ClientGoodsRequestLine" (
     "requestId" TEXT NOT NULL,
     "lineOrder" INTEGER NOT NULL DEFAULT 1,
     "itemId" TEXT,
+    "catalogBoardItemId" TEXT,
     "itemTitle" TEXT NOT NULL,
     "requestedQty" DECIMAL NOT NULL,
     "confirmedQty" DECIMAL,
@@ -1363,6 +1375,7 @@ CREATE TABLE "ClientGoodsRequestLine" (
     "customUnitLabel" TEXT,
     "unitPrice" DECIMAL NOT NULL DEFAULT 0,
     "lineTotal" DECIMAL NOT NULL DEFAULT 0,
+    "saleMode" TEXT NOT NULL DEFAULT 'BULK',
     "notes" TEXT,
     CONSTRAINT "ClientGoodsRequestLine_requestId_fkey" FOREIGN KEY ("requestId") REFERENCES "ClientGoodsRequest" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );

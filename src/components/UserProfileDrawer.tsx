@@ -471,8 +471,8 @@ function UserProfileDrawerContent({
                   ? "صلاحيات مخصصة"
                   : "Custom RBAC"
                 : isAr
-                ? "صلاحيات الدور الافتراضية"
-                : "Role Default"}
+                  ? "صلاحيات الدور الافتراضية"
+                  : "Role Default"}
             </div>
           </div>
         </div>
@@ -513,11 +513,10 @@ function UserProfileDrawerContent({
           <button
             type="button"
             onClick={() => setActiveSubTab("profile")}
-            className={`flex-1 py-2 rounded-xl font-bold transition flex items-center justify-center gap-1.5 ${
-              activeSubTab === "profile"
-                ? "bg-white dark:bg-slate-900 shadow-xs text-emerald-600 dark:text-emerald-400"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
-            }`}
+            className={`flex-1 py-2 rounded-xl font-bold transition flex items-center justify-center gap-1.5 ${activeSubTab === "profile"
+              ? "bg-white dark:bg-slate-900 shadow-xs text-emerald-600 dark:text-emerald-400"
+              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+              }`}
           >
             <User className="w-3.5 h-3.5" />
             <span>{isAr ? "الملف والتواصل" : "Profile & Contact"}</span>
@@ -525,11 +524,10 @@ function UserProfileDrawerContent({
           <button
             type="button"
             onClick={() => setActiveSubTab("preferences")}
-            className={`flex-1 py-2 rounded-xl font-bold transition flex items-center justify-center gap-1.5 ${
-              activeSubTab === "preferences"
-                ? "bg-white dark:bg-slate-900 shadow-xs text-emerald-600 dark:text-emerald-400"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
-            }`}
+            className={`flex-1 py-2 rounded-xl font-bold transition flex items-center justify-center gap-1.5 ${activeSubTab === "preferences"
+              ? "bg-white dark:bg-slate-900 shadow-xs text-emerald-600 dark:text-emerald-400"
+              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+              }`}
           >
             <Paintbrush className="w-3.5 h-3.5" />
             <span>{isAr ? "تفضيلات العمل" : "Preferences"}</span>
@@ -537,11 +535,10 @@ function UserProfileDrawerContent({
           <button
             type="button"
             onClick={() => setActiveSubTab("security")}
-            className={`flex-1 py-2 rounded-xl font-bold transition flex items-center justify-center gap-1.5 ${
-              activeSubTab === "security"
-                ? "bg-white dark:bg-slate-900 shadow-xs text-emerald-600 dark:text-emerald-400"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
-            }`}
+            className={`flex-1 py-2 rounded-xl font-bold transition flex items-center justify-center gap-1.5 ${activeSubTab === "security"
+              ? "bg-white dark:bg-slate-900 shadow-xs text-emerald-600 dark:text-emerald-400"
+              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+              }`}
           >
             <KeyRound className="w-3.5 h-3.5" />
             <span>{isAr ? "الأمان وكلمة المرور" : "Security"}</span>
@@ -552,11 +549,10 @@ function UserProfileDrawerContent({
           <button
             type="button"
             onClick={() => setActiveSubTab("access")}
-            className={`flex-1 py-2 rounded-xl font-bold transition flex items-center justify-center gap-1.5 ${
-              activeSubTab === "access"
-                ? "bg-white dark:bg-slate-900 shadow-xs text-emerald-600 dark:text-emerald-400"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
-            }`}
+            className={`flex-1 py-2 rounded-xl font-bold transition flex items-center justify-center gap-1.5 ${activeSubTab === "access"
+              ? "bg-white dark:bg-slate-900 shadow-xs text-emerald-600 dark:text-emerald-400"
+              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+              }`}
           >
             <Shield className="w-3.5 h-3.5" />
             <span>{isAr ? "صلاحياتي ونطاقي" : "My Access & Scope"}</span>
@@ -677,8 +673,8 @@ function UserProfileDrawerContent({
                           ? "صورة شخصية مفعلة"
                           : "Custom photo active"
                         : isAr
-                        ? "الأحرف الافتراضية مفعلة حالياً"
-                        : "Using initials fallback"}
+                          ? "الأحرف الافتراضية مفعلة حالياً"
+                          : "Using initials fallback"}
                     </div>
                     <div className="text-[10px] text-slate-400">
                       {isAr ? "PNG, JPG, WEBP, GIF — بحد أقصى 2MB" : "PNG, JPG, WEBP, GIF — max 2 MB"}
@@ -706,8 +702,8 @@ function UserProfileDrawerContent({
                           ? "جاري الرفع..."
                           : "Uploading..."
                         : isAr
-                        ? "رفع صورة"
-                        : "Upload Photo"}
+                          ? "رفع صورة"
+                          : "Upload Photo"}
                     </span>
                   </button>
                   {avatarUrl && (
@@ -796,9 +792,11 @@ function UserProfileDrawerContent({
                   onChange={(e) => setPrefTheme(e.target.value as ThemeName)}
                   className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-bold"
                 >
-                  <option value="emerald">🌿 الزمردي الزراعي (Emerald)</option>
+                  <option value="light">☀️ النهاري الفاتح (Daylight)</option>
+                  <option value="emerald">🌿 الزمردي المؤسسي (Emerald)</option>
                   <option value="royal">🏛️ الملكي الكلاسيكي (Royal)</option>
-                  <option value="dark">🌙 الوضع الليلي (Dark)</option>
+                  <option value="dark">🌙 الوضع الداكن (Dark)</option>
+                  <option value="system">🖥️ تلقائي حسب النظام (System)</option>
                 </select>
               </div>
 
@@ -977,8 +975,8 @@ function UserProfileDrawerContent({
                       ? "صلاحيات مخصصة للمستخدم (Custom Per-User Access)"
                       : "Custom User Overrides Active"
                     : isAr
-                    ? "صلاحيات الدور الافتراضية (System Role Defaults)"
-                    : "System Role Defaults Active"}
+                      ? "صلاحيات الدور الافتراضية (System Role Defaults)"
+                      : "System Role Defaults Active"}
                 </div>
                 <div className="text-[11px] text-slate-500">
                   {currentUser.useCustomPermissions
@@ -986,16 +984,15 @@ function UserProfileDrawerContent({
                       ? "تم تخصيص الأقسام والصلاحيات بشكل فردي لحسابك بواسطة مدير النظام"
                       : "Sections and actions custom granted by SUPER_ADMIN"
                     : isAr
-                    ? `تتبع الصلاحيات المعيارية لدور ${roleMeta.labelAr}`
-                    : `Inheriting standard permissions for ${roleMeta.labelEn}`}
+                      ? `تتبع الصلاحيات المعيارية لدور ${roleMeta.labelAr}`
+                      : `Inheriting standard permissions for ${roleMeta.labelEn}`}
                 </div>
               </div>
               <span
-                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold ${
-                  currentUser.useCustomPermissions
-                    ? "bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-300"
-                    : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
-                }`}
+                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold ${currentUser.useCustomPermissions
+                  ? "bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-300"
+                  : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
+                  }`}
               >
                 {currentUser.useCustomPermissions ? "Custom" : "Standard"}
               </span>
@@ -1028,11 +1025,10 @@ function UserProfileDrawerContent({
                 {ACTION_CAPABILITIES.map((cap, idx) => (
                   <div
                     key={idx}
-                    className={`p-2.5 rounded-xl border flex items-center justify-between text-[11px] ${
-                      cap.active
-                        ? "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200"
-                        : "bg-slate-50 dark:bg-slate-900/30 border-slate-200/60 dark:border-slate-800/40 text-slate-400 opacity-60"
-                    }`}
+                    className={`p-2.5 rounded-xl border flex items-center justify-between text-[11px] ${cap.active
+                      ? "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200"
+                      : "bg-slate-50 dark:bg-slate-900/30 border-slate-200/60 dark:border-slate-800/40 text-slate-400 opacity-60"
+                      }`}
                   >
                     <span className="font-semibold">{isAr ? cap.labelAr : cap.labelEn}</span>
                     {cap.active ? (

@@ -12,6 +12,7 @@ import { consumeStockLayersOutTx, recordStockLayerInTx } from "@/lib/inventoryGl
 import { appendAuditLogTx } from "@/lib/serverBootstrap";
 import { emitNotification } from "@/lib/notifications/notificationService";
 import { withIdempotency } from "@/lib/idempotencyGuard";
+import { syncPublishedCatalogStockTx } from "@/lib/clientPortal/catalogStockSync";
 
 import { convertToBaseQty } from "@/lib/multiUnitInventoryEngine";
 
@@ -215,6 +216,8 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         entityReference: `StockMovement:${movement.id}`,
         details: `${item.nameAr} | ${enteredQty} × ${factorToBase} = ${baseQtyDelta} base`,
       });
+
+      await syncPublishedCatalogStockTx(tx).catch(() => null);
 
       if (Number(item.minStockAlert) > 0 && Number(balance.qtyOnHandBase) <= Number(item.minStockAlert)) {
         await emitNotification(

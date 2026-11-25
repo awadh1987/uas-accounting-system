@@ -2,11 +2,16 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  Archive,
   Check,
   CheckCircle2,
   ClipboardCheck,
+  Clock,
   Copy,
   CornerUpLeft,
+  Eye,
+  EyeOff,
+  FolderOpen,
   KeyRound,
   Layers,
   MessageSquare,
@@ -22,11 +27,16 @@ import {
 } from "lucide-react";
 import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
-import { formatIsoToDmy, formatMoney, formatRefreshTimestamp } from "@/lib/uiFormatters";
+import {
+  formatIsoToDmyTime,
+  formatMoney,
+  formatRefreshTimestamp,
+} from "@/lib/uiFormatters";
 import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
 import { PhoneContactInput } from "@/components/PhoneContactInput";
 import { SvgAvatar } from "@/components/SvgAvatar";
 import { PortalCatalogBoardAdminSection } from "@/components/portal-admin/PortalCatalogBoardAdminSection";
+import { groupRequestsByClientAndMonth } from "@/lib/clientPortal/requestGrouping";
 import { filterOutSyntheticTestRecords, isSyntheticTestRecord } from "@/lib/testRecordHygiene";
 import type { AmendmentDiffEntry } from "@/lib/clientPortal/portalTypes";
 import type { TenantFormConfig } from "@/lib/clientPortal/portalConfig";
@@ -91,12 +101,32 @@ interface StaffRequestItem {
   amendmentDiff?: AmendmentDiffEntry[];
   revisionNumber?: number;
   returnedToClientAt?: string | null;
+  returnedToClientAtDisplay?: string | null;
   returnedByName?: string | null;
   clientResponseStatus?: string | null;
   clientResponseStatusLabelAr?: string | null;
   clientResponseNote?: string | null;
   clientRespondedAt?: string | null;
+  clientRespondedAtDisplay?: string | null;
+  sectorType?: string;
+  submissionType?: string;
+  isArchived?: boolean;
+  archivedAt?: string | null;
+  archivedAtDisplay?: string | null;
+  isHiddenByStaff?: boolean;
   createdAt: string;
+  createdAtDisplay?: string;
+  updatedAt?: string;
+  updatedAtDisplay?: string;
+  approvedAtDisplay?: string | null;
+  reviewedAt?: string | null;
+  reviewedAtDisplay?: string | null;
+  readyAt?: string | null;
+  readyAtDisplay?: string | null;
+  handedOverAt?: string | null;
+  handedOverAtDisplay?: string | null;
+  canArchiveOrHide?: boolean;
+  canSafelyDelete?: boolean;
   clientAccount?: {
     id: string;
     fullName: string;
@@ -120,9 +150,13 @@ interface WhatsAppDraftRecord {
   status: string;
   dispatchChannel: string;
   approvedByName: string | null;
+  approvedAt?: string | null;
+  approvedAtDisplay?: string | null;
   sentAt: string | null;
+  sentAtDisplay?: string | null;
   skippedReason: string | null;
   createdAt: string;
+  createdAtDisplay?: string;
 }
 
 interface TenantClientPortalAdminPanelProps {
@@ -144,6 +178,13 @@ export function TenantClientPortalAdminPanel({
   const [loading, setLoading] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState("");
   const [hideTestRecords, setHideTestRecords] = useState(true);
+  const [showHiddenStaffRequests, setShowHiddenStaffRequests] = useState(false);
+  const [selectedStaffReqIds, setSelectedStaffReqIds] = useState<Record<string, boolean>>({});
+  const [reqViewMode, setReqViewMode] = useState<"directories" | "flat">("directories");
+  const [selectedClientDir, setSelectedClientDir] = useState<string>("ALL");
+  const [selectedMonthDir, setSelectedMonthDir] = useState<string>("ALL");
+  const [sectorFilter, setSectorFilter] = useState<"ALL" | "HARVEST" | "COMMERCIAL">("ALL");
+  const [collapsedDirs, setCollapsedDirs] = useState<Record<string, boolean>>({});
 
   // Registrations & Client Password Reset
   const [clients, setClients] = useState<StaffClientAccount[]>([]);
@@ -197,7 +238,7 @@ export function TenantClientPortalAdminPanel({
     try {
       const [cRes, rRes, wRes, fRes] = await Promise.all([
         fetch("/api/portal-admin/clients", { cache: "no-store" }),
-        fetch("/api/portal-admin/requests", { cache: "no-store" }),
+        fetch(`/api/portal-admin/requests${showHiddenStaffRequests ? "?includeHidden=1" : ""}`, { cache: "no-store" }),
         fetch(`/api/whatsapp-outbox?status=${encodeURIComponent(waStatusFilter)}`, { cache: "no-store" }),
         fetch("/api/portal-admin/form-config", { cache: "no-store" }),
       ]);
@@ -239,7 +280,7 @@ export function TenantClientPortalAdminPanel({
     } finally {
       setLoading(false);
     }
-  }, [waStatusFilter, onToast]);
+  }, [waStatusFilter, showHiddenStaffRequests, onToast]);
 
   useEffect(() => {
     let active = true;
@@ -472,6 +513,49 @@ export function TenantClientPortalAdminPanel({
     await loadAll(false);
   }
 
+  async function handleStaffRequestLifecycle(
+    reqItem: StaffRequestItem,
+    action: "ARCHIVE" | "UNARCHIVE" | "HIDE" | "UNHIDE" | "DELETE"
+  ) {
+    const res = await fetch("/api/portal-admin/requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requestId: reqItem.id, action }),
+    });
+    const data = (await res.json()) as { message?: string; error?: string };
+    if (!res.ok) {
+      onToast(data.error || "تعذر تنفيذ الإجراء على الطلب");
+      return;
+    }
+    onToast(data.message || "✅ تم تحديث الطلب بنجاح");
+    await Promise.all([loadAll(false), onRefreshState?.()]);
+  }
+
+  async function handleStaffBulkHide(useSelectedOnly: boolean) {
+    const requestIds = useSelectedOnly
+      ? Object.entries(selectedStaffReqIds)
+        .filter(([, checked]) => checked)
+        .map(([id]) => id)
+      : undefined;
+    const res = await fetch("/api/portal-admin/requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "BULK_HIDE",
+        ...(requestIds && requestIds.length > 0 ? { requestIds } : {}),
+        includeArchived: true,
+      }),
+    });
+    const data = (await res.json()) as { message?: string; error?: string };
+    if (!res.ok) {
+      onToast(data.error || "تعذر تنفيذ الإخفاء الجماعي");
+      return;
+    }
+    setSelectedStaffReqIds({});
+    onToast(data.message || "✅ تم الإخفاء الجماعي بنجاح");
+    await loadAll(false);
+  }
+
   const { visible: visibleRequests, hiddenCount: hiddenRequestsCount } =
     filterOutSyntheticTestRecords(requests, hideTestRecords);
   const { visible: visibleClients, hiddenCount: hiddenClientsCount } =
@@ -515,6 +599,41 @@ export function TenantClientPortalAdminPanel({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {section === "requests" && (
+            <>
+              <button
+                type="button"
+                data-testid="staff-bulk-hide-completed-btn"
+                onClick={() => void handleStaffBulkHide(false)}
+                className="px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-bold inline-flex items-center gap-1"
+              >
+                <EyeOff className="w-3.5 h-3.5" />
+                <span>إخفاء جماعي للمكتمل/الملغى</span>
+              </button>
+              {Object.values(selectedStaffReqIds).some(Boolean) && (
+                <button
+                  type="button"
+                  data-testid="staff-bulk-hide-selected-btn"
+                  onClick={() => void handleStaffBulkHide(true)}
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-800 text-white text-[11px] font-bold inline-flex items-center gap-1"
+                >
+                  <EyeOff className="w-3.5 h-3.5" />
+                  <span>إخفاء المحدد ({Object.values(selectedStaffReqIds).filter(Boolean).length})</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowHiddenStaffRequests((prev) => !prev)}
+                className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold inline-flex items-center gap-1 ${showHiddenStaffRequests
+                  ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-200"
+                  : "border-slate-300 dark:border-slate-700"
+                  }`}
+              >
+                {showHiddenStaffRequests ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                <span>{showHiddenStaffRequests ? "إخفاء المخفية" : "عرض المخفية"}</span>
+              </button>
+            </>
+          )}
           <button
             type="button"
             data-testid="portal-admin-toggle-test-filter"
@@ -554,544 +673,788 @@ export function TenantClientPortalAdminPanel({
         />
       )}
 
-      {/* SECTION 1: INCOMING REQUESTS, AMENDMENTS, RETURN LOOP & HANDOVER */}
-      {section === "requests" && (
-        <div className="space-y-3">
-          {visibleRequests.length === 0 ? (
-            <div className="p-6 rounded-2xl bg-slate-50 dark:bg-slate-800/40 text-center text-slate-500 space-y-2">
-              <div>لا توجد طلبات واردة من بوابة العملاء حالياً ضمن الفلتر النشط.</div>
-              {hiddenRequestsCount > 0 && hideTestRecords && (
-                <button
-                  type="button"
-                  onClick={() => setHideTestRecords(false)}
-                  className="px-3 py-1 rounded-xl border border-slate-300 dark:border-slate-700 font-bold text-[11px]"
-                >
-                  عرض {hiddenRequestsCount} سجل اختباري مخفي
-                </button>
-              )}
-            </div>
-          ) : (
-            visibleRequests.map((r) => {
-              const combinedLines = [...r.lines, ...(addedLinesByReq[r.id] || [])].filter(
-                (l) => !removedLineIds[l.id]
-              );
-              const liveLines = combinedLines.map((l) => {
-                const q =
-                  lineQtyEdits[l.id] !== undefined
-                    ? Math.max(0, Number(lineQtyEdits[l.id]) || 0)
-                    : Math.max(0, Number(l.confirmedQty ?? l.requestedQty ?? 0));
-                const p =
-                  linePriceEdits[l.id] !== undefined
-                    ? Math.max(0, Number(linePriceEdits[l.id]) || 0)
-                    : Math.max(0, Number(l.unitPrice || 0));
-                const { totalAmount } = computeSaleTotals(q, p, 0);
-                return { line: l, qty: q, price: p, total: totalAmount };
-              });
-              const liveOrderTotal = liveLines.reduce((s, x) => s + x.total, 0);
-              const livePaid =
-                reqPaidNow[r.id] !== undefined
-                  ? Math.max(0, Number(reqPaidNow[r.id]) || 0)
-                  : Number(r.creditPaidPlanned || 0);
-              const { debitReceivable: liveDebit } = computeSaleTotals(liveOrderTotal, 1, livePaid);
-              const activeSalesLink = r.linkedSalesRecordId || r.linkedSaleId || r.linkedDraftId;
-              const isPostHandoverEditing = Boolean(postHandoverEditIds[r.id]);
-              const isLockedTerminal =
-                r.status === "REJECTED" ||
-                r.status === "CANCELLED" ||
-                (r.status === "COMPLETED" && !isPostHandoverEditing);
-              const currentPickupChoice =
-                reqPickupLocationEdits[r.id] !== undefined
-                  ? reqPickupLocationEdits[r.id]
-                  : formCfg?.pickupOptions.some((o) => o.labelAr === r.pickupLocation && o.type !== "OTHER")
-                    ? r.pickupLocation
-                    : "__OTHER__";
-              const isTestRec = isSyntheticTestRecord(r);
+      {/* SECTION 1: INCOMING REQUESTS, CLIENT MONTHLY DIRECTORIES, AMENDMENTS, RETURN LOOP & HANDOVER */}
+      {section === "requests" && (() => {
+        const sectorScopedRequests =
+          sectorFilter === "ALL"
+            ? visibleRequests
+            : visibleRequests.filter(
+              (r) => (r.sectorType || "HARVEST").toUpperCase() === sectorFilter
+            );
+        const grouped = groupRequestsByClientAndMonth(sectorScopedRequests);
+        const filteredDirectories = grouped.directories
+          .filter((d) => selectedClientDir === "ALL" || d.clientKey === selectedClientDir)
+          .map((d) => ({
+            ...d,
+            months: d.months.filter(
+              (m) => selectedMonthDir === "ALL" || m.monthKey === selectedMonthDir
+            ),
+          }))
+          .filter((d) => d.months.length > 0);
+        const filteredFlatRequests = filteredDirectories.flatMap((d) =>
+          d.months.flatMap((m) => m.requests)
+        );
 
-              return (
-                <div
-                  key={r.id}
-                  data-testid={`staff-portal-request-${r.id}`}
-                  className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 space-y-3"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono font-black px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
-                        <bdi dir="ltr">{r.requestNumber}</bdi>
-                      </span>
-                      <SvgAvatar
-                        char={r.clientAccount?.avatarChar || (r.clientAccount?.fullName || "ع").charAt(0)}
-                        avatarUrl={r.clientAccount?.avatarUrl}
-                        color={r.clientAccount?.avatarColor || "#059669"}
-                        size={24}
-                        alt={r.clientAccount?.fullName || "عميل"}
-                      />
-                      <span className="font-extrabold text-sm">{r.clientAccount?.fullName || "عميل"}</span>
-                      <bdi dir="ltr" className="font-mono text-slate-500">{r.clientAccount?.phone}</bdi>
-                      <span
-                        className={`px-2 py-0.5 rounded-full font-bold ${r.status === "RETURNED_TO_CLIENT"
-                          ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200"
-                          : "bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-200"
-                          }`}
-                      >
-                        {r.statusLabelAr}
-                      </span>
-                      {r.clientResponseStatus === "PENDING_STAFF_APPROVAL" && (
-                        <span
-                          data-testid={`staff-awaiting-approval-${r.id}`}
-                          className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200 text-[10px] font-black"
-                        >
-                          بانتظار اعتماد الموظف
-                        </span>
-                      )}
-                      {r.revisionNumber && r.revisionNumber > 1 && (
-                        <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-[10px] font-bold">
-                          مراجعة #{r.revisionNumber}
-                        </span>
-                      )}
-                      {activeSalesLink && (
-                        <span className="px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-200 font-bold font-mono text-[10px]">
-                          مرتبط بالمبيعات (<bdi dir="ltr">{activeSalesLink.slice(0, 8)}</bdi>)
-                        </span>
-                      )}
-                      {isTestRec && (
-                        <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] font-bold">
-                          اختباري
-                        </span>
-                      )}
-                      <span className="text-slate-500">• استلام من: <strong>{r.pickupLocation}</strong></span>
-                      <span className="font-mono text-slate-400">
-                        <bdi dir="ltr">{formatIsoToDmy(r.createdAt.slice(0, 10))}</bdi>
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300">
-                        الإجمالي: {formatMoney(liveOrderTotal)}
-                      </span>
-                      {r.status === "COMPLETED" && (
-                        <button
-                          type="button"
-                          data-testid={`staff-toggle-post-amend-${r.id}`}
-                          onClick={() =>
-                            setPostHandoverEditIds((prev) => ({ ...prev, [r.id]: !prev[r.id] }))
-                          }
-                          className={`px-2.5 py-1 rounded-xl border text-[11px] font-bold ${isPostHandoverEditing
-                            ? "border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
-                            : "border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
-                            }`}
-                        >
-                          {isPostHandoverEditing ? "إلغاء تعديل التسليم" : "تعديل ما بعد التسليم"}
-                        </button>
-                      )}
-                      {!isLockedTerminal && (
-                        <ActionOverflowMenu
-                          size="xs"
-                          align="end"
-                          items={[
-                            {
-                              id: "add-line",
-                              label: "إضافة صنف جديد للطلب",
-                              icon: <Plus className="w-3.5 h-3.5" />,
-                              onClick: () =>
-                                setAddedLinesByReq((prev) => ({
-                                  ...prev,
-                                  [r.id]: [
-                                    ...(prev[r.id] || []),
-                                    {
-                                      id: `new-${Date.now()}`,
-                                      itemId: null,
-                                      itemTitle: "",
-                                      requestedQty: 1,
-                                      confirmedQty: 1,
-                                      unitCode: "QAT_BUNCH",
-                                      unitLabel: "علاقية قات",
-                                      displayUnitLabel: "علاقية قات",
-                                      unitPrice: 0,
-                                      lineTotal: 0,
-                                      isNew: true,
-                                    },
-                                  ],
-                                })),
-                            },
-                            {
-                              id: "reject",
-                              label: "رفض الطلب",
-                              icon: <XCircle className="w-3.5 h-3.5" />,
-                              tone: "danger",
-                              dividerBefore: true,
-                              hidden: r.status === "COMPLETED",
-                              confirmTitle: `رفض الطلب (${r.requestNumber})`,
-                              confirmMessage: "هل تريد رفض هذا الطلب نهائياً؟",
-                              onClick: () => handleRequestAction(r, "REJECT"),
-                            },
-                            {
-                              id: "cancel",
-                              label: "إلغاء الطلب",
-                              icon: <Trash2 className="w-3.5 h-3.5" />,
-                              tone: "danger",
-                              hidden: r.status === "COMPLETED",
-                              confirmTitle: `إلغاء الطلب (${r.requestNumber})`,
-                              confirmMessage: "هل تريد إلغاء هذا الطلب؟",
-                              onClick: () => handleRequestAction(r, "CANCEL"),
-                            },
-                          ]}
-                        />
-                      )}
-                    </div>
-                  </div>
+        const renderStaffRequestCard = (r: StaffRequestItem) => {
+          const combinedLines = [...r.lines, ...(addedLinesByReq[r.id] || [])].filter(
+            (l) => !removedLineIds[l.id]
+          );
+          const liveLines = combinedLines.map((l) => {
+            const q =
+              lineQtyEdits[l.id] !== undefined
+                ? Math.max(0, Number(lineQtyEdits[l.id]) || 0)
+                : Math.max(0, Number(l.confirmedQty ?? l.requestedQty ?? 0));
+            const p =
+              linePriceEdits[l.id] !== undefined
+                ? Math.max(0, Number(linePriceEdits[l.id]) || 0)
+                : Math.max(0, Number(l.unitPrice || 0));
+            const { totalAmount } = computeSaleTotals(q, p, 0);
+            return { line: l, qty: q, price: p, total: totalAmount };
+          });
+          const liveOrderTotal = liveLines.reduce((s, x) => s + x.total, 0);
+          const livePaid =
+            reqPaidNow[r.id] !== undefined
+              ? Math.max(0, Number(reqPaidNow[r.id]) || 0)
+              : Number(r.creditPaidPlanned || 0);
+          const { debitReceivable: liveDebit } = computeSaleTotals(liveOrderTotal, 1, livePaid);
+          const activeSalesLink = r.linkedSalesRecordId || r.linkedSaleId || r.linkedDraftId;
+          const isPostHandoverEditing = Boolean(postHandoverEditIds[r.id]);
+          const isLockedTerminal =
+            r.status === "REJECTED" ||
+            r.status === "CANCELLED" ||
+            (r.status === "COMPLETED" && !isPostHandoverEditing);
+          const currentPickupChoice =
+            reqPickupLocationEdits[r.id] !== undefined
+              ? reqPickupLocationEdits[r.id]
+              : formCfg?.pickupOptions.some((o) => o.labelAr === r.pickupLocation && o.type !== "OTHER")
+                ? r.pickupLocation
+                : "__OTHER__";
+          const isTestRec = isSyntheticTestRecord(r);
 
-                  {/* Staff Before/After Diff & Client Response Feedback */}
-                  {(r.clientResponseNote || (r.amendmentDiff && r.amendmentDiff.length > 0)) && (
-                    <div className="p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 space-y-1.5 text-[11px]">
-                      {r.reviewerRemarks && (
-                        <div>
-                          <strong>ملاحظات المراجع:</strong> {r.reviewerRemarks}
-                        </div>
-                      )}
-                      {r.clientResponseNote && (
-                        <div className="font-bold text-indigo-800 dark:text-indigo-200">
-                          رد العميل ({r.clientResponseStatus === "CLIENT_APPROVED" ? "موافق" : "رد / ملاحظة"}):{" "}
-                          {r.clientResponseNote}
-                        </div>
-                      )}
-                      {r.amendmentDiff && r.amendmentDiff.length > 0 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 pt-1">
-                          {r.amendmentDiff.map((d, idx) => (
-                            <div
-                              key={`${d.field}-${idx}`}
-                              className="px-2 py-1 rounded bg-white/80 dark:bg-slate-900/70 border border-amber-200/70"
-                            >
-                              <span className="font-bold">{d.labelAr}: </span>
-                              <span className="line-through text-rose-600 mx-1">{d.before}</span>
-                              <span>←</span>
-                              <strong className="text-emerald-700 dark:text-emerald-300 mx-1">{d.after}</strong>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+          const canStaffArchiveHide =
+            r.canArchiveOrHide ??
+            (["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status) || Boolean(r.isArchived));
+          const canStaffSafeDelete =
+            r.canSafelyDelete ??
+            (["CANCELLED", "REJECTED", "PENDING_REVIEW", "RETURNED_TO_CLIENT"].includes(r.status) &&
+              !r.reserveStock &&
+              !r.linkedSalesRecordId &&
+              !r.linkedSaleId &&
+              !r.linkedInvoiceId);
+
+          return (
+            <div
+              key={r.id}
+              data-testid={`staff-portal-request-${r.id}`}
+              className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 space-y-3"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {canStaffArchiveHide && (
+                    <input
+                      type="checkbox"
+                      aria-label={`تحديد الطلب ${r.requestNumber}`}
+                      checked={Boolean(selectedStaffReqIds[r.id])}
+                      onChange={(e) =>
+                        setSelectedStaffReqIds((prev) => ({
+                          ...prev,
+                          [r.id]: e.target.checked,
+                        }))
+                      }
+                      className="rounded border-slate-300"
+                    />
+                  )}
+                  <span className="font-mono font-black px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
+                    <bdi dir="ltr">{r.requestNumber}</bdi>
+                  </span>
+                  <SvgAvatar
+                    char={r.clientAccount?.avatarChar || (r.clientAccount?.fullName || "ع").charAt(0)}
+                    avatarUrl={r.clientAccount?.avatarUrl}
+                    color={r.clientAccount?.avatarColor || "#059669"}
+                    size={24}
+                    alt={r.clientAccount?.fullName || "عميل"}
+                  />
+                  <span className="font-extrabold text-sm">{r.clientAccount?.fullName || "عميل"}</span>
+                  <bdi dir="ltr" className="font-mono text-slate-500">{r.clientAccount?.phone}</bdi>
+                  <span
+                    className={`px-2 py-0.5 rounded-full font-bold ${r.status === "RETURNED_TO_CLIENT"
+                      ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200"
+                      : "bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-200"
+                      }`}
+                  >
+                    {r.statusLabelAr}
+                  </span>
+                  {r.clientResponseStatus === "PENDING_STAFF_APPROVAL" && (
+                    <span
+                      data-testid={`staff-awaiting-approval-${r.id}`}
+                      className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200 text-[10px] font-black"
+                    >
+                      بانتظار اعتماد الموظف
+                    </span>
+                  )}
+                  {r.revisionNumber && r.revisionNumber > 1 && (
+                    <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-[10px] font-bold">
+                      مراجعة #{r.revisionNumber}
+                    </span>
+                  )}
+                  {activeSalesLink && (
+                    <span className="px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-200 font-bold font-mono text-[10px]">
+                      مرتبط بالمبيعات (<bdi dir="ltr">{activeSalesLink.slice(0, 8)}</bdi>)
+                    </span>
+                  )}
+                  {isTestRec && (
+                    <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] font-bold">
+                      اختباري
+                    </span>
+                  )}
+                  {r.isArchived && (
+                    <span className="px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-bold">
+                      مؤرشف
+                    </span>
+                  )}
+                  {r.isHiddenByStaff && (
+                    <span className="px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-200 text-[10px] font-bold">
+                      مخفي
+                    </span>
+                  )}
+                  <span className="text-slate-500">• استلام من: <strong>{r.pickupLocation}</strong></span>
+                  <span className="font-mono text-slate-500 inline-flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    <bdi dir="ltr">{r.createdAtDisplay || formatIsoToDmyTime(r.createdAt)}</bdi>
+                  </span>
+                  {r.handedOverAt && (
+                    <span className="font-mono text-[10px] text-emerald-700 dark:text-emerald-300">
+                      تسليم: <bdi dir="ltr">{r.handedOverAtDisplay || formatIsoToDmyTime(r.handedOverAt)}</bdi>
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300">
+                    الإجمالي: {formatMoney(liveOrderTotal)}
+                  </span>
+                  {r.status === "COMPLETED" && (
+                    <button
+                      type="button"
+                      data-testid={`staff-toggle-post-amend-${r.id}`}
+                      onClick={() =>
+                        setPostHandoverEditIds((prev) => ({ ...prev, [r.id]: !prev[r.id] }))
+                      }
+                      className={`px-2.5 py-1 rounded-xl border text-[11px] font-bold ${isPostHandoverEditing
+                        ? "border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
+                        : "border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        }`}
+                    >
+                      {isPostHandoverEditing ? "إلغاء تعديل التسليم" : "تعديل ما بعد التسليم"}
+                    </button>
+                  )}
+                  <ActionOverflowMenu
+                    size="xs"
+                    align="end"
+                    items={[
+                      {
+                        id: "add-line",
+                        label: "إضافة صنف جديد للطلب",
+                        icon: <Plus className="w-3.5 h-3.5" />,
+                        hidden: isLockedTerminal,
+                        onClick: () =>
+                          setAddedLinesByReq((prev) => ({
+                            ...prev,
+                            [r.id]: [
+                              ...(prev[r.id] || []),
+                              {
+                                id: `new-${Date.now()}`,
+                                itemId: null,
+                                itemTitle: "",
+                                requestedQty: 1,
+                                confirmedQty: 1,
+                                unitCode: "QAT_BUNCH",
+                                unitLabel: "علاقية قات",
+                                displayUnitLabel: "علاقية قات",
+                                unitPrice: 0,
+                                lineTotal: 0,
+                                isNew: true,
+                              },
+                            ],
+                          })),
+                      },
+                      {
+                        id: "archive-staff",
+                        label: r.isArchived ? "إلغاء الأرشفة" : "أرشفة الطلب",
+                        icon: <Archive className="w-3.5 h-3.5" />,
+                        hidden: !canStaffArchiveHide,
+                        onClick: () =>
+                          handleStaffRequestLifecycle(r, r.isArchived ? "UNARCHIVE" : "ARCHIVE"),
+                      },
+                      {
+                        id: "hide-staff",
+                        label: r.isHiddenByStaff ? "إظهار الطلب" : "إخفاء الطلب",
+                        icon: r.isHiddenByStaff ? (
+                          <Eye className="w-3.5 h-3.5" />
+                        ) : (
+                          <EyeOff className="w-3.5 h-3.5" />
+                        ),
+                        hidden: !canStaffArchiveHide,
+                        onClick: () =>
+                          handleStaffRequestLifecycle(r, r.isHiddenByStaff ? "UNHIDE" : "HIDE"),
+                      },
+                      {
+                        id: "reject",
+                        label: "رفض الطلب",
+                        icon: <XCircle className="w-3.5 h-3.5" />,
+                        tone: "danger",
+                        dividerBefore: true,
+                        hidden: isLockedTerminal || r.status === "COMPLETED",
+                        confirmTitle: `رفض الطلب (${r.requestNumber})`,
+                        confirmMessage: "هل تريد رفض هذا الطلب نهائياً؟",
+                        onClick: () => handleRequestAction(r, "REJECT"),
+                      },
+                      {
+                        id: "cancel",
+                        label: "إلغاء الطلب",
+                        icon: <XCircle className="w-3.5 h-3.5" />,
+                        tone: "danger",
+                        hidden: isLockedTerminal || r.status === "COMPLETED",
+                        confirmTitle: `إلغاء الطلب (${r.requestNumber})`,
+                        confirmMessage: "هل تريد إلغاء هذا الطلب؟",
+                        onClick: () => handleRequestAction(r, "CANCEL"),
+                      },
+                      {
+                        id: "delete-staff-safe",
+                        label: "حذف نهائي (لغير المرحّل/الملغى فقط)",
+                        icon: <Trash2 className="w-3.5 h-3.5" />,
+                        tone: "danger",
+                        hidden: !canStaffSafeDelete,
+                        confirmTitle: `حذف الطلب (${r.requestNumber})`,
+                        confirmMessage: "سيتم حذف الطلب غير المرحّل دون التأثير على أي قيود محاسبية. هل تريد المتابعة؟",
+                        onClick: () => handleStaffRequestLifecycle(r, "DELETE"),
+                      },
+                    ]}
+                  />
+                </div>
+              </div>
+
+              {/* Staff Before/After Diff & Client Response Feedback */}
+              {(r.clientResponseNote || (r.amendmentDiff && r.amendmentDiff.length > 0)) && (
+                <div className="p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 space-y-1.5 text-[11px]">
+                  {r.reviewerRemarks && (
+                    <div>
+                      <strong>ملاحظات المراجع:</strong> {r.reviewerRemarks}
                     </div>
                   )}
-
-                  {/* Pickup Location Amendment Bar */}
-                  {!isLockedTerminal && (
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/40">
-                      <div>
-                        <label className="block font-bold mb-1">تعديل الاستلام من:</label>
-                        <select
-                          value={currentPickupChoice}
-                          onChange={(e) =>
-                            setReqPickupLocationEdits((prev) => ({ ...prev, [r.id]: e.target.value }))
-                          }
-                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-bold"
-                        >
-                          {(formCfg?.pickupOptions || [])
-                            .filter((p) => p.type !== "OTHER")
-                            .map((p) => (
-                              <option key={p.code} value={p.labelAr}>
-                                {p.labelAr}
-                              </option>
-                            ))}
-                          <option value="__OTHER__">أخرى / موقع مخصص</option>
-                        </select>
-                        {currentPickupChoice === "__OTHER__" && (
-                          <input
-                            type="text"
-                            value={
-                              reqCustomPickupEdits[r.id] !== undefined
-                                ? reqCustomPickupEdits[r.id]
-                                : r.pickupLocation
-                            }
-                            onChange={(e) =>
-                              setReqCustomPickupEdits((prev) => ({ ...prev, [r.id]: e.target.value }))
-                            }
-                            placeholder="اكتب موقع الاستلام..."
-                            className="mt-1 w-full rounded-lg border border-emerald-400 bg-white dark:bg-slate-900 px-2 py-1"
-                          />
-                        )}
-                      </div>
-                      <div>
-                        <label className="block font-bold mb-1">تعديل ملاحظات الاستلام</label>
-                        <input
-                          type="text"
-                          value={
-                            reqPickupNotesEdits[r.id] !== undefined
-                              ? reqPickupNotesEdits[r.id]
-                              : r.pickupNotes || ""
-                          }
-                          onChange={(e) =>
-                            setReqPickupNotesEdits((prev) => ({ ...prev, [r.id]: e.target.value }))
-                          }
-                          placeholder="ملاحظات التسليم..."
-                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1"
-                        />
-                      </div>
-                      <div>
-                        <label className="block font-bold mb-1">ملاحظات المراجع للعميل (عند الإعادة)</label>
-                        <input
-                          type="text"
-                          data-testid={`staff-reviewer-remarks-${r.id}`}
-                          value={
-                            reqReviewerRemarks[r.id] !== undefined
-                              ? reqReviewerRemarks[r.id]
-                              : r.reviewerRemarks || ""
-                          }
-                          onChange={(e) =>
-                            setReqReviewerRemarks((prev) => ({ ...prev, [r.id]: e.target.value }))
-                          }
-                          placeholder="سبب التعديل أو ملاحظات للعميل..."
-                          className="w-full rounded-lg border border-amber-400 bg-white dark:bg-slate-900 px-2 py-1"
-                        />
-                      </div>
+                  {r.clientResponseNote && (
+                    <div className="font-bold text-indigo-800 dark:text-indigo-200">
+                      رد العميل ({r.clientResponseStatus === "CLIENT_APPROVED" ? "موافق" : "رد / ملاحظة"}):{" "}
+                      {r.clientResponseNote}
                     </div>
                   )}
-
-                  {/* Line Items Editable by Staff (including title, unit/أخرى, qty, price, remove) */}
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs text-right border-collapse">
-                      <thead>
-                        <tr className="border-b bg-slate-50 dark:bg-slate-800/60">
-                          <th className="p-2">الصنف</th>
-                          <th className="p-2">الوحدة</th>
-                          <th className="p-2">المطلوب</th>
-                          <th className="p-2">المؤكد</th>
-                          <th className="p-2">سعر الوحدة (ريال)</th>
-                          <th className="p-2">الإجمالي (P×Q)</th>
-                          {!isLockedTerminal && <th className="p-2">حذف</th>}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                        {liveLines.map(({ line: l, total }) => {
-                          const unitVal = lineUnitEdits[l.id] || l.unitCode || "QAT_BUNCH";
-                          return (
-                            <tr key={l.id}>
-                              <td className="p-2 font-bold">
-                                {isLockedTerminal ? (
-                                  l.itemTitle
-                                ) : (
-                                  <input
-                                    type="text"
-                                    value={lineTitleEdits[l.id] ?? l.itemTitle}
-                                    onChange={(e) =>
-                                      setLineTitleEdits((prev) => ({ ...prev, [l.id]: e.target.value }))
-                                    }
-                                    placeholder="اسم الصنف..."
-                                    className="w-40 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 font-bold"
-                                  />
-                                )}
-                              </td>
-                              <td className="p-2 space-y-1">
-                                {isLockedTerminal ? (
-                                  l.displayUnitLabel
-                                ) : (
-                                  <>
-                                    <select
-                                      value={unitVal}
-                                      onChange={(e) =>
-                                        setLineUnitEdits((prev) => ({ ...prev, [l.id]: e.target.value }))
-                                      }
-                                      className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-bold"
-                                    >
-                                      {(formCfg?.unitOptions || []).map((u) => (
-                                        <option key={u.code} value={u.code}>
-                                          {u.labelAr}
-                                        </option>
-                                      ))}
-                                    </select>
-                                    {unitVal === "OTHER" && (
-                                      <input
-                                        type="text"
-                                        value={lineCustomUnitEdits[l.id] ?? (l.customUnitLabel || "")}
-                                        onChange={(e) =>
-                                          setLineCustomUnitEdits((prev) => ({
-                                            ...prev,
-                                            [l.id]: e.target.value,
-                                          }))
-                                        }
-                                        placeholder="اخرى: ..."
-                                        className="w-24 rounded-lg border border-emerald-400 px-2 py-0.5 bg-transparent"
-                                      />
-                                    )}
-                                  </>
-                                )}
-                              </td>
-                              <td className="p-2 font-mono">{fmtNum(l.requestedQty)}</td>
-                              <td className="p-2">
-                                <input
-                                  type="number"
-                                  step="any"
-                                  disabled={isLockedTerminal}
-                                  value={lineQtyEdits[l.id] ?? String(l.confirmedQty ?? l.requestedQty)}
-                                  onChange={(e) =>
-                                    setLineQtyEdits((prev) => ({ ...prev, [l.id]: e.target.value }))
-                                  }
-                                  className="w-20 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 font-mono"
-                                />
-                              </td>
-                              <td className="p-2">
-                                <input
-                                  type="number"
-                                  step="any"
-                                  disabled={isLockedTerminal}
-                                  value={linePriceEdits[l.id] ?? String(l.unitPrice || 0)}
-                                  onChange={(e) =>
-                                    setLinePriceEdits((prev) => ({ ...prev, [l.id]: e.target.value }))
-                                  }
-                                  className="w-24 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 font-mono"
-                                />
-                              </td>
-                              <td className="p-2 font-mono font-extrabold text-emerald-700 dark:text-emerald-300">
-                                {formatMoney(total)}
-                              </td>
-                              {!isLockedTerminal && (
-                                <td className="p-2">
-                                  {liveLines.length > 1 && (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setRemovedLineIds((prev) => ({ ...prev, [l.id]: true }))
-                                      }
-                                      className="text-rose-600 p-1 rounded hover:bg-rose-50 dark:hover:bg-rose-950/30"
-                                      title="إزالة السطر"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  )}
-                                </td>
-                              )}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {!isLockedTerminal && (
-                    <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] bg-slate-50 dark:bg-slate-800/50 rounded-xl px-3 py-2">
-                        <span>الإجمالي (= P×Q): <strong className="text-slate-900 dark:text-white">{formatMoney(liveOrderTotal)}</strong></span>
-                        <span>دائن (مقبوض نقد/بنك): <strong className="text-emerald-700 dark:text-emerald-300">{formatMoney(livePaid)}</strong></span>
-                        <span>مدين (متبقي آجل): <strong className="text-rose-600 dark:text-rose-400">{formatMoney(liveDebit)}</strong></span>
-                      </div>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <select
-                            value={reqProjectChoice[r.id] || projects[0]?.id || ""}
-                            onChange={(e) =>
-                              setReqProjectChoice((prev) => ({ ...prev, [r.id]: e.target.value }))
-                            }
-                            className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-bold"
-                          >
-                            {projects.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.nameAr}
-                              </option>
-                            ))}
-                          </select>
-                          <select
-                            value={reqTreasuryChoice[r.id] || treasuries[0]?.id || ""}
-                            onChange={(e) =>
-                              setReqTreasuryChoice((prev) => ({ ...prev, [r.id]: e.target.value }))
-                            }
-                            className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-bold"
-                          >
-                            {treasuries.map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.nameAr}
-                              </option>
-                            ))}
-                          </select>
-                          <input
-                            type="number"
-                            step="any"
-                            min="0"
-                            placeholder="دائن / مدفوع الآن"
-                            value={reqPaidNow[r.id] ?? (r.creditPaidPlanned ? String(r.creditPaidPlanned) : "")}
-                            onChange={(e) =>
-                              setReqPaidNow((prev) => ({ ...prev, [r.id]: e.target.value }))
-                            }
-                            className="w-36 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 font-mono"
-                          />
-                          <label className="inline-flex items-center gap-1 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={reqReserveFlag[r.id] ?? r.reserveStock}
-                              onChange={(e) =>
-                                setReqReserveFlag((prev) => ({ ...prev, [r.id]: e.target.checked }))
-                              }
-                            />
-                            <span>حجز المخزون</span>
-                          </label>
+                  {r.amendmentDiff && r.amendmentDiff.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 pt-1">
+                      {r.amendmentDiff.map((d, idx) => (
+                        <div
+                          key={`${d.field}-${idx}`}
+                          className="px-2 py-1 rounded bg-white/80 dark:bg-slate-900/70 border border-amber-200/70"
+                        >
+                          <span className="font-bold">{d.labelAr}: </span>
+                          <span className="line-through text-rose-600 mx-1">{d.before}</span>
+                          <span>←</span>
+                          <strong className="text-emerald-700 dark:text-emerald-300 mx-1">{d.after}</strong>
                         </div>
-
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {r.status === "COMPLETED" ? (
-                            <button
-                              type="button"
-                              data-testid={`staff-save-post-amend-${r.id}`}
-                              onClick={() => void handleRequestAction(r, "AMEND")}
-                              className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold inline-flex items-center gap-1"
-                            >
-                              <Save className="w-3.5 h-3.5" />
-                              <span>حفظ تعديل الفاتورة والمبيعات (دون تكرار)</span>
-                            </button>
-                          ) : (
-                            <>
-                              <button
-                                type="button"
-                                data-testid={`staff-save-amend-${r.id}`}
-                                onClick={() => void handleRequestAction(r, "AMEND")}
-                                className="px-3 py-1.5 rounded-xl border border-indigo-400 text-indigo-700 dark:text-indigo-300 font-bold inline-flex items-center gap-1"
-                              >
-                                <Save className="w-3.5 h-3.5" />
-                                <span>حفظ التعديل</span>
-                              </button>
-                              <button
-                                type="button"
-                                data-testid={`staff-return-client-${r.id}`}
-                                onClick={() => void handleRequestAction(r, "RETURN_TO_CLIENT")}
-                                className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold inline-flex items-center gap-1"
-                              >
-                                <CornerUpLeft className="w-3.5 h-3.5" />
-                                <span>إعادة للعميل للموافقة</span>
-                              </button>
-                              {(r.status === "PENDING_REVIEW" || r.status === "RETURNED_TO_CLIENT" || r.status === "CONFIRMED") && (
-                                <button
-                                  type="button"
-                                  onClick={() => void handleRequestAction(r, "CONFIRM")}
-                                  className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white font-bold inline-flex items-center gap-1"
-                                >
-                                  <ClipboardCheck className="w-3.5 h-3.5" />
-                                  <span>{r.linkedSalesRecordId ? "حفظ وتحديث أمر البيع" : "اعتماد وفتح أمر بيع"}</span>
-                                </button>
-                              )}
-                              {(r.status === "PENDING_REVIEW" || r.status === "CONFIRMED") && (
-                                <button
-                                  type="button"
-                                  onClick={() => void handleRequestAction(r, "MARK_READY")}
-                                  className="px-3 py-1.5 rounded-xl border border-amber-500 text-amber-700 dark:text-amber-300 font-bold"
-                                >
-                                  جاهز للاستلام
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => void handleRequestAction(r, "HANDOVER")}
-                                className="px-3 py-1.5 rounded-xl accent-bg font-extrabold inline-flex items-center gap-1"
-                              >
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                <span>إتمام التسليم (تم الاستلام + فاتورة)</span>
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
+                      ))}
                     </div>
                   )}
                 </div>
-              );
-            })
-          )}
-        </div>
-      )}
+              )}
+
+              {/* Pickup Location Amendment Bar */}
+              {!isLockedTerminal && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/40">
+                  <div>
+                    <label className="block font-bold mb-1">تعديل الاستلام من:</label>
+                    <select
+                      value={currentPickupChoice}
+                      onChange={(e) =>
+                        setReqPickupLocationEdits((prev) => ({ ...prev, [r.id]: e.target.value }))
+                      }
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-bold"
+                    >
+                      {(formCfg?.pickupOptions || [])
+                        .filter((p) => p.type !== "OTHER")
+                        .map((p) => (
+                          <option key={p.code} value={p.labelAr}>
+                            {p.labelAr}
+                          </option>
+                        ))}
+                      <option value="__OTHER__">أخرى / موقع مخصص</option>
+                    </select>
+                    {currentPickupChoice === "__OTHER__" && (
+                      <input
+                        type="text"
+                        value={
+                          reqCustomPickupEdits[r.id] !== undefined
+                            ? reqCustomPickupEdits[r.id]
+                            : r.pickupLocation
+                        }
+                        onChange={(e) =>
+                          setReqCustomPickupEdits((prev) => ({ ...prev, [r.id]: e.target.value }))
+                        }
+                        placeholder="اكتب موقع الاستلام..."
+                        className="mt-1 w-full rounded-lg border border-emerald-400 bg-white dark:bg-slate-900 px-2 py-1"
+                      />
+                    )}
+                  </div>
+                  <div>
+                    <label className="block font-bold mb-1">تعديل ملاحظات الاستلام</label>
+                    <input
+                      type="text"
+                      value={
+                        reqPickupNotesEdits[r.id] !== undefined
+                          ? reqPickupNotesEdits[r.id]
+                          : r.pickupNotes || ""
+                      }
+                      onChange={(e) =>
+                        setReqPickupNotesEdits((prev) => ({ ...prev, [r.id]: e.target.value }))
+                      }
+                      placeholder="ملاحظات التسليم..."
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold mb-1">ملاحظات المراجع للعميل (عند الإعادة)</label>
+                    <input
+                      type="text"
+                      data-testid={`staff-reviewer-remarks-${r.id}`}
+                      value={
+                        reqReviewerRemarks[r.id] !== undefined
+                          ? reqReviewerRemarks[r.id]
+                          : r.reviewerRemarks || ""
+                      }
+                      onChange={(e) =>
+                        setReqReviewerRemarks((prev) => ({ ...prev, [r.id]: e.target.value }))
+                      }
+                      placeholder="سبب التعديل أو ملاحظات للعميل..."
+                      className="w-full rounded-lg border border-amber-400 bg-white dark:bg-slate-900 px-2 py-1"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Line Items Editable by Staff (including title, unit/أخرى, qty, price, remove) */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-right border-collapse">
+                  <thead>
+                    <tr className="border-b bg-slate-50 dark:bg-slate-800/60">
+                      <th className="p-2">الصنف</th>
+                      <th className="p-2">الوحدة</th>
+                      <th className="p-2">المطلوب</th>
+                      <th className="p-2">المؤكد</th>
+                      <th className="p-2">سعر الوحدة (ريال)</th>
+                      <th className="p-2">الإجمالي (P×Q)</th>
+                      {!isLockedTerminal && <th className="p-2">حذف</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                    {liveLines.map(({ line: l, total }) => {
+                      const unitVal = lineUnitEdits[l.id] || l.unitCode || "QAT_BUNCH";
+                      return (
+                        <tr key={l.id}>
+                          <td className="p-2 font-bold">
+                            {isLockedTerminal ? (
+                              l.itemTitle
+                            ) : (
+                              <input
+                                type="text"
+                                value={lineTitleEdits[l.id] ?? l.itemTitle}
+                                onChange={(e) =>
+                                  setLineTitleEdits((prev) => ({ ...prev, [l.id]: e.target.value }))
+                                }
+                                placeholder="اسم الصنف..."
+                                className="w-40 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 font-bold"
+                              />
+                            )}
+                          </td>
+                          <td className="p-2 space-y-1">
+                            {isLockedTerminal ? (
+                              l.displayUnitLabel
+                            ) : (
+                              <>
+                                <select
+                                  value={unitVal}
+                                  onChange={(e) =>
+                                    setLineUnitEdits((prev) => ({ ...prev, [l.id]: e.target.value }))
+                                  }
+                                  className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-bold"
+                                >
+                                  {(formCfg?.unitOptions || []).map((u) => (
+                                    <option key={u.code} value={u.code}>
+                                      {u.labelAr}
+                                    </option>
+                                  ))}
+                                </select>
+                                {unitVal === "OTHER" && (
+                                  <input
+                                    type="text"
+                                    value={lineCustomUnitEdits[l.id] ?? (l.customUnitLabel || "")}
+                                    onChange={(e) =>
+                                      setLineCustomUnitEdits((prev) => ({
+                                        ...prev,
+                                        [l.id]: e.target.value,
+                                      }))
+                                    }
+                                    placeholder="اخرى: ..."
+                                    className="w-24 rounded-lg border border-emerald-400 px-2 py-0.5 bg-transparent"
+                                  />
+                                )}
+                              </>
+                            )}
+                          </td>
+                          <td className="p-2 font-mono">{fmtNum(l.requestedQty)}</td>
+                          <td className="p-2">
+                            <input
+                              type="number"
+                              step="any"
+                              disabled={isLockedTerminal}
+                              value={lineQtyEdits[l.id] ?? String(l.confirmedQty ?? l.requestedQty)}
+                              onChange={(e) =>
+                                setLineQtyEdits((prev) => ({ ...prev, [l.id]: e.target.value }))
+                              }
+                              className="w-20 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 font-mono"
+                            />
+                          </td>
+                          <td className="p-2">
+                            <input
+                              type="number"
+                              step="any"
+                              disabled={isLockedTerminal}
+                              value={linePriceEdits[l.id] ?? String(l.unitPrice || 0)}
+                              onChange={(e) =>
+                                setLinePriceEdits((prev) => ({ ...prev, [l.id]: e.target.value }))
+                              }
+                              className="w-24 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 font-mono"
+                            />
+                          </td>
+                          <td className="p-2 font-mono font-extrabold text-emerald-700 dark:text-emerald-300">
+                            {formatMoney(total)}
+                          </td>
+                          {!isLockedTerminal && (
+                            <td className="p-2">
+                              {liveLines.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setRemovedLineIds((prev) => ({ ...prev, [l.id]: true }))
+                                  }
+                                  className="text-rose-600 p-1 rounded hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                                  title="إزالة السطر"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {!isLockedTerminal && (
+                <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] bg-slate-50 dark:bg-slate-800/50 rounded-xl px-3 py-2">
+                    <span>الإجمالي (= P×Q): <strong className="text-slate-900 dark:text-white">{formatMoney(liveOrderTotal)}</strong></span>
+                    <span>دائن (مقبوض نقد/بنك): <strong className="text-emerald-700 dark:text-emerald-300">{formatMoney(livePaid)}</strong></span>
+                    <span>مدين (متبقي آجل): <strong className="text-rose-600 dark:text-rose-400">{formatMoney(liveDebit)}</strong></span>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        value={reqProjectChoice[r.id] || projects[0]?.id || ""}
+                        onChange={(e) =>
+                          setReqProjectChoice((prev) => ({ ...prev, [r.id]: e.target.value }))
+                        }
+                        className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-bold"
+                      >
+                        {projects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.nameAr}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={reqTreasuryChoice[r.id] || treasuries[0]?.id || ""}
+                        onChange={(e) =>
+                          setReqTreasuryChoice((prev) => ({ ...prev, [r.id]: e.target.value }))
+                        }
+                        className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-bold"
+                      >
+                        {treasuries.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.nameAr}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        placeholder="دائن / مدفوع الآن"
+                        value={reqPaidNow[r.id] ?? (r.creditPaidPlanned ? String(r.creditPaidPlanned) : "")}
+                        onChange={(e) =>
+                          setReqPaidNow((prev) => ({ ...prev, [r.id]: e.target.value }))
+                        }
+                        className="w-36 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 font-mono"
+                      />
+                      <label className="inline-flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={reqReserveFlag[r.id] ?? r.reserveStock}
+                          onChange={(e) =>
+                            setReqReserveFlag((prev) => ({ ...prev, [r.id]: e.target.checked }))
+                          }
+                        />
+                        <span>حجز المخزون</span>
+                      </label>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {r.status === "COMPLETED" ? (
+                        <button
+                          type="button"
+                          data-testid={`staff-save-post-amend-${r.id}`}
+                          onClick={() => void handleRequestAction(r, "AMEND")}
+                          className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold inline-flex items-center gap-1"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>حفظ تعديل الفاتورة والمبيعات (دون تكرار)</span>
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            data-testid={`staff-save-amend-${r.id}`}
+                            onClick={() => void handleRequestAction(r, "AMEND")}
+                            className="px-3 py-1.5 rounded-xl border border-indigo-400 text-indigo-700 dark:text-indigo-300 font-bold inline-flex items-center gap-1"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            <span>حفظ التعديل</span>
+                          </button>
+                          <button
+                            type="button"
+                            data-testid={`staff-return-client-${r.id}`}
+                            onClick={() => void handleRequestAction(r, "RETURN_TO_CLIENT")}
+                            className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold inline-flex items-center gap-1"
+                          >
+                            <CornerUpLeft className="w-3.5 h-3.5" />
+                            <span>إعادة للعميل للموافقة</span>
+                          </button>
+                          {(r.status === "PENDING_REVIEW" || r.status === "RETURNED_TO_CLIENT" || r.status === "CONFIRMED") && (
+                            <button
+                              type="button"
+                              onClick={() => void handleRequestAction(r, "CONFIRM")}
+                              className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white font-bold inline-flex items-center gap-1"
+                            >
+                              <ClipboardCheck className="w-3.5 h-3.5" />
+                              <span>{r.linkedSalesRecordId ? "حفظ وتحديث أمر البيع" : "اعتماد وفتح أمر بيع"}</span>
+                            </button>
+                          )}
+                          {(r.status === "PENDING_REVIEW" || r.status === "CONFIRMED") && (
+                            <button
+                              type="button"
+                              onClick={() => void handleRequestAction(r, "MARK_READY")}
+                              className="px-3 py-1.5 rounded-xl border border-amber-500 text-amber-700 dark:text-amber-300 font-bold"
+                            >
+                              جاهز للاستلام
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => void handleRequestAction(r, "HANDOVER")}
+                            className="px-3 py-1.5 rounded-xl accent-bg font-extrabold inline-flex items-center gap-1"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>إتمام التسليم (تم الاستلام + فاتورة)</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        };
+
+        return (
+          <div className="space-y-3">
+            {/* Client Monthly Directory Filter & Navigation Bar */}
+            <div className="p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  data-testid="staff-dir-client-filter"
+                  value={selectedClientDir}
+                  onChange={(e) => setSelectedClientDir(e.target.value)}
+                  className="rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 font-bold"
+                >
+                  <option value="ALL">جميع العملاء ({grouped.clientOptions.length})</option>
+                  {grouped.clientOptions.map((c) => (
+                    <option key={c.clientKey} value={c.clientKey}>
+                      {c.clientName} ({c.count})
+                    </option>
+                  ))}
+                </select>
+                <select
+                  data-testid="staff-dir-month-filter"
+                  value={selectedMonthDir}
+                  onChange={(e) => setSelectedMonthDir(e.target.value)}
+                  className="rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 font-bold"
+                >
+                  <option value="ALL">جميع الأشهر / السنوات</option>
+                  {grouped.monthOptions.map((m) => (
+                    <option key={m.monthKey} value={m.monthKey}>
+                      {m.monthLabelAr} ({m.count})
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={sectorFilter}
+                  onChange={(e) =>
+                    setSectorFilter(e.target.value as "ALL" | "HARVEST" | "COMMERCIAL")
+                  }
+                  className="rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 font-bold"
+                >
+                  <option value="ALL">كلا القطاعين</option>
+                  <option value="HARVEST">القطاع الحالي (المحصول والفرز)</option>
+                  <option value="COMMERCIAL">القطاع التجاري (الجملة والتجزئة)</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setReqViewMode("directories")}
+                  className={`px-2.5 py-1.5 rounded-xl font-bold inline-flex items-center gap-1 ${reqViewMode === "directories"
+                    ? "accent-bg"
+                    : "border border-slate-300 dark:border-slate-700"
+                    }`}
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  <span>مجلدات العميل / الشهر</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReqViewMode("flat")}
+                  className={`px-2.5 py-1.5 rounded-xl font-bold ${reqViewMode === "flat"
+                    ? "accent-bg"
+                    : "border border-slate-300 dark:border-slate-700"
+                    }`}
+                >
+                  قائمة مسطحة
+                </button>
+              </div>
+            </div>
+
+            {filteredFlatRequests.length === 0 ? (
+              <div className="p-6 rounded-2xl bg-slate-50 dark:bg-slate-800/40 text-center text-slate-500 space-y-2">
+                <div>لا توجد طلبات واردة من بوابة العملاء حالياً ضمن الفلتر النشط.</div>
+                {hiddenRequestsCount > 0 && hideTestRecords && (
+                  <button
+                    type="button"
+                    onClick={() => setHideTestRecords(false)}
+                    className="px-3 py-1 rounded-xl border border-slate-300 dark:border-slate-700 font-bold text-[11px]"
+                  >
+                    عرض {hiddenRequestsCount} سجل اختباري مخفي
+                  </button>
+                )}
+              </div>
+            ) : reqViewMode === "flat" ? (
+              filteredFlatRequests.map(renderStaffRequestCard)
+            ) : (
+              <div className="space-y-4">
+                {filteredDirectories.map((clientDir) => {
+                  const clientCollapsed = Boolean(collapsedDirs[`c:${clientDir.clientKey}`]);
+                  return (
+                    <div
+                      key={clientDir.clientKey}
+                      data-testid={`staff-client-directory-${clientDir.clientKey}`}
+                      className="rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden bg-slate-50/40 dark:bg-slate-900/40"
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCollapsedDirs((prev) => ({
+                            ...prev,
+                            [`c:${clientDir.clientKey}`]: !clientCollapsed,
+                          }))
+                        }
+                        className="w-full p-3.5 flex flex-wrap items-center justify-between gap-2 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-right hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <FolderOpen className="w-4 h-4 text-emerald-600" />
+                          <span className="font-black text-sm">{clientDir.clientName}</span>
+                          {clientDir.clientPhone && (
+                            <bdi dir="ltr" className="font-mono text-slate-500">
+                              {clientDir.clientPhone}
+                            </bdi>
+                          )}
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200 font-bold text-[10px]">
+                            {clientDir.totalRequests} طلب • {clientDir.openRequests} مفتوح
+                          </span>
+                        </div>
+                        <span className="font-bold text-emerald-700 dark:text-emerald-300">
+                          {formatMoney(clientDir.totalAmount)} • {clientCollapsed ? "فتح المجلد" : "طي"}
+                        </span>
+                      </button>
+
+                      {!clientCollapsed && (
+                        <div className="p-3 space-y-3">
+                          {clientDir.months.map((monthDir) => {
+                            const monthFolderKey = `m:${clientDir.clientKey}:${monthDir.monthKey}`;
+                            const monthCollapsed = Boolean(collapsedDirs[monthFolderKey]);
+                            return (
+                              <div
+                                key={monthFolderKey}
+                                data-testid={`staff-month-folder-${clientDir.clientKey}-${monthDir.monthKey}`}
+                                className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/80 overflow-hidden"
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setCollapsedDirs((prev) => ({
+                                      ...prev,
+                                      [monthFolderKey]: !monthCollapsed,
+                                    }))
+                                  }
+                                  className="w-full px-3 py-2 flex flex-wrap items-center justify-between gap-2 bg-slate-100/80 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-700 font-extrabold text-[11px]"
+                                >
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <FolderOpen className="w-3.5 h-3.5 text-indigo-600" />
+                                    <span>مجلد الشهر: {monthDir.monthLabelAr}</span>
+                                    <span className="px-2 py-0.5 rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono text-[10px]">
+                                      {monthDir.requests.length}
+                                    </span>
+                                  </span>
+                                  <span className="text-slate-500">
+                                    {formatMoney(monthDir.totalAmount)} • {monthCollapsed ? "عرض الطلبات" : "إخفاء"}
+                                  </span>
+                                </button>
+                                {!monthCollapsed && (
+                                  <div className="p-2.5 space-y-2.5">
+                                    {monthDir.requests.map(renderStaffRequestCard)}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* SECTION 2: NEW CLIENT REGISTRATIONS */}
       {section === "registrations" && (
@@ -1337,6 +1700,15 @@ export function TenantClientPortalAdminPanel({
                       <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 font-bold text-[10px]">
                         {d.status}
                       </span>
+                      <span className="font-mono text-slate-400 text-[10px] inline-flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        <bdi dir="ltr">{d.createdAtDisplay || formatIsoToDmyTime(d.createdAt)}</bdi>
+                      </span>
+                      {d.sentAt && (
+                        <span className="font-mono text-emerald-600 dark:text-emerald-400 text-[10px]">
+                          أُرسلت: <bdi dir="ltr">{d.sentAtDisplay || formatIsoToDmyTime(d.sentAt)}</bdi>
+                        </span>
+                      )}
                     </div>
                     {d.approvedByName && (
                       <span className="text-[10px] text-slate-400">

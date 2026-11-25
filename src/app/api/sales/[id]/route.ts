@@ -6,6 +6,7 @@ import {
 } from "@/lib/accounting/ledgerService";
 import { appendAuditLogTx, getBootstrapState, isHarvestLockedTx } from "@/lib/serverBootstrap";
 import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
+import { syncPublishedCatalogStockTx } from "@/lib/clientPortal/catalogStockSync";
 
 async function handleSaleByIdUpdate(
   req: NextRequest,
@@ -56,6 +57,7 @@ async function handleSaleByIdUpdate(
       actorRole: auth.actor.userRole ?? undefined,
     });
 
+    await syncPublishedCatalogStockTx(prisma).catch(() => null);
     const state = await getBootstrapState();
     return NextResponse.json({ sale: updated, state });
   } catch (error) {
@@ -193,6 +195,7 @@ export const DELETE = withTenantRoute(async function DELETE(
         entityReference: id,
         details: `${rec.customerName} - ${Number(rec.totalAmount).toLocaleString("en-US")} ريال`,
       });
+      await syncPublishedCatalogStockTx(tx).catch(() => null);
       return { status: "OK" as const };
     });
 

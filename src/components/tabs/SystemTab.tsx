@@ -1824,11 +1824,11 @@ export function SystemTab({
           initialSection="settings"
           canManageSettings={Boolean(
             !readOnly &&
-              (canManageUsers ||
-                canManageCms ||
-                canEdit(currentUser, "system") ||
-                currentUser.role === "SUPER_ADMIN" ||
-                currentUser.role === "CHIEF_ACCOUNTANT")
+            (canManageUsers ||
+              canManageCms ||
+              canEdit(currentUser, "system") ||
+              currentUser.role === "SUPER_ADMIN" ||
+              currentUser.role === "CHIEF_ACCOUNTANT")
           )}
           onRefreshState={async () => {
             await onRefreshState?.();
@@ -1906,9 +1906,11 @@ export function SystemTab({
                   onChange={(e) => onChangeTheme(e.target.value as ThemeName)}
                   className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
                 >
-                  <option value="emerald">الأخضر الزراعي (Emerald)</option>
+                  <option value="light">النهاري الفاتح (Light)</option>
+                  <option value="emerald">الأخضر المؤسسي (Emerald)</option>
                   <option value="dark">الوضع الداكن (Dark)</option>
                   <option value="royal">الأزرق الملكي (Royal)</option>
+                  <option value="system">تلقائي حسب النظام (System)</option>
                 </select>
               </div>
             </div>

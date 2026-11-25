@@ -4,35 +4,77 @@
 
 :root {
   --bg-primary: #f8fafc;
+  --bg-elevated: #f1f5f9;
   --bg-card: #ffffff;
   --text-primary: #0f172a;
   --text-secondary: #475569;
   --accent: #059669;
   --accent-hover: #047857;
   --accent-soft: #ecfdf5;
+  --accent-contrast: #ffffff;
   --border-color: #e2e8f0;
+  --light-sheen: rgba(16, 185, 129, 0.14);
+  --light-border: rgba(16, 185, 129, 0.34);
 }
 
+html.theme-light,
+body.theme-light {
+  --bg-primary: #f8fafc;
+  --bg-elevated: #f1f5f9;
+  --bg-card: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --accent: var(--tenant-accent, #059669);
+  --accent-hover: var(--tenant-accent-hover, #047857);
+  --accent-soft: var(--tenant-accent-soft, #ecfdf5);
+  --border-color: #e2e8f0;
+  --light-sheen: rgba(14, 165, 233, 0.12);
+  --light-border: rgba(14, 165, 233, 0.3);
+}
+
+html.theme-emerald,
+body.theme-emerald {
+  --bg-primary: #f8fafc;
+  --bg-elevated: #ecfdf5;
+  --bg-card: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --accent: var(--tenant-accent, #059669);
+  --accent-hover: var(--tenant-accent-hover, #047857);
+  --accent-soft: var(--tenant-accent-soft, #ecfdf5);
+  --border-color: #e2e8f0;
+  --light-sheen: rgba(16, 185, 129, 0.14);
+  --light-border: rgba(16, 185, 129, 0.35);
+}
+
+html.theme-dark,
 body.theme-dark {
-  --bg-primary: #0f172a;
+  --bg-primary: #0b1120;
+  --bg-elevated: #111827;
   --bg-card: #1e293b;
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
-  --accent: #10b981;
-  --accent-hover: #059669;
-  --accent-soft: #064e3b;
+  --accent: var(--tenant-accent, #10b981);
+  --accent-hover: var(--tenant-accent-hover, #059669);
+  --accent-soft: var(--tenant-accent-soft, rgba(16, 185, 129, 0.18));
   --border-color: #334155;
+  --light-sheen: rgba(52, 211, 153, 0.16);
+  --light-border: rgba(52, 211, 153, 0.42);
 }
 
+html.theme-royal,
 body.theme-royal {
   --bg-primary: #f5f7ff;
+  --bg-elevated: #eef2ff;
   --bg-card: #ffffff;
   --text-primary: #1e1b4b;
   --text-secondary: #4338ca;
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: #eef2ff;
+  --accent: var(--tenant-accent, #4f46e5);
+  --accent-hover: var(--tenant-accent-hover, #4338ca);
+  --accent-soft: var(--tenant-accent-soft, #eef2ff);
   --border-color: #c7d2fe;
+  --light-sheen: rgba(99, 102, 241, 0.14);
+  --light-border: rgba(99, 102, 241, 0.35);
 }
 
 body {
@@ -90,7 +132,7 @@ table tbody tr:hover {
 
 .accent-bg {
   background-color: var(--accent);
-  color: #ffffff;
+  color: var(--accent-contrast, #ffffff);
 }
 
 .accent-bg:hover {
@@ -104,6 +146,96 @@ table tbody tr:hover {
 .accent-badge {
   background-color: var(--accent-soft);
   color: var(--accent);
+}
+
+.uas-light-divider {
+  position: relative;
+  height: 1px;
+  background: var(--border-color);
+  overflow: hidden;
+}
+
+.uas-light-heading {
+  position: relative;
+  border-radius: 0.75rem;
+}
+
+/* Phase 16: GPU-friendly Pointer-Reactive Light (hover devices & motion-safe only) */
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .card-surface,
+  .uas-light-card,
+  .uas-light-btn,
+  .uas-light-tab,
+  button.accent-bg,
+  [data-uas-light] {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .card-surface[data-uas-lit="1"]::after,
+  .uas-light-card[data-uas-lit="1"]::after,
+  .uas-light-btn[data-uas-lit="1"]::after,
+  .uas-light-tab[data-uas-lit="1"]::after,
+  button.accent-bg[data-uas-lit="1"]::after,
+  [data-uas-light][data-uas-lit="1"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: 0;
+    background: radial-gradient(
+      240px circle at var(--uas-ptr-x, 50%) var(--uas-ptr-y, 50%),
+      var(--light-sheen, rgba(16, 185, 129, 0.14)),
+      transparent 68%
+    );
+    opacity: 0.85;
+    transform: translateZ(0);
+    transition: opacity 0.18s ease;
+  }
+
+  .card-surface > *,
+  .uas-light-card > *,
+  .uas-light-btn > *,
+  .uas-light-tab > *,
+  button.accent-bg > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .uas-light-divider[data-uas-lit="1"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(
+      180px circle at var(--uas-ptr-x, 50%) 50%,
+      var(--light-border, rgba(16, 185, 129, 0.5)),
+      transparent 70%
+    );
+  }
+
+  .uas-light-heading[data-uas-lit="1"] {
+    background-image: radial-gradient(
+      220px circle at var(--uas-ptr-x, 50%) var(--uas-ptr-y, 50%),
+      var(--light-sheen, rgba(16, 185, 129, 0.1)),
+      transparent 70%
+    );
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-surface::after,
+  .uas-light-card::after,
+  .uas-light-btn::after,
+  .uas-light-tab::after,
+  .uas-light-divider::after,
+  button.accent-bg::after,
+  [data-uas-light]::after {
+    display: none !important;
+    animation: none !important;
+    transition: none !important;
+  }
 }
 
 /* Mobile Responsive & Smartphone App Frame Mode */
@@ -142,6 +274,15 @@ body.mobile-simulator-active #erpAppFrame {
 
 @media print {
   .no-print {
+    display: none !important;
+  }
+  .card-surface::after,
+  .uas-light-card::after,
+  .uas-light-btn::after,
+  .uas-light-tab::after,
+  .uas-light-divider::after,
+  button.accent-bg::after,
+  [data-uas-light]::after {
     display: none !important;
   }
   body {

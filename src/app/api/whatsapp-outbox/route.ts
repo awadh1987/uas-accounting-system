@@ -3,6 +3,7 @@ import { prisma, withTenantRoute } from "@/lib/prisma";
 import { authorizeApiAction, corsOptionsResponse, jsonError } from "@/lib/apiHelpers";
 import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
 import { resolveRequestTenantScope } from "@/lib/clientPortal/clientAuth";
+import { formatIsoToDmy, formatIsoToDmyTime, formatIsoToTimeHm } from "@/lib/uiFormatters";
 import {
   approveAndSendWhatsAppDraft,
   createWhatsAppDraftTx,
@@ -37,7 +38,14 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       tenantSlug: scope.tenantSlug,
-      drafts,
+      drafts: drafts.map((d) => ({
+        ...d,
+        createdAtDmy: formatIsoToDmy(d.createdAt),
+        createdAtTime: formatIsoToTimeHm(d.createdAt),
+        createdAtDisplay: formatIsoToDmyTime(d.createdAt),
+        approvedAtDisplay: d.approvedAt ? formatIsoToDmyTime(d.approvedAt) : null,
+        sentAtDisplay: d.sentAt ? formatIsoToDmyTime(d.sentAt) : null,
+      })),
       settings,
     });
   } catch (err) {

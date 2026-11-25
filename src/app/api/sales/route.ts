@@ -16,6 +16,7 @@ import {
 import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
 import { withIdempotency } from "@/lib/idempotencyGuard";
 import { validateHarvestStockForSaleTx } from "@/lib/harvestStockGuard";
+import { syncPublishedCatalogStockTx } from "@/lib/clientPortal/catalogStockSync";
 
 export const POST = withTenantRoute(async function POST(req: NextRequest) {
   return withIdempotency(req, async (r) => {
@@ -240,6 +241,8 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         entityReference: sale.id,
         details: `${customerName} — ${sequenceNumber} / ${dailyBatchLabel} (${bundlesCount} × ${unitPrice} = ${totalAmount.toLocaleString("en-US")} ريال، سند ${receiptVoucherNo})`,
       });
+
+      await syncPublishedCatalogStockTx(tx).catch(() => null);
 
       return { locked: false as const, sale };
     });

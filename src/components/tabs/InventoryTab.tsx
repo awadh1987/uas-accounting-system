@@ -55,7 +55,25 @@ export function InventoryTab({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [syncingCatalog, setSyncingCatalog] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState("");
+
+  const handleSyncCatalogFromHarvest = async () => {
+    setSyncingCatalog(true);
+    try {
+      const res = await fetch("/api/portal-admin/catalog", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "SYNC_FROM_HARVEST", publishImmediately: true }),
+      });
+      const data = (await res.json()) as { message?: string; error?: string };
+      onToast?.(res.ok ? data.message || "✅ تم نشر ومزامنة المخزون والفرز للعملاء" : data.error || "تعذر المزامنة");
+    } catch {
+      onToast?.("تعذر الاتصال بالخادم أثناء مزامنة قائمة الأصناف والفرز");
+    } finally {
+      setSyncingCatalog(false);
+    }
+  };
 
   const handleRefreshHarvest = async () => {
     if (!onRefreshState) return;
@@ -305,14 +323,26 @@ export function InventoryTab({
               </button>
             )}
             {!readOnly && (
-              <button
-                type="button"
-                onClick={openCreateDrawer}
-                className="px-3.5 py-1.5 rounded-xl accent-bg text-xs font-extrabold inline-flex items-center gap-1.5 shadow-sm"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>تسجيل دفعة حصاد</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  data-testid="inventory-sync-catalog-btn"
+                  disabled={syncingCatalog}
+                  onClick={() => void handleSyncCatalogFromHarvest()}
+                  className="px-3 py-1.5 rounded-xl border border-emerald-500 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold inline-flex items-center gap-1.5 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${syncingCatalog ? "animate-spin" : ""}`} />
+                  <span>{syncingCatalog ? "جاري النشر..." : "نشر ومزامنة مع قائمة أسعار العملاء"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={openCreateDrawer}
+                  className="px-3.5 py-1.5 rounded-xl accent-bg text-xs font-extrabold inline-flex items-center gap-1.5 shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>تسجيل دفعة حصاد</span>
+                </button>
+              </>
             )}
           </div>
         </div>

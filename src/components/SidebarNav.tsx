@@ -3,6 +3,7 @@
 import React from "react";
 import {
   BarChart3,
+  Boxes,
   Briefcase,
   ChevronLeft,
   ChevronRight,
@@ -44,6 +45,7 @@ const GROUP_ICONS: Record<ErpGroupId, React.ComponentType<{ className?: string }
   public: LayoutDashboard,
   projects: Sprout,
   commercial: ShoppingBag,
+  inventory: Boxes,
   operations: Briefcase,
   finance: Landmark,
   intelligence: BarChart3,

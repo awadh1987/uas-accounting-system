@@ -2,9 +2,11 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { appendAuditLogTx } from "@/lib/serverBootstrap";
 import { formatIsoToDmy } from "@/lib/uiFormatters";
+import { syncPublishedCatalogStockTx } from "@/lib/clientPortal/catalogStockSync";
 import {
   CATALOG_AVAILABILITY_LABELS,
   PORTAL_GRADE_PRESETS,
+  computeClientCatalogBoardStats,
   type CatalogAvailabilityStatus,
   type ClientCatalogBoardItemView,
   type ClientCatalogBoardStats,
@@ -14,6 +16,7 @@ import {
 export {
   CATALOG_AVAILABILITY_LABELS,
   PORTAL_GRADE_PRESETS,
+  computeClientCatalogBoardStats,
   type CatalogAvailabilityStatus,
   type ClientCatalogBoardItemView,
   type ClientCatalogBoardStats,
@@ -45,15 +48,28 @@ function resolveDisplayUnitLabel(row: {
 export function sanitizeClientCatalogBoardItem(row: {
   id: string;
   inventoryItemId?: string | null;
+  harvestBatchId?: string | null;
+  projectId?: string | null;
+  harvestName?: string | null;
   sku?: string | null;
   titleAr: string;
   titleEn?: string | null;
   gradeLabel: string;
   categoryLabel: string;
+  sectorType?: string;
+  categoryGroup?: string;
+  saleMode?: string;
   unitCode: string;
   unitLabel: string;
   customUnitLabel?: string | null;
   unitPrice: Prisma.Decimal | number | string;
+  bulkUnitLabel?: string | null;
+  partialUnitLabel?: string | null;
+  partialUnitPrice?: Prisma.Decimal | number | string;
+  multiplierToBase?: Prisma.Decimal | number | string;
+  publishedQty?: Prisma.Decimal | number | string | null;
+  remainingQty?: Prisma.Decimal | number | string | null;
+  lowStockThreshold?: Prisma.Decimal | number | string;
   currency: string;
   availabilityStatus: string;
   pickupLocation?: string | null;
@@ -70,22 +86,41 @@ export function sanitizeClientCatalogBoardItem(row: {
     row.publishedAt instanceof Date
       ? row.publishedAt.toISOString()
       : row.publishedAt
-      ? String(row.publishedAt)
-      : null;
+        ? String(row.publishedAt)
+        : null;
 
   return {
     id: row.id,
     inventoryItemId: row.inventoryItemId ?? null,
+    harvestBatchId: row.harvestBatchId ?? null,
+    projectId: row.projectId ?? null,
+    harvestName: row.harvestName ?? null,
     sku: row.sku ?? null,
     titleAr: row.titleAr,
     titleEn: row.titleEn ?? null,
     gradeLabel: row.gradeLabel || "درجة أولى",
     categoryLabel: row.categoryLabel || "أصناف عامة",
+    sectorType: row.sectorType || "HARVEST",
+    categoryGroup: row.categoryGroup || "HARVEST",
+    saleMode: row.saleMode || "BOTH",
     unitCode: row.unitCode || "QAT_BUNCH",
     unitLabel: row.unitLabel || "علاقية قات",
     customUnitLabel: row.customUnitLabel ?? null,
     displayUnitLabel: resolveDisplayUnitLabel(row),
     unitPrice: Math.max(0, Number(row.unitPrice || 0)),
+    bulkUnitLabel: row.bulkUnitLabel ?? null,
+    partialUnitLabel: row.partialUnitLabel ?? null,
+    partialUnitPrice: Math.max(0, Number(row.partialUnitPrice || 0)),
+    multiplierToBase: Math.max(0.0001, Number(row.multiplierToBase || 1)),
+    publishedQty:
+      row.publishedQty !== null && row.publishedQty !== undefined
+        ? Number(row.publishedQty)
+        : null,
+    remainingQty:
+      row.remainingQty !== null && row.remainingQty !== undefined
+        ? Number(row.remainingQty)
+        : null,
+    lowStockThreshold: Number(row.lowStockThreshold || 5),
     currency: row.currency || "YER",
     availabilityStatus,
     availabilityLabelAr: CATALOG_AVAILABILITY_LABELS[availabilityStatus],
@@ -100,58 +135,9 @@ export function sanitizeClientCatalogBoardItem(row: {
   };
 }
 
-export function computeClientCatalogBoardStats(
-  items: ClientCatalogBoardItemView[]
-): ClientCatalogBoardStats {
-  const gradeSet = new Set<string>();
-  const categorySet = new Set<string>();
-  const unitMap = new Map<string, string>();
-  let availableCount = 0;
-  let limitedCount = 0;
-  let unavailableCount = 0;
-
-  let latestFreshnessLabel = "قائمة أسعار اليوم";
-  let latestEffectiveDate: string | null = null;
-  let latestValidityNote: string | null = null;
-
-  for (const it of items) {
-    if (it.gradeLabel) gradeSet.add(it.gradeLabel);
-    if (it.categoryLabel) categorySet.add(it.categoryLabel);
-    if (!unitMap.has(it.unitCode)) {
-      unitMap.set(it.unitCode, it.displayUnitLabel);
-    }
-    if (it.availabilityStatus === "AVAILABLE") availableCount += 1;
-    else if (it.availabilityStatus === "LIMITED") limitedCount += 1;
-    else unavailableCount += 1;
-
-    if (it.effectiveDate && (!latestEffectiveDate || it.effectiveDate >= latestEffectiveDate)) {
-      latestEffectiveDate = it.effectiveDate;
-      latestFreshnessLabel = it.freshnessLabel || latestFreshnessLabel;
-      latestValidityNote = it.validityNote ?? latestValidityNote;
-    } else if (!latestEffectiveDate && it.freshnessLabel) {
-      latestFreshnessLabel = it.freshnessLabel;
-      latestValidityNote = it.validityNote ?? latestValidityNote;
-    }
-  }
-
-  return {
-    totalPublished: items.length,
-    availableCount,
-    limitedCount,
-    unavailableCount,
-    gradesCount: gradeSet.size,
-    categoriesCount: categorySet.size,
-    grades: Array.from(gradeSet),
-    categories: Array.from(categorySet),
-    units: Array.from(unitMap.entries()).map(([unitCode, displayUnitLabel]) => ({
-      unitCode,
-      displayUnitLabel,
-    })),
-    latestFreshnessLabel,
-    latestEffectiveDate,
-    latestEffectiveDateDmy: latestEffectiveDate ? formatIsoToDmy(latestEffectiveDate) : "",
-    latestValidityNote,
-  };
+// Re-exported from portalTypes for client & server parity
+export function _ensureCatalogBoardStatsExport() {
+  return computeClientCatalogBoardStats;
 }
 
 /**
@@ -162,20 +148,34 @@ export async function listPublishedClientCatalogBoard(): Promise<{
   items: ClientCatalogBoardItemView[];
   stats: ClientCatalogBoardStats;
 }> {
+  await syncPublishedCatalogStockTx(prisma).catch(() => null);
   const rows = await prisma.portalCatalogBoardItem.findMany({
     where: { isPublished: true },
     select: {
       id: true,
       inventoryItemId: true,
+      harvestBatchId: true,
+      projectId: true,
+      harvestName: true,
       sku: true,
       titleAr: true,
       titleEn: true,
       gradeLabel: true,
       categoryLabel: true,
+      sectorType: true,
+      categoryGroup: true,
+      saleMode: true,
       unitCode: true,
       unitLabel: true,
       customUnitLabel: true,
       unitPrice: true,
+      bulkUnitLabel: true,
+      partialUnitLabel: true,
+      partialUnitPrice: true,
+      multiplierToBase: true,
+      publishedQty: true,
+      remainingQty: true,
+      lowStockThreshold: true,
       currency: true,
       availabilityStatus: true,
       pickupLocation: true,
@@ -211,6 +211,7 @@ export async function listStaffCatalogBoard(): Promise<{
     baseUnitLabel: string;
   }>;
 }> {
+  await syncPublishedCatalogStockTx(prisma).catch(() => null);
   const [rows, invRows] = await Promise.all([
     prisma.portalCatalogBoardItem.findMany({
       orderBy: [{ displayOrder: "asc" }, { updatedAt: "desc" }],
@@ -261,15 +262,28 @@ export async function listStaffCatalogBoard(): Promise<{
 export async function upsertStaffCatalogBoardItem(params: {
   id?: string;
   inventoryItemId?: string | null;
+  harvestBatchId?: string | null;
+  projectId?: string | null;
+  harvestName?: string | null;
   sku?: string | null;
   titleAr: string;
   titleEn?: string | null;
   gradeLabel?: string;
   categoryLabel?: string;
+  sectorType?: string;
+  categoryGroup?: string;
+  saleMode?: string;
   unitCode?: string;
   unitLabel?: string;
   customUnitLabel?: string | null;
   unitPrice: number;
+  bulkUnitLabel?: string | null;
+  partialUnitLabel?: string | null;
+  partialUnitPrice?: number;
+  multiplierToBase?: number;
+  publishedQty?: number | null;
+  remainingQty?: number | null;
+  lowStockThreshold?: number;
   currency?: string;
   availabilityStatus?: string;
   pickupLocation?: string | null;
@@ -294,6 +308,28 @@ export async function upsertStaffCatalogBoardItem(params: {
     throw new Error("يرجى كتابة اسم الوحدة المخصصة عند اختيار (أخرى)");
   }
 
+  const sectorType =
+    String(params.sectorType || "HARVEST").trim().toUpperCase() === "COMMERCIAL"
+      ? "COMMERCIAL"
+      : "HARVEST";
+  const categoryGroup = String(
+    params.categoryGroup || (sectorType === "COMMERCIAL" ? "GENERAL_COMMERCIAL" : "HARVEST")
+  )
+    .trim()
+    .toUpperCase();
+  const saleModeRaw = String(params.saleMode || "BOTH").trim().toUpperCase();
+  const saleMode =
+    saleModeRaw === "BULK" || saleModeRaw === "PARTIAL" ? saleModeRaw : "BOTH";
+
+  const publishedQty =
+    params.publishedQty !== undefined && params.publishedQty !== null
+      ? Math.max(0, Number(params.publishedQty) || 0)
+      : undefined;
+  const remainingQty =
+    params.remainingQty !== undefined && params.remainingQty !== null
+      ? Math.max(0, Number(params.remainingQty) || 0)
+      : publishedQty;
+
   const availabilityStatus = normalizeAvailability(params.availabilityStatus);
   const effectiveDate = params.effectiveDate?.trim()
     ? params.effectiveDate.trim().slice(0, 10)
@@ -303,11 +339,17 @@ export async function upsertStaffCatalogBoardItem(params: {
 
   const payload = {
     inventoryItemId: params.inventoryItemId?.trim() || null,
+    harvestBatchId: params.harvestBatchId?.trim() || null,
+    projectId: params.projectId?.trim() || null,
+    harvestName: params.harvestName?.trim() || null,
     sku: params.sku?.trim() || null,
     titleAr,
     titleEn: params.titleEn?.trim() || null,
     gradeLabel: String(params.gradeLabel || "درجة أولى").trim() || "درجة أولى",
     categoryLabel: String(params.categoryLabel || "أصناف عامة").trim() || "أصناف عامة",
+    sectorType,
+    categoryGroup,
+    saleMode,
     unitCode,
     unitLabel:
       unitCode === "OTHER"
@@ -315,6 +357,15 @@ export async function upsertStaffCatalogBoardItem(params: {
         : String(params.unitLabel || "علاقية قات").trim() || "علاقية قات",
     customUnitLabel: unitCode === "OTHER" ? customUnitLabel : null,
     unitPrice,
+    bulkUnitLabel: params.bulkUnitLabel?.trim() || null,
+    partialUnitLabel: params.partialUnitLabel?.trim() || null,
+    partialUnitPrice: Math.max(0, Number(params.partialUnitPrice) || 0),
+    multiplierToBase: Math.max(0.0001, Number(params.multiplierToBase) || 1),
+    ...(publishedQty !== undefined ? { publishedQty } : {}),
+    ...(remainingQty !== undefined ? { remainingQty } : {}),
+    ...(params.lowStockThreshold !== undefined
+      ? { lowStockThreshold: Math.max(0, Number(params.lowStockThreshold) || 5) }
+      : {}),
     currency: String(params.currency || "YER").trim().toUpperCase() || "YER",
     availabilityStatus,
     pickupLocation: params.pickupLocation?.trim() || null,
@@ -333,30 +384,30 @@ export async function upsertStaffCatalogBoardItem(params: {
 
     const record = existing
       ? await tx.portalCatalogBoardItem.update({
-          where: { id: existing.id },
-          data: {
-            ...payload,
-            ...(isPublished && !existing.isPublished
-              ? {
-                  publishedAt: now,
-                  publishedById: params.actor.userId ?? null,
-                  publishedByName: params.actor.userDisplay,
-                }
-              : !isPublished
+        where: { id: existing.id },
+        data: {
+          ...payload,
+          ...(isPublished && !existing.isPublished
+            ? {
+              publishedAt: now,
+              publishedById: params.actor.userId ?? null,
+              publishedByName: params.actor.userDisplay,
+            }
+            : !isPublished
               ? { publishedAt: null }
               : {}),
-          },
-        })
+        },
+      })
       : await tx.portalCatalogBoardItem.create({
-          data: {
-            ...payload,
-            publishedAt: isPublished ? now : null,
-            publishedById: isPublished ? (params.actor.userId ?? null) : null,
-            publishedByName: isPublished ? params.actor.userDisplay : null,
-            createdById: params.actor.userId ?? null,
-            createdByName: params.actor.userDisplay,
-          },
-        });
+        data: {
+          ...payload,
+          publishedAt: isPublished ? now : null,
+          publishedById: isPublished ? (params.actor.userId ?? null) : null,
+          publishedByName: isPublished ? params.actor.userDisplay : null,
+          createdById: params.actor.userId ?? null,
+          createdByName: params.actor.userDisplay,
+        },
+      });
 
     await appendAuditLogTx(tx, {
       userId: params.actor.userId,
@@ -364,11 +415,9 @@ export async function upsertStaffCatalogBoardItem(params: {
       userRole: params.actor.userRole,
       actionType: isPublished ? "PORTAL_CATALOG_PUBLISHED" : "PORTAL_CATALOG_DRAFT_SAVED",
       entityReference: record.id,
-      details: `[tenant:${params.tenantSlug || "default"}] ${
-        existing ? "تحديث" : "إنشاء"
-      } بطاقة صنف في لوحة البوابة: ${record.titleAr} (${record.gradeLabel}) بسعر ${unitPrice} ${record.currency} — ${
-        isPublished ? "منشور للعملاء" : "مسودة داخلية"
-      }`,
+      details: `[tenant:${params.tenantSlug || "default"}] ${existing ? "تحديث" : "إنشاء"
+        } بطاقة صنف في لوحة البوابة: ${record.titleAr} (${record.gradeLabel}) بسعر ${unitPrice} ${record.currency} — ${isPublished ? "منشور للعملاء" : "مسودة داخلية"
+        }`,
     });
 
     return record;
@@ -404,9 +453,9 @@ export async function setCatalogBoardPublishState(params: {
         publishedAt: params.publish ? now : null,
         ...(params.publish
           ? {
-              publishedById: params.actor.userId ?? null,
-              publishedByName: params.actor.userDisplay,
-            }
+            publishedById: params.actor.userId ?? null,
+            publishedByName: params.actor.userDisplay,
+          }
           : {}),
         ...(params.freshnessLabel?.trim()
           ? { freshnessLabel: params.freshnessLabel.trim() }
@@ -426,9 +475,8 @@ export async function setCatalogBoardPublishState(params: {
       userRole: params.actor.userRole,
       actionType: params.publish ? "PORTAL_CATALOG_BATCH_PUBLISH" : "PORTAL_CATALOG_BATCH_UNPUBLISH",
       entityReference: cleanIds.join(",") || "ALL",
-      details: `[tenant:${params.tenantSlug || "default"}] ${
-        params.publish ? "نشر للعملاء" : "إيقاف نشر"
-      } عدد ${updated.count} صنفاً (${params.freshnessLabel || "قائمة أسعار اليوم"})`,
+      details: `[tenant:${params.tenantSlug || "default"}] ${params.publish ? "نشر للعملاء" : "إيقاف نشر"
+        } عدد ${updated.count} صنفاً (${params.freshnessLabel || "قائمة أسعار اليوم"})`,
     });
 
     return updated;

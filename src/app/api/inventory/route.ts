@@ -9,6 +9,7 @@ import {
 } from "@/lib/serverBootstrap";
 import { authorizeApiAction, jsonError, lockedError } from "@/lib/apiHelpers";
 import { validateHarvestStockAfterBatchUpdateTx } from "@/lib/harvestStockGuard";
+import { syncPublishedCatalogStockTx } from "@/lib/clientPortal/catalogStockSync";
 
 export const dynamic = "force-dynamic";
 
@@ -69,6 +70,8 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         entityReference: batch.id,
         details: `${harvestName} (${productGrade}) — ${harvestedBundles} علاقية`,
       });
+
+      await syncPublishedCatalogStockTx(tx).catch(() => null);
 
       return { locked: false as const, batch };
     });
@@ -190,6 +193,8 @@ async function handleInventoryUpdate(req: NextRequest) {
         entityReference: id,
         details: `${updated.harvestName} (${updated.productGrade}) — ${updated.harvestedBundles} علاقية`,
       });
+
+      await syncPublishedCatalogStockTx(tx).catch(() => null);
 
       return { status: "OK" as const, batch: updated };
     });

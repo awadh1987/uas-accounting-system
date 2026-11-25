@@ -1,7 +1,8 @@
 import type { CurrencyCode } from "@/lib/formulas";
 
-export type ThemeName = "emerald" | "dark" | "royal";
+export type ThemeName = "light" | "emerald" | "dark" | "royal" | "system";
 export type LanguageCode = "ar" | "en";
+export type TradingSectorId = "HARVEST" | "COMMERCIAL";
 
 export type UserRole =
   | "SUPER_ADMIN"
@@ -16,6 +17,7 @@ export type ErpGroupId =
   | "public"
   | "projects"
   | "commercial"
+  | "inventory"
   | "operations"
   | "finance"
   | "intelligence"

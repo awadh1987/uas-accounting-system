@@ -73,6 +73,12 @@ export function PortalCatalogBoardAdminSection({
   const [unitCode, setUnitCode] = useState("QAT_BUNCH");
   const [customUnitLabel, setCustomUnitLabel] = useState("");
   const [unitPrice, setUnitPrice] = useState("");
+  const [sectorType, setSectorType] = useState<"HARVEST" | "COMMERCIAL">("HARVEST");
+  const [categoryGroup, setCategoryGroup] = useState("HARVEST");
+  const [saleMode, setSaleMode] = useState<"BOTH" | "BULK" | "PARTIAL">("BOTH");
+  const [partialUnitLabel, setPartialUnitLabel] = useState("");
+  const [partialUnitPrice, setPartialUnitPrice] = useState("");
+  const [publishedQty, setPublishedQty] = useState("");
   const [availabilityStatus, setAvailabilityStatus] =
     useState<CatalogAvailabilityStatus>("AVAILABLE");
   const [pickupLocation, setPickupLocation] = useState("");
@@ -131,6 +137,12 @@ export function PortalCatalogBoardAdminSection({
     setUnitCode("QAT_BUNCH");
     setCustomUnitLabel("");
     setUnitPrice("");
+    setSectorType("HARVEST");
+    setCategoryGroup("HARVEST");
+    setSaleMode("BOTH");
+    setPartialUnitLabel("");
+    setPartialUnitPrice("");
+    setPublishedQty("");
     setAvailabilityStatus("AVAILABLE");
     setPickupLocation("");
     setFreshnessLabel(batchFreshness || "قائمة أسعار اليوم");
@@ -157,6 +169,18 @@ export function PortalCatalogBoardAdminSection({
     setUnitCode(it.unitCode || "QAT_BUNCH");
     setCustomUnitLabel(it.customUnitLabel || "");
     setUnitPrice(String(it.unitPrice || 0));
+    setSectorType(it.sectorType === "COMMERCIAL" ? "COMMERCIAL" : "HARVEST");
+    setCategoryGroup(it.categoryGroup || (it.sectorType === "COMMERCIAL" ? "GENERAL_COMMERCIAL" : "HARVEST"));
+    setSaleMode(it.saleMode === "BULK" || it.saleMode === "PARTIAL" ? it.saleMode : "BOTH");
+    setPartialUnitLabel(it.partialUnitLabel || "");
+    setPartialUnitPrice(it.partialUnitPrice ? String(it.partialUnitPrice) : "");
+    setPublishedQty(
+      it.remainingQty !== null && it.remainingQty !== undefined
+        ? String(it.remainingQty)
+        : it.publishedQty !== null && it.publishedQty !== undefined
+        ? String(it.publishedQty)
+        : ""
+    );
     setAvailabilityStatus(it.availabilityStatus);
     setPickupLocation(it.pickupLocation || "");
     setFreshnessLabel(it.freshnessLabel || "قائمة أسعار اليوم");
@@ -188,6 +212,13 @@ export function PortalCatalogBoardAdminSection({
           unitLabel: unitCode === "OTHER" ? customUnitLabel.trim() || "أخرى" : uOpt?.labelAr || "علاقية قات",
           customUnitLabel: unitCode === "OTHER" ? customUnitLabel.trim() : null,
           unitPrice: Number(unitPrice || 0),
+          sectorType,
+          categoryGroup,
+          saleMode,
+          partialUnitLabel: partialUnitLabel.trim() || null,
+          partialUnitPrice: partialUnitPrice !== "" ? Number(partialUnitPrice) : 0,
+          publishedQty: publishedQty !== "" ? Number(publishedQty) : null,
+          remainingQty: publishedQty !== "" ? Number(publishedQty) : null,
           availabilityStatus,
           pickupLocation: pickupLocation.trim() || null,
           freshnessLabel: freshnessLabel.trim() || "قائمة أسعار اليوم",
@@ -211,7 +242,7 @@ export function PortalCatalogBoardAdminSection({
   }
 
   async function handleBatchAction(
-    action: "PUBLISH" | "UNPUBLISH" | "SEED_FROM_INVENTORY",
+    action: "PUBLISH" | "UNPUBLISH" | "SEED_FROM_INVENTORY" | "SYNC_FROM_HARVEST" | "SYNC_STOCK",
     ids: string[] = []
   ) {
     setSaving(true);
@@ -312,6 +343,16 @@ export function PortalCatalogBoardAdminSection({
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
               <span>تحديث</span>
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              data-testid="staff-catalog-sync-harvest-btn"
+              onClick={() => void handleBatchAction("SYNC_FROM_HARVEST")}
+              className="px-3 py-1.5 rounded-xl border border-emerald-500 text-emerald-700 dark:text-emerald-300 font-extrabold inline-flex items-center gap-1 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>مزامنة ونشر من المخزون والفرز</span>
             </button>
             <button
               type="button"
@@ -578,6 +619,75 @@ export function PortalCatalogBoardAdminSection({
               className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
             />
           </div>
+
+          <div className="sm:col-span-3">
+            <label className="block font-bold mb-1">القطاع التجاري</label>
+            <select
+              value={sectorType}
+              onChange={(e) => {
+                const next = e.target.value === "COMMERCIAL" ? "COMMERCIAL" : "HARVEST";
+                setSectorType(next);
+                if (next === "COMMERCIAL" && categoryGroup === "HARVEST") {
+                  setCategoryGroup("GENERAL_COMMERCIAL");
+                } else if (next === "HARVEST") {
+                  setCategoryGroup("HARVEST");
+                }
+              }}
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 font-bold"
+            >
+              <option value="HARVEST">القطاع الحالي (المحصول والفرز)</option>
+              <option value="COMMERCIAL">القطاع التجاري (الجملة والتجزئة والسلع)</option>
+            </select>
+          </div>
+          <div className="sm:col-span-3">
+            <label className="block font-bold mb-1">التصنيف التجاري</label>
+            <select
+              value={categoryGroup}
+              onChange={(e) => setCategoryGroup(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 font-bold"
+            >
+              <option value="HARVEST">محصول زراعي وفرز</option>
+              <option value="FOOD">مواد غذائية (Food)</option>
+              <option value="NON_FOOD">بضائع استهلاكية / غير غذائية</option>
+              <option value="FUEL">محروقات ووقود (Fuel)</option>
+              <option value="GENERAL_COMMERCIAL">تجارة عامة جملة وتجزئة</option>
+            </select>
+          </div>
+          <div className="sm:col-span-3">
+            <label className="block font-bold mb-1">الكمية المتاحة بالمخزون</label>
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={publishedQty}
+              onChange={(e) => setPublishedQty(e.target.value)}
+              placeholder="مثال: 100 (اختياري)"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5 font-mono"
+            />
+          </div>
+          <div className="sm:col-span-3">
+            <label className="block font-bold mb-1">نمط البيع وسعر التجزئة</label>
+            <div className="flex gap-1.5">
+              <select
+                value={saleMode}
+                onChange={(e) => setSaleMode(e.target.value as "BOTH" | "BULK" | "PARTIAL")}
+                className="rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 font-bold"
+              >
+                <option value="BOTH">جملة + تجزئة</option>
+                <option value="BULK">جملة فقط</option>
+                <option value="PARTIAL">تجزئة/جزئي</option>
+              </select>
+              <input
+                type="number"
+                min="0"
+                step="any"
+                value={partialUnitPrice}
+                onChange={(e) => setPartialUnitPrice(e.target.value)}
+                placeholder="سعر التجزئة"
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-1.5 font-mono"
+              />
+            </div>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
@@ -627,6 +737,16 @@ export function PortalCatalogBoardAdminSection({
                 <div className="space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-black text-sm">{it.titleAr}</span>
+                    {it.sectorType === "COMMERCIAL" && (
+                      <span className="px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-200 font-bold text-[10px]">
+                        القطاع التجاري
+                      </span>
+                    )}
+                    {it.remainingQty !== null && it.remainingQty !== undefined && (
+                      <span className="px-2 py-0.5 rounded-full bg-sky-100 dark:bg-sky-950 text-sky-800 dark:text-sky-200 font-mono font-bold text-[10px]">
+                        المتبقي: {it.remainingQty}
+                      </span>
+                    )}
                     <span className="px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-200 font-bold text-[10px]">
                       {it.gradeLabel}
                     </span>

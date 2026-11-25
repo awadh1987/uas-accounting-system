@@ -4,8 +4,11 @@ import { authorizeApiAction, corsOptionsResponse, jsonError } from "@/lib/apiHel
 import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
 import { resolveRequestTenantScope } from "@/lib/clientPortal/clientAuth";
 import {
+  bulkHideClientGoodsRequests,
+  lifecycleClientGoodsRequest,
   serializeRequest,
   staffProcessGoodsRequest,
+  type ClientOrStaffLifecycleAction,
 } from "@/lib/clientPortal/portalService";
 import { resolveTenantCloudUrl } from "@/lib/serverConnection";
 
@@ -24,6 +27,9 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const status = (searchParams.get("status") || "ALL").trim().toUpperCase();
     const pickup = (searchParams.get("pickup") || "").trim();
+    const sectorType = (searchParams.get("sectorType") || "ALL").trim().toUpperCase();
+    const includeHidden = searchParams.get("includeHidden") === "1";
+    const includeArchived = searchParams.get("includeArchived") !== "0";
 
     const [rows, projects, treasuries] = await Promise.all([
       prisma.clientGoodsRequest.findMany({
@@ -43,7 +49,7 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
           lines: { orderBy: { lineOrder: "asc" } },
         },
         orderBy: [{ createdAt: "desc" }],
-        take: 250,
+        take: 400,
       }),
       prisma.project.findMany({
         where: { isActive: true },
@@ -59,7 +65,13 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
 
     const filtered = rows
       .map(serializeRequest)
-      .filter((r) => (!pickup ? true : r.pickupLocation.includes(pickup)));
+      .filter((r) => {
+        if (!includeHidden && r.isHiddenByStaff) return false;
+        if (!includeArchived && r.isArchived) return false;
+        if (sectorType && sectorType !== "ALL" && r.sectorType !== sectorType) return false;
+        if (pickup && !r.pickupLocation.includes(pickup)) return false;
+        return true;
+      });
 
     return NextResponse.json({
       success: true,
@@ -78,6 +90,75 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     await ensurePortalSchemaReady();
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const actionRaw = String(body.action || "").trim().toUpperCase();
+    const scope = resolveRequestTenantScope(req);
+
+    if (actionRaw === "BULK_HIDE" || actionRaw === "HIDE_COMPLETED") {
+      const auth = await authorizeApiAction(body, req, { moduleId: "sales", action: "edit" });
+      if (!auth.ok) return auth.response;
+
+      const requestIds = Array.isArray(body.requestIds)
+        ? body.requestIds.map((id) => String(id)).filter(Boolean)
+        : undefined;
+      const bulkRes = await bulkHideClientGoodsRequests({
+        actorScope: "STAFF",
+        requestIds,
+        includeArchived: Boolean(body.includeArchived ?? true),
+      });
+      return NextResponse.json({
+        success: true,
+        updatedCount: bulkRes.updatedCount,
+        ids: bulkRes.ids,
+        message:
+          bulkRes.updatedCount > 0
+            ? `✅ تم إخفاء ${bulkRes.updatedCount} طلب مكتمل/ملغى من لوحة الإدارة بأمان`
+            : "لا توجد طلبات مكتملة أو ملغاة أو مؤرشفة لإخفائها",
+      });
+    }
+
+    if (
+      actionRaw === "ARCHIVE" ||
+      actionRaw === "UNARCHIVE" ||
+      actionRaw === "HIDE" ||
+      actionRaw === "UNHIDE" ||
+      actionRaw === "DELETE"
+    ) {
+      const auth = await authorizeApiAction(body, req, {
+        moduleId: "sales",
+        action: actionRaw === "DELETE" ? "delete" : "edit",
+      });
+      if (!auth.ok) return auth.response;
+
+      const requestId = String(body.requestId || "").trim();
+      if (!requestId) return jsonError("requestId مطلوب", 400);
+
+      const lifecycleRes = await lifecycleClientGoodsRequest({
+        requestId,
+        actorScope: "STAFF",
+        action: actionRaw as ClientOrStaffLifecycleAction,
+        actorName: auth.actor.userDisplay || "موظف المبيعات",
+        actorUserId: auth.actor.userId,
+        actorRole: auth.actor.userRole,
+        tenantSlug: scope.tenantSlug,
+      });
+
+      return NextResponse.json({
+        success: true,
+        deleted: Boolean(lifecycleRes.deleted),
+        deletedId: lifecycleRes.deletedId,
+        request: lifecycleRes.request,
+        message:
+          actionRaw === "DELETE"
+            ? "✅ تم حذف الطلب غير المرحّل بأمان"
+            : actionRaw === "ARCHIVE"
+            ? "✅ تمت أرشفة الطلب بنجاح"
+            : actionRaw === "UNARCHIVE"
+            ? "✅ تمت استعادة الطلب من الأرشيف"
+            : actionRaw === "HIDE"
+            ? "✅ تم إخفاء الطلب من القائمة"
+            : "✅ تم إظهار الطلب في القائمة",
+      });
+    }
+
     const action =
       actionRaw === "CONFIRM" ||
       actionRaw === "MARK_READY" ||
@@ -120,7 +201,6 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         }))
       : undefined;
 
-    const scope = resolveRequestTenantScope(req);
     const portalOrigin = resolveTenantCloudUrl(scope.tenantSlug);
     const result = await staffProcessGoodsRequest({
       requestId,

@@ -90,7 +90,7 @@ export interface AccountingSettingsConfig {
   orgName: string;
   logoText: string;
   defaultLang: "ar" | "en";
-  defaultTheme: "emerald" | "dark" | "royal";
+  defaultTheme: "light" | "emerald" | "dark" | "royal" | "system";
   defaultCurrency: string;
   fiscalYearStart: string;
   fiscalYearEnd: string;
@@ -225,7 +225,12 @@ export function parseAccountingSettings(row: {
     logoText: row.logoText || DEFAULT_ACCOUNTING_SETTINGS.logoText,
     defaultLang: row.defaultLang === "en" ? "en" : "ar",
     defaultTheme:
-      row.defaultTheme === "dark" || row.defaultTheme === "royal" ? row.defaultTheme : "emerald",
+      row.defaultTheme === "dark" ||
+        row.defaultTheme === "royal" ||
+        row.defaultTheme === "light" ||
+        row.defaultTheme === "system"
+        ? row.defaultTheme
+        : "emerald",
     defaultCurrency: (row.defaultCurrency || "YER").toUpperCase(),
     fiscalYearStart: row.fiscalYearStart || "2026-01-01",
     fiscalYearEnd: row.fiscalYearEnd || "2026-12-31",

@@ -4,10 +4,12 @@ import { prisma } from "@/lib/prisma";
 import {
   buildTenantWorkspaceUrl,
   getTenantMetadata,
+  listRegisteredTenants,
   runWithTenant,
 } from "@/lib/tenant";
 import { resolvePublicTenantFromRequest } from "@/lib/publicTenantResolver";
 import { resolveEffectiveBrandInfo } from "@/lib/branding";
+import { isSyntheticTestRecord } from "@/lib/testRecordHygiene";
 import { jsonError } from "@/lib/apiHelpers";
 
 export const dynamic = "force-dynamic";
@@ -91,12 +93,26 @@ export async function GET(req: NextRequest) {
     const resolutionSource = lookup.resolutionSource;
 
     const meta = getTenantMetadata(targetTenantId);
-    const { profile, settings } = await runWithTenant(targetTenantId, async () => {
-      const [p, s] = await Promise.all([
+    const { profile, settings, rawClientCards } = await runWithTenant(targetTenantId, async () => {
+      const [p, s, c] = await Promise.all([
         prisma.enterpriseProfile.findUnique({ where: { id: "default" } }),
         prisma.systemSettings.findUnique({ where: { id: "default" } }),
+        prisma.clientPortalAccount
+          .findMany({
+            where: { status: "ACTIVE" },
+            select: {
+              id: true,
+              fullName: true,
+              tradeName: true,
+              avatarColor: true,
+              clientType: true,
+            },
+            orderBy: { createdAt: "asc" },
+            take: 24,
+          })
+          .catch(() => []),
       ]);
-      return { profile: p, settings: s };
+      return { profile: p, settings: s, rawClientCards: c };
     });
 
     const effectiveSlug =
@@ -105,6 +121,38 @@ export async function GET(req: NextRequest) {
       (meta?.slug && meta.slug !== "default" ? meta.slug : null);
     const isTenantWorkspace = Boolean(effectiveSlug && effectiveSlug !== "default");
     const brandInfo = resolveEffectiveBrandInfo(profile, effectiveSlug);
+
+    const activeTenants = !isTenantWorkspace
+      ? listRegisteredTenants()
+          .filter(
+            (t) =>
+              t.status === "ACTIVE" &&
+              t.slug &&
+              t.slug !== "default" &&
+              !t.slug.includes("-test-") &&
+              !t.tenantId.includes("-test-")
+          )
+          .map((t) => ({
+            slug: t.slug,
+            nameAr: t.nameAr || t.companyName || t.slug,
+            nameEn: t.nameEn || t.companyName || t.slug,
+            tenantUrl: t.tenantUrl || buildTenantWorkspaceUrl(t.slug),
+          }))
+      : [];
+
+    const clientCards = isTenantWorkspace
+      ? rawClientCards
+          .filter((c) => !isSyntheticTestRecord({ name: c.tradeName || c.fullName }))
+          .map((c) => ({
+            id: c.id,
+            displayName: (c.tradeName || c.fullName || "").trim(),
+            avatarChar: (c.tradeName || c.fullName || "ع").trim().charAt(0) || "ع",
+            avatarColor: c.avatarColor || "#059669",
+            clientType: c.clientType || "DIRECT_CLIENT",
+            loginUrl: effectiveSlug ? `/portal?slug=${encodeURIComponent(effectiveSlug)}` : "/portal",
+          }))
+          .filter((c) => c.displayName.length > 0)
+      : [];
 
     return NextResponse.json(
       {
@@ -118,6 +166,8 @@ export async function GET(req: NextRequest) {
         resolutionSource,
         branding: brandInfo,
         profile: mapPublicProfile(profile, effectiveSlug),
+        activeTenants,
+        clientCards,
         defaults: {
           defaultLang: settings?.defaultLang || "ar",
           defaultTheme: settings?.defaultTheme || "emerald",

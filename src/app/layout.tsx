@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
 import { Cairo, Inter } from "next/font/google";
 import "./globals.css";
+import { PointerLightController } from "@/components/PointerLightController";
+import { buildThemeBootInlineScript } from "@/lib/themeEngine";
 import { prisma } from "@/lib/prisma";
 import {
   DEFAULT_TAB_TITLE,
@@ -105,8 +107,21 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="ar" dir="rtl" className={`${cairo.variable} ${inter.variable}`}>
-      <body className="min-h-screen flex flex-col antialiased">{children}</body>
+    <html
+      lang="ar"
+      dir="rtl"
+      suppressHydrationWarning
+      className={`${cairo.variable} ${inter.variable}`}
+    >
+      <head>
+        <script
+          dangerouslySetInnerHTML={{ __html: buildThemeBootInlineScript() }}
+        />
+      </head>
+      <body className="min-h-screen flex flex-col antialiased">
+        <PointerLightController />
+        {children}
+      </body>
     </html>
   );
 }

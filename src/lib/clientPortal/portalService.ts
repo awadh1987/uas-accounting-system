@@ -24,6 +24,20 @@ import { ensure6GenerationCoaHierarchy } from "@/lib/accountingCoreEngine";
 import { computeSaleTotals } from "@/lib/formulas";
 import { dAdd, dDiv, dMul, dSub, round4Decimal as round4 } from "@/lib/decimalMath";
 import { resolveTenantCloudUrl } from "@/lib/serverConnection";
+import {
+  formatIsoToDmy,
+  formatIsoToDmyTime,
+  formatIsoToTimeHm,
+} from "@/lib/uiFormatters";
+import {
+  canArchiveOrHideRequest,
+  canClientCancelRequest,
+  canSafelyDeleteRequest,
+} from "@/lib/clientPortal/orderLineBuilder";
+import {
+  deductPublishedCatalogStockForLinesTx,
+  syncPublishedCatalogStockTx,
+} from "@/lib/clientPortal/catalogStockSync";
 import type {
   AmendmentDiffEntry,
   RequestAmendmentSnapshot,
@@ -420,6 +434,7 @@ export async function updateClientPortalProfile(
 
 interface RawClientRequestLineInput {
   id?: string | null;
+  catalogBoardItemId?: string | null;
   itemId?: string | null;
   itemTitle: string;
   requestedQty: number;
@@ -427,6 +442,7 @@ interface RawClientRequestLineInput {
   unitLabel: string;
   customUnitLabel?: string | null;
   unitPrice?: number | null;
+  saleMode?: string | null;
   notes?: string | null;
 }
 
@@ -443,6 +459,7 @@ async function prepareValidatedRequestLines(
     existingId?: string;
     lineOrder: number;
     itemId: string | null;
+    catalogBoardItemId: string | null;
     itemTitle: string;
     requestedQty: number;
     confirmedQty?: number | null;
@@ -451,6 +468,7 @@ async function prepareValidatedRequestLines(
     customUnitLabel: string | null;
     unitPrice: number;
     lineTotal: number;
+    saleMode: string;
     notes: string | null;
   }> = [];
 
@@ -472,6 +490,13 @@ async function prepareValidatedRequestLines(
     let itemTitle = String(raw.itemTitle || "").trim();
     let unitPrice = 0;
     let itemId: string | null = raw.itemId ? String(raw.itemId).trim() : null;
+    let catalogBoardItemId: string | null = raw.catalogBoardItemId
+      ? String(raw.catalogBoardItemId).trim()
+      : null;
+    const requestedSaleMode =
+      String(raw.saleMode || "BULK").trim().toUpperCase() === "PARTIAL"
+        ? "PARTIAL"
+        : "BULK";
 
     const rawPricePresent =
       raw.unitPrice !== undefined &&
@@ -484,7 +509,23 @@ async function prepareValidatedRequestLines(
       }
     }
 
-    if (itemId) {
+    // Prioritize published catalog board item pricing/grade isolation over shared inventory item fallback
+    const boardCandidateId = catalogBoardItemId || itemId;
+    const boardItem = boardCandidateId
+      ? await prisma.portalCatalogBoardItem
+          .findFirst({ where: { id: boardCandidateId, isPublished: true } })
+          .catch(() => null)
+      : null;
+
+    if (boardItem) {
+      catalogBoardItemId = boardItem.id;
+      itemTitle = itemTitle || boardItem.titleAr;
+      unitPrice =
+        requestedSaleMode === "PARTIAL" && Number(boardItem.partialUnitPrice || 0) > 0
+          ? Math.max(0, Number(boardItem.partialUnitPrice || 0))
+          : Math.max(0, Number(boardItem.unitPrice || 0));
+      itemId = boardItem.inventoryItemId || itemId || null;
+    } else if (itemId) {
       const catItem = await prisma.inventoryItem.findUnique({
         where: { id: itemId },
         include: {
@@ -503,22 +544,13 @@ async function prepareValidatedRequestLines(
           unitPrice = round4(basePrice * Number(conv.factorToBase));
         }
       } else {
-        const boardItem = await prisma.portalCatalogBoardItem
-          .findFirst({ where: { id: itemId, isPublished: true } })
-          .catch(() => null);
-        if (boardItem) {
-          itemTitle = itemTitle || boardItem.titleAr;
-          unitPrice = Math.max(0, Number(boardItem.unitPrice || 0));
-          itemId = boardItem.inventoryItemId || null;
-        } else {
-          itemId = null;
-        }
+        itemId = null;
       }
     }
 
     if (opts?.allowProposedPrice && rawPricePresent && Number(raw.unitPrice) > 0) {
       unitPrice = round4(Number(raw.unitPrice));
-    } else {
+    } else if (!boardItem) {
       if (unitPrice <= 0 && unitOption?.defaultUnitPrice && Number(unitOption.defaultUnitPrice) > 0) {
         unitPrice = round4(Number(unitOption.defaultUnitPrice));
       }
@@ -545,6 +577,7 @@ async function prepareValidatedRequestLines(
       ...(validExistingId ? { existingId: validExistingId } : {}),
       lineOrder: i + 1,
       itemId,
+      catalogBoardItemId,
       itemTitle,
       requestedQty: qty,
       unitCode,
@@ -552,6 +585,7 @@ async function prepareValidatedRequestLines(
       customUnitLabel,
       unitPrice,
       lineTotal,
+      saleMode: requestedSaleMode,
       notes: raw.notes ? String(raw.notes).trim() : null,
     });
   }
@@ -561,6 +595,8 @@ async function prepareValidatedRequestLines(
 
 export async function createClientGoodsRequest(params: {
   clientAccountId: string;
+  sectorType?: string;
+  submissionType?: string;
   pickupType?: string;
   pickupLocation: string;
   customPickupLocation?: string;
@@ -579,6 +615,15 @@ export async function createClientGoodsRequest(params: {
     throw new Error("MUST_CHANGE_PASSWORD: يرجى تحديث كلمة المرور المؤقتة من الملف الشخصي أولاً قبل إرسال الطلبات");
   }
 
+  const sectorType =
+    String(params.sectorType || "HARVEST").trim().toUpperCase() === "COMMERCIAL"
+      ? "COMMERCIAL"
+      : "HARVEST";
+  const submissionType =
+    String(params.submissionType || "").trim() === "client_goods_registration"
+      ? "client_goods_registration"
+      : "catalog_order";
+
   const pickupTypeRaw = String(params.pickupType || "MARKET").toUpperCase();
   const isCustomPickup = pickupTypeRaw === "OTHER" || params.pickupLocation.trim() === "أخرى";
   const resolvedPickupLocation = isCustomPickup
@@ -589,13 +634,15 @@ export async function createClientGoodsRequest(params: {
     throw new Error("يرجى تحديد موقع الاستلام (أو كتابة الموقع عند اختيار أخرى)");
   }
 
-  const preparedLines = await prepareValidatedRequestLines(params.lines);
+  const preparedLines = await prepareValidatedRequestLines(params.lines, {
+    allowProposedPrice: submissionType === "client_goods_registration",
+  });
 
   const totalEstimated = preparedLines.reduce((s, l) => dAdd(s, l.lineTotal, 4), 0);
-  const requestNumber = `REQ-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${crypto
-    .randomBytes(2)
-    .toString("hex")
-    .toUpperCase()}`;
+  const requestNumber = `${sectorType === "COMMERCIAL" ? "CREQ" : "REQ"}-${new Date()
+    .toISOString()
+    .slice(0, 10)
+    .replace(/-/g, "")}-${crypto.randomBytes(2).toString("hex").toUpperCase()}`;
 
   const created = await prisma.$transaction(async (tx) => {
     const reqRecord = await tx.clientGoodsRequest.create({
@@ -603,6 +650,8 @@ export async function createClientGoodsRequest(params: {
         requestNumber,
         clientAccountId: account.id,
         customerId: account.customerId,
+        sectorType,
+        submissionType,
         status: "PENDING_REVIEW",
         pickupType: pickupTypeRaw === "BRANCH" || pickupTypeRaw === "WAREHOUSE" || pickupTypeRaw === "OTHER" ? pickupTypeRaw : "MARKET",
         pickupLocation: resolvedPickupLocation,
@@ -615,6 +664,7 @@ export async function createClientGoodsRequest(params: {
           create: preparedLines.map((l) => ({
             lineOrder: l.lineOrder,
             itemId: l.itemId,
+            catalogBoardItemId: l.catalogBoardItemId,
             itemTitle: l.itemTitle,
             requestedQty: l.requestedQty,
             unitCode: l.unitCode,
@@ -622,6 +672,7 @@ export async function createClientGoodsRequest(params: {
             customUnitLabel: l.customUnitLabel,
             unitPrice: l.unitPrice,
             lineTotal: l.lineTotal,
+            saleMode: l.saleMode,
             notes: l.notes,
           })),
         },
@@ -787,6 +838,7 @@ export async function updatePendingClientRequest(params: {
         requestId: existing.id,
         lineOrder: l.lineOrder,
         itemId: l.itemId,
+        catalogBoardItemId: l.catalogBoardItemId,
         itemTitle: l.itemTitle,
         requestedQty: l.requestedQty,
         confirmedQty: null,
@@ -795,6 +847,7 @@ export async function updatePendingClientRequest(params: {
         customUnitLabel: l.customUnitLabel,
         unitPrice: l.unitPrice,
         lineTotal: l.lineTotal,
+        saleMode: l.saleMode,
         notes: l.notes,
       })),
     });
@@ -917,6 +970,17 @@ export function serializeRequest(req: {
   clientResponseStatus?: string | null;
   clientResponseNote?: string | null;
   clientRespondedAt?: Date | null;
+  sectorType?: string;
+  submissionType?: string;
+  isArchived?: boolean;
+  archivedAt?: Date | null;
+  archivedBy?: string | null;
+  isArchivedByClient?: boolean;
+  archivedByClientAt?: Date | null;
+  isHiddenByClient?: boolean;
+  hiddenByClientAt?: Date | null;
+  isHiddenByStaff?: boolean;
+  hiddenByStaffAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
   clientAccount?: {
@@ -934,6 +998,7 @@ export function serializeRequest(req: {
     id: string;
     lineOrder: number;
     itemId: string | null;
+    catalogBoardItemId?: string | null;
     itemTitle: string;
     requestedQty: unknown;
     confirmedQty: unknown;
@@ -942,6 +1007,7 @@ export function serializeRequest(req: {
     customUnitLabel: string | null;
     unitPrice: unknown;
     lineTotal: unknown;
+    saleMode?: string | null;
     notes: string | null;
   }>;
 }) {
@@ -1011,11 +1077,15 @@ export function serializeRequest(req: {
     approvedByUserId: req.approvedByUserId ?? null,
     approvedByName: req.approvedByName ?? null,
     approvedAt: req.approvedAt ? req.approvedAt.toISOString() : null,
+    approvedAtDisplay: req.approvedAt ? formatIsoToDmyTime(req.approvedAt) : null,
     reviewedByName: req.reviewedByName,
     reviewedAt: req.reviewedAt ? req.reviewedAt.toISOString() : null,
+    reviewedAtDisplay: req.reviewedAt ? formatIsoToDmyTime(req.reviewedAt) : null,
     readyAt: req.readyAt ? req.readyAt.toISOString() : null,
+    readyAtDisplay: req.readyAt ? formatIsoToDmyTime(req.readyAt) : null,
     handedOverByName: req.handedOverByName,
     handedOverAt: req.handedOverAt ? req.handedOverAt.toISOString() : null,
+    handedOverAtDisplay: req.handedOverAt ? formatIsoToDmyTime(req.handedOverAt) : null,
     staffNotes: req.staffNotes,
     reviewerRemarks: req.reviewerRemarks ?? null,
     amendmentDiff,
@@ -1023,6 +1093,9 @@ export function serializeRequest(req: {
     afterSnapshot,
     revisionNumber: Number(req.revisionNumber || 1),
     returnedToClientAt: req.returnedToClientAt ? req.returnedToClientAt.toISOString() : null,
+    returnedToClientAtDisplay: req.returnedToClientAt
+      ? formatIsoToDmyTime(req.returnedToClientAt)
+      : null,
     returnedByUserId: req.returnedByUserId ?? null,
     returnedByName: req.returnedByName ?? null,
     clientResponseStatus: req.clientResponseStatus ?? null,
@@ -1031,8 +1104,32 @@ export function serializeRequest(req: {
       : null,
     clientResponseNote: req.clientResponseNote ?? null,
     clientRespondedAt: req.clientRespondedAt ? req.clientRespondedAt.toISOString() : null,
+    clientRespondedAtDisplay: req.clientRespondedAt
+      ? formatIsoToDmyTime(req.clientRespondedAt)
+      : null,
+    sectorType: req.sectorType || "HARVEST",
+    submissionType: req.submissionType || "catalog_order",
+    isArchived: Boolean(req.isArchived),
+    archivedAt: req.archivedAt ? req.archivedAt.toISOString() : null,
+    archivedAtDisplay: req.archivedAt ? formatIsoToDmyTime(req.archivedAt) : null,
+    archivedBy: req.archivedBy ?? null,
+    isArchivedByClient: Boolean(req.isArchivedByClient),
+    archivedByClientAt: req.archivedByClientAt ? req.archivedByClientAt.toISOString() : null,
+    isHiddenByClient: Boolean(req.isHiddenByClient),
+    hiddenByClientAt: req.hiddenByClientAt ? req.hiddenByClientAt.toISOString() : null,
+    isHiddenByStaff: Boolean(req.isHiddenByStaff),
+    hiddenByStaffAt: req.hiddenByStaffAt ? req.hiddenByStaffAt.toISOString() : null,
     createdAt: req.createdAt.toISOString(),
     updatedAt: req.updatedAt.toISOString(),
+    createdAtDmy: formatIsoToDmy(req.createdAt),
+    createdAtTime: formatIsoToTimeHm(req.createdAt),
+    createdAtDisplay: formatIsoToDmyTime(req.createdAt),
+    updatedAtDmy: formatIsoToDmy(req.updatedAt),
+    updatedAtTime: formatIsoToTimeHm(req.updatedAt),
+    updatedAtDisplay: formatIsoToDmyTime(req.updatedAt),
+    canClientCancel: canClientCancelRequest(req),
+    canArchiveOrHide: canArchiveOrHideRequest(req),
+    canSafelyDelete: canSafelyDeleteRequest(req).allowed,
     clientAccount: req.clientAccount
       ? {
         id: req.clientAccount.id,
@@ -1051,6 +1148,7 @@ export function serializeRequest(req: {
       id: l.id,
       lineOrder: l.lineOrder,
       itemId: l.itemId,
+      catalogBoardItemId: l.catalogBoardItemId ?? null,
       itemTitle: l.itemTitle,
       requestedQty: Number(l.requestedQty || 0),
       confirmedQty: l.confirmedQty !== null && l.confirmedQty !== undefined ? Number(l.confirmedQty) : null,
@@ -1061,6 +1159,7 @@ export function serializeRequest(req: {
         l.unitCode === "OTHER" && l.customUnitLabel ? l.customUnitLabel : l.unitLabel,
       unitPrice: Number(l.unitPrice || 0),
       lineTotal: Number(l.lineTotal || 0),
+      saleMode: l.saleMode || "BULK",
       notes: l.notes,
     })),
   };
@@ -3133,6 +3232,14 @@ export async function staffProcessGoodsRequest(params: {
     });
 
     const profile = await tx.enterpriseProfile.findUnique({ where: { id: "default" } }).catch(() => null);
+    await deductPublishedCatalogStockForLinesTx(
+      tx,
+      completedReq.lines.map((l) => ({
+        catalogBoardItemId: (l as { catalogBoardItemId?: string | null }).catalogBoardItemId ?? null,
+        qty: Math.max(0, Number(l.confirmedQty ?? l.requestedQty ?? 0)),
+      }))
+    ).catch(() => null);
+    await syncPublishedCatalogStockTx(tx).catch(() => null);
     await createWhatsAppDraftTx(tx, {
       eventType: "HANDOVER_INVOICE",
       clientAccountId: completedReq.clientAccountId,
@@ -3729,11 +3836,224 @@ export async function getClientPortalNotifications(clientAccountId: string) {
     statusLabelAr: WA_STATUS_LABELS_AR[row.status] || row.status,
     dispatchChannel: row.dispatchChannel,
     createdAt: row.createdAt.toISOString(),
+    createdAtDisplay: formatIsoToDmyTime(row.createdAt),
     sentAt: row.sentAt ? row.sentAt.toISOString() : null,
+    sentAtDisplay: row.sentAt ? formatIsoToDmyTime(row.sentAt) : null,
     // Never leak OTP/reset secrets through portal notification list
     previewText:
       row.eventType === "PASSWORD_RESET"
         ? "إشعار استعادة / تحديث كلمة المرور (محتوى الرمز محمي)"
         : row.finalMessageText.slice(0, 160),
   }));
+}
+
+export type ClientOrStaffLifecycleAction =
+  | "CANCEL"
+  | "ARCHIVE"
+  | "UNARCHIVE"
+  | "HIDE"
+  | "UNHIDE"
+  | "DELETE";
+
+export async function lifecycleClientGoodsRequest(params: {
+  requestId: string;
+  actorScope: "CLIENT" | "STAFF";
+  clientAccountId?: string;
+  action: ClientOrStaffLifecycleAction;
+  actorName?: string;
+  actorUserId?: string | null;
+  actorRole?: string;
+  tenantSlug?: string;
+}): Promise<{
+  deleted?: boolean;
+  deletedId?: string;
+  requestNumber?: string;
+  request?: ReturnType<typeof serializeRequest>;
+}> {
+  const existing = await prisma.clientGoodsRequest.findUnique({
+    where: { id: params.requestId },
+    include: {
+      clientAccount: {
+        select: {
+          id: true,
+          fullName: true,
+          tradeName: true,
+          phone: true,
+          email: true,
+          avatarUrl: true,
+          avatarColor: true,
+          clientType: true,
+          customerId: true,
+        },
+      },
+      lines: { orderBy: { lineOrder: "asc" } },
+    },
+  });
+
+  if (!existing) {
+    throw new Error("NOT_FOUND: الطلب غير موجود");
+  }
+  if (params.actorScope === "CLIENT" && existing.clientAccountId !== params.clientAccountId) {
+    throw new Error("NOT_FOUND: الطلب غير موجود أو غير مصرح بالوصول إليه");
+  }
+
+  const now = new Date();
+  const tenantLabel = (params.tenantSlug || "default").trim() || "default";
+
+  if (params.action === "CANCEL") {
+    if (!canClientCancelRequest(existing)) {
+      throw new Error(
+        "يمكن إلغاء الطلب فقط قبل حجز المخزون أو معالجة الإدارة والربط بالمبيعات"
+      );
+    }
+    const updated = await prisma.$transaction(async (tx) => {
+      const rec = await tx.clientGoodsRequest.update({
+        where: { id: existing.id },
+        data: { status: "CANCELLED" },
+        include: {
+          clientAccount: true,
+          lines: { orderBy: { lineOrder: "asc" } },
+        },
+      });
+      await appendAuditLogTx(tx, {
+        userId: params.actorUserId ?? null,
+        userDisplay: params.actorName || existing.clientAccount?.fullName || "العميل",
+        userRole: params.actorRole || (params.actorScope === "CLIENT" ? "CLIENT_PORTAL" : "USER"),
+        actionType: "CLIENT_REQUEST_CANCELLED",
+        entityReference: existing.requestNumber,
+        details: `[tenant:${tenantLabel}] إلغاء الطلب ${existing.requestNumber} قبل المعالجة/حجز المخزون`,
+      });
+      return rec;
+    });
+    return { request: serializeRequest(updated) };
+  }
+
+  if (params.action === "ARCHIVE" || params.action === "HIDE") {
+    if (!canArchiveOrHideRequest(existing)) {
+      throw new Error(
+        "يمكن أرشفة أو إخفاء الطلبات المكتملة أو الملغاة أو المرفوضة فقط"
+      );
+    }
+  }
+
+  if (params.action === "ARCHIVE" || params.action === "UNARCHIVE") {
+    const isArchive = params.action === "ARCHIVE";
+    const data =
+      params.actorScope === "CLIENT"
+        ? {
+            isArchivedByClient: isArchive,
+            archivedByClientAt: isArchive ? now : null,
+          }
+        : {
+            isArchived: isArchive,
+            archivedAt: isArchive ? now : null,
+            archivedBy: isArchive ? params.actorName || "الإدارة" : null,
+          };
+    const updated = await prisma.clientGoodsRequest.update({
+      where: { id: existing.id },
+      data,
+      include: {
+        clientAccount: true,
+        lines: { orderBy: { lineOrder: "asc" } },
+      },
+    });
+    return { request: serializeRequest(updated) };
+  }
+
+  if (params.action === "HIDE" || params.action === "UNHIDE") {
+    const isHide = params.action === "HIDE";
+    const data =
+      params.actorScope === "CLIENT"
+        ? {
+            isHiddenByClient: isHide,
+            hiddenByClientAt: isHide ? now : null,
+          }
+        : {
+            isHiddenByStaff: isHide,
+            hiddenByStaffAt: isHide ? now : null,
+          };
+    const updated = await prisma.clientGoodsRequest.update({
+      where: { id: existing.id },
+      data,
+      include: {
+        clientAccount: true,
+        lines: { orderBy: { lineOrder: "asc" } },
+      },
+    });
+    return { request: serializeRequest(updated) };
+  }
+
+  // DELETE action — strict accounting safety guardrails
+  const deleteCheck = canSafelyDeleteRequest(existing);
+  if (!deleteCheck.allowed) {
+    throw new Error(deleteCheck.reason || "لا يمكن حذف هذا الطلب للحفاظ على سلامة القيود المحاسبية");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.clientGoodsRequest.delete({
+      where: { id: existing.id },
+    });
+    await appendAuditLogTx(tx, {
+      userId: params.actorUserId ?? null,
+      userDisplay: params.actorName || existing.clientAccount?.fullName || "العميل",
+      userRole: params.actorRole || (params.actorScope === "CLIENT" ? "CLIENT_PORTAL" : "USER"),
+      actionType: "CLIENT_REQUEST_DELETED",
+      entityReference: existing.requestNumber,
+      details: `[tenant:${tenantLabel}] حذف آمن للطلب غير المرحّل ${existing.requestNumber} (الحالة السابقة: ${existing.status})`,
+    });
+  });
+
+  return {
+    deleted: true,
+    deletedId: existing.id,
+    requestNumber: existing.requestNumber,
+  };
+}
+
+export async function bulkHideClientGoodsRequests(params: {
+  actorScope: "CLIENT" | "STAFF";
+  clientAccountId?: string;
+  requestIds?: string[];
+  includeArchived?: boolean;
+}) {
+  const allowedStatuses = ["COMPLETED", "CANCELLED", "REJECTED"];
+  const hasExplicitIds = Array.isArray(params.requestIds) && params.requestIds.length > 0;
+  const now = new Date();
+
+  const candidates = await prisma.clientGoodsRequest.findMany({
+    where: {
+      ...(params.actorScope === "CLIENT" && params.clientAccountId
+        ? { clientAccountId: params.clientAccountId }
+        : {}),
+      ...(hasExplicitIds ? { id: { in: params.requestIds } } : {}),
+    },
+    select: {
+      id: true,
+      status: true,
+      isArchived: true,
+      isArchivedByClient: true,
+    },
+  });
+
+  const targetIds = candidates
+    .filter(
+      (c) =>
+        allowedStatuses.includes(c.status) ||
+        Boolean(params.includeArchived && (c.isArchived || c.isArchivedByClient))
+    )
+    .map((c) => c.id);
+
+  if (targetIds.length === 0) {
+    return { updatedCount: 0, ids: [] as string[] };
+  }
+
+  await prisma.clientGoodsRequest.updateMany({
+    where: { id: { in: targetIds } },
+    data:
+      params.actorScope === "CLIENT"
+        ? { isHiddenByClient: true, hiddenByClientAt: now }
+        : { isHiddenByStaff: true, hiddenByStaffAt: now },
+  });
+
+  return { updatedCount: targetIds.length, ids: targetIds };
 }

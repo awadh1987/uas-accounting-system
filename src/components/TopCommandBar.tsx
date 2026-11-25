@@ -497,9 +497,11 @@ export function TopCommandBar({
                     onChange={(e) => onThemeChange(e.target.value as ThemeName)}
                     className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-2.5 py-1.5 text-[11px] font-bold"
                   >
+                    <option value="light">☀️ Light</option>
                     <option value="emerald">🌿 Emerald</option>
                     <option value="royal">🏛️ Royal</option>
                     <option value="dark">🌙 Dark</option>
+                    <option value="system">🖥️ System</option>
                   </select>
                 </div>
 

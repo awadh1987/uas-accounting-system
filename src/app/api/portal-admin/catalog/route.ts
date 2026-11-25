@@ -10,6 +10,10 @@ import {
   setCatalogBoardPublishState,
   upsertStaffCatalogBoardItem,
 } from "@/lib/clientPortal/catalogBoard";
+import {
+  publishHarvestBatchesToCatalogBoard,
+  syncPublishedCatalogStockTx,
+} from "@/lib/clientPortal/catalogStockSync";
 
 export const dynamic = "force-dynamic";
 
@@ -91,6 +95,32 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       });
     }
 
+    if (action === "SYNC_FROM_HARVEST") {
+      const batchIds = Array.isArray(body.batchIds)
+        ? body.batchIds.map((x) => String(x || "")).filter(Boolean)
+        : undefined;
+      const synced = await publishHarvestBatchesToCatalogBoard({
+        batchIds,
+        publishImmediately: Boolean(body.publishImmediately ?? true),
+        tenantSlug: scope.tenantSlug,
+        actor,
+      });
+      return NextResponse.json({
+        success: true,
+        syncedCount: synced.syncedCount,
+        message: `✅ تم ربط ومزامنة ${synced.syncedCount} دفعة فرز ومخزون مع قائمة الأصناف والأسعار للعملاء`,
+      });
+    }
+
+    if (action === "SYNC_STOCK") {
+      const res = await syncPublishedCatalogStockTx();
+      return NextResponse.json({
+        success: true,
+        updatedCount: res.updatedCount,
+        message: `✅ تم تحديث الأرصدة الحية لعدد ${res.updatedCount} صنف في القائمة المنشورة`,
+      });
+    }
+
     if (action === "SEED_FROM_INVENTORY") {
       const seeded = await seedCatalogBoardFromInventory({
         tenantSlug: scope.tenantSlug,
@@ -121,15 +151,28 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     const item = await upsertStaffCatalogBoardItem({
       id: body.id ? String(body.id) : undefined,
       inventoryItemId: body.inventoryItemId ? String(body.inventoryItemId) : null,
+      harvestBatchId: body.harvestBatchId ? String(body.harvestBatchId) : null,
+      projectId: body.projectId ? String(body.projectId) : null,
+      harvestName: body.harvestName ? String(body.harvestName) : null,
       sku: body.sku ? String(body.sku) : null,
       titleAr: String(body.titleAr || ""),
       titleEn: body.titleEn ? String(body.titleEn) : null,
       gradeLabel: body.gradeLabel ? String(body.gradeLabel) : undefined,
       categoryLabel: body.categoryLabel ? String(body.categoryLabel) : undefined,
+      sectorType: body.sectorType ? String(body.sectorType) : undefined,
+      categoryGroup: body.categoryGroup ? String(body.categoryGroup) : undefined,
+      saleMode: body.saleMode ? String(body.saleMode) : undefined,
       unitCode: body.unitCode ? String(body.unitCode) : undefined,
       unitLabel: body.unitLabel ? String(body.unitLabel) : undefined,
       customUnitLabel: body.customUnitLabel ? String(body.customUnitLabel) : null,
       unitPrice: Number(body.unitPrice ?? 0),
+      bulkUnitLabel: body.bulkUnitLabel ? String(body.bulkUnitLabel) : null,
+      partialUnitLabel: body.partialUnitLabel ? String(body.partialUnitLabel) : null,
+      partialUnitPrice: body.partialUnitPrice !== undefined ? Number(body.partialUnitPrice) : undefined,
+      multiplierToBase: body.multiplierToBase !== undefined ? Number(body.multiplierToBase) : undefined,
+      publishedQty: body.publishedQty !== undefined && body.publishedQty !== null ? Number(body.publishedQty) : null,
+      remainingQty: body.remainingQty !== undefined && body.remainingQty !== null ? Number(body.remainingQty) : null,
+      lowStockThreshold: body.lowStockThreshold !== undefined ? Number(body.lowStockThreshold) : undefined,
       currency: body.currency ? String(body.currency) : "YER",
       availabilityStatus: body.availabilityStatus ? String(body.availabilityStatus) : undefined,
       pickupLocation: body.pickupLocation ? String(body.pickupLocation) : null,

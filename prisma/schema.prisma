@@ -1602,6 +1602,17 @@ model ClientGoodsRequest {
   clientResponseStatus String?
   clientResponseNote  String?
   clientRespondedAt   DateTime?
+  sectorType          String                @default("HARVEST") // HARVEST | COMMERCIAL
+  submissionType      String                @default("catalog_order") // catalog_order | client_goods_registration
+  isArchived          Boolean               @default(false)
+  archivedAt          DateTime?
+  archivedBy          String?
+  isArchivedByClient  Boolean               @default(false)
+  archivedByClientAt  DateTime?
+  isHiddenByClient    Boolean               @default(false)
+  hiddenByClientAt    DateTime?
+  isHiddenByStaff     Boolean               @default(false)
+  hiddenByStaffAt     DateTime?
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
 
@@ -1611,23 +1622,26 @@ model ClientGoodsRequest {
   @@index([customerId, status])
   @@index([status, createdAt])
   @@index([linkedSalesRecordId])
+  @@index([sectorType, status])
 }
 
 model ClientGoodsRequestLine {
-  id              String             @id @default(cuid())
-  requestId       String
-  request         ClientGoodsRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  lineOrder       Int                @default(1)
-  itemId          String?
-  itemTitle       String
-  requestedQty    Decimal
-  confirmedQty    Decimal?
-  unitCode        String             @default("QAT_BUNCH") // QAT_BUNCH | BUNDLE | BAG | CARTON | KG | OTHER
-  unitLabel       String             @default("علاقية قات")
-  customUnitLabel String?
-  unitPrice       Decimal            @default(0)
-  lineTotal       Decimal            @default(0)
-  notes           String?
+  id                 String             @id @default(cuid())
+  requestId          String
+  request            ClientGoodsRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  lineOrder          Int                @default(1)
+  itemId             String?
+  catalogBoardItemId String?
+  itemTitle          String
+  requestedQty       Decimal
+  confirmedQty       Decimal?
+  unitCode           String             @default("QAT_BUNCH") // QAT_BUNCH | BUNDLE | BAG | CARTON | KG | OTHER
+  unitLabel          String             @default("علاقية قات")
+  customUnitLabel    String?
+  unitPrice          Decimal            @default(0)
+  lineTotal          Decimal            @default(0)
+  saleMode           String             @default("BULK") // BULK | PARTIAL
+  notes              String?
 
   @@index([requestId])
 }
@@ -1678,15 +1692,28 @@ model TenantIntegrationSetting {
 model PortalCatalogBoardItem {
   id                 String    @id @default(cuid())
   inventoryItemId    String?
+  harvestBatchId     String?
+  projectId          String?
+  harvestName        String?
   sku                String?
   titleAr            String
   titleEn            String?
   gradeLabel         String    @default("درجة أولى")
   categoryLabel      String    @default("أصناف عامة")
+  sectorType         String    @default("HARVEST") // HARVEST | COMMERCIAL
+  categoryGroup      String    @default("HARVEST") // HARVEST | FOOD | NON_FOOD | FUEL | GENERAL_COMMERCIAL
+  saleMode           String    @default("BOTH") // BULK | PARTIAL | BOTH
   unitCode           String    @default("QAT_BUNCH")
   unitLabel          String    @default("علاقية قات")
   customUnitLabel    String?
   unitPrice          Decimal   @default(0)
+  bulkUnitLabel      String?
+  partialUnitLabel   String?
+  partialUnitPrice   Decimal   @default(0)
+  multiplierToBase   Decimal   @default(1)
+  publishedQty       Decimal?
+  remainingQty       Decimal?
+  lowStockThreshold  Decimal   @default(5)
   currency           String    @default("YER")
   availabilityStatus String    @default("AVAILABLE") // AVAILABLE | LIMITED | UNAVAILABLE
   pickupLocation     String?
@@ -1706,6 +1733,31 @@ model PortalCatalogBoardItem {
 
   @@index([isPublished, displayOrder])
   @@index([gradeLabel, availabilityStatus])
+  @@index([sectorType, isPublished])
+}
+
+model CommercialDispatchOrder {
+  id             String    @id @default(cuid())
+  dispatchNumber String    @unique
+  requestId      String?
+  sectorType     String    @default("COMMERCIAL")
+  warehouseId    String?
+  driverName     String?
+  vehicleInfo    String?
+  tripStatus     String    @default("PENDING_PICK") // PENDING_PICK | PICKING | PACKED_STAGED | IN_TRANSIT | DELIVERED | PARTIAL_RETURN
+  podNotes       String?
+  pickedAt       DateTime?
+  packedAt       DateTime?
+  dispatchedAt   DateTime?
+  deliveredAt    DateTime?
+  itemsJson      String    @default("[]")
+  createdById    String?
+  createdByName  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([tripStatus, createdAt])
+  @@index([requestId])
 }
 
 

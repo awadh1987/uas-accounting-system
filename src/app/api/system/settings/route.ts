@@ -48,9 +48,11 @@ async function saveSettings(req: NextRequest) {
     const defaultLang =
       body.defaultLang === "en" || body.defaultLang === "ar" ? body.defaultLang : undefined;
     const defaultTheme =
+      body.defaultTheme === "light" ||
       body.defaultTheme === "emerald" ||
       body.defaultTheme === "dark" ||
-      body.defaultTheme === "royal"
+      body.defaultTheme === "royal" ||
+      body.defaultTheme === "system"
         ? body.defaultTheme
         : undefined;
     const defaultCurrency =

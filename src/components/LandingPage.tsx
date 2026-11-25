@@ -31,6 +31,8 @@ import {
   Users,
 } from "lucide-react";
 import { DualLogoBadge } from "@/components/DualLogoBadge";
+import { ThemeSwitcherControl } from "@/components/ThemeSwitcherControl";
+import { buildTenantAccentVars } from "@/lib/themeEngine";
 import {
   FALLBACK_DOWNLOAD_PACKAGES,
   type DownloadPackageInfo,
@@ -40,7 +42,7 @@ import { resolveEffectiveTagline } from "@/lib/branding";
 import { fmtNum } from "@/lib/formulas";
 import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
 import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
-import type { LanguageCode, TabId, UasBootstrapState, UasUser } from "@/types/uas";
+import type { LanguageCode, TabId, ThemeName, UasBootstrapState, UasUser } from "@/types/uas";
 
 export type ClientPortalEntrySection =
   | "catalog"
@@ -52,6 +54,7 @@ export type ClientPortalEntrySection =
 interface LandingPageProps {
   state: UasBootstrapState;
   lang: LanguageCode;
+  theme?: ThemeName;
   currentUser?: UasUser | null;
   onEnterErp: (tab?: TabId) => void;
   onOpenLogin: () => void;
@@ -60,6 +63,7 @@ interface LandingPageProps {
     initialSection?: ClientPortalEntrySection
   ) => void;
   onToggleLang: () => void;
+  onChangeTheme?: (next: ThemeName) => void;
   onSelectProjectCard?: (projectId: string) => void;
 }
 
@@ -73,7 +77,7 @@ interface PublicSummary {
   isLedgerBalanced: boolean;
 }
 
-const noopSubscribe = () => () => {};
+const noopSubscribe = () => () => { };
 const getClientInstalledSnapshot = () => isInstalledClientApp();
 const getServerInstalledSnapshot = () => true;
 
@@ -94,11 +98,13 @@ interface VerifyResult {
 export function LandingPage({
   state,
   lang,
+  theme = "emerald",
   currentUser,
   onEnterErp,
   onOpenLogin,
   onOpenClientPortal,
   onToggleLang,
+  onChangeTheme,
   onSelectProjectCard,
 }: LandingPageProps) {
   const profile = state.enterpriseProfile;
@@ -117,6 +123,19 @@ export function LandingPage({
   );
   const [downloadsVersion, setDownloadsVersion] = useState<string>("1.0.0");
   const [downloadsUpdatedAt, setDownloadsUpdatedAt] = useState<string | null>(null);
+  const [activeTenants, setActiveTenants] = useState<
+    Array<{ slug: string; nameAr: string; nameEn: string; tenantUrl: string }>
+  >([]);
+  const [tenantClientCards, setTenantClientCards] = useState<
+    Array<{
+      id: string;
+      displayName: string;
+      avatarChar: string;
+      avatarColor: string;
+      clientType: string;
+      loginUrl: string;
+    }>
+  >([]);
   const [tenantPortalInfo, setTenantPortalInfo] = useState<{
     isTenantWorkspace: boolean;
     tenantSlug: string | null;
@@ -131,10 +150,10 @@ export function LandingPage({
       typeof window !== "undefined" ? extractSubdomainSlugFromHost(window.location.host) : null;
     return hostSlug
       ? {
-          isTenantWorkspace: true,
-          tenantSlug: hostSlug,
-          tenantUrl: `https://${hostSlug}.qat.world`,
-        }
+        isTenantWorkspace: true,
+        tenantSlug: hostSlug,
+        tenantUrl: `https://${hostSlug}.qat.world`,
+      }
       : null;
   });
 
@@ -146,7 +165,14 @@ export function LandingPage({
     fetch("/api/public/tenant")
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (active && data?.isTenantWorkspace) {
+        if (!active || !data) return;
+        if (Array.isArray(data.activeTenants)) {
+          setActiveTenants(data.activeTenants);
+        }
+        if (Array.isArray(data.clientCards)) {
+          setTenantClientCards(data.clientCards);
+        }
+        if (data.isTenantWorkspace) {
           setTenantPortalInfo({
             isTenantWorkspace: Boolean(data.isTenantWorkspace),
             tenantSlug: data.tenantSlug || hostSlug,
@@ -242,10 +268,10 @@ export function LandingPage({
 
   return (
     <div
-      className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+      className="min-h-screen flex flex-col bg-[var(--bg-primary)] text-[var(--text-primary)]"
       style={
         profile?.brandColor
-          ? ({ "--tenant-accent": profile.brandColor } as React.CSSProperties)
+          ? (buildTenantAccentVars(profile.brandColor, theme === "dark" ? "dark" : "light") as React.CSSProperties)
           : undefined
       }
     >
@@ -311,45 +337,46 @@ export function LandingPage({
           <div className="flex items-center gap-2">
             {!isInstalledApp && !isTenantBranded && (
               <>
-            <a
-              href="/downloads/UAS-Setup-Win64.exe"
-              download="UAS-Setup-Win64.exe"
-              className="px-3 py-2 rounded-xl border border-indigo-500/40 hover:border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30 text-xs font-bold flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300 transition"
-              title={isAr ? "تحميل نسخة ويندوز المكتبية والشبكية (UAS-Setup-Win64.exe)" : "Download Windows Desktop / LAN Edition"}
-            >
-              <Monitor className="w-3.5 h-3.5 text-indigo-600" />
-              <span className="hidden sm:inline">{isAr ? "ويندوز (Desktop / LAN)" : "Windows"}</span>
-              <span className="sm:hidden">.EXE</span>
-            </a>
+                <a
+                  href="/downloads/UAS-Setup-Win64.exe"
+                  download="UAS-Setup-Win64.exe"
+                  className="px-3 py-2 rounded-xl border border-indigo-500/40 hover:border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30 text-xs font-bold flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300 transition"
+                  title={isAr ? "تحميل نسخة ويندوز المكتبية والشبكية (UAS-Setup-Win64.exe)" : "Download Windows Desktop / LAN Edition"}
+                >
+                  <Monitor className="w-3.5 h-3.5 text-indigo-600" />
+                  <span className="hidden sm:inline">{isAr ? "ويندوز (Desktop / LAN)" : "Windows"}</span>
+                  <span className="sm:hidden">.EXE</span>
+                </a>
 
-            <a
-              href="/downloads/UAS-Mobile-Release-qat.world.apk"
-              download="UAS-Mobile-Release-qat.world.apk"
-              className="px-3 py-2 rounded-xl border border-emerald-500/40 hover:border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-xs font-bold flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300 transition"
-              title={isAr ? "تحميل تطبيق Android APK الميداني" : "Download Android APK"}
-            >
-              <Download className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="hidden sm:inline">{isAr ? "تطبيق أندرويد" : "Android"}</span>
-              <span className="sm:hidden">APK</span>
-            </a>
+                <a
+                  href="/downloads/UAS-Mobile-Release-qat.world.apk"
+                  download="UAS-Mobile-Release-qat.world.apk"
+                  className="px-3 py-2 rounded-xl border border-emerald-500/40 hover:border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-xs font-bold flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300 transition"
+                  title={isAr ? "تحميل تطبيق Android APK الميداني" : "Download Android APK"}
+                >
+                  <Download className="w-3.5 h-3.5 text-emerald-600" />
+                  <span className="hidden sm:inline">{isAr ? "تطبيق أندرويد" : "Android"}</span>
+                  <span className="sm:hidden">APK</span>
+                </a>
 
-            <a
-              href="#downloads-center"
-              className="hidden md:inline-flex px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold items-center gap-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
-            >
-              <span>{isAr ? "التحميلات" : "Downloads"}</span>
-            </a>
+                <a
+                  href="#downloads-center"
+                  className="hidden md:inline-flex px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold items-center gap-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                >
+                  <span>{isAr ? "التحميلات" : "Downloads"}</span>
+                </a>
               </>
             )}
 
-            <button
-              type="button"
-              onClick={onToggleLang}
-              className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 transition text-slate-700 dark:text-slate-300"
-            >
-              <Globe2 className="w-3.5 h-3.5" />
-              <span>{isAr ? "English" : "العربية"}</span>
-            </button>
+            {onChangeTheme && (
+              <ThemeSwitcherControl
+                theme={theme}
+                lang={lang}
+                compact
+                testId="landing-theme-switcher"
+                onChangeTheme={onChangeTheme}
+              />
+            )}
 
             {!isTenantBranded && (
               <>
@@ -371,18 +398,27 @@ export function LandingPage({
                     <span>{isAr ? "بوابة العملاء" : "Client Portal"}</span>
                   </Link>
                 )}
-
-                <button
-                  type="button"
-                  data-testid="root-login-cta"
-                  onClick={currentUser ? () => onEnterErp("dashboard") : onOpenLogin}
-                  className="px-4 py-2 rounded-xl accent-bg text-xs font-extrabold shadow-sm flex items-center gap-2 hover:opacity-95 transition"
-                >
-                  <Lock className="w-3.5 h-3.5" />
-                  <span>{isAr ? "دخول" : "Sign In"}</span>
-                </button>
               </>
             )}
+
+            <button
+              type="button"
+              onClick={onToggleLang}
+              className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 transition text-slate-700 dark:text-slate-300 uas-light-btn"
+            >
+              <Globe2 className="w-3.5 h-3.5" />
+              <span>{isAr ? "English" : "العربية"}</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="root-login-cta"
+              onClick={currentUser ? () => onEnterErp("dashboard") : onOpenLogin}
+              className="px-4 py-2 rounded-xl accent-bg text-xs font-extrabold shadow-sm flex items-center gap-2 hover:opacity-95 transition uas-light-btn"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>{isAr ? "دخول" : "Sign In"}</span>
+            </button>
           </div>
         </div>
       </header>
@@ -409,9 +445,9 @@ export function LandingPage({
             <p className="text-sm sm:text-base text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl">
               {isAr
                 ? profile?.heroSubtitleAr ||
-                  "نظام مؤسسي متكامل يربط شجرة الحسابات خماسية المستويات بالعمليات والعملاء والموردين بدفتر أستاذ محكم وتقارير فورية وتوثيق إلكتروني."
+                "نظام مؤسسي متكامل يربط شجرة الحسابات خماسية المستويات بالعمليات والعملاء والموردين بدفتر أستاذ محكم وتقارير فورية وتوثيق إلكتروني."
                 : profile?.heroSubtitleEn ||
-                  "Integrated double-entry general ledger connecting projects, supply chains, treasury, and partners with immutable audit trails and real-time financial statements."}
+                "Integrated double-entry general ledger connecting projects, supply chains, treasury, and partners with immutable audit trails and real-time financial statements."}
             </p>
 
             {welcomeNotice && (
@@ -483,11 +519,10 @@ export function LandingPage({
 
                 {verifyResult && (
                   <div
-                    className={`p-4 rounded-2xl border text-xs space-y-2 ${
-                      verifyResult.verified
-                        ? "bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800"
-                        : "bg-rose-50/70 dark:bg-rose-950/30 border-rose-300 dark:border-rose-800"
-                    }`}
+                    className={`p-4 rounded-2xl border text-xs space-y-2 ${verifyResult.verified
+                      ? "bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800"
+                      : "bg-rose-50/70 dark:bg-rose-950/30 border-rose-300 dark:border-rose-800"
+                      }`}
                   >
                     {verifyResult.verified ? (
                       <>
@@ -709,6 +744,100 @@ export function LandingPage({
                     )}
                   </div>
 
+                  {/* Tenant Client Cards with Direct Login Links */}
+                  <div
+                    data-testid="tenant-client-cards-section"
+                    className="pt-4 border-t border-emerald-200/70 dark:border-emerald-900/50 space-y-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-xs font-black text-emerald-800 dark:text-emerald-200 flex items-center gap-1.5">
+                        <Users className="w-4 h-4" />
+                        <span>
+                          {isAr
+                            ? `بطاقات دخول عملاء ${legalName}`
+                            : `${legalName} Client Portal Cards`}
+                        </span>
+                      </div>
+                      <Link
+                        href={buildPortalHref()}
+                        className="text-[11px] font-extrabold text-emerald-700 dark:text-emerald-300 hover:underline"
+                      >
+                        {isAr ? "فتح بوابة العملاء الكاملة" : "Open Full Portal"}
+                      </Link>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                      {tenantClientCards.length > 0
+                        ? tenantClientCards.slice(0, 6).map((c) => (
+                          <Link
+                            key={c.id}
+                            href={c.loginUrl || buildPortalHref()}
+                            data-testid={`tenant-client-card-${c.id}`}
+                            className="p-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-emerald-500 transition flex items-center justify-between gap-2.5 group uas-light-card"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span
+                                className="w-8 h-8 rounded-xl text-white font-black text-xs flex items-center justify-center shrink-0"
+                                style={{ backgroundColor: c.avatarColor || "#059669" }}
+                              >
+                                {c.avatarChar}
+                              </span>
+                              <div className="min-w-0">
+                                <div className="font-extrabold text-xs truncate">
+                                  {c.displayName}
+                                </div>
+                                <div className="text-[10px] text-slate-500">
+                                  {c.clientType === "WHOLESALE"
+                                    ? isAr
+                                      ? "عميل جملة وتوريد"
+                                      : "Wholesale Client"
+                                    : isAr
+                                      ? "حساب عميل مفعل"
+                                      : "Active Client Account"}
+                                </div>
+                              </div>
+                            </div>
+                            <span className="px-2.5 py-1 rounded-xl accent-badge text-[10px] font-black shrink-0">
+                              {isAr ? "دخول العميل" : "Client Login"}
+                            </span>
+                          </Link>
+                        ))
+                        : [
+                          {
+                            id: "client-wholesale",
+                            titleAr: "بوابة عملاء الجملة والتوريد",
+                            titleEn: "Wholesale & Trade Clients",
+                            href: buildPortalHref(),
+                          },
+                          {
+                            id: "client-retail",
+                            titleAr: "العملاء المباشرون وطلبات التجزئة",
+                            titleEn: "Direct & Partial Order Clients",
+                            href: buildPortalHref("section=catalog"),
+                          },
+                          {
+                            id: "client-register",
+                            titleAr: "انضم كعميل جديد للمنشأة",
+                            titleEn: "Register New Client Account",
+                            href: buildPortalHref("tab=register"),
+                          },
+                        ].map((card) => (
+                          <Link
+                            key={card.id}
+                            href={card.href}
+                            data-testid={`tenant-client-card-${card.id}`}
+                            className="p-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-emerald-500 transition flex items-center justify-between gap-2.5 uas-light-card"
+                          >
+                            <span className="font-extrabold text-xs">
+                              {isAr ? card.titleAr : card.titleEn}
+                            </span>
+                            <span className="px-2.5 py-1 rounded-xl accent-badge text-[10px] font-black shrink-0">
+                              {isAr ? "دخول" : "Open"}
+                            </span>
+                          </Link>
+                        ))}
+                    </div>
+                  </div>
+
                   {/* Single Clean Workspace Login Entry */}
                   <div className="pt-3 border-t border-emerald-200/70 dark:border-emerald-900/50 flex flex-wrap items-center justify-between gap-3">
                     <div className="text-xs text-slate-600 dark:text-slate-300 font-semibold">
@@ -729,6 +858,66 @@ export function LandingPage({
                 </div>
               );
             })()}
+          </section>
+        )}
+
+        {/* Active UAS Tenants Directory (Root apex qat.world only — placed directly above UAS Architecture) */}
+        {!isTenantBranded && (
+          <section
+            data-testid="root-active-tenants-section"
+            className="max-w-7xl mx-auto px-4 sm:px-8 pb-10 space-y-5"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-xl font-black">
+                  {isAr ? "بوابات المنشآت النشطة (تسجيل الدخول)" : "Active UAS Tenant Workspaces"}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  {isAr
+                    ? "اختر منشأتك للدخول المباشر إلى مساحة العمل المستقلة وبوابة العملاء الخاصة بها"
+                    : "Select a registered organization workspace to sign in directly"}
+                </p>
+              </div>
+              <span className="px-3 py-1 rounded-full accent-badge text-[11px] font-black">
+                {activeTenants.length} {isAr ? "منشأة نشطة" : "Active Workspaces"}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {activeTenants.map((tenant) => (
+                <a
+                  key={tenant.slug}
+                  href={tenant.tenantUrl}
+                  data-testid={`root-tenant-card-${tenant.slug}`}
+                  className="card-surface rounded-2xl p-5 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/70 hover:shadow-lg transition flex flex-col justify-between gap-4 group uas-light-card"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                        <Building2 className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="font-black text-sm truncate group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition">
+                          {isAr ? tenant.nameAr : tenant.nameEn}
+                        </h4>
+                        <div className="text-[11px] font-mono text-slate-500 truncate">
+                          <bdi dir="ltr">{tenant.tenantUrl}</bdi>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
+                    <span className="font-mono font-bold text-slate-400">
+                      <bdi dir="ltr">{tenant.slug}.qat.world</bdi>
+                    </span>
+                    <span className="px-3 py-1.5 rounded-xl accent-bg font-black inline-flex items-center gap-1.5">
+                      <Lock className="w-3 h-3" />
+                      <span>{isAr ? "دخول" : "Sign In"}</span>
+                    </span>
+                  </div>
+                </a>
+              ))}
+            </div>
           </section>
         )}
 
@@ -867,8 +1056,8 @@ export function LandingPage({
           </section>
         )}
 
-        {/* Active Projects Showcase (rendered only when projects actually exist) */}
-        {state.projects.length > 0 && (
+        {/* Active Projects Showcase (Tenant Workspaces Only; root uses active tenant cards above) */}
+        {isTenantBranded && state.projects.length > 0 && (
           <section className="max-w-7xl mx-auto px-4 sm:px-8 py-8 border-t border-slate-200/80 dark:border-slate-800">
             <div className="flex flex-wrap items-center justify-between gap-2 mb-6">
               <div>
@@ -974,11 +1163,10 @@ export function LandingPage({
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2.5 min-w-0">
                           <div
-                            className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${
-                              isAndroid
-                                ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                                : "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400"
-                            }`}
+                            className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${isAndroid
+                              ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                              : "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400"
+                              }`}
                           >
                             {isAndroid ? <Smartphone className="w-5 h-5" /> : <Monitor className="w-5 h-5" />}
                           </div>
@@ -993,11 +1181,10 @@ export function LandingPage({
                         </div>
 
                         <span
-                          className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase ${
-                            pkg.exists
-                              ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                              : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                          }`}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase ${pkg.exists
+                            ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                            : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                            }`}
                         >
                           {pkg.exists
                             ? isAr ? "متاح للتحميل" : "Available"
@@ -1035,13 +1222,12 @@ export function LandingPage({
                         download={pkg.fileName}
                         data-testid={`download-link-${pkg.platform}`}
                         aria-disabled={!pkg.exists}
-                        className={`flex-1 min-h-[44px] px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-black inline-flex items-center justify-center gap-2 transition shadow-sm ${
-                          pkg.exists
-                            ? isAndroid
-                              ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-                              : "bg-indigo-600 hover:bg-indigo-700 text-white"
-                            : "bg-slate-200 dark:bg-slate-800 text-slate-400 pointer-events-none"
-                        }`}
+                        className={`flex-1 min-h-[44px] px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-black inline-flex items-center justify-center gap-2 transition shadow-sm ${pkg.exists
+                          ? isAndroid
+                            ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                            : "bg-indigo-600 hover:bg-indigo-700 text-white"
+                          : "bg-slate-200 dark:bg-slate-800 text-slate-400 pointer-events-none"
+                          }`}
                       >
                         <Download className="w-4 h-4 shrink-0" />
                         <span>
@@ -1050,8 +1236,8 @@ export function LandingPage({
                               ? `تحميل مباشر (${pkg.sizeFormatted})`
                               : `Download Now (${pkg.sizeFormatted})`
                             : isAr
-                            ? "غير متاح بعد"
-                            : "Not Yet Uploaded"}
+                              ? "غير متاح بعد"
+                              : "Not Yet Uploaded"}
                         </span>
                       </a>
 
@@ -1086,9 +1272,9 @@ export function LandingPage({
               <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
                 {isAr
                   ? profile?.aboutMissionAr ||
-                    "منظومة محاسبية وتخطيط موارد مؤسسية متقدمة تلتزم بأعلى معايير الرقابة والشفافية وتكامل العمليات المالية."
+                  "منظومة محاسبية وتخطيط موارد مؤسسية متقدمة تلتزم بأعلى معايير الرقابة والشفافية وتكامل العمليات المالية."
                   : profile?.aboutMissionEn ||
-                    "Enterprise Resource Planning platform dedicated to rigorous financial governance, transparency, and operational excellence."}
+                  "Enterprise Resource Planning platform dedicated to rigorous financial governance, transparency, and operational excellence."}
               </p>
             </div>
 

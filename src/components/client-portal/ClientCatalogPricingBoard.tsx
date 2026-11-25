@@ -297,6 +297,19 @@ export function ClientCatalogPricingBoard({
                         <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 font-bold text-[10px]">
                           {it.freshnessLabel}
                         </span>
+                        {it.remainingQty !== null && it.remainingQty !== undefined && (
+                          <span
+                            className={`px-2 py-0.5 rounded-full font-mono font-bold text-[10px] ${
+                              it.remainingQty <= 0
+                                ? "bg-rose-100 text-rose-700"
+                                : it.remainingQty <= (it.lowStockThreshold || 5)
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-200"
+                            }`}
+                          >
+                            المتاح بالمخزون: <bdi dir="ltr">{fmtNum(it.remainingQty)}</bdi>
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -305,6 +318,11 @@ export function ClientCatalogPricingBoard({
                         {it.unitPrice > 0 ? formatMoney(it.unitPrice, it.currency) : "حسب المراجعة"}
                       </div>
                       <div className="text-[10px] text-slate-500">لكل {it.displayUnitLabel}</div>
+                      {Number(it.partialUnitPrice || 0) > 0 && (
+                        <div className="text-[10px] font-bold text-indigo-600 dark:text-indigo-300 mt-0.5 tabular-nums">
+                          تجزئة ({it.partialUnitLabel || "مفرّق"}): {formatMoney(Number(it.partialUnitPrice), it.currency)}
+                        </div>
+                      )}
                     </div>
                   </div>
 

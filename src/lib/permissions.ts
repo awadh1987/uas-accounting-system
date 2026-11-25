@@ -103,7 +103,7 @@ const MODULE_TO_GROUP: Record<TabId, ErpGroupId> = {
   procurement: "commercial",
   sales: "commercial",
   customers: "commercial",
-  inventory: "commercial",
+  inventory: "inventory",
   operations: "operations",
   expenses: "operations",
   workers: "operations",
@@ -120,13 +120,13 @@ const MODULE_TO_GROUP: Record<TabId, ErpGroupId> = {
 };
 
 const ROLE_GROUP_ACCESS: Record<UserRole, ErpGroupId[]> = {
-  SUPER_ADMIN: ["public", "projects", "commercial", "operations", "finance", "intelligence", "admin"],
-  PROJECT_MANAGER: ["public", "projects", "commercial", "operations", "intelligence"],
-  CHIEF_ACCOUNTANT: ["public", "projects", "commercial", "operations", "finance", "intelligence", "admin"],
-  PROCUREMENT_OFFICER: ["public", "commercial", "operations"],
-  SALES_COLLECTOR: ["public", "commercial", "finance"],
-  FIELD_ACCOUNTANT: ["public", "projects", "commercial", "operations", "finance"],
-  EXTERNAL_AUDITOR: ["public", "projects", "commercial", "operations", "finance", "intelligence"],
+  SUPER_ADMIN: ["public", "projects", "commercial", "inventory", "operations", "finance", "intelligence", "admin"],
+  PROJECT_MANAGER: ["public", "projects", "commercial", "inventory", "operations", "intelligence"],
+  CHIEF_ACCOUNTANT: ["public", "projects", "commercial", "inventory", "operations", "finance", "intelligence", "admin"],
+  PROCUREMENT_OFFICER: ["public", "commercial", "inventory", "operations"],
+  SALES_COLLECTOR: ["public", "commercial", "inventory", "finance"],
+  FIELD_ACCOUNTANT: ["public", "projects", "commercial", "inventory", "operations", "finance"],
+  EXTERNAL_AUDITOR: ["public", "projects", "commercial", "inventory", "operations", "finance", "intelligence"],
 };
 
 const ROLE_TAB_ACCESS: Record<UserRole, TabId[]> = {
@@ -552,6 +552,7 @@ export function getAccessibleGroups(userOrRole?: UasUser | string | null): ErpGr
     const overrides = resolveCustomOverrides(userOrRole);
     const list = new Set<ErpGroupId>(overrides.allowedGroups || []);
     list.add("public");
+    if (list.has("commercial")) list.add("inventory");
     if (role === "SUPER_ADMIN") list.add("admin");
     return Array.from(list);
   }

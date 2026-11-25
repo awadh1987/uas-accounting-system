@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Eye, Globe, Lock, Receipt, Users } from "lucide-react";
+import { Eye, Globe, Lock, Receipt, ShoppingBag, Sprout, Users } from "lucide-react";
 import { CoaTreeTab } from "@/components/CoaTreeTab";
+import { CommercialSectorWorkspace } from "@/components/CommercialSectorWorkspace";
 import { CommandSearchModal } from "@/components/CommandSearchModal";
 import { FinancialReportsTab } from "@/components/FinancialReportsTab";
 import { ForcePasswordChangeModal } from "@/components/ForcePasswordChangeModal";
@@ -81,6 +82,12 @@ import { performManualSyncNow, startAutoSyncController } from "@/lib/sync/client
 import { resolveTransportTarget } from "@/lib/transportResolver";
 import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
 import { resolveEffectiveBrandInfo } from "@/lib/branding";
+import {
+  THEME_STORAGE_KEY,
+  applyThemeToDocument,
+  normalizeThemePreset,
+  readStoredThemePreset,
+} from "@/lib/themeEngine";
 import { setActivePrintEnterpriseProfile } from "@/lib/print/uasDocumentPrinter";
 import { resolveExportSignature, setActiveClientExportActor } from "@/lib/uiFormatters";
 import {
@@ -165,7 +172,9 @@ export function UasAppShell() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [lang, setLang] = useState<LanguageCode>("ar");
-  const [theme, setTheme] = useState<ThemeName>("emerald");
+  const [theme, setTheme] = useState<ThemeName>(() =>
+    readStoredThemePreset(THEME_STORAGE_KEY, "emerald")
+  );
   const [currency, setCurrency] = useState<CurrencyCode>("YER");
   const [offlineMode, setOfflineMode] = useState(false);
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
@@ -188,6 +197,7 @@ export function UasAppShell() {
   const [licenseStatus, setLicenseStatus] = useState<LicenseStatusData | null>(null);
   const [licenseModalOpen, setLicenseModalOpen] = useState(false);
   const [quickSheetOpen, setQuickSheetOpen] = useState(false);
+  const [activeTradingSector, setActiveTradingSector] = useState<"HARVEST" | "COMMERCIAL">("HARVEST");
   const [voucherModal, setVoucherModal] = useState<VoucherModalPayload | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [deferredInstallPrompt, setDeferredInstallPrompt] =
@@ -365,7 +375,10 @@ export function UasAppShell() {
         setStoredTenantSlug(res.state.enterpriseProfile.tenantSlug);
       }
       setLang(res.state.settings.defaultLang);
-      setTheme(res.state.settings.defaultTheme);
+      setTheme((prev) => {
+        const stored = typeof window !== "undefined" ? window.localStorage.getItem(THEME_STORAGE_KEY) : null;
+        return normalizeThemePreset(stored || res.state.settings.defaultTheme || prev);
+      });
       setCurrency(res.state.settings.defaultCurrency);
       setOfflineQueueCount(res.queueCount);
 
@@ -400,14 +413,14 @@ export function UasAppShell() {
 
       const matchedUser =
         (res.state.sessionUser &&
-        res.state.sessionUser.active &&
-        (res.state.sessionUser.isActive ?? true)
+          res.state.sessionUser.active &&
+          (res.state.sessionUser.isActive ?? true)
           ? res.state.sessionUser
           : null) ||
         (savedUserId
           ? res.state.users.find(
-              (u) => u.id === savedUserId && u.active && (u.isActive ?? true)
-            )
+            (u) => u.id === savedUserId && u.active && (u.isActive ?? true)
+          )
           : null);
 
       if (matchedUser) {
@@ -705,10 +718,16 @@ export function UasAppShell() {
   }, [state.enterpriseProfile, lang, viewMode, currentUser]);
 
   useEffect(() => {
-    document.body.classList.remove("theme-dark", "theme-royal");
-    if (theme === "dark") document.body.classList.add("theme-dark");
-    if (theme === "royal") document.body.classList.add("theme-royal");
-  }, [theme]);
+    const brandColor = state.enterpriseProfile?.brandColor;
+    applyThemeToDocument(theme, brandColor, THEME_STORAGE_KEY);
+    if (theme !== "system" || typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => applyThemeToDocument("system", brandColor, THEME_STORAGE_KEY);
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, [theme, state.enterpriseProfile?.brandColor]);
 
   useEffect(() => {
     document.body.classList.toggle("mobile-simulator-active", mobileSimulatorActive);
@@ -970,10 +989,10 @@ export function UasAppShell() {
   async function handleSendWhatsApp(voucher: VoucherModalPayload) {
     const rawPhone = String(
       voucher.phone ||
-        state.enterpriseProfile?.contactWhatsApp ||
-        state.enterpriseProfile?.contactPhone ||
-        state.enterpriseProfile?.phone ||
-        ""
+      state.enterpriseProfile?.contactWhatsApp ||
+      state.enterpriseProfile?.contactPhone ||
+      state.enterpriseProfile?.phone ||
+      ""
     ).trim();
     if (!rawPhone.replace(/[^0-9]/g, "")) {
       showToast(
@@ -1222,22 +1241,21 @@ export function UasAppShell() {
       {toastMsg && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] no-print max-w-lg w-[90vw] pointer-events-none">
           <div
-            className={`px-5 py-3 rounded-xl shadow-xl text-white text-sm font-semibold flex items-start gap-2 whitespace-pre-line pointer-events-auto transition-all ${
-              toastMsg.includes("⛔") ||
+            className={`px-5 py-3 rounded-xl shadow-xl text-white text-sm font-semibold flex items-start gap-2 whitespace-pre-line pointer-events-auto transition-all ${toastMsg.includes("⛔") ||
               toastMsg.includes("❌") ||
               toastMsg.includes("تعذر") ||
               toastMsg.includes("فشل") ||
               toastMsg.includes("خطأ") ||
               toastMsg.toLowerCase().includes("failed") ||
               toastMsg.toLowerCase().includes("error")
-                ? "bg-rose-700 border border-rose-500/50 shadow-rose-900/40"
-                : toastMsg.includes("⚠️") ||
-                  toastMsg.includes("💡") ||
-                  toastMsg.includes("🟠") ||
-                  toastMsg.toLowerCase().includes("warn")
+              ? "bg-rose-700 border border-rose-500/50 shadow-rose-900/40"
+              : toastMsg.includes("⚠️") ||
+                toastMsg.includes("💡") ||
+                toastMsg.includes("🟠") ||
+                toastMsg.toLowerCase().includes("warn")
                 ? "bg-amber-700 border border-amber-500/50 shadow-amber-900/40"
                 : "bg-emerald-700 border border-emerald-500/50 shadow-emerald-900/40"
-            }`}
+              }`}
           >
             <span className="flex-1 leading-relaxed">{toastMsg}</span>
           </div>
@@ -1278,7 +1296,9 @@ export function UasAppShell() {
         <LandingPage
           state={state}
           lang={lang}
+          theme={theme}
           currentUser={currentUser}
+          onChangeTheme={(nextTheme) => setTheme(nextTheme)}
           onEnterErp={(tab) => {
             if (!currentUser) {
               setViewMode("login");
@@ -1384,13 +1404,12 @@ export function UasAppShell() {
           />
 
           <div
-            className={`flex-1 min-w-0 flex flex-col transition-all duration-200 ${
-              !mobileSimulatorActive
-                ? sidebarCollapsed
-                  ? "md:ps-[72px]"
-                  : "md:ps-[264px]"
-                : ""
-            }`}
+            className={`flex-1 min-w-0 flex flex-col transition-all duration-200 ${!mobileSimulatorActive
+              ? sidebarCollapsed
+                ? "md:ps-[72px]"
+                : "md:ps-[264px]"
+              : ""
+              }`}
           >
             <SharedDraftsCenterDrawer
               open={draftsDrawerOpen}
@@ -1521,689 +1540,770 @@ export function UasAppShell() {
                 </div>
               )}
 
-              {/* Unified Hub Sub-Tab Bar */}
-              {visibleSubTabs.length > 0 && (
-                <div className="card-surface rounded-2xl p-2 flex flex-col md:flex-row md:flex-wrap md:items-center md:justify-between gap-2 no-print">
-                  {/* Mobile / Narrow Viewport Accessible Sub-Tab Dropdown */}
-                  <div className="md:hidden w-full">
-                    <select
-                      data-testid="app-subtabs-select"
-                      aria-label={lang === "ar" ? "القسم الفرعي" : "Module Section"}
-                      value={
-                        visibleSubTabs.some(
-                          (sub) => sub.id === activeTab || (sub.id === "sales" && activeTab === "customers")
-                        )
-                          ? activeTab === "customers"
-                            ? "sales"
-                            : activeTab
-                          : visibleSubTabs[0]?.id ?? ""
-                      }
-                      onChange={(e) => navigateToTab(e.target.value as TabId)}
-                      className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-extrabold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
-                    >
-                      {visibleSubTabs.map((sub) => (
-                        <option key={sub.id} value={sub.id}>
-                          {lang === "ar" ? sub.labelAr : sub.labelEn}
-                        </option>
-                      ))}
-                    </select>
+              {/* Dual Trading Sector Top Switcher (Section 1: Harvest vs Section 2: Commercial Bulk/Partial) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 no-print">
+                <button
+                  type="button"
+                  data-testid="workspace-sector-tab-harvest"
+                  onClick={() => setActiveTradingSector("HARVEST")}
+                  className={`p-3 rounded-2xl border text-start transition flex items-center justify-between gap-2 ${activeTradingSector === "HARVEST"
+                    ? "border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/40 shadow-sm"
+                    : "card-surface border-slate-200 dark:border-slate-700 hover:border-emerald-300"
+                    }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+                      <Sprout className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-black">
+                        {lang === "ar"
+                          ? "1. القطاع الحالي — المحصول والفرز والعمليات الميدانية"
+                          : "1. Current Sector — Harvest, Sorting & Field Ops"}
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        {lang === "ar"
+                          ? "المبيعات، المخزون وفرز المحصول، بوابة العملاء، والمحاسبة الشاملة"
+                          : "Sales, Harvest Inventory & Sorting, Client Portal & Ledger"}
+                      </div>
+                    </div>
                   </div>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${activeTradingSector === "HARVEST"
+                      ? "accent-bg"
+                      : "bg-slate-100 dark:bg-slate-800 text-slate-500"
+                      }`}
+                  >
+                    {activeTradingSector === "HARVEST" ? (lang === "ar" ? "نشط" : "Active") : (lang === "ar" ? "فتح" : "Open")}
+                  </span>
+                </button>
 
-                  {/* Desktop Horizontal Sub-Tab Bar */}
-                  <div className="hidden md:flex flex-wrap items-center gap-1.5">
-                    {visibleSubTabs.map((sub) => {
-                      const isSubActive =
-                        activeTab === sub.id ||
-                        (sub.id === "sales" && activeTab === "customers");
-                      return (
-                        <button
-                          key={sub.id}
-                          type="button"
-                          onClick={() => navigateToTab(sub.id)}
-                          className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition ${
-                            isSubActive
-                              ? "accent-bg shadow-sm"
-                              : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
-                          }`}
-                        >
-                          {lang === "ar" ? sub.labelAr : sub.labelEn}
-                        </button>
-                      );
-                    })}
+                <button
+                  type="button"
+                  data-testid="workspace-sector-tab-commercial"
+                  onClick={() => setActiveTradingSector("COMMERCIAL")}
+                  className={`p-3 rounded-2xl border text-start transition flex items-center justify-between gap-2 ${activeTradingSector === "COMMERCIAL"
+                    ? "border-amber-500 bg-amber-50/80 dark:bg-amber-950/40 shadow-sm"
+                    : "card-surface border-slate-200 dark:border-slate-700 hover:border-amber-300"
+                    }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0">
+                      <ShoppingBag className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-black">
+                        {lang === "ar"
+                          ? "2. القطاع التجاري — الجملة والتجزئة والسلع المتعددة"
+                          : "2. Commercial Sector — Bulk & Partial Wholesale/Retail"}
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        {lang === "ar"
+                          ? "السلع الغذائية، غير الغذائية، المحروقات، المستودعات والرحلات (POD)"
+                          : "Food, Non-Food, Fuel, Multi-Unit Warehouses & Dispatch POD"}
+                      </div>
+                    </div>
                   </div>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${activeTradingSector === "COMMERCIAL"
+                      ? "bg-amber-600 text-white"
+                      : "bg-slate-100 dark:bg-slate-800 text-slate-500"
+                      }`}
+                  >
+                    {activeTradingSector === "COMMERCIAL" ? (lang === "ar" ? "نشط" : "Active") : (lang === "ar" ? "فتح" : "Open")}
+                  </span>
+                </button>
+              </div>
 
-                  {/* Inner toggle inside Commercial -> Sales & Clients */}
-                  {(activeTab === "sales" || activeTab === "customers") && (
-                    <>
+              {activeTradingSector === "COMMERCIAL" ? (
+                <CommercialSectorWorkspace
+                  onRefreshState={refreshFromServer}
+                  onToast={showToast}
+                  onSwitchToHarvestSector={() => setActiveTradingSector("HARVEST")}
+                />
+              ) : (
+                <>
+                  {/* Unified Hub Sub-Tab Bar */}
+                  {visibleSubTabs.length > 0 && (
+                    <div className="card-surface rounded-2xl p-2 flex flex-col md:flex-row md:flex-wrap md:items-center md:justify-between gap-2 no-print">
+                      {/* Mobile / Narrow Viewport Accessible Sub-Tab Dropdown */}
                       <div className="md:hidden w-full">
                         <select
-                          data-testid="sales-view-mode-select"
-                          aria-label={lang === "ar" ? "عرض المبيعات" : "Sales View Mode"}
+                          data-testid="app-subtabs-select"
+                          aria-label={lang === "ar" ? "القسم الفرعي" : "Module Section"}
                           value={
-                            activeTab === "customers" && customersInitialSection === "portal"
-                              ? "portal"
-                              : salesViewMode === "customers" || activeTab === "customers"
-                              ? "customers"
-                              : "sales"
+                            visibleSubTabs.some(
+                              (sub) => sub.id === activeTab || (sub.id === "sales" && activeTab === "customers")
+                            )
+                              ? activeTab === "customers"
+                                ? "sales"
+                                : activeTab
+                              : visibleSubTabs[0]?.id ?? ""
                           }
-                          onChange={(e) => {
-                            const next = e.target.value as "sales" | "customers" | "portal";
-                            if (next === "portal") {
-                              setCustomersInitialSection("portal");
-                              setSalesViewMode("customers");
-                              setActiveTab("customers");
-                              return;
-                            }
-                            if (next === "customers") {
-                              setCustomersInitialSection("cards");
-                            }
-                            setSalesViewMode(next);
-                            setActiveTab(next);
-                          }}
-                          className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                          onChange={(e) => navigateToTab(e.target.value as TabId)}
+                          className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-extrabold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
                         >
-                          <option value="sales">
-                            {lang === "ar" ? "🧾 فواتير المبيعات" : "🧾 Sales Invoices"}
-                          </option>
-                          <option value="customers">
-                            {lang === "ar" ? "👥 كشوفات العملاء" : "👥 Client Ledgers"}
-                          </option>
-                          <option value="portal">
-                            {lang === "ar" ? "🌐 إدارة بوابة العملاء والطلبات" : "🌐 Client Portal Admin"}
-                          </option>
+                          {visibleSubTabs.map((sub) => (
+                            <option key={sub.id} value={sub.id}>
+                              {lang === "ar" ? sub.labelAr : sub.labelEn}
+                            </option>
+                          ))}
                         </select>
                       </div>
-                      <div className="hidden md:flex items-center gap-1 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl text-[11px] font-bold">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSalesViewMode("sales");
-                          setActiveTab("sales");
+
+                      {/* Desktop Horizontal Sub-Tab Bar */}
+                      <div className="hidden md:flex flex-wrap items-center gap-1.5">
+                        {visibleSubTabs.map((sub) => {
+                          const isSubActive =
+                            activeTab === sub.id ||
+                            (sub.id === "sales" && activeTab === "customers");
+                          return (
+                            <button
+                              key={sub.id}
+                              type="button"
+                              onClick={() => navigateToTab(sub.id)}
+                              className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition ${isSubActive
+                                ? "accent-bg shadow-sm"
+                                : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                                }`}
+                            >
+                              {lang === "ar" ? sub.labelAr : sub.labelEn}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Inner toggle inside Commercial -> Sales & Clients */}
+                      {(activeTab === "sales" || activeTab === "customers") && (
+                        <>
+                          <div className="md:hidden w-full">
+                            <select
+                              data-testid="sales-view-mode-select"
+                              aria-label={lang === "ar" ? "عرض المبيعات" : "Sales View Mode"}
+                              value={
+                                activeTab === "customers" && customersInitialSection === "portal"
+                                  ? "portal"
+                                  : salesViewMode === "customers" || activeTab === "customers"
+                                    ? "customers"
+                                    : "sales"
+                              }
+                              onChange={(e) => {
+                                const next = e.target.value as "sales" | "customers" | "portal";
+                                if (next === "portal") {
+                                  setCustomersInitialSection("portal");
+                                  setSalesViewMode("customers");
+                                  setActiveTab("customers");
+                                  return;
+                                }
+                                if (next === "customers") {
+                                  setCustomersInitialSection("cards");
+                                }
+                                setSalesViewMode(next);
+                                setActiveTab(next);
+                              }}
+                              className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                            >
+                              <option value="sales">
+                                {lang === "ar" ? "🧾 فواتير المبيعات" : "🧾 Sales Invoices"}
+                              </option>
+                              <option value="customers">
+                                {lang === "ar" ? "👥 كشوفات العملاء" : "👥 Client Ledgers"}
+                              </option>
+                              <option value="portal">
+                                {lang === "ar" ? "🌐 إدارة بوابة العملاء والطلبات" : "🌐 Client Portal Admin"}
+                              </option>
+                            </select>
+                          </div>
+                          <div className="hidden md:flex items-center gap-1 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl text-[11px] font-bold">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSalesViewMode("sales");
+                                setActiveTab("sales");
+                              }}
+                              className={`px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${salesViewMode === "sales" && activeTab !== "customers"
+                                ? "bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 shadow-sm"
+                                : "text-slate-500"
+                                }`}
+                            >
+                              <Receipt className="w-3.5 h-3.5" />
+                              <span>{lang === "ar" ? "فواتير المبيعات" : "Sales Invoices"}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCustomersInitialSection("cards");
+                                setSalesViewMode("customers");
+                                setActiveTab("customers");
+                              }}
+                              className={`px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${(salesViewMode === "customers" || activeTab === "customers") &&
+                                customersInitialSection !== "portal"
+                                ? "bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 shadow-sm"
+                                : "text-slate-500"
+                                }`}
+                            >
+                              <Users className="w-3.5 h-3.5" />
+                              <span>{lang === "ar" ? "كشوفات العملاء" : "Client Ledgers"}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCustomersInitialSection("portal");
+                                setSalesViewMode("customers");
+                                setActiveTab("customers");
+                              }}
+                              className={`px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${activeTab === "customers" && customersInitialSection === "portal"
+                                ? "bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 shadow-sm"
+                                : "text-slate-500"
+                                }`}
+                            >
+                              <Globe className="w-3.5 h-3.5" />
+                              <span>{lang === "ar" ? "بوابة العملاء" : "Client Portal"}</span>
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Active Tab Screen rendering wrapped in TabErrorBoundary */}
+                  <TabErrorBoundary
+                    tab={activeTab}
+                    lang={lang}
+                    onNavigateHome={() => navigateToTab("dashboard")}
+                  >
+                    {activeTab === "dashboard" && (
+                      <DashboardTab
+                        state={state}
+                        lang={lang}
+                        currency={currency}
+                        selectedProjectId={selectedProjectId}
+                        selectedSubProjectId={selectedSubProjectId}
+                        filteredSales={filteredSales}
+                        filteredExpenses={filteredExpenses}
+                        filteredWorkers={filteredWorkers}
+                        onExportExcel={() => {
+                          exportFullWorkbookToExcel(state);
+                          showToast("تم تصدير ملف Excel بنجاح");
                         }}
-                        className={`px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
-                          salesViewMode === "sales" && activeTab !== "customers"
-                            ? "bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 shadow-sm"
-                            : "text-slate-500"
-                        }`}
-                      >
-                        <Receipt className="w-3.5 h-3.5" />
-                        <span>{lang === "ar" ? "فواتير المبيعات" : "Sales Invoices"}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCustomersInitialSection("cards");
-                          setSalesViewMode("customers");
-                          setActiveTab("customers");
+                        onSwitchTab={navigateToTab}
+                        onRefreshState={refreshFromServer}
+                        onToast={showToast}
+                      />
+                    )}
+
+                    {activeTab === "coa" && (
+                      <CoaTreeTab
+                        selectedProjectId={selectedProjectId}
+                        readOnly={userReadOnly}
+                        canEdit={userCanPost}
+                        onToast={showToast}
+                      />
+                    )}
+
+                    {activeTab === "ledger" && (
+                      <GeneralLedgerTab
+                        projects={scopedProjects}
+                        currentUser={currentUser}
+                        enterpriseProfile={state.enterpriseProfile}
+                        exchangeRates={state.exchangeRates}
+                        selectedProjectId={selectedProjectId}
+                        selectedSubProjectId={selectedSubProjectId}
+                        readOnly={userReadOnly}
+                        canPost={userCanPost}
+                        canEditDate={userCanEditDate}
+                        onToast={showToast}
+                      />
+                    )}
+
+                    {activeTab === "procurement" && (
+                      <ProcurementTab
+                        projects={scopedProjects}
+                        treasuryAccounts={state.treasuryAccounts}
+                        currentUser={currentUser}
+                        selectedProjectId={selectedProjectId}
+                        selectedSubProjectId={selectedSubProjectId}
+                        readOnly={userReadOnly}
+                        canApprove={userCanApprove}
+                        canEditRecords={canEdit(currentUser, "procurement")}
+                        canEditDate={userCanEditDate}
+                        onOpenVoucher={setVoucherModal}
+                        onRefreshState={refreshFromServer}
+                        onToast={showToast}
+                      />
+                    )}
+
+                    {activeTab === "reports" && (
+                      <FinancialReportsTab
+                        projects={scopedProjects}
+                        selectedProjectId={selectedProjectId}
+                        selectedSubProjectId={selectedSubProjectId}
+                        enterpriseProfile={state.enterpriseProfile}
+                        onToast={showToast}
+                      />
+                    )}
+
+                    {activeTab === "projects" && (
+                      <ProjectsManagerTab
+                        projects={scopedProjects}
+                        treasuryAccounts={state.treasuryAccounts}
+                        currentUser={currentUser}
+                        lang={lang}
+                        readOnly={userReadOnly}
+                        canLock={userCanLock}
+                        canApprove={userCanApprove}
+                        canEditRecords={canEdit(currentUser, "projects")}
+                        canEditDate={userCanEditDate}
+                        onAddProject={(payload) =>
+                          runMutation(
+                            "/api/projects",
+                            "POST",
+                            payload,
+                            `مشروع: ${payload.name}`,
+                            `تمت إضافة المشروع بنجاح: ${payload.name}`
+                          )
+                        }
+                        onAddHarvest={(payload) =>
+                          runMutation(
+                            "/api/projects/harvests",
+                            "POST",
+                            payload,
+                            `قطفة: ${payload.name}`,
+                            "تمت إضافة القطفة/المرشة بنجاح"
+                          )
+                        }
+                        onTogglePeriodLock={async (key) => {
+                          const nextLocked = !state.lockedPeriods[key];
+                          await runMutation(
+                            "/api/audit/lock",
+                            "POST",
+                            { key },
+                            `قفل فترة ${key}`,
+                            nextLocked
+                              ? "🔒 تم إغلاق القطفة محاسبياً ومنع التعديل المباشر"
+                              : "🔓 تم فتح القطفة للتعديل"
+                          );
                         }}
-                        className={`px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
-                          (salesViewMode === "customers" || activeTab === "customers") &&
-                          customersInitialSection !== "portal"
-                            ? "bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 shadow-sm"
-                            : "text-slate-500"
-                        }`}
-                      >
-                        <Users className="w-3.5 h-3.5" />
-                        <span>{lang === "ar" ? "كشوفات العملاء" : "Client Ledgers"}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
+                        onRefreshState={refreshFromServer}
+                        onToast={showToast}
+                      />
+                    )}
+
+                    {activeTab === "expenses" && (
+                      <ExpensesTab
+                        projects={scopedProjects}
+                        expenses={filteredExpenses}
+                        readOnly={userReadOnly}
+                        canEditRecords={canEdit(currentUser, "expenses")}
+                        canEditDate={userCanEditDate}
+                        onAddExpense={(payload) =>
+                          runMutation(
+                            "/api/expenses",
+                            "POST",
+                            payload,
+                            `مصروف: ${payload.category}`,
+                            "تمت إضافة المصروف التشغيلي بنجاح"
+                          )
+                        }
+                        onEditExpense={(id, payload) =>
+                          runMutation(
+                            `/api/expenses/${id}`,
+                            "PATCH",
+                            payload,
+                            `تعديل مصروف: ${payload.category}`,
+                            "تم تعديل المصروف التشغيلي بنجاح"
+                          )
+                        }
+                        onDeleteExpense={async (id) => {
+                          await runMutation(
+                            `/api/expenses/${id}`,
+                            "DELETE",
+                            {},
+                            `حذف مصروف ${id}`,
+                            "تم حذف المصروف"
+                          );
+                        }}
+                        onRefreshState={refreshFromServer}
+                        onToast={showToast}
+                      />
+                    )}
+
+                    {activeTab === "workers" && (
+                      <WorkersTab
+                        projects={scopedProjects}
+                        workers={filteredWorkers}
+                        allWorkers={state.workers}
+                        treasuryAccounts={state.treasuryAccounts}
+                        currentUser={currentUser}
+                        enterpriseProfile={state.enterpriseProfile}
+                        readOnly={userReadOnly}
+                        canEditRecords={canEdit(currentUser, "workers")}
+                        canEditDate={userCanEditDate}
+                        onAddWorker={(payload) =>
+                          runMutation(
+                            "/api/workers",
+                            "POST",
+                            payload,
+                            `أجر عامل: ${payload.name}`,
+                            `تمت إضافة سجل العامل: ${payload.name}`
+                          )
+                        }
+                        onEditWorker={(id, payload) =>
+                          runMutation(
+                            `/api/workers/${id}`,
+                            "PATCH",
+                            payload,
+                            `تعديل سجل عامل: ${payload.name}`,
+                            "تم تعديل سجل أجر العامل بنجاح"
+                          )
+                        }
+                        onDeleteWorker={async (id) => {
+                          await runMutation(
+                            `/api/workers/${id}`,
+                            "DELETE",
+                            {},
+                            `حذف سجل عامل ${id}`,
+                            "تم حذف سجل العامل"
+                          );
+                        }}
+                        onOpenWorkerVoucher={openWorkerVoucher}
+                        onExportWorkerExcel={(workerFilter) => {
+                          exportFullWorkbookToExcel(state, { workerFilter });
+                          showToast("تم تصدير كشف حساب العمال إلى Excel بنجاح");
+                        }}
+                        onRefreshState={refreshFromServer}
+                        onToast={showToast}
+                      />
+                    )}
+
+                    {activeTab === "sales" && (
+                      <SalesTab
+                        projects={scopedProjects}
+                        sales={filteredSales}
+                        inventoryBatches={state.inventoryBatches}
+                        treasuryAccounts={state.treasuryAccounts}
+                        currentUser={currentUser}
+                        enterpriseProfile={state.enterpriseProfile}
+                        readOnly={userReadOnly}
+                        canEditRecords={canEdit(currentUser, "sales")}
+                        canEditDate={userCanEditDate}
+                        onAddSale={(payload) =>
+                          runMutation(
+                            "/api/sales",
+                            "POST",
+                            payload,
+                            `عملية بيع: ${payload.customer}`,
+                            `تم حفظ عملية البيع للعميل: ${payload.customer}`
+                          )
+                        }
+                        onEditSale={(id, payload) =>
+                          runMutation(
+                            `/api/sales/${id}`,
+                            "PATCH",
+                            payload,
+                            `تعديل بيع: ${payload.customer}`,
+                            "تم تعديل عملية البيع بنجاح"
+                          )
+                        }
+                        onDeleteSale={async (id) => {
+                          await runMutation(
+                            `/api/sales/${id}`,
+                            "DELETE",
+                            {},
+                            `حذف بيع ${id}`,
+                            "تم حذف عملية البيع"
+                          );
+                        }}
+                        onOpenSaleVoucher={openSaleVoucher}
+                        onOpenClientPortalAdmin={() => {
                           setCustomersInitialSection("portal");
                           setSalesViewMode("customers");
                           setActiveTab("customers");
                         }}
-                        className={`px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
-                          activeTab === "customers" && customersInitialSection === "portal"
-                            ? "bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 shadow-sm"
-                            : "text-slate-500"
-                        }`}
-                      >
-                        <Globe className="w-3.5 h-3.5" />
-                        <span>{lang === "ar" ? "بوابة العملاء" : "Client Portal"}</span>
-                      </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
+                        onRefreshState={refreshFromServer}
+                        onToast={showToast}
+                      />
+                    )}
 
-              {/* Active Tab Screen rendering wrapped in TabErrorBoundary */}
-              <TabErrorBoundary
-                tab={activeTab}
-                lang={lang}
-                onNavigateHome={() => navigateToTab("dashboard")}
-              >
-                {activeTab === "dashboard" && (
-                <DashboardTab
-                  state={state}
-                  lang={lang}
-                  currency={currency}
-                  selectedProjectId={selectedProjectId}
-                  selectedSubProjectId={selectedSubProjectId}
-                  filteredSales={filteredSales}
-                  filteredExpenses={filteredExpenses}
-                  filteredWorkers={filteredWorkers}
-                  onExportExcel={() => {
-                    exportFullWorkbookToExcel(state);
-                    showToast("تم تصدير ملف Excel بنجاح");
-                  }}
-                  onSwitchTab={navigateToTab}
-                  onRefreshState={refreshFromServer}
-                  onToast={showToast}
-                />
-              )}
+                    {activeTab === "customers" && (
+                      <CustomersTab
+                        projects={scopedProjects}
+                        sales={filteredSales}
+                        allSales={state.sales}
+                        currentUser={currentUser}
+                        enterpriseProfile={state.enterpriseProfile}
+                        initialSection={customersInitialSection}
+                        readOnly={userReadOnly}
+                        canEditRecords={canEdit(currentUser, "customers")}
+                        onOpenSaleVoucher={openSaleVoucher}
+                        onExportCustomerExcel={(customerFilter) => {
+                          exportFullWorkbookToExcel(state, { customerFilter });
+                          showToast("تم تصدير كشف العملاء إلى Excel بنجاح");
+                        }}
+                        onRefreshState={refreshFromServer}
+                        onToast={showToast}
+                      />
+                    )}
 
-              {activeTab === "coa" && (
-                <CoaTreeTab
-                  selectedProjectId={selectedProjectId}
-                  readOnly={userReadOnly}
-                  canEdit={userCanPost}
-                  onToast={showToast}
-                />
-              )}
-
-              {activeTab === "ledger" && (
-                <GeneralLedgerTab
-                  projects={scopedProjects}
-                  currentUser={currentUser}
-                  enterpriseProfile={state.enterpriseProfile}
-                  exchangeRates={state.exchangeRates}
-                  selectedProjectId={selectedProjectId}
-                  selectedSubProjectId={selectedSubProjectId}
-                  readOnly={userReadOnly}
-                  canPost={userCanPost}
-                  canEditDate={userCanEditDate}
-                  onToast={showToast}
-                />
-              )}
-
-              {activeTab === "procurement" && (
-                <ProcurementTab
-                  projects={scopedProjects}
-                  treasuryAccounts={state.treasuryAccounts}
-                  currentUser={currentUser}
-                  selectedProjectId={selectedProjectId}
-                  selectedSubProjectId={selectedSubProjectId}
-                  readOnly={userReadOnly}
-                  canApprove={userCanApprove}
-                  canEditRecords={canEdit(currentUser, "procurement")}
-                  canEditDate={userCanEditDate}
-                  onOpenVoucher={setVoucherModal}
-                  onRefreshState={refreshFromServer}
-                  onToast={showToast}
-                />
-              )}
-
-              {activeTab === "reports" && (
-                <FinancialReportsTab
-                  projects={scopedProjects}
-                  selectedProjectId={selectedProjectId}
-                  selectedSubProjectId={selectedSubProjectId}
-                  enterpriseProfile={state.enterpriseProfile}
-                  onToast={showToast}
-                />
-              )}
-
-              {activeTab === "projects" && (
-                <ProjectsManagerTab
-                  projects={scopedProjects}
-                  treasuryAccounts={state.treasuryAccounts}
-                  currentUser={currentUser}
-                  lang={lang}
-                  readOnly={userReadOnly}
-                  canLock={userCanLock}
-                  canApprove={userCanApprove}
-                  canEditRecords={canEdit(currentUser, "projects")}
-                  canEditDate={userCanEditDate}
-                  onAddProject={(payload) =>
-                    runMutation(
-                      "/api/projects",
-                      "POST",
-                      payload,
-                      `مشروع: ${payload.name}`,
-                      `تمت إضافة المشروع بنجاح: ${payload.name}`
-                    )
-                  }
-                  onAddHarvest={(payload) =>
-                    runMutation(
-                      "/api/projects/harvests",
-                      "POST",
-                      payload,
-                      `قطفة: ${payload.name}`,
-                      "تمت إضافة القطفة/المرشة بنجاح"
-                    )
-                  }
-                  onTogglePeriodLock={async (key) => {
-                    const nextLocked = !state.lockedPeriods[key];
-                    await runMutation(
-                      "/api/audit/lock",
-                      "POST",
-                      { key },
-                      `قفل فترة ${key}`,
-                      nextLocked
-                        ? "🔒 تم إغلاق القطفة محاسبياً ومنع التعديل المباشر"
-                        : "🔓 تم فتح القطفة للتعديل"
-                    );
-                  }}
-                  onRefreshState={refreshFromServer}
-                  onToast={showToast}
-                />
-              )}
-
-              {activeTab === "expenses" && (
-                <ExpensesTab
-                  projects={scopedProjects}
-                  expenses={filteredExpenses}
-                  readOnly={userReadOnly}
-                  canEditRecords={canEdit(currentUser, "expenses")}
-                  canEditDate={userCanEditDate}
-                  onAddExpense={(payload) =>
-                    runMutation(
-                      "/api/expenses",
-                      "POST",
-                      payload,
-                      `مصروف: ${payload.category}`,
-                      "تمت إضافة المصروف التشغيلي بنجاح"
-                    )
-                  }
-                  onEditExpense={(id, payload) =>
-                    runMutation(
-                      `/api/expenses/${id}`,
-                      "PATCH",
-                      payload,
-                      `تعديل مصروف: ${payload.category}`,
-                      "تم تعديل المصروف التشغيلي بنجاح"
-                    )
-                  }
-                  onDeleteExpense={async (id) => {
-                    await runMutation(
-                      `/api/expenses/${id}`,
-                      "DELETE",
-                      {},
-                      `حذف مصروف ${id}`,
-                      "تم حذف المصروف"
-                    );
-                  }}
-                  onRefreshState={refreshFromServer}
-                  onToast={showToast}
-                />
-              )}
-
-              {activeTab === "workers" && (
-                <WorkersTab
-                  projects={scopedProjects}
-                  workers={filteredWorkers}
-                  allWorkers={state.workers}
-                  treasuryAccounts={state.treasuryAccounts}
-                  currentUser={currentUser}
-                  enterpriseProfile={state.enterpriseProfile}
-                  readOnly={userReadOnly}
-                  canEditRecords={canEdit(currentUser, "workers")}
-                  canEditDate={userCanEditDate}
-                  onAddWorker={(payload) =>
-                    runMutation(
-                      "/api/workers",
-                      "POST",
-                      payload,
-                      `أجر عامل: ${payload.name}`,
-                      `تمت إضافة سجل العامل: ${payload.name}`
-                    )
-                  }
-                  onEditWorker={(id, payload) =>
-                    runMutation(
-                      `/api/workers/${id}`,
-                      "PATCH",
-                      payload,
-                      `تعديل سجل عامل: ${payload.name}`,
-                      "تم تعديل سجل أجر العامل بنجاح"
-                    )
-                  }
-                  onDeleteWorker={async (id) => {
-                    await runMutation(
-                      `/api/workers/${id}`,
-                      "DELETE",
-                      {},
-                      `حذف سجل عامل ${id}`,
-                      "تم حذف سجل العامل"
-                    );
-                  }}
-                  onOpenWorkerVoucher={openWorkerVoucher}
-                  onExportWorkerExcel={(workerFilter) => {
-                    exportFullWorkbookToExcel(state, { workerFilter });
-                    showToast("تم تصدير كشف حساب العمال إلى Excel بنجاح");
-                  }}
-                  onRefreshState={refreshFromServer}
-                  onToast={showToast}
-                />
-              )}
-
-              {activeTab === "sales" && (
-                <SalesTab
-                  projects={scopedProjects}
-                  sales={filteredSales}
-                  inventoryBatches={state.inventoryBatches}
-                  treasuryAccounts={state.treasuryAccounts}
-                  currentUser={currentUser}
-                  enterpriseProfile={state.enterpriseProfile}
-                  readOnly={userReadOnly}
-                  canEditRecords={canEdit(currentUser, "sales")}
-                  canEditDate={userCanEditDate}
-                  onAddSale={(payload) =>
-                    runMutation(
-                      "/api/sales",
-                      "POST",
-                      payload,
-                      `عملية بيع: ${payload.customer}`,
-                      `تم حفظ عملية البيع للعميل: ${payload.customer}`
-                    )
-                  }
-                  onEditSale={(id, payload) =>
-                    runMutation(
-                      `/api/sales/${id}`,
-                      "PATCH",
-                      payload,
-                      `تعديل بيع: ${payload.customer}`,
-                      "تم تعديل عملية البيع بنجاح"
-                    )
-                  }
-                  onDeleteSale={async (id) => {
-                    await runMutation(
-                      `/api/sales/${id}`,
-                      "DELETE",
-                      {},
-                      `حذف بيع ${id}`,
-                      "تم حذف عملية البيع"
-                    );
-                  }}
-                  onOpenSaleVoucher={openSaleVoucher}
-                  onOpenClientPortalAdmin={() => {
-                    setCustomersInitialSection("portal");
-                    setSalesViewMode("customers");
-                    setActiveTab("customers");
-                  }}
-                  onRefreshState={refreshFromServer}
-                  onToast={showToast}
-                />
-              )}
-
-              {activeTab === "customers" && (
-                <CustomersTab
-                  projects={scopedProjects}
-                  sales={filteredSales}
-                  allSales={state.sales}
-                  currentUser={currentUser}
-                  enterpriseProfile={state.enterpriseProfile}
-                  initialSection={customersInitialSection}
-                  readOnly={userReadOnly}
-                  canEditRecords={canEdit(currentUser, "customers")}
-                  onOpenSaleVoucher={openSaleVoucher}
-                  onExportCustomerExcel={(customerFilter) => {
-                    exportFullWorkbookToExcel(state, { customerFilter });
-                    showToast("تم تصدير كشف العملاء إلى Excel بنجاح");
-                  }}
-                  onRefreshState={refreshFromServer}
-                  onToast={showToast}
-                />
-              )}
-
-              {activeTab === "system" && (
-                <SystemTab
-                  settings={state.settings}
-                  enterpriseProfile={state.enterpriseProfile}
-                  lang={lang}
-                  theme={theme}
-                  currentUser={currentUser}
-                  users={state.users}
-                  projects={state.projects}
-                  offlineQueueCount={offlineQueueCount}
-                  onRefreshState={refreshFromServer}
-                  readOnly={userReadOnly}
-                  canManageUsers={userCanManageUsers}
-                  canManageCms={canManageLandingCms(currentUser)}
-                  onSaveBranding={async (orgName, logoText, extra) => {
-                    await runMutation(
-                      "/api/system/settings",
-                      "PATCH",
-                      { orgName, logoText, ...(extra || {}) },
-                      "إعدادات النظام",
-                      "تم حفظ شعار وإعدادات النظام"
-                    );
-                  }}
-                  onSaveEnterpriseBranding={async (payload: Partial<UasEnterpriseProfile>) => {
-                    try {
-                      const res = await fetch("/api/system/branding", {
-                        method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          ...payload,
-                          actor: {
-                            userId: currentUser.id,
-                            userDisplay: currentUser.name,
-                            userRole: currentUser.role,
-                          },
-                        }),
-                      });
-                      const data = (await res.json()) as {
-                        error?: string;
-                        state?: UasBootstrapState;
-                        enterpriseProfile?: UasEnterpriseProfile;
-                      };
-                      if (!res.ok) {
-                        showToast(data.error || "تعذر حفظ الهوية المؤسسية");
-                        return;
-                      }
-                      if (data.state) {
-                        setState(data.state);
-                      } else if (data.enterpriseProfile) {
-                        setState((prev) => ({
-                          ...prev,
-                          enterpriseProfile: data.enterpriseProfile,
-                        }));
-                      }
-                      showToast(
-                        lang === "ar"
-                          ? "✅ تم حفظ الهوية المؤسسية والشعار ومحتوى الصفحة الرئيسية"
-                          : "✅ Enterprise branding & Landing CMS saved"
-                      );
-                    } catch {
-                      showToast(
-                        lang === "ar"
-                          ? "تعذر الاتصال بالخادم لحفظ الهوية المؤسسية"
-                          : "Network error while saving branding"
-                      );
-                    }
-                  }}
-                  onChangeLang={(next) => {
-                    setLang(next);
-                    runMutation(
-                      "/api/system/settings",
-                      "PATCH",
-                      { defaultLang: next },
-                      "Language change",
-                      next === "ar" ? "تم التبديل إلى اللغة العربية" : "Switched to English"
-                    );
-                  }}
-                  onChangeTheme={(next) => {
-                    setTheme(next);
-                    runMutation(
-                      "/api/system/settings",
-                      "PATCH",
-                      { defaultTheme: next },
-                      "Theme change",
-                      `تم تغيير المظهر إلى: ${next}`
-                    );
-                  }}
-                  onUpdateProfile={async (payload) => {
-                    const ok = await runMutation(
-                      `/api/users/${payload.userId}`,
-                      "PATCH",
-                      {
-                        name: payload.name,
-                        avatarChar: payload.avatarChar,
-                        ...(payload.newPassword ? { newPassword: payload.newPassword } : {}),
-                      },
-                      "تحديث الملف الشخصي",
-                      "تم تحديث الملف الشخصي وإعادة تعيين كلمة المرور بنجاح"
-                    );
-                    if (ok) {
-                      setCurrentUser((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              name: payload.name || prev.name,
-                              avatarChar: payload.avatarChar || prev.avatarChar,
+                    {activeTab === "system" && (
+                      <SystemTab
+                        settings={state.settings}
+                        enterpriseProfile={state.enterpriseProfile}
+                        lang={lang}
+                        theme={theme}
+                        currentUser={currentUser}
+                        users={state.users}
+                        projects={state.projects}
+                        offlineQueueCount={offlineQueueCount}
+                        onRefreshState={refreshFromServer}
+                        readOnly={userReadOnly}
+                        canManageUsers={userCanManageUsers}
+                        canManageCms={canManageLandingCms(currentUser)}
+                        onSaveBranding={async (orgName, logoText, extra) => {
+                          await runMutation(
+                            "/api/system/settings",
+                            "PATCH",
+                            { orgName, logoText, ...(extra || {}) },
+                            "إعدادات النظام",
+                            "تم حفظ شعار وإعدادات النظام"
+                          );
+                        }}
+                        onSaveEnterpriseBranding={async (payload: Partial<UasEnterpriseProfile>) => {
+                          try {
+                            const res = await fetch("/api/system/branding", {
+                              method: "PUT",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                ...payload,
+                                actor: {
+                                  userId: currentUser.id,
+                                  userDisplay: currentUser.name,
+                                  userRole: currentUser.role,
+                                },
+                              }),
+                            });
+                            const data = (await res.json()) as {
+                              error?: string;
+                              state?: UasBootstrapState;
+                              enterpriseProfile?: UasEnterpriseProfile;
+                            };
+                            if (!res.ok) {
+                              showToast(data.error || "تعذر حفظ الهوية المؤسسية");
+                              return;
                             }
-                          : prev
-                      );
-                    }
-                  }}
-                  onAddUser={(payload) =>
-                    runMutation(
-                      "/api/users",
-                      "POST",
-                      payload,
-                      `مستخدم: ${payload.name}`,
-                      "تمت إضافة المستخدم بنجاح"
-                    )
-                  }
-                  onToggleUserStatus={async (uid) => {
-                    await runMutation(
-                      `/api/users/${uid}`,
-                      "PATCH",
-                      { toggleActive: true },
-                      `تغيير حالة مستخدم ${uid}`,
-                      "تم تحديث حالة المستخدم"
-                    );
-                  }}
-                  onOpenLogin={() => setViewMode("login")}
-                  onToast={showToast}
-                />
-              )}
+                            if (data.state) {
+                              setState(data.state);
+                            } else if (data.enterpriseProfile) {
+                              setState((prev) => ({
+                                ...prev,
+                                enterpriseProfile: data.enterpriseProfile,
+                              }));
+                            }
+                            showToast(
+                              lang === "ar"
+                                ? "✅ تم حفظ الهوية المؤسسية والشعار ومحتوى الصفحة الرئيسية"
+                                : "✅ Enterprise branding & Landing CMS saved"
+                            );
+                          } catch {
+                            showToast(
+                              lang === "ar"
+                                ? "تعذر الاتصال بالخادم لحفظ الهوية المؤسسية"
+                                : "Network error while saving branding"
+                            );
+                          }
+                        }}
+                        onChangeLang={(next) => {
+                          setLang(next);
+                          runMutation(
+                            "/api/system/settings",
+                            "PATCH",
+                            { defaultLang: next },
+                            "Language change",
+                            next === "ar" ? "تم التبديل إلى اللغة العربية" : "Switched to English"
+                          );
+                        }}
+                        onChangeTheme={(next) => {
+                          setTheme(next);
+                          runMutation(
+                            "/api/system/settings",
+                            "PATCH",
+                            { defaultTheme: next },
+                            "Theme change",
+                            `تم تغيير المظهر إلى: ${next}`
+                          );
+                        }}
+                        onUpdateProfile={async (payload) => {
+                          const ok = await runMutation(
+                            `/api/users/${payload.userId}`,
+                            "PATCH",
+                            {
+                              name: payload.name,
+                              avatarChar: payload.avatarChar,
+                              ...(payload.newPassword ? { newPassword: payload.newPassword } : {}),
+                            },
+                            "تحديث الملف الشخصي",
+                            "تم تحديث الملف الشخصي وإعادة تعيين كلمة المرور بنجاح"
+                          );
+                          if (ok) {
+                            setCurrentUser((prev) =>
+                              prev
+                                ? {
+                                  ...prev,
+                                  name: payload.name || prev.name,
+                                  avatarChar: payload.avatarChar || prev.avatarChar,
+                                }
+                                : prev
+                            );
+                          }
+                        }}
+                        onAddUser={(payload) =>
+                          runMutation(
+                            "/api/users",
+                            "POST",
+                            payload,
+                            `مستخدم: ${payload.name}`,
+                            "تمت إضافة المستخدم بنجاح"
+                          )
+                        }
+                        onToggleUserStatus={async (uid) => {
+                          await runMutation(
+                            `/api/users/${uid}`,
+                            "PATCH",
+                            { toggleActive: true },
+                            `تغيير حالة مستخدم ${uid}`,
+                            "تم تحديث حالة المستخدم"
+                          );
+                        }}
+                        onOpenLogin={() => setViewMode("login")}
+                        onToast={showToast}
+                      />
+                    )}
 
-              {activeTab === "treasury" && (
-                <TreasuryTab
-                  currency={currency}
-                  exchangeRates={state.exchangeRates}
-                  treasuryAccounts={state.treasuryAccounts}
-                  installments={state.installments}
-                  sales={state.sales}
-                  workers={state.workers}
-                  currentUser={currentUser}
-                  readOnly={userReadOnly}
-                  canManageTreasury={userCanManageTreasury}
-                  canEditDate={userCanEditDate}
-                  onAddInstallment={(payload) =>
-                    runMutation(
-                      "/api/installments",
-                      "POST",
-                      payload,
-                      `سند ${payload.voucherNo}`,
-                      `تم حفظ السند ${payload.voucherNo} وتحديث الرصيد بنجاح`
-                    )
-                  }
-                  onRefreshState={refreshFromServer}
-                  onOpenInstallmentModal={openInstallmentModal}
-                  onExportExcel={() => {
-                    exportFullWorkbookToExcel(state);
-                    showToast("تم تصدير ملف Excel بنجاح");
-                  }}
-                  onToast={showToast}
-                />
-              )}
+                    {activeTab === "treasury" && (
+                      <TreasuryTab
+                        currency={currency}
+                        exchangeRates={state.exchangeRates}
+                        treasuryAccounts={state.treasuryAccounts}
+                        installments={state.installments}
+                        sales={state.sales}
+                        workers={state.workers}
+                        currentUser={currentUser}
+                        readOnly={userReadOnly}
+                        canManageTreasury={userCanManageTreasury}
+                        canEditDate={userCanEditDate}
+                        onAddInstallment={(payload) =>
+                          runMutation(
+                            "/api/installments",
+                            "POST",
+                            payload,
+                            `سند ${payload.voucherNo}`,
+                            `تم حفظ السند ${payload.voucherNo} وتحديث الرصيد بنجاح`
+                          )
+                        }
+                        onRefreshState={refreshFromServer}
+                        onOpenInstallmentModal={openInstallmentModal}
+                        onExportExcel={() => {
+                          exportFullWorkbookToExcel(state);
+                          showToast("تم تصدير ملف Excel بنجاح");
+                        }}
+                        onToast={showToast}
+                      />
+                    )}
 
-              {activeTab === "inventory" && (
-                <InventoryTab
-                  projects={scopedProjects}
-                  inventoryBatches={filteredInventoryBatches}
-                  sales={state.sales}
-                  readOnly={userReadOnly}
-                  canEditRecords={canEdit(currentUser, "inventory")}
-                  onAddInventoryBatch={(payload) =>
-                    runMutation(
-                      "/api/inventory",
-                      "POST",
-                      payload,
-                      `مخزون ${payload.harvest}`,
-                      "تم تسجيل دفعة الحصاد في المخزون بنجاح"
-                    )
-                  }
-                  onEditInventoryBatch={(payload) =>
-                    runMutation(
-                      "/api/inventory",
-                      "PATCH",
-                      payload,
-                      `تعديل مخزون ${payload.harvest}`,
-                      "تم تعديل دفعة الحصاد والمخزون بنجاح"
-                    )
-                  }
-                  onRefreshState={refreshFromServer}
-                  onToast={showToast}
-                />
-              )}
+                    {activeTab === "inventory" && (
+                      <InventoryTab
+                        projects={scopedProjects}
+                        inventoryBatches={filteredInventoryBatches}
+                        sales={state.sales}
+                        readOnly={userReadOnly}
+                        canEditRecords={canEdit(currentUser, "inventory")}
+                        onAddInventoryBatch={(payload) =>
+                          runMutation(
+                            "/api/inventory",
+                            "POST",
+                            payload,
+                            `مخزون ${payload.harvest}`,
+                            "تم تسجيل دفعة الحصاد في المخزون بنجاح"
+                          )
+                        }
+                        onEditInventoryBatch={(payload) =>
+                          runMutation(
+                            "/api/inventory",
+                            "PATCH",
+                            payload,
+                            `تعديل مخزون ${payload.harvest}`,
+                            "تم تعديل دفعة الحصاد والمخزون بنجاح"
+                          )
+                        }
+                        onRefreshState={refreshFromServer}
+                        onToast={showToast}
+                      />
+                    )}
 
-              {activeTab === "audit" && (
-                <AuditTab
-                  projects={scopedProjects}
-                  lockedPeriods={state.lockedPeriods}
-                  auditLogs={state.auditLogs}
-                  readOnly={userReadOnly}
-                  canLock={userCanLock}
-                  canPost={userCanPost}
-                  onTogglePeriodLock={async (key) => {
-                    const nextLocked = !state.lockedPeriods[key];
-                    await runMutation(
-                      "/api/audit/lock",
-                      "POST",
-                      { key },
-                      `قفل فترة ${key}`,
-                      nextLocked
-                        ? "🔒 تم إغلاق القطفة محاسبياً ومنع التعديل المباشر"
-                        : "🔓 تم فتح القطفة للتعديل"
-                    );
-                  }}
-                  onPostAdjustment={(payload) =>
-                    runMutation(
-                      "/api/audit/adjustments",
-                      "POST",
-                      payload,
-                      "قيد تسوية",
-                      "تم ترحيل قيد التسوية وتوثيقه في سجل الرقابة"
-                    )
-                  }
-                  onExportExcel={() => {
-                    exportFullWorkbookToExcel(state);
-                    showToast("تم تصدير ملف Excel بنجاح");
-                  }}
-                  onToast={showToast}
-                />
-              )}
+                    {activeTab === "audit" && (
+                      <AuditTab
+                        projects={scopedProjects}
+                        lockedPeriods={state.lockedPeriods}
+                        auditLogs={state.auditLogs}
+                        readOnly={userReadOnly}
+                        canLock={userCanLock}
+                        canPost={userCanPost}
+                        onTogglePeriodLock={async (key) => {
+                          const nextLocked = !state.lockedPeriods[key];
+                          await runMutation(
+                            "/api/audit/lock",
+                            "POST",
+                            { key },
+                            `قفل فترة ${key}`,
+                            nextLocked
+                              ? "🔒 تم إغلاق القطفة محاسبياً ومنع التعديل المباشر"
+                              : "🔓 تم فتح القطفة للتعديل"
+                          );
+                        }}
+                        onPostAdjustment={(payload) =>
+                          runMutation(
+                            "/api/audit/adjustments",
+                            "POST",
+                            payload,
+                            "قيد تسوية",
+                            "تم ترحيل قيد التسوية وتوثيقه في سجل الرقابة"
+                          )
+                        }
+                        onExportExcel={() => {
+                          exportFullWorkbookToExcel(state);
+                          showToast("تم تصدير ملف Excel بنجاح");
+                        }}
+                        onToast={showToast}
+                      />
+                    )}
 
-              {activeTab === "mobile" && (
-                <MobileTab
-                  canInstallPwa={Boolean(deferredInstallPrompt)}
-                  offlineMode={offlineMode}
-                  offlineQueueCount={offlineQueueCount}
-                  onToggleMobileSim={() => {
-                    const next = !mobileSimulatorActive;
-                    setMobileSimulatorActive(next);
-                    showToast(
-                      next
-                        ? "📱 تم تفعيل محاكي تطبيق الجوال (عرض الهاتف 412px)"
-                        : "🖥️ تم العودة لعرض الشاشة الكاملة"
-                    );
-                  }}
-                  onOpenQuickSheet={() => setQuickSheetOpen(true)}
-                  onTriggerPwaInstall={handleTriggerPwaInstall}
-                  onSyncQueue={handleSyncQueue}
-                  onSwitchTab={navigateToTab}
-                  onToast={showToast}
-                />
-              )}
+                    {activeTab === "mobile" && (
+                      <MobileTab
+                        canInstallPwa={Boolean(deferredInstallPrompt)}
+                        offlineMode={offlineMode}
+                        offlineQueueCount={offlineQueueCount}
+                        onToggleMobileSim={() => {
+                          const next = !mobileSimulatorActive;
+                          setMobileSimulatorActive(next);
+                          showToast(
+                            next
+                              ? "📱 تم تفعيل محاكي تطبيق الجوال (عرض الهاتف 412px)"
+                              : "🖥️ تم العودة لعرض الشاشة الكاملة"
+                          );
+                        }}
+                        onOpenQuickSheet={() => setQuickSheetOpen(true)}
+                        onTriggerPwaInstall={handleTriggerPwaInstall}
+                        onSyncQueue={handleSyncQueue}
+                        onSwitchTab={navigateToTab}
+                        onToast={showToast}
+                      />
+                    )}
 
-              {activeTab === "prompt" && <PromptTab onToast={showToast} />}
-            </TabErrorBoundary>
-          </main>
+                    {activeTab === "prompt" && <PromptTab onToast={showToast} />}
+                  </TabErrorBoundary>
+                </>
+              )}
+            </main>
           </div>
 
           <MobileBottomNav
