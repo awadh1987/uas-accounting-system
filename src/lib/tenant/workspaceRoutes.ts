@@ -75,10 +75,9 @@ export function resolveCanonicalWorkspacePath(params: {
   preferHarvestPath?: boolean;
   currentPath?: string;
 }): string {
-  if (params.activeTradingSector === "COMMERCIAL" || params.activeTab === "commercial") {
-    return "/commercial";
-  }
   switch (params.activeTab) {
+    case "commercial":
+      return "/commercial";
     case "customers":
       return params.customersInitialSection === "portal"
         ? "/sales/portal"

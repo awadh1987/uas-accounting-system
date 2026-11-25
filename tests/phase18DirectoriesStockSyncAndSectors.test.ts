@@ -110,9 +110,14 @@ describe("Phase 18 — Client Monthly Directories, Stock Sync, Sales Relocation 
       path.join(process.cwd(), "src/components/UasAppShell.tsx"),
       "utf8"
     );
-    assert.ok(appShellSrc.includes("workspace-sector-tab-harvest"));
-    assert.ok(appShellSrc.includes("workspace-sector-tab-commercial"));
     assert.ok(appShellSrc.includes("CommercialSectorWorkspace"));
+
+    const sidebarSrc = fs.readFileSync(
+      path.join(process.cwd(), "src/components/SidebarNav.tsx"),
+      "utf8"
+    );
+    assert.ok(sidebarSrc.includes("workspace-sector-tab-harvest"));
+    assert.ok(sidebarSrc.includes("workspace-sector-tab-commercial"));
 
     const portalAppSrc = fs.readFileSync(
       path.join(process.cwd(), "src/components/client-portal/ClientPortalApp.tsx"),

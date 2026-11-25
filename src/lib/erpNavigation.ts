@@ -133,6 +133,9 @@ export function resolveGroupForTab(tab: TabId): ErpGroupDef {
 }
 
 export function resolveEffectiveTab(tab: TabId, user?: UasUser | null): TabId {
+  if (tab === "commercial") {
+    return "commercial";
+  }
   // Map group IDs to their default sub-tab (taking user permissions into account)
   const group = ERP_GROUPS.find((g) => g.id === tab);
   if (group && group.subTabs.length > 0) {

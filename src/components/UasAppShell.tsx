@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Eye, Globe, Lock, Receipt, ShoppingBag, Sprout, Users } from "lucide-react";
+import { Eye, Globe, Lock, Receipt, Users } from "lucide-react";
 import { CoaTreeTab } from "@/components/CoaTreeTab";
 import { CommercialSectorWorkspace } from "@/components/CommercialSectorWorkspace";
 import { CommandSearchModal } from "@/components/CommandSearchModal";
@@ -463,7 +463,17 @@ export function UasAppShell() {
         }
 
         const finalTab = targetTab || (matchedUser.defaultModule as TabId) || "dashboard";
-        if (finalTab === "customers") {
+        if (finalTab === "commercial") {
+          if (canAccessModule(matchedUser, "commercial")) {
+            setActiveTradingSector("COMMERCIAL");
+            setActiveTab("commercial");
+          } else {
+            const fallback = getAccessibleTabs(matchedUser)[0] || "dashboard";
+            setActiveTradingSector("HARVEST");
+            setActiveTab(fallback);
+          }
+        } else if (finalTab === "customers") {
+          setActiveTradingSector("HARVEST");
           if (canAccessModule(matchedUser, "customers")) {
             setActiveTab("customers");
             setSalesViewMode("customers");
@@ -472,6 +482,7 @@ export function UasAppShell() {
             setActiveTab(fallback);
           }
         } else {
+          setActiveTradingSector("HARVEST");
           const resolved = resolveEffectiveTab(finalTab, matchedUser);
           if (canAccessModule(matchedUser, resolved)) {
             setActiveTab(resolved);
@@ -640,8 +651,18 @@ export function UasAppShell() {
       }
       if (!rawHash) return;
       const [hTab, hSub] = rawHash.split("/");
+      if (hTab === "commercial") {
+        if (canAccessModule(currentUser, "commercial")) {
+          preferHarvestPathRef.current = false;
+          setActiveTradingSector("COMMERCIAL");
+          setActiveTab("commercial");
+        }
+        return;
+      }
       if (hTab === "customers") {
         if (canAccessModule(currentUser, "customers")) {
+          preferHarvestPathRef.current = false;
+          setActiveTradingSector("HARVEST");
           setActiveTab("customers");
           setSalesViewMode("customers");
         }
@@ -672,6 +693,10 @@ export function UasAppShell() {
       if (validTabs.includes(hTab as TabId)) {
         const resolved = resolveEffectiveTab(hTab as TabId, currentUser);
         if (canAccessModule(currentUser, resolved)) {
+          if (hTab !== "dashboard") {
+            preferHarvestPathRef.current = false;
+          }
+          setActiveTradingSector("HARVEST");
           setActiveTab(resolved);
           if (resolved === "sales") {
             setSalesViewMode("sales");
@@ -1101,8 +1126,20 @@ export function UasAppShell() {
         return;
       }
       if (nextTab === "commercial") {
+        if (!canAccessModule(activeUser, "commercial")) {
+          const fallback = getAccessibleTabs(activeUser)[0] || "dashboard";
+          setActiveTradingSector("HARVEST");
+          setActiveTab(fallback);
+          showToast(
+            lang === "ar"
+              ? "ليست لديك صلاحية للوصول إلى هذا القسم"
+              : "You do not have permission to access this module"
+          );
+          return;
+        }
         preferHarvestPathRef.current = false;
         setActiveTradingSector("COMMERCIAL");
+        setActiveTab("commercial");
         return;
       }
       setActiveTradingSector("HARVEST");
@@ -1477,6 +1514,9 @@ export function UasAppShell() {
             enterpriseProfile={state.enterpriseProfile}
             lang={lang}
             activeTab={activeTab}
+            activeTradingSector={activeTradingSector}
+            customersSection={customersInitialSection}
+            salesViewMode={salesViewMode}
             collapsed={sidebarCollapsed}
             mobileOpen={mobileSidebarOpen}
             mobileSimulatorActive={mobileSimulatorActive}
@@ -1485,6 +1525,32 @@ export function UasAppShell() {
             onCloseMobile={() => setMobileSidebarOpen(false)}
             onSelectGroup={(_groupId, defaultTab) => navigateToTab(defaultTab)}
             onSelectSubTab={(tab) => navigateToTab(tab)}
+            onSelectClientPortal={() => {
+              preferHarvestPathRef.current = false;
+              setCustomersInitialSection("portal");
+              setSalesViewMode("customers");
+              navigateToTab("customers");
+            }}
+            onSelectClientLedgers={() => {
+              preferHarvestPathRef.current = false;
+              setCustomersInitialSection("cards");
+              setSalesViewMode("customers");
+              navigateToTab("customers");
+            }}
+            onSelectSalesInvoices={() => {
+              preferHarvestPathRef.current = false;
+              setSalesViewMode("sales");
+              navigateToTab("sales");
+            }}
+            onSelectSector={(sector) => {
+              if (sector === "COMMERCIAL") {
+                navigateToTab("commercial");
+              } else {
+                preferHarvestPathRef.current = true;
+                setActiveTradingSector("HARVEST");
+                navigateToTab("dashboard");
+              }
+            }}
             onOpenLogin={() => setViewMode("login")}
             onLogout={handleLogout}
           />
@@ -1626,237 +1692,15 @@ export function UasAppShell() {
                 </div>
               )}
 
-              {/* Organized 4-Part Navigation: 1) Sales & Client Portal (separated from sectors), 2) Procurement & Vendors, 3) Harvest Sector, 4) Commercial Sector */}
-              <div
-                data-testid="workspace-4part-nav"
-                className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5 no-print"
-              >
-                {/* Part 1: Sales & Client Portal */}
-                <div
-                  data-testid="workspace-part-sales-portal"
-                  className={`p-3 rounded-2xl border transition flex flex-col justify-between gap-2 ${
-                    activeTradingSector !== "COMMERCIAL" &&
-                    (activeTab === "sales" || activeTab === "customers")
-                      ? "border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/40 shadow-sm"
-                      : "card-surface border-slate-200 dark:border-slate-700 hover:border-emerald-300"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div className="w-7 h-7 rounded-xl bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
-                        <Users className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-black truncate">
-                        {lang === "ar" ? "المبيعات وبوابة العملاء" : "Sales & Client Portal"}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1 text-[10px] font-extrabold">
-                    <button
-                      type="button"
-                      data-testid="workspace-nav-client-portal"
-                      onClick={() => {
-                        preferHarvestPathRef.current = false;
-                        setActiveTradingSector("HARVEST");
-                        setCustomersInitialSection("portal");
-                        setSalesViewMode("customers");
-                        navigateToTab("customers");
-                      }}
-                      className={`px-2 py-1 rounded-lg transition ${
-                        activeTradingSector !== "COMMERCIAL" &&
-                        activeTab === "customers" &&
-                        customersInitialSection === "portal"
-                          ? "accent-bg shadow-xs"
-                          : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
-                      }`}
-                    >
-                      {lang === "ar" ? "بوابة العملاء" : "Client Portal"}
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="workspace-nav-client-ledgers"
-                      onClick={() => {
-                        preferHarvestPathRef.current = false;
-                        setActiveTradingSector("HARVEST");
-                        setCustomersInitialSection("cards");
-                        setSalesViewMode("customers");
-                        navigateToTab("customers");
-                      }}
-                      className={`px-2 py-1 rounded-lg transition ${
-                        activeTradingSector !== "COMMERCIAL" &&
-                        activeTab === "customers" &&
-                        customersInitialSection !== "portal"
-                          ? "accent-bg shadow-xs"
-                          : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
-                      }`}
-                    >
-                      {lang === "ar" ? "حسابات العملاء" : "Client Ledgers"}
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="workspace-nav-sales-invoices"
-                      onClick={() => {
-                        preferHarvestPathRef.current = false;
-                        setActiveTradingSector("HARVEST");
-                        setSalesViewMode("sales");
-                        navigateToTab("sales");
-                      }}
-                      className={`px-2 py-1 rounded-lg transition ${
-                        activeTradingSector !== "COMMERCIAL" && activeTab === "sales"
-                          ? "accent-bg shadow-xs"
-                          : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
-                      }`}
-                    >
-                      {lang === "ar" ? "فواتير المبيعات" : "Sales Invoices"}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Part 2: Procurement & Vendors */}
-                <button
-                  type="button"
-                  data-testid="workspace-part-procurement"
-                  onClick={() => {
-                    preferHarvestPathRef.current = false;
-                    setActiveTradingSector("HARVEST");
-                    navigateToTab("procurement");
-                  }}
-                  className={`p-3 rounded-2xl border text-start transition flex items-center justify-between gap-2 ${
-                    activeTradingSector !== "COMMERCIAL" && activeTab === "procurement"
-                      ? "border-sky-500 bg-sky-50/80 dark:bg-sky-950/40 shadow-sm"
-                      : "card-surface border-slate-200 dark:border-slate-700 hover:border-sky-300"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-8 h-8 rounded-xl bg-sky-100 dark:bg-sky-950 text-sky-700 dark:text-sky-300 flex items-center justify-center shrink-0">
-                      <Receipt className="w-4 h-4" />
-                    </div>
-                    <div className="text-xs sm:text-sm font-black truncate">
-                      {lang === "ar" ? "المشتريات والموردون" : "Procurement & Vendors"}
-                    </div>
-                  </div>
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${
-                      activeTradingSector !== "COMMERCIAL" && activeTab === "procurement"
-                        ? "bg-sky-600 text-white"
-                        : "bg-slate-100 dark:bg-slate-800 text-slate-500"
-                    }`}
-                  >
-                    {activeTradingSector !== "COMMERCIAL" && activeTab === "procurement"
-                      ? lang === "ar"
-                        ? "نشط"
-                        : "Active"
-                      : lang === "ar"
-                      ? "فتح"
-                      : "Open"}
-                  </span>
-                </button>
-
-                {/* Part 3: Agricultural Sector */}
-                <button
-                  type="button"
-                  data-testid="workspace-sector-tab-harvest"
-                  onClick={() => {
-                    preferHarvestPathRef.current = true;
-                    setActiveTradingSector("HARVEST");
-                    if (
-                      activeTab === "sales" ||
-                      activeTab === "customers" ||
-                      activeTab === "procurement" ||
-                      activeTab === "commercial"
-                    ) {
-                      navigateToTab("dashboard");
-                    }
-                  }}
-                  className={`p-3 rounded-2xl border text-start transition flex items-center justify-between gap-2 ${
-                    activeTradingSector === "HARVEST" &&
-                    activeTab !== "sales" &&
-                    activeTab !== "customers" &&
-                    activeTab !== "procurement"
-                      ? "border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/40 shadow-sm"
-                      : "card-surface border-slate-200 dark:border-slate-700 hover:border-emerald-300"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
-                      <Sprout className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-xs sm:text-sm font-black">
-                        {lang === "ar" ? "القطاع الزراعي" : "Agricultural Sector"}
-                      </div>
-                    </div>
-                  </div>
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${
-                      activeTradingSector === "HARVEST" &&
-                      activeTab !== "sales" &&
-                      activeTab !== "customers" &&
-                      activeTab !== "procurement"
-                        ? "accent-bg"
-                        : "bg-slate-100 dark:bg-slate-800 text-slate-500"
-                    }`}
-                  >
-                    {activeTradingSector === "HARVEST" &&
-                    activeTab !== "sales" &&
-                    activeTab !== "customers" &&
-                    activeTab !== "procurement"
-                      ? lang === "ar"
-                        ? "نشط"
-                        : "Active"
-                      : lang === "ar"
-                      ? "فتح"
-                      : "Open"}
-                  </span>
-                </button>
-
-                {/* Part 4: Commercial Sector */}
-                <button
-                  type="button"
-                  data-testid="workspace-sector-tab-commercial"
-                  onClick={() => {
-                    preferHarvestPathRef.current = false;
-                    setActiveTradingSector("COMMERCIAL");
-                  }}
-                  className={`p-3 rounded-2xl border text-start transition flex items-center justify-between gap-2 ${
-                    activeTradingSector === "COMMERCIAL"
-                      ? "border-amber-500 bg-amber-50/80 dark:bg-amber-950/40 shadow-sm"
-                      : "card-surface border-slate-200 dark:border-slate-700 hover:border-amber-300"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0">
-                      <ShoppingBag className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-xs sm:text-sm font-black">
-                        {lang === "ar" ? "القطاع التجاري" : "Commercial Sector"}
-                      </div>
-                    </div>
-                  </div>
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${
-                      activeTradingSector === "COMMERCIAL"
-                        ? "bg-amber-600 text-white"
-                        : "bg-slate-100 dark:bg-slate-800 text-slate-500"
-                    }`}
-                  >
-                    {activeTradingSector === "COMMERCIAL"
-                      ? lang === "ar"
-                        ? "نشط"
-                        : "Active"
-                      : lang === "ar"
-                      ? "فتح"
-                      : "Open"}
-                  </span>
-                </button>
-              </div>
-
-              {activeTradingSector === "COMMERCIAL" ? (
+              {activeTab === "commercial" ? (
                 <CommercialSectorWorkspace
                   onRefreshState={refreshFromServer}
                   onToast={showToast}
-                  onSwitchToHarvestSector={() => setActiveTradingSector("HARVEST")}
+                  onSwitchToHarvestSector={() => {
+                    preferHarvestPathRef.current = true;
+                    setActiveTradingSector("HARVEST");
+                    navigateToTab("dashboard");
+                  }}
                 />
               ) : (
                 <>

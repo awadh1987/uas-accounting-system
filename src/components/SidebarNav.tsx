@@ -10,10 +10,12 @@ import {
   Landmark,
   LayoutDashboard,
   LogOut,
+  Receipt,
   Settings2,
   ShieldCheck,
   ShoppingBag,
   Sprout,
+  Users,
   X,
 } from "lucide-react";
 import { SvgAvatar } from "@/components/SvgAvatar";
@@ -29,6 +31,9 @@ interface SidebarNavProps {
   enterpriseProfile?: UasEnterpriseProfile | null;
   lang: LanguageCode;
   activeTab: TabId;
+  activeTradingSector: "HARVEST" | "COMMERCIAL";
+  customersSection?: string;
+  salesViewMode?: "sales" | "customers";
   collapsed: boolean;
   mobileOpen: boolean;
   mobileSimulatorActive: boolean;
@@ -37,6 +42,10 @@ interface SidebarNavProps {
   onCloseMobile: () => void;
   onSelectGroup: (groupId: ErpGroupId, defaultTab: TabId) => void;
   onSelectSubTab: (tab: TabId) => void;
+  onSelectClientPortal: () => void;
+  onSelectClientLedgers: () => void;
+  onSelectSalesInvoices: () => void;
+  onSelectSector: (sector: "HARVEST" | "COMMERCIAL") => void;
   onOpenLogin: () => void;
   onLogout?: () => void;
 }
@@ -57,6 +66,9 @@ export function SidebarNav({
   enterpriseProfile,
   lang,
   activeTab,
+  activeTradingSector,
+  customersSection,
+  salesViewMode,
   collapsed,
   mobileOpen,
   mobileSimulatorActive,
@@ -65,6 +77,10 @@ export function SidebarNav({
   onCloseMobile,
   onSelectGroup,
   onSelectSubTab,
+  onSelectClientPortal,
+  onSelectClientLedgers,
+  onSelectSalesInvoices,
+  onSelectSector,
   onOpenLogin,
   onLogout,
 }: SidebarNavProps) {
@@ -73,7 +89,9 @@ export function SidebarNav({
   const roleMeta = getRoleMeta(currentUser);
   const readOnly = isReadOnly(currentUser);
 
-  const visibleGroups = ERP_GROUPS.filter((g) => canAccessModule(currentUser, g.id));
+  const visibleGroups = ERP_GROUPS.filter(
+    (g) => g.id !== "commercial" && canAccessModule(currentUser, g.id)
+  );
   const CollapseIcon = isAr
     ? collapsed
       ? ChevronLeft
@@ -147,10 +165,198 @@ export function SidebarNav({
         </div>
 
         {/* Navigation Groups */}
-        <nav className="flex-1 overflow-y-auto px-2.5 py-3 space-y-1.5">
+        <nav className="flex-1 overflow-y-auto px-2.5 py-3 space-y-2">
+          {/* Organized 4-Part Primary Sidebar Navigation */}
+          <div data-testid="workspace-4part-nav" className="space-y-1.5">
+            {/* 1. Sales & Client Portal */}
+            {(canAccessModule(currentUser, "sales") || canAccessModule(currentUser, "customers")) && (
+              <div
+                data-testid="workspace-part-sales-portal"
+                className={`rounded-xl border p-2 space-y-1.5 transition ${
+                  activeTab === "sales" || activeTab === "customers"
+                    ? "border-emerald-500/70 bg-emerald-50/70 dark:bg-emerald-950/35"
+                    : "border-slate-200 dark:border-slate-700/70 bg-slate-50/60 dark:bg-slate-800/40"
+                }`}
+              >
+                {!isIconRail ? (
+                  <>
+                    <div className="flex items-center gap-2 px-1 text-xs font-black text-slate-800 dark:text-slate-100 leading-snug">
+                      <Users className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span>{isAr ? "المبيعات وبوابة العملاء" : "Sales & Client Portal"}</span>
+                    </div>
+                    <div className="ms-2 ps-2 border-s-2 border-emerald-500/35 space-y-1">
+                      {canAccessModule(currentUser, "customers") && (
+                        <button
+                          type="button"
+                          data-testid="workspace-nav-client-portal"
+                          onClick={() => {
+                            onSelectClientPortal();
+                            if (isMobileDrawer) onCloseMobile();
+                          }}
+                          className={`w-full text-start px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold leading-snug transition ${
+                            activeTab === "customers" && customersSection === "portal"
+                              ? "accent-bg shadow-xs"
+                              : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          }`}
+                        >
+                          {isAr ? "بوابة العملاء" : "Client Portal"}
+                        </button>
+                      )}
+                      {canAccessModule(currentUser, "customers") && (
+                        <button
+                          type="button"
+                          data-testid="workspace-nav-client-ledgers"
+                          onClick={() => {
+                            onSelectClientLedgers();
+                            if (isMobileDrawer) onCloseMobile();
+                          }}
+                          className={`w-full text-start px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold leading-snug transition ${
+                            activeTab === "customers" && customersSection !== "portal"
+                              ? "accent-bg shadow-xs"
+                              : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          }`}
+                        >
+                          {isAr ? "حسابات العملاء" : "Client Ledgers"}
+                        </button>
+                      )}
+                      {canAccessModule(currentUser, "sales") && (
+                        <button
+                          type="button"
+                          data-testid="workspace-nav-sales-invoices"
+                          onClick={() => {
+                            onSelectSalesInvoices();
+                            if (isMobileDrawer) onCloseMobile();
+                          }}
+                          className={`w-full text-start px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold leading-snug transition ${
+                            activeTab === "sales" && salesViewMode !== "customers"
+                              ? "accent-bg shadow-xs"
+                              : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          }`}
+                        >
+                          {isAr ? "فواتير المبيعات" : "Sales Invoices"}
+                        </button>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    title={isAr ? "المبيعات وبوابة العملاء" : "Sales & Client Portal"}
+                    onClick={onSelectSalesInvoices}
+                    className="group relative w-full flex justify-center py-1.5 rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  >
+                    <Users className="w-4 h-4 shrink-0" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* 2. Procurement & Vendors */}
+            {canAccessModule(currentUser, "procurement") && (
+              <button
+                type="button"
+                data-testid="workspace-part-procurement"
+                title={isIconRail ? (isAr ? "المشتريات والموردون" : "Procurement & Vendors") : undefined}
+                onClick={() => {
+                  onSelectSubTab("procurement");
+                  if (isMobileDrawer) onCloseMobile();
+                }}
+                className={`group relative w-full flex items-center ${
+                  isIconRail ? "justify-center px-2" : "justify-start px-3"
+                } py-2.5 rounded-xl text-xs font-extrabold transition leading-snug ${
+                  activeTab === "procurement"
+                    ? "bg-sky-600 text-white shadow-sm"
+                    : "text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700/70 hover:bg-slate-100 dark:hover:bg-slate-800/80"
+                }`}
+              >
+                <Receipt className="w-4 h-4 shrink-0" />
+                {!isIconRail && (
+                  <span className="ms-2.5">{isAr ? "المشتريات والموردون" : "Procurement & Vendors"}</span>
+                )}
+                {isIconRail && (
+                  <span
+                    className={`pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity absolute ${
+                      isAr ? "right-full mr-3" : "left-full ml-3"
+                    } z-50 px-2.5 py-1.5 rounded-lg bg-slate-900 text-white text-[11px] font-bold whitespace-nowrap shadow-lg`}
+                  >
+                    {isAr ? "المشتريات والموردون" : "Procurement & Vendors"}
+                  </span>
+                )}
+              </button>
+            )}
+
+            {/* 3. Agricultural Sector */}
+            <button
+              type="button"
+              data-testid="workspace-sector-tab-harvest"
+              title={isIconRail ? (isAr ? "القطاع الزراعي" : "Agricultural Sector") : undefined}
+              onClick={() => {
+                onSelectSector("HARVEST");
+                if (isMobileDrawer) onCloseMobile();
+              }}
+              className={`group relative w-full flex items-center ${
+                isIconRail ? "justify-center px-2" : "justify-start px-3"
+              } py-2.5 rounded-xl text-xs font-extrabold transition leading-snug ${
+                activeTab === "dashboard" && activeTradingSector === "HARVEST"
+                  ? "accent-bg shadow-sm"
+                  : "text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700/70 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+              }`}
+            >
+              <Sprout className="w-4 h-4 shrink-0" />
+              {!isIconRail && (
+                <span className="ms-2.5">{isAr ? "القطاع الزراعي" : "Agricultural Sector"}</span>
+              )}
+              {isIconRail && (
+                <span
+                  className={`pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity absolute ${
+                    isAr ? "right-full mr-3" : "left-full ml-3"
+                  } z-50 px-2.5 py-1.5 rounded-lg bg-slate-900 text-white text-[11px] font-bold whitespace-nowrap shadow-lg`}
+                >
+                  {isAr ? "القطاع الزراعي" : "Agricultural Sector"}
+                </span>
+              )}
+            </button>
+
+            {/* 4. Commercial Sector */}
+            {canAccessModule(currentUser, "commercial") && (
+              <button
+                type="button"
+                data-testid="workspace-sector-tab-commercial"
+                title={isIconRail ? (isAr ? "القطاع التجاري" : "Commercial Sector") : undefined}
+                onClick={() => {
+                  onSelectSector("COMMERCIAL");
+                  if (isMobileDrawer) onCloseMobile();
+                }}
+                className={`group relative w-full flex items-center ${
+                  isIconRail ? "justify-center px-2" : "justify-start px-3"
+                } py-2.5 rounded-xl text-xs font-extrabold transition leading-snug ${
+                  activeTab === "commercial"
+                    ? "bg-amber-600 text-white shadow-sm"
+                    : "text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700/70 hover:bg-amber-50 dark:hover:bg-amber-950/30"
+                }`}
+              >
+                <ShoppingBag className="w-4 h-4 shrink-0" />
+                {!isIconRail && (
+                  <span className="ms-2.5">{isAr ? "القطاع التجاري" : "Commercial Sector"}</span>
+                )}
+                {isIconRail && (
+                  <span
+                    className={`pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity absolute ${
+                      isAr ? "right-full mr-3" : "left-full ml-3"
+                    } z-50 px-2.5 py-1.5 rounded-lg bg-slate-900 text-white text-[11px] font-bold whitespace-nowrap shadow-lg`}
+                  >
+                    {isAr ? "القطاع التجاري" : "Commercial Sector"}
+                  </span>
+                )}
+              </button>
+            )}
+          </div>
+
+          <div className="my-2 border-t border-slate-200 dark:border-slate-700/80" />
+
           {visibleGroups.map((group) => {
             const Icon = GROUP_ICONS[group.id];
-            const isActiveGroup = activeGroup.id === group.id;
+            const isActiveGroup = activeTab !== "commercial" && activeGroup.id === group.id;
             const accessibleSubs = group.subTabs.filter((s) =>
               canAccessModule(currentUser, s.id)
             );

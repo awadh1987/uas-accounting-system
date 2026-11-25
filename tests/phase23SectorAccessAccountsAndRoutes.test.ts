@@ -27,6 +27,7 @@ import {
   resolveWorkspaceRouteSection,
   resolveCanonicalWorkspacePath,
 } from "../src/lib/tenant/workspaceRoutes";
+import { resolveEffectiveTab } from "../src/lib/erpNavigation";
 
 const root = process.cwd();
 const read = (rel: string) => fs.readFileSync(path.join(root, rel), "utf8");
@@ -88,10 +89,11 @@ describe("Phase 23 — subdomain routes", () => {
 });
 
 describe("Phase 23 — clean sector titles & commercial/inbound-outbound capabilities", () => {
-  it("UasAppShell keeps clean sector tab labels without trailing subtitle text", () => {
+  it("SidebarNav and UasAppShell keep clean sector tab labels without trailing subtitle text", () => {
     const shell = read("src/components/UasAppShell.tsx");
-    assert.ok(shell.includes('data-testid="workspace-sector-tab-harvest"'));
-    assert.ok(shell.includes('data-testid="workspace-sector-tab-commercial"'));
+    const sidebar = read("src/components/SidebarNav.tsx");
+    assert.ok(sidebar.includes('data-testid="workspace-sector-tab-harvest"'));
+    assert.ok(sidebar.includes('data-testid="workspace-sector-tab-commercial"'));
     assert.ok(!shell.includes("المبيعات، المخزون وفرز المحصول، بوابة العملاء، والمحاسبة الشاملة"));
     assert.ok(!shell.includes("السلع الغذائية، غير الغذائية، المحروقات، المستودعات والرحلات (POD)"));
     assert.ok(shell.includes("pt-2 sm:pt-2.5 md:pt-3"));
@@ -341,13 +343,25 @@ describe("Phase 24 — subdomain URL sync, inventory field layout & 4-part separ
     );
   });
 
-  it("fixes الصنف المخزني alignment/label and enforces dark option contrast & 4-part separation", () => {
+  it("moves 4-part nav into SidebarNav, fixes الصنف المخزني & prevents sector hijack on #/expenses", () => {
     const inv = read("src/components/MultiUnitInventoryPanel.tsx");
     assert.ok(inv.includes("items-end"));
     assert.ok(!inv.includes("sm:col-span-2 lg:col-span-2 w-full min-w-0 truncate"));
     assert.ok(read("src/components/CommercialSectorWorkspace.tsx").includes("sm:col-span-12 grid"));
     assert.ok(read("src/app/globals.css").includes("select option,"));
     const shell = read("src/components/UasAppShell.tsx");
+    assert.ok(!shell.includes('data-testid="workspace-4part-nav"'));
+    assert.ok(shell.includes('{activeTab === "commercial" ? ('));
+    assert.ok(!shell.includes('{activeTradingSector === "COMMERCIAL" ? ('));
+    assert.equal(resolveEffectiveTab("commercial"), "commercial");
+    assert.equal(
+      resolveCanonicalWorkspacePath({
+        activeTab: "expenses",
+        activeTradingSector: "COMMERCIAL",
+      }),
+      "/expenses"
+    );
+    const sidebar = read("src/components/SidebarNav.tsx");
     for (const tid of [
       'data-testid="workspace-4part-nav"',
       'data-testid="workspace-part-sales-portal"',
@@ -358,7 +372,7 @@ describe("Phase 24 — subdomain URL sync, inventory field layout & 4-part separ
       'data-testid="workspace-sector-tab-harvest"',
       'data-testid="workspace-sector-tab-commercial"',
     ]) {
-      assert.ok(shell.includes(tid), tid);
+      assert.ok(sidebar.includes(tid), tid);
     }
   });
 });
