@@ -28,6 +28,12 @@ import {
   Wallet,
   XCircle,
 } from "lucide-react";
+import { ClientAccountsControlPanel } from "@/components/portal-admin/ClientAccountsControlPanel";
+import {
+  DEFAULT_RETURN_EDIT_PERMISSIONS,
+  RETURN_EDIT_PERMISSION_LABELS_AR,
+  type ReturnEditPermissions,
+} from "@/lib/clientPortal/portalPolicy";
 import { PortalAdminPaymentGateSection } from "@/components/portal-admin/PortalAdminPaymentGateSection";
 import type { PaymentPaginationMeta } from "@/components/client-portal/ClientPaymentsSection";
 import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
@@ -172,8 +178,10 @@ interface TenantClientPortalAdminPanelProps {
   | "payments"
   | "payment_channels"
   | "whatsapp"
+  | "accounts"
   | "settings";
   canManageSettings?: boolean;
+  staffSignature?: string;
   onRefreshState?: () => Promise<void>;
   onToast: (msg: string) => void;
 }
@@ -181,12 +189,14 @@ interface TenantClientPortalAdminPanelProps {
 export function TenantClientPortalAdminPanel({
   initialSection = "requests",
   canManageSettings = true,
+  staffSignature,
   onRefreshState,
   onToast,
 }: TenantClientPortalAdminPanelProps) {
   const [section, setSection] = useState<
-    "registrations" | "requests" | "catalog" | "payments" | "payment_channels" | "whatsapp" | "settings"
+    "registrations" | "requests" | "catalog" | "payments" | "payment_channels" | "whatsapp" | "accounts" | "settings"
   >(initialSection);
+  const [reqReturnPerms, setReqReturnPerms] = useState<Record<string, Partial<ReturnEditPermissions>>>({});
   const [loading, setLoading] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState("");
   const [hideTestRecords, setHideTestRecords] = useState(true);
@@ -347,7 +357,7 @@ export function TenantClientPortalAdminPanel({
         setPendingPaymentsCount(pData.pagination?.total ?? 0);
       }
       setLastRefreshedAt(new Date().toISOString());
-      if (manual) onToast("✅ تم تحديث بوابة العملاء وإيصالات السداد وقائمة واتساب");
+      if (manual) onToast("✅ تم تحديث بوابة العملاء وإيصالات السداد وقائمة الإشعارات");
     } catch {
       onToast("تعذر تحميل بيانات بوابة العملاء");
     } finally {
@@ -388,7 +398,7 @@ export function TenantClientPortalAdminPanel({
   async function handleStaffResetClientPassword(client: StaffClientAccount) {
     if (
       !confirm(
-        `هل تريد إعادة تعيين كلمة مرور العميل (${client.fullName})؟ سيتم إنهاء جلساته الحالية وإلزامه بتغيير كلمة المرور عند الدخول وتجهيز إشعار واتساب للمراجعة.`
+        `هل تريد إعادة تعيين كلمة مرور العميل (${client.fullName})؟ سيتم إنهاء جلساته الحالية وإلزامه بتغيير كلمة المرور عند الدخول وتجهيز إشعار للمراجعة.`
       )
     ) {
       return;
@@ -420,7 +430,7 @@ export function TenantClientPortalAdminPanel({
         resetCode: data.resetCode || "",
       });
       setCopiedResetFlag(false);
-      onToast(data.message || "✅ تم إنشاء كلمة مرور مؤقتة وإدراج إشعار واتساب للمراجعة");
+      onToast(data.message || "✅ تم إنشاء كلمة مرور مؤقتة وإدراج إشعار للمراجعة");
       await loadAll(false);
     } finally {
       setResetBusyClientId(null);
@@ -524,6 +534,10 @@ export function TenantClientPortalAdminPanel({
           reqReviewerRemarks[reqItem.id] !== undefined
             ? reqReviewerRemarks[reqItem.id]
             : undefined,
+        returnEditPermissions:
+          action === "RETURN_TO_CLIENT"
+            ? { ...DEFAULT_RETURN_EDIT_PERMISSIONS, ...(reqReturnPerms[reqItem.id] || {}) }
+            : undefined,
         lines: [...existingLinePayloads, ...addedPayloads],
       }),
     });
@@ -564,7 +578,7 @@ export function TenantClientPortalAdminPanel({
     if (data.whatsappUrl && (!waSettings || waSettings.provider === "WHATSAPP_WEB_LINK")) {
       openExternalOrWhatsApp(data.whatsappUrl);
     }
-    onToast("✅ تم اعتماد وإرسال رسالة واتساب بنجاح");
+    onToast("✅ تم اعتماد وتجهيز الإشعار بنجاح");
     await loadAll(false);
   }
 
@@ -652,11 +666,12 @@ export function TenantClientPortalAdminPanel({
             { id: "payments" as const, label: `إيصالات السداد (${pendingPaymentsCount})`, Icon: CreditCard },
             { id: "catalog" as const, label: "لوحة الأصناف والفرز والأسعار", Icon: Layers },
             { id: "registrations" as const, label: `تسجيلات العملاء (${pendingClientsCount} معلق)`, Icon: UserCheck },
-            { id: "whatsapp" as const, label: `قائمة اعتماد وإرسال واتساب (${pendingWaCount})`, Icon: MessageSquare },
+            { id: "whatsapp" as const, label: `الإشعارات (${pendingWaCount})`, Icon: MessageSquare },
+            { id: "accounts" as const, label: "إدارة حسابات العملاء والقطاعات", Icon: UserCheck },
             ...(canManageSettings
               ? [
                 { id: "payment_channels" as const, label: "بوابات وحسابات الاستلام", Icon: Wallet },
-                { id: "settings" as const, label: "تخصيص النماذج وواتساب", Icon: Settings },
+                { id: "settings" as const, label: "تخصيص النماذج والإشعارات", Icon: Settings },
               ]
               : []),
           ].map(({ id, label, Icon }) => (
@@ -1132,6 +1147,26 @@ export function TenantClientPortalAdminPanel({
                       className="w-full rounded-lg border border-amber-400 bg-white dark:bg-slate-900 px-2 py-1"
                     />
                   </div>
+                  <div className="sm:col-span-2" data-testid={`staff-return-permissions-${r.id}`}>
+                    <label className="block font-bold mb-1">صلاحيات تعديل الطلب عند الإعادة للعميل</label>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                      {(Object.keys(RETURN_EDIT_PERMISSION_LABELS_AR) as Array<keyof ReturnEditPermissions>).map((key) => (
+                        <label key={key} className="inline-flex items-center gap-1.5 font-semibold">
+                          <input
+                            type="checkbox"
+                            checked={(reqReturnPerms[r.id]?.[key] ?? DEFAULT_RETURN_EDIT_PERMISSIONS[key]) === true}
+                            onChange={(e) =>
+                              setReqReturnPerms((prev) => ({
+                                ...prev,
+                                [r.id]: { ...(prev[r.id] || {}), [key]: e.target.checked },
+                              }))
+                            }
+                          />
+                          {RETURN_EDIT_PERMISSION_LABELS_AR[key]}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -1589,6 +1624,8 @@ export function TenantClientPortalAdminPanel({
       })()}
 
       {/* SECTION 2: NEW CLIENT REGISTRATIONS */}
+      {section === "accounts" && <ClientAccountsControlPanel onToast={onToast} signature={staffSignature} />}
+
       {section === "registrations" && (
         <div className="space-y-3">
           <div className="p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 flex flex-wrap items-center justify-between gap-2">
@@ -1637,7 +1674,7 @@ export function TenantClientPortalAdminPanel({
                     className="px-3 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-extrabold inline-flex items-center gap-1"
                   >
                     <Send className="w-3 h-3" />
-                    <span>مراجعة وإرسال مسودة واتساب</span>
+                    <span>مراجعة وإرسال مسودة الإشعار</span>
                   </button>
                 </div>
               </div>
@@ -1837,7 +1874,7 @@ export function TenantClientPortalAdminPanel({
               className="rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 font-bold"
             >
               <option value="PENDING_APPROVAL">بانتظار الاعتماد والتعديل قبل الإرسال</option>
-              <option value="DISPATCHED_LINK">تم الفتح عبر واتساب</option>
+              <option value="DISPATCHED_LINK">تم الفتح عبر الرابط المباشر</option>
               <option value="APPROVED_SENT">تم الإرسال عبر البوابة</option>
               <option value="SKIPPED">المتجاهلة</option>
               <option value="ALL">جميع المسودات والرسائل</option>
@@ -1846,7 +1883,7 @@ export function TenantClientPortalAdminPanel({
 
           {visibleWaDrafts.length === 0 ? (
             <div className="p-6 rounded-2xl bg-slate-50 dark:bg-slate-800/40 text-center text-slate-500">
-              لا توجد رسائل في قائمة اعتماد وإرسال واتساب ضمن هذا الفلتر.
+              لا توجد رسائل في قائمة اعتماد وإرسال الإشعارات ضمن هذا الفلتر.
             </div>
           ) : (
             visibleWaDrafts.map((d) => {
@@ -2183,6 +2220,24 @@ export function TenantClientPortalAdminPanel({
                                 حذف
                               </button>
                             </div>
+                            {cf.type === "select" && (
+                              <input
+                                type="text"
+                                value={(cf.options || []).join("، ")}
+                                onChange={(e) => {
+                                  const opts = e.target.value
+                                    .split(/[,،]+/)
+                                    .map((x) => x.trim())
+                                    .filter(Boolean);
+                                  const nextFields = currentSec.customFields.map((f, i) =>
+                                    i === cfIdx ? { ...f, options: opts } : f
+                                  );
+                                  updateSec({ customFields: nextFields });
+                                }}
+                                placeholder="خيارات القائمة مفصولة بفاصلة (مثال: عاجل، عادي)"
+                                className="sm:col-span-4 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px]"
+                              />
+                            )}
                           </div>
                         ))}
                       </div>
@@ -2226,11 +2281,11 @@ export function TenantClientPortalAdminPanel({
                   setWaSettings(data.settings);
                   setWaApiTokenInput("");
                 }
-                onToast(res.ok ? data.message || "✅ تم حفظ إعدادات واتساب" : data.error || "تعذر الحفظ");
+                onToast(res.ok ? data.message || "✅ تم حفظ إعدادات الإشعارات" : data.error || "تعذر الحفظ");
               }}
               className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 space-y-3"
             >
-              <h4 className="font-black text-sm">إعدادات بوابة واتساب المعزولة للمنشأة</h4>
+              <h4 className="font-black text-sm">إعدادات بوابة الإشعارات المعزولة للمنشأة</h4>
               <div>
                 <label className="block font-bold mb-1">قناة الإرسال</label>
                 <select
@@ -2243,8 +2298,8 @@ export function TenantClientPortalAdminPanel({
                   }
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
                 >
-                  <option value="WHATSAPP_WEB_LINK">رابط واتساب المباشر (wa.me بعد الاعتماد والتعديل)</option>
-                  <option value="CLOUD_API">WhatsApp Cloud API (لكل منشأة مفاتيحها المعزولة)</option>
+                  <option value="WHATSAPP_WEB_LINK">رابط الإرسال المباشر (بعد الاعتماد والتعديل)</option>
+                  <option value="CLOUD_API">بوابة الإشعارات السحابية (Cloud API لكل منشأة مفاتيحها المعزولة)</option>
                   <option value="CUSTOM_WEBHOOK">Webhook / مزود خاص للمنشأة</option>
                 </select>
               </div>
@@ -2307,7 +2362,7 @@ export function TenantClientPortalAdminPanel({
               </div>
               <button type="submit" className="px-4 py-2 rounded-xl accent-bg font-extrabold inline-flex items-center gap-1.5">
                 <Save className="w-3.5 h-3.5" />
-                <span>حفظ إعدادات واتساب</span>
+                <span>حفظ إعدادات الإشعارات</span>
               </button>
             </form>
           )}

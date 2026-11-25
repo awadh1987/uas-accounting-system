@@ -1,5 +1,6 @@
 "use client";
 
+import { resolvePortalRouteSection } from "@/lib/clientPortal/portalRoutes";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
@@ -168,6 +169,9 @@ function getClientTokenStorageKey(overrideSlug?: string | null): string {
 
 interface ClientAccountView {
   id: string;
+  sectorMode?: string;
+  allowedSectors?: Array<"HARVEST" | "COMMERCIAL">;
+  lockedSector?: "HARVEST" | "COMMERCIAL" | null;
   customerId: string | null;
   fullName: string;
   tradeName: string | null;
@@ -231,6 +235,7 @@ interface CatalogItemOption {
   sku: string;
   nameAr: string;
   nameEn: string;
+  sectorType?: string;
   grade?: string | null;
   origin?: string | null;
   unitPrice: number;
@@ -279,6 +284,14 @@ interface ClientRequestView {
   afterSnapshot?: RequestAmendmentSnapshot | null;
   revisionNumber?: number;
   returnedToClientAt?: string | null;
+  returnEditPermissions?: {
+    price: boolean;
+    quantity: boolean;
+    unit: boolean;
+    pickupLocation: boolean;
+    pickupNotes: boolean;
+    lines: boolean;
+  };
   returnedToClientAtDisplay?: string | null;
   returnedByName?: string | null;
   clientResponseStatus?: string | null;
@@ -474,6 +487,8 @@ export function ClientPortalApp({
   const [portalTab, setPortalTab] = useState<PortalSectionTab>(() => {
     if (initialPortalSection) return initialPortalSection;
     if (typeof window !== "undefined") {
+      const routed = resolvePortalRouteSection(window.location.pathname);
+      if (routed) return routed.tab;
       try {
         const sp = new URLSearchParams(window.location.search);
         const sec = (sp.get("section") || sp.get("portalTab") || "").trim();
@@ -537,6 +552,7 @@ export function ClientPortalApp({
   const [regClientType, setRegClientType] = useState("DIRECT_CLIENT");
   const [regCustomClientType, setRegCustomClientType] = useState("");
   const [regPreferredPickup, setRegPreferredPickup] = useState("السوق");
+  const [regSectorPreference, setRegSectorPreference] = useState<"" | "HARVEST_ONLY" | "COMMERCIAL_ONLY" | "BOTH">("");
   const [regCustomFields, setRegCustomFields] = useState<Record<string, string>>({});
 
   // Request Builder State
@@ -557,7 +573,13 @@ export function ClientPortalApp({
     },
   ]);
   const [submittingReq, setSubmittingReq] = useState(false);
-  const [activeSector, setActiveSector] = useState<"HARVEST" | "COMMERCIAL">("HARVEST");
+  const [activeSector, setActiveSector] = useState<"HARVEST" | "COMMERCIAL">(() => {
+    if (typeof window !== "undefined") {
+      const routed = resolvePortalRouteSection(window.location.pathname);
+      if (routed?.sector) return routed.sector;
+    }
+    return "HARVEST";
+  });
   const [submissionType, setSubmissionType] = useState<"catalog_order" | "client_goods_registration">("catalog_order");
   const [commercialCategoryGroup, setCommercialCategoryGroup] = useState<"FOOD" | "NON_FOOD" | "FUEL" | "GENERAL_COMMERCIAL">("FOOD");
   const [editingRequestId, setEditingRequestId] = useState<string | null>(null);
@@ -1104,6 +1126,35 @@ export function ClientPortalApp({
     ? `uas_portal_order_draft_v1_${tenantSlug}_${account.id}_${activeSector}`
     : null;
 
+  // Return-to-client edit permissions: lock fields the reviewer disallowed (server enforces the same rules with HTTP 403).
+  const editLocks = useMemo(() => {
+    const none = { price: false, quantity: false, unit: false, pickupLocation: false, pickupNotes: false, lines: false };
+    if (!editingRequestId) return none;
+    const target = requestsList.find((x) => x.id === editingRequestId);
+    const perms = target?.status === "RETURNED_TO_CLIENT" ? target.returnEditPermissions : undefined;
+    if (!perms) return none;
+    return {
+      price: perms.price === false,
+      quantity: perms.quantity === false,
+      unit: perms.unit === false,
+      pickupLocation: perms.pickupLocation === false,
+      pickupNotes: perms.pickupNotes === false,
+      lines: perms.lines === false,
+    };
+  }, [editingRequestId, requestsList]);
+
+  const allowedSectors = account?.allowedSectors && account.allowedSectors.length > 0
+    ? account.allowedSectors
+    : (["HARVEST", "COMMERCIAL"] as Array<"HARVEST" | "COMMERCIAL">);
+  const showSectorSwitcher = allowedSectors.length > 1;
+  const sectorCatalogItems = useMemo(
+    () =>
+      catalogItems.filter(
+        (it) => (it.sectorType || "HARVEST").toUpperCase() === activeSector
+      ),
+    [catalogItems, activeSector]
+  );
+
   const switchPortalSector = useCallback(
     (nextSector: "HARVEST" | "COMMERCIAL") => {
       if (nextSector === activeSector) return;
@@ -1131,6 +1182,22 @@ export function ClientPortalApp({
     },
     [activeSector]
   );
+
+  // Single-sector accounts are locked directly into their allowed sector (no switcher).
+  useEffect(() => {
+    if (!account?.allowedSectors || account.allowedSectors.length === 0) return undefined;
+    const allowed = account.allowedSectors;
+    if (!allowed.includes(activeSector)) {
+      let active = true;
+      Promise.resolve().then(() => {
+        if (active) switchPortalSector(allowed[0]);
+      });
+      return () => {
+        active = false;
+      };
+    }
+    return undefined;
+  }, [account?.allowedSectors, activeSector, switchPortalSector]);
 
   // Restore saved local draft on active client session mount
   useEffect(() => {
@@ -1309,6 +1376,7 @@ export function ClientPortalApp({
           clientType: regClientType,
           customClientType: regClientType === "OTHER" ? regCustomClientType : undefined,
           preferredPickup: regPreferredPickup,
+          sectorPreference: regSectorPreference || undefined,
           customFields: regCustomFields,
         }),
       });
@@ -2464,7 +2532,7 @@ export function ClientPortalApp({
                     {forgotStep === "request" ? (
                       <form onSubmit={handleForgotRequestSubmit} className="space-y-3">
                         <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-                          أدخل رقم الجوال أو البريد الإلكتروني المسجل في بوابة هذه المنشأة لإصدار رمز تحقق صالح لمرة واحدة (تُرسل رسالة واتساب بعد مراجعة الإدارة أو عبر البريد المهيأ).
+                          أدخل رقم الجوال أو البريد الإلكتروني المسجل في بوابة هذه المنشأة لإصدار رمز تحقق صالح لمرة واحدة (يُرسل إشعار بعد مراجعة الإدارة أو عبر البريد المهيأ).
                         </p>
                         <div>
                           <label className="block font-bold mb-1">رقم الجوال أو البريد الإلكتروني *</label>
@@ -2655,21 +2723,61 @@ export function ClientPortalApp({
                       />
                     </div>
 
+                    {(formConfig as { allowSectorPreferenceOnRegister?: boolean; defaultSectorMode?: string } | null)?.allowSectorPreferenceOnRegister &&
+                      ((formConfig as { defaultSectorMode?: string } | null)?.defaultSectorMode || "BOTH") === "BOTH" && (
+                        <div>
+                          <label className="block font-bold mb-1">القطاع المفضل (اختياري)</label>
+                          <select
+                            data-testid="portal-reg-sector-preference"
+                            value={regSectorPreference}
+                            onChange={(e) =>
+                              setRegSectorPreference(
+                                e.target.value as "" | "HARVEST_ONLY" | "COMMERCIAL_ONLY" | "BOTH"
+                              )
+                            }
+                            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
+                          >
+                            <option value="">حسب الإعداد الافتراضي للمنشأة</option>
+                            <option value="BOTH">القطاع الزراعي + القطاع التجاري</option>
+                            <option value="HARVEST_ONLY">القطاع الزراعي فقط</option>
+                            <option value="COMMERCIAL_ONLY">القطاع التجاري فقط</option>
+                          </select>
+                        </div>
+                      )}
+
                     {(formConfig?.customRegistrationFields || []).map((f) => (
                       <div key={f.key}>
                         <label className="block font-bold mb-1">
                           {f.labelAr} {f.required ? "*" : ""}
                         </label>
-                        <input
-                          type={f.type === "number" ? "number" : "text"}
-                          required={f.required}
-                          placeholder={f.placeholder || f.labelAr}
-                          value={regCustomFields[f.key] || ""}
-                          onChange={(e) =>
-                            setRegCustomFields((prev) => ({ ...prev, [f.key]: e.target.value }))
-                          }
-                          className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-                        />
+                        {f.type === "select" && Array.isArray(f.options) && f.options.length > 0 ? (
+                          <select
+                            required={f.required}
+                            value={regCustomFields[f.key] || ""}
+                            onChange={(e) =>
+                              setRegCustomFields((prev) => ({ ...prev, [f.key]: e.target.value }))
+                            }
+                            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
+                          >
+                            <option value="">اختر...</option>
+                            {f.options.map((opt) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            type={f.type === "number" ? "number" : "text"}
+                            required={f.required}
+                            placeholder={f.placeholder || f.labelAr}
+                            value={regCustomFields[f.key] || ""}
+                            onChange={(e) =>
+                              setRegCustomFields((prev) => ({ ...prev, [f.key]: e.target.value }))
+                            }
+                            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                          />
+                        )}
                       </div>
                     ))}
 
@@ -2732,7 +2840,8 @@ export function ClientPortalApp({
             )}
 
             {/* Dual Trading Sector Top Switcher (Section 1 Harvest vs Section 2 Commercial) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {showSectorSwitcher && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5" data-testid="portal-sector-switcher">
               <button
                 type="button"
                 data-testid="portal-sector-tab-harvest"
@@ -2745,9 +2854,6 @@ export function ClientPortalApp({
                 <div>
                   <div className="font-black text-xs sm:text-sm text-slate-900 dark:text-white">
                     القطاع الزراعي
-                  </div>
-                  <div className="text-[11px] text-slate-500 mt-0.5">
-                    قوائم الفرز اليومية، علاقيات القات وأخرى، ونقاط الاستلام المباشر
                   </div>
                 </div>
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${activeSector === "HARVEST" ? "accent-bg" : "bg-slate-100 dark:bg-slate-800 text-slate-500"}`}>
@@ -2768,15 +2874,13 @@ export function ClientPortalApp({
                   <div className="font-black text-xs sm:text-sm text-slate-900 dark:text-white">
                     القطاع التجاري
                   </div>
-                  <div className="text-[11px] text-slate-500 mt-0.5">
-                    البضائع الكاملة والجزئية، المواد الغذائية، غير الغذائية، المحروقات والوقود
-                  </div>
                 </div>
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${activeSector === "COMMERCIAL" ? "bg-amber-600 text-white" : "bg-slate-100 dark:bg-slate-800 text-slate-500"}`}>
                   {activeSector === "COMMERCIAL" ? "نشط" : "فتح"}
                 </span>
               </button>
             </div>
+            )}
 
             {/* Portal Top Summary + Sub-Tabs */}
             <div className="card-surface rounded-2xl p-4 space-y-3">
@@ -3063,6 +3167,46 @@ export function ClientPortalApp({
                     </div>
                   )}
 
+                  {editingRequestId && (() => {
+                    const editingReq = requestsList.find((x) => x.id === editingRequestId);
+                    if (!editingReq || editingReq.status !== "RETURNED_TO_CLIENT") return null;
+                    const p = editingReq.returnEditPermissions;
+                    return (
+                      <div
+                        data-testid="portal-return-permissions-banner"
+                        className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 space-y-1.5 text-amber-900 dark:text-amber-200"
+                      >
+                        <div className="font-black">
+                          طلب معاد للموافقة والتعديل {editingReq.reviewerRemarks ? `— ملاحظات المراجع: ${editingReq.reviewerRemarks}` : ""}
+                        </div>
+                        {p && (
+                          <div className="flex flex-wrap gap-1.5 text-[10px]">
+                            {[
+                              { ok: p.price, label: "السعر" },
+                              { ok: p.quantity, label: "الكمية" },
+                              { ok: p.unit, label: "الوحدة" },
+                              { ok: p.pickupLocation, label: "الاستلام من:" },
+                              { ok: p.pickupNotes, label: "ملاحظات الاستلام" },
+                              { ok: p.lines, label: "الأصناف" },
+                            ].map((tag) => (
+                              <span
+                                key={tag.label}
+                                className={`px-2 py-0.5 rounded-full font-bold ${
+                                  tag.ok
+                                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+                                    : "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+                                }`}
+                              >
+                                {tag.ok ? "مسموح: " : "مقفل: "}
+                                {tag.label}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {reqError && (
                     <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 font-bold flex flex-wrap items-center justify-between gap-2">
                       <span>{reqError}</span>
@@ -3105,6 +3249,7 @@ export function ClientPortalApp({
                       <label className="block font-extrabold mb-1">استلام من:</label>
                       <select
                         value={pickupCode}
+                        disabled={editLocks.pickupLocation}
                         onChange={(e) => setPickupCode(e.target.value)}
                         className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
                       >
@@ -3118,10 +3263,11 @@ export function ClientPortalApp({
                         <input
                           type="text"
                           required
+                          disabled={editLocks.pickupLocation}
                           value={customPickupText}
                           onChange={(e) => setCustomPickupText(e.target.value)}
                           placeholder="اكتب موقع الاستلام المخصص..."
-                          className="mt-2 w-full rounded-xl border border-emerald-400 bg-transparent px-3 py-2"
+                          className="mt-2 w-full rounded-xl border border-emerald-400 bg-transparent px-3 py-2 disabled:opacity-50"
                         />
                       )}
                     </div>
@@ -3130,6 +3276,7 @@ export function ClientPortalApp({
                       <input
                         type="text"
                         value={pickupNotes}
+                        disabled={editLocks.pickupNotes}
                         onChange={(e) => setPickupNotes(e.target.value)}
                         placeholder="مثال: الاستلام الساعة 1 ظهراً"
                         className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
@@ -3152,16 +3299,34 @@ export function ClientPortalApp({
                             <label className="block font-bold mb-1">
                               {cf.labelAr} {cf.required ? "*" : ""}
                             </label>
-                            <input
-                              type={cf.type === "number" ? "number" : "text"}
-                              required={cf.required}
-                              placeholder={cf.placeholder || cf.labelAr}
-                              value={reqCustomData[cf.key] || ""}
-                              onChange={(e) =>
-                                setReqCustomData((prev) => ({ ...prev, [cf.key]: e.target.value }))
-                              }
-                              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-                            />
+                            {cf.type === "select" && Array.isArray(cf.options) && cf.options.length > 0 ? (
+                              <select
+                                required={cf.required}
+                                value={reqCustomData[cf.key] || ""}
+                                onChange={(e) =>
+                                  setReqCustomData((prev) => ({ ...prev, [cf.key]: e.target.value }))
+                                }
+                                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
+                              >
+                                <option value="">اختر...</option>
+                                {cf.options.map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                type={cf.type === "number" ? "number" : "text"}
+                                required={cf.required}
+                                placeholder={cf.placeholder || cf.labelAr}
+                                value={reqCustomData[cf.key] || ""}
+                                onChange={(e) =>
+                                  setReqCustomData((prev) => ({ ...prev, [cf.key]: e.target.value }))
+                                }
+                                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                              />
+                            )}
                           </div>
                         ))}
                       </div>
@@ -3177,18 +3342,20 @@ export function ClientPortalApp({
                       <div className="flex flex-wrap items-center gap-1.5">
                         <button
                           type="button"
+                          disabled={editLocks.lines}
                           data-testid="portal-open-bulk-import-btn"
                           onClick={() => setShowBulkImportModal(true)}
-                          className="px-3 py-1.5 rounded-xl border border-indigo-400 text-indigo-700 dark:text-indigo-300 font-extrabold inline-flex items-center gap-1 hover:bg-indigo-50 dark:hover:bg-indigo-950/30"
+                          className="px-3 py-1.5 rounded-xl border border-indigo-400 text-indigo-700 dark:text-indigo-300 font-extrabold inline-flex items-center gap-1 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           <FileSpreadsheet className="w-3.5 h-3.5" />
                           <span>استيراد أصناف بالجملة</span>
                         </button>
                         <button
                           type="button"
+                          disabled={editLocks.lines}
                           data-testid="portal-toggle-quick-repeat-btn"
                           onClick={() => setShowQuickRepeat((prev) => !prev)}
-                          className={`px-3 py-1.5 rounded-xl border font-extrabold inline-flex items-center gap-1 ${showQuickRepeat
+                          className={`px-3 py-1.5 rounded-xl border font-extrabold inline-flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed ${showQuickRepeat
                             ? "border-indigo-600 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-800 dark:text-indigo-200"
                             : "border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800"
                             }`}
@@ -3213,7 +3380,8 @@ export function ClientPortalApp({
                               },
                             ])
                           }
-                          className="px-3 py-1.5 rounded-xl border border-emerald-500 text-emerald-700 dark:text-emerald-300 font-extrabold inline-flex items-center gap-1 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                          disabled={editLocks.lines}
+                          className="px-3 py-1.5 rounded-xl border border-emerald-500 text-emerald-700 dark:text-emerald-300 font-extrabold inline-flex items-center gap-1 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           <Plus className="w-3.5 h-3.5" />
                           <span>+ إضافة صنف</span>
@@ -3246,7 +3414,7 @@ export function ClientPortalApp({
                                   ? `الإجمالي (P×Q): ${formatMoney(rowTotal)}`
                                   : "التسعير: تقديري / يُحدد عند المراجعة"}
                               </span>
-                              {lines.length > 1 && (
+                              {lines.length > 1 && !editLocks.lines && (
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -3263,13 +3431,14 @@ export function ClientPortalApp({
 
                           <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
                             <div className="sm:col-span-4 space-y-1.5">
-                              {catalogItems.length > 0 && (
+                              {sectorCatalogItems.length > 0 && (
                                 <select
                                   aria-label="اختيار من الأصناف"
+                                  disabled={editLocks.lines}
                                   value={row.itemId}
                                   onChange={(e) => {
                                     const nextId = e.target.value;
-                                    const found = catalogItems.find((it) => it.id === nextId);
+                                    const found = sectorCatalogItems.find((it) => it.id === nextId);
                                     setLines((prev) =>
                                       prev.map((x) =>
                                         x.rowKey === row.rowKey
@@ -3280,28 +3449,29 @@ export function ClientPortalApp({
                                             unitPrice:
                                               nextId === "__CUSTOM__"
                                                 ? ""
-                                                : resolveLineDefaultUnitPrice(nextId, x.unitCode, catalogItems, formConfig) || x.unitPrice,
+                                                : resolveLineDefaultUnitPrice(nextId, x.unitCode, sectorCatalogItems, formConfig) || x.unitPrice,
                                           }
                                           : x
                                       )
                                     );
                                   }}
-                                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold"
+                                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold disabled:opacity-50"
                                 >
                                   <option value="">اختر الصنف أو اكتب أدناه...</option>
-                                  {catalogItems.map((it) => (
+                                  {sectorCatalogItems.map((it) => (
                                     <option key={it.id} value={it.id}>
                                       {it.nameAr} {it.unitPrice > 0 ? `(${fmtNum(it.unitPrice)} ريال)` : ""}
                                     </option>
                                   ))}
-                                  {(formConfig?.allowUnlistedItems ?? true) && (
-                                    <option value="__CUSTOM__">صنف آخر غير مدرج</option>
-                                  )}
+                                  {(formConfig?.sectorForms?.[activeSector]?.allowUnlistedItems ??
+                                    formConfig?.allowUnlistedItems ??
+                                    true) && <option value="__CUSTOM__">صنف آخر غير مدرج</option>}
                                 </select>
                               )}
                               <input
                                 type="text"
                                 required
+                                disabled={editLocks.lines}
                                 value={row.itemTitle}
                                 onChange={(e) =>
                                   setLines((prev) =>
@@ -3310,8 +3480,12 @@ export function ClientPortalApp({
                                     )
                                   )
                                 }
-                                placeholder="اسم الصنف (مثال: قات صوطي درجة أولى)"
-                                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
+                                placeholder={
+                                  activeSector === "COMMERCIAL"
+                                    ? "اسم الصنف التجاري (مثال: أرز بسمتي 10 كجم)"
+                                    : "اسم الصنف (مثال: قات صوطي درجة أولى)"
+                                }
+                                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold disabled:opacity-50"
                               />
                             </div>
 
@@ -3323,6 +3497,7 @@ export function ClientPortalApp({
                                 min="0.01"
                                 required
                                 value={row.requestedQty}
+                                disabled={editLocks.quantity}
                                 onChange={(e) =>
                                   setLines((prev) =>
                                     prev.map((x) =>
@@ -3338,6 +3513,7 @@ export function ClientPortalApp({
                               <label className="block text-[10px] text-slate-500 mb-1">الوحدة *</label>
                               <select
                                 value={row.unitCode}
+                                disabled={editLocks.unit}
                                 onChange={(e) => {
                                   const nextUnit = e.target.value;
                                   setLines((prev) =>
@@ -3370,6 +3546,7 @@ export function ClientPortalApp({
                                   <input
                                     type="text"
                                     required
+                                    disabled={editLocks.unit}
                                     value={row.customUnitLabel}
                                     onChange={(e) =>
                                       setLines((prev) =>
@@ -3381,7 +3558,7 @@ export function ClientPortalApp({
                                       )
                                     }
                                     placeholder="اكتب اسم الوحدة..."
-                                    className="w-full rounded-xl border border-emerald-400 bg-white dark:bg-slate-900 px-2.5 py-1.5"
+                                    className="w-full rounded-xl border border-emerald-400 bg-white dark:bg-slate-900 px-2.5 py-1.5 disabled:opacity-50"
                                   />
                                 </div>
                               )}
@@ -3394,6 +3571,7 @@ export function ClientPortalApp({
                                 step="any"
                                 min="0"
                                 value={row.unitPrice}
+                                disabled={editLocks.price}
                                 onChange={(e) =>
                                   setLines((prev) =>
                                     prev.map((x) =>
@@ -3473,8 +3651,12 @@ export function ClientPortalApp({
               open={showBulkImportModal}
               onClose={() => setShowBulkImportModal(false)}
               tenantSlug={tenantSlug}
-              boardItems={boardItems}
-              catalogItems={catalogItems}
+              boardItems={boardItems.filter((item) =>
+                activeSector === "COMMERCIAL"
+                  ? (item.sectorType || "HARVEST").toUpperCase() === "COMMERCIAL"
+                  : (item.sectorType || "HARVEST").toUpperCase() !== "COMMERCIAL"
+              )}
+              catalogItems={sectorCatalogItems}
               formConfig={formConfig}
               onApplyRows={handleApplyBulkRows}
             />
@@ -4199,7 +4381,7 @@ export function ClientPortalApp({
                           }`}
                       >
                         <Bell className="w-3.5 h-3.5" />
-                        <span>الإشعارات والواتساب ({notificationsList.length})</span>
+                        <span>الإشعارات ({notificationsList.length})</span>
                       </button>
                     </div>
 
@@ -4472,7 +4654,7 @@ export function ClientPortalApp({
                     <div className="space-y-2.5">
                       {notificationsList.length === 0 ? (
                         <div className="p-6 text-center text-slate-500 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 space-y-2">
-                          <div>لا توجد إشعارات أو رسائل واتساب مسجلة حتى الآن.</div>
+                          <div>لا توجد إشعارات مسجلة حتى الآن.</div>
                           <button
                             type="button"
                             onClick={() => void loadStatement(true)}

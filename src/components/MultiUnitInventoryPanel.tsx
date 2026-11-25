@@ -4,7 +4,7 @@ import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { Archive, ArrowDownUp, Boxes, Layers, Plus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { Archive, ArrowDownUp, Boxes, Layers, Pencil, Plus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { safeFetchJson } from "@/lib/apiClient";
 import { fmtNum } from "@/lib/formulas";
 import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
@@ -96,6 +96,7 @@ interface StockMovementRecord {
   factorToBase: number;
   baseQtyDelta: number;
   unitCostBase: number;
+  referenceId?: string | null;
   notes?: string | null;
   createdAt: string;
   createdAtDisplay?: string;
@@ -164,6 +165,7 @@ export function MultiUnitInventoryPanel({
   const [wholesalePrice, setWholesalePrice] = useState("");
   const [retailPrice, setRetailPrice] = useState("");
   const [conversions, setConversions] = useState<ConversionRowDraft[]>([]);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [savingItem, setSavingItem] = useState(false);
 
   // Quick Multi-Unit Stock Movement State
@@ -176,6 +178,8 @@ export function MultiUnitInventoryPanel({
   const [movCustomFactor, setMovCustomFactor] = useState("1");
   const [movQty, setMovQty] = useState("");
   const [movUnitCost, setMovUnitCost] = useState("");
+  const [movReference, setMovReference] = useState("");
+  const [movNotes, setMovNotes] = useState("");
   const [movCostCenterId, setMovCostCenterId] = useState("");
   const [savingMov, setSavingMov] = useState(false);
 
@@ -333,6 +337,43 @@ export function MultiUnitInventoryPanel({
     ]);
   }
 
+  function openEditItemForm(item: InventoryItemRecord) {
+    setEditingItemId(item.id);
+    setSku(item.sku || "");
+    setBarcode(item.barcode || "");
+    setNameAr(item.nameAr || "");
+    setNameEn(item.nameEn || "");
+    setItemSectorType(item.sectorType === "COMMERCIAL" ? "COMMERCIAL" : "HARVEST");
+    setCategoryId(item.category?.id || categories[0]?.id || "");
+    setItemType(item.itemType || "STOCKABLE");
+    setGrade(item.grade || "درجة أولى");
+    setOrigin(item.origin || "محلي");
+    setProducerCompany(item.producerCompany || "");
+    setCountryOfOrigin(item.countryOfOrigin || "");
+    setProductionDate(item.productionDate || "");
+    setExpiryDate(item.expiryDate || "");
+    setBaseUnitId(item.baseUnitId || units[0]?.id || "");
+    setDefaultWarehouseId(item.defaultWarehouse?.id || warehouses[0]?.id || "");
+    setOpeningQty("");
+    setPurchasePrice(item.purchasePrice ? String(item.purchasePrice) : "");
+    setDispatchCost(item.dispatchCost ? String(item.dispatchCost) : "");
+    setTaxRate(item.taxRate ? String(item.taxRate) : "");
+    setWholesalePrice(item.wholesalePrice ? String(item.wholesalePrice) : "");
+    setRetailPrice(item.retailPrice ? String(item.retailPrice) : "");
+    setConversions(
+      (item.conversions || []).map((c) => ({
+        unitId: c.unitId,
+        customUnitLabel: c.customUnitLabel || "",
+        factorToBase: String(c.factorToBase || 1),
+        barcode: "",
+        sellPrice: c.sellPrice ? String(c.sellPrice) : "",
+        isDefaultSalesUnit: false,
+        isDefaultPurchaseUnit: false,
+      }))
+    );
+    setShowItemForm(true);
+  }
+
   async function handleSaveItem(e: React.FormEvent) {
     e.preventDefault();
     if (!nameAr.trim()) return;
@@ -342,6 +383,7 @@ export function MultiUnitInventoryPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          ...(editingItemId ? { id: editingItemId } : {}),
           sku: sku.trim() || undefined,
           barcode: barcode.trim() || undefined,
           nameAr: nameAr.trim(),
@@ -406,6 +448,7 @@ export function MultiUnitInventoryPanel({
       setWholesalePrice("");
       setRetailPrice("");
       setConversions([]);
+      setEditingItemId(null);
       setShowItemForm(false);
       await loadAll();
     } finally {
@@ -510,6 +553,9 @@ export function MultiUnitInventoryPanel({
           factorToBase: resolvedFactor,
           enteredQty: Number(movQty) || 0,
           unitCost: Number(movUnitCost) || 0,
+          referenceType: "MANUAL",
+          referenceId: movReference.trim() || undefined,
+          notes: movNotes.trim() || undefined,
           costCenterId: movCostCenterId || undefined,
         }),
       });
@@ -524,6 +570,8 @@ export function MultiUnitInventoryPanel({
             : `Movement recorded • Stock: ${res.data.compoundBreakdown || ""}`)
       );
       setMovQty("1");
+      setMovReference("");
+      setMovNotes("");
       await loadAll();
     } finally {
       setSavingMov(false);
@@ -569,7 +617,10 @@ export function MultiUnitInventoryPanel({
             {!readOnly && (
               <button
                 type="button"
-                onClick={() => setShowItemForm((v) => !v)}
+                onClick={() => {
+                  setEditingItemId(null);
+                  setShowItemForm((v) => !v);
+                }}
                 className="px-3.5 py-1.5 rounded-xl accent-bg font-black inline-flex items-center gap-1"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -688,7 +739,13 @@ export function MultiUnitInventoryPanel({
             className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 space-y-3"
           >
             <div className="font-extrabold text-slate-700 dark:text-slate-200">
-              {isAr ? "بطاقة صنف جديدة (تدعم خيار أخرى / مخصص في كل الحقول)" : "New Item Master (Universal Other / Custom Support)"}
+              {editingItemId
+                ? isAr
+                  ? "تعديل بطاقة الصنف والبيانات التجارية"
+                  : "Edit Item Master Card"
+                : isAr
+                ? "بطاقة صنف جديدة (تدعم خيار أخرى / مخصص في كل الحقول)"
+                : "New Item Master (Universal Other / Custom Support)"}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
@@ -1123,10 +1180,37 @@ export function MultiUnitInventoryPanel({
               ))}
             </div>
 
+            {/* Live Landed Cost & Totals Summary (P × Q) */}
+            {(Number(purchasePrice) > 0 || Number(dispatchCost) > 0 || Number(taxRate) > 0) && (() => {
+              const p = Number(purchasePrice) || 0;
+              const d = Number(dispatchCost) || 0;
+              const t = Number(taxRate) || 0;
+              const landedUnit = Math.round((p + d + (p * t) / 100) * 100) / 100;
+              const qty = Number(openingQty) || 0;
+              const lineTotal = Math.round(landedUnit * qty * 100) / 100;
+              return (
+                <div className="p-2.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex flex-wrap items-center justify-between gap-2 text-[11px] font-bold">
+                  <span>
+                    {isAr ? "التكلفة الإجمالية للوحدة (شراء + شحن + ضريبة):" : "Landed Unit Cost:"}{" "}
+                    <strong className="font-mono text-emerald-700 dark:text-emerald-300">{fmtNum(landedUnit)}</strong>
+                  </span>
+                  {qty > 0 && (
+                    <span>
+                      {isAr ? "إجمالي قيمة الكمية (P × Q):" : "Total Value (P × Q):"}{" "}
+                      <strong className="font-mono text-emerald-700 dark:text-emerald-300">{fmtNum(lineTotal)}</strong>
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setShowItemForm(false)}
+                onClick={() => {
+                  setEditingItemId(null);
+                  setShowItemForm(false);
+                }}
                 className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 font-bold"
               >
                 {isAr ? "إلغاء" : "Cancel"}
@@ -1205,7 +1289,14 @@ export function MultiUnitInventoryPanel({
                             {fmtNum(Math.abs(Number(m.baseQtyDelta || m.enteredQty)))} {m.item?.baseUnit?.nameAr || m.enteredUnit?.nameAr || ""}
                           </bdi>
                         </td>
-                        <td className="p-2 text-slate-500">{m.notes || "—"}</td>
+                        <td className="p-2 text-slate-500">
+                          {m.referenceId ? (
+                            <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 me-1">
+                              <bdi dir="ltr">{m.referenceId}</bdi>
+                            </span>
+                          ) : null}
+                          {m.notes || "—"}
+                        </td>
                       </tr>
                     );
                   })}
@@ -1252,7 +1343,7 @@ export function MultiUnitInventoryPanel({
                   const it = items.find((x) => x.id === e.target.value);
                   if (it) setMovUnitId(it.baseUnitId);
                 }}
-                className="sm:col-span-2 w-full min-w-0 truncate rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold text-right"
+                className="sm:col-span-2 lg:col-span-2 w-full min-w-0 truncate rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold text-right"
               >
                 {items.map((it) => (
                   <option key={it.id} value={it.id} title={`${it.nameAr} (${it.sku})`}>
@@ -1310,6 +1401,22 @@ export function MultiUnitInventoryPanel({
                 onChange={(e) => setMovUnitCost(e.target.value)}
                 placeholder={isAr ? "تكلفة الوحدة" : "Unit Cost"}
                 className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 font-mono"
+              />
+
+              <input
+                type="text"
+                value={movReference}
+                onChange={(e) => setMovReference(e.target.value)}
+                placeholder={isAr ? "رقم السند / المرجع" : "Voucher / Ref #"}
+                className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 font-mono"
+              />
+
+              <input
+                type="text"
+                value={movNotes}
+                onChange={(e) => setMovNotes(e.target.value)}
+                placeholder={isAr ? "استلام من: / الجهة / ملاحظات" : "Source / Destination / Notes"}
+                className="sm:col-span-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5"
               />
 
               <CostCenterSelector value={movCostCenterId} onChange={setMovCostCenterId} />
@@ -1481,6 +1588,12 @@ export function MultiUnitInventoryPanel({
                               align="end"
                               label={isAr ? "خيارات الصنف" : "Item Options"}
                               items={[
+                                {
+                                  id: "edit",
+                                  label: isAr ? "تعديل بطاقة الصنف" : "Edit Item Card",
+                                  icon: <Pencil className="w-3.5 h-3.5" />,
+                                  onClick: () => openEditItemForm(item),
+                                },
                                 {
                                   id: "archive",
                                   label: isArchived

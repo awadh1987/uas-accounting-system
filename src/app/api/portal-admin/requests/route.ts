@@ -1,3 +1,4 @@
+import { portalErrorStatus, stripPolicyPrefix } from "@/lib/clientPortal/portalPolicy";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
 import { authorizeApiAction, corsOptionsResponse, jsonError } from "@/lib/apiHelpers";
@@ -243,6 +244,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       staffNotes: body.staffNotes !== undefined ? String(body.staffNotes) : undefined,
       reviewerRemarks:
         body.reviewerRemarks !== undefined ? String(body.reviewerRemarks) : undefined,
+      returnEditPermissions: body.returnEditPermissions,
       pickupType: body.pickupType ? String(body.pickupType) : undefined,
       pickupLocation:
         body.pickupLocation !== undefined ? String(body.pickupLocation) : undefined,
@@ -265,9 +267,9 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       request: result,
       message:
         action === "HANDOVER"
-          ? "✅ تم تسليم الطلب وترحيل الفاتورة والقيد المحاسبي وإعداد مسودة واتساب"
+          ? "✅ تم تسليم الطلب وترحيل الفاتورة والقيد المحاسبي وإعداد مسودة إشعار"
           : action === "RETURN_TO_CLIENT"
-            ? "✅ تم حفظ التعديلات وإعادة الطلب للعميل للموافقة وإدراج مسودة واتساب"
+            ? "✅ تم حفظ التعديلات وإعادة الطلب للعميل للموافقة وإدراج مسودة إشعار"
             : action === "AMEND"
               ? "✅ تم حفظ تعديلات المراجع وتحديث الفروقات"
               : replay
@@ -276,6 +278,6 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "تعذر معالجة طلب العميل";
-    return jsonError(msg, 400);
+    return jsonError(stripPolicyPrefix(msg), portalErrorStatus(err));
   }
 });

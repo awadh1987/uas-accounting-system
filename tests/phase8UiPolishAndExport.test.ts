@@ -146,7 +146,7 @@ describe("Phase 8 — ERP UI Polish, Dates, Test Hygiene, PDF RTL Shaping & Over
       "تحديث",
       "formatMoney",
       "بوابة العملاء والطلبات",
-      "اعتماد وإرسال واتساب",
+      "الإشعارات",
     ]);
     assert.ok(!cust.includes("(Clients Directory & Statements)"));
     assert.ok(!cust.includes("(All Customers)"));
@@ -155,7 +155,7 @@ describe("Phase 8 — ERP UI Polish, Dates, Test Hygiene, PDF RTL Shaping & Over
     checkHas("src/components/MultiUnitInventoryPanel.tsx", ["ActionOverflowMenu", "dir={isAr ? \"rtl\" : \"ltr\"}", "lg:col-span-2"]);
     checkHas("src/components/tabs/InventoryTab.tsx", ["تحديث", "تسجيل دفعة حصاد الآن"]);
     checkHas("src/components/tabs/WorkersTab.tsx", ["ActionOverflowMenu", "UasDateInput", "رقم الهاتف:", "تحديث"]);
-    checkHas("src/components/UasAppShell.tsx", ["pb-28 md:pb-24", "ClientPortalApp"]);
+    checkHas("src/components/UasAppShell.tsx", ["pb-6 md:pb-8", "ClientPortalApp"]);
   });
 
   it("embeds Username + Title signature block across PDF/Print, Excel and CSV exports without breaking sorting or leaking paths", () => {
@@ -250,14 +250,12 @@ describe("Phase 8 — ERP UI Polish, Dates, Test Hygiene, PDF RTL Shaping & Over
     assert.ok(landingSrc.includes("تسجيل طلب"));
     assert.ok(landingSrc.includes("متابعة الطلبات"));
     assert.ok(landingSrc.includes("الفواتير وكشف الحساب"));
-    assert.ok(landingSrc.includes('data-testid="tenant-staff-login-cta"'));
+    assert.ok(!landingSrc.includes('data-testid="tenant-staff-login-cta"'));
+    assert.ok(landingSrc.includes('data-testid="root-login-cta"'));
     assert.ok(landingSrc.includes("دخول"));
     assert.ok(!landingSrc.includes("مدير النظام العام"));
     assert.ok(!landingSrc.includes("SUPER_ADMIN"));
-    assert.ok(
-      landingSrc.indexOf('data-testid="tenant-client-portal-card"') <
-        landingSrc.indexOf("ركائز النظام المحاسبي الموحد")
-    );
+    assert.ok(!landingSrc.includes("ركائز النظام المحاسبي الموحد"));
 
     const loginSrc = fs.readFileSync(path.join(REPO_ROOT, "src/components/LoginView.tsx"), "utf8");
     assert.ok(loginSrc.includes("!isInstalledApp && !isTenantWorkspace"));

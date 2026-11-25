@@ -36,6 +36,7 @@ import { TreasuryTab } from "@/components/tabs/TreasuryTab";
 import { WorkersTab } from "@/components/tabs/WorkersTab";
 import { TabErrorBoundary } from "@/components/TabErrorBoundary";
 import { ClientPortalApp } from "@/components/client-portal/ClientPortalApp";
+import { resolveWorkspaceRouteSection } from "@/lib/tenant/workspaceRoutes";
 import {
   executeMutation,
   fetchBootstrapState,
@@ -398,6 +399,13 @@ export function UasAppShell() {
           if (parts[0]) {
             targetTab = parts[0] as TabId;
             targetSubTab = parts[1] || null;
+          }
+        }
+        const pathRoute = resolveWorkspaceRouteSection(window.location.pathname, window.location.search);
+        if (pathRoute) {
+          if (!targetTab) targetTab = pathRoute.tab;
+          if (pathRoute.sector) {
+            setActiveTradingSector(pathRoute.sector);
           }
         }
         if (!targetTab) {
@@ -997,8 +1005,8 @@ export function UasAppShell() {
     if (!rawPhone.replace(/[^0-9]/g, "")) {
       showToast(
         lang === "ar"
-          ? "يرجى تحديد رقم الهاتف لإرسال السند عبر واتساب"
-          : "Please specify a phone number to send via WhatsApp"
+          ? "يرجى تحديد رقم الهاتف لإرسال إشعار السند"
+          : "Please specify a phone number to send voucher notification"
       );
       return;
     }
@@ -1010,11 +1018,11 @@ export function UasAppShell() {
       "/api/audit/log",
       "POST",
       {
-        action: "إرسال سند عبر واتساب",
+        action: "إرسال إشعار السند",
         details: `إلى الرابط ${launched.url} (${voucher.voucherNo})`,
       },
-      "WhatsApp dispatch",
-      "تم فتح واتساب لإرسال السند للعميل/العامل"
+      "Notification dispatch",
+      "تم فتح رابط الإشعار لإرسال السند للعميل/العامل"
     );
   }
 
@@ -1559,11 +1567,6 @@ export function UasAppShell() {
                       <div className="text-xs sm:text-sm font-black">
                         {lang === "ar" ? "القطاع الزراعي" : "Agricultural Sector"}
                       </div>
-                      <div className="text-[10px] text-slate-500">
-                        {lang === "ar"
-                          ? "المبيعات، المخزون وفرز المحصول، بوابة العملاء، والمحاسبة الشاملة"
-                          : "Sales, Harvest Inventory & Sorting, Client Portal & Ledger"}
-                      </div>
                     </div>
                   </div>
                   <span
@@ -1592,11 +1595,6 @@ export function UasAppShell() {
                     <div>
                       <div className="text-xs sm:text-sm font-black">
                         {lang === "ar" ? "القطاع التجاري" : "Commercial Sector"}
-                      </div>
-                      <div className="text-[10px] text-slate-500">
-                        {lang === "ar"
-                          ? "السلع الغذائية، غير الغذائية، المحروقات، المستودعات والرحلات (POD)"
-                          : "Food, Non-Food, Fuel, Multi-Unit Warehouses & Dispatch POD"}
                       </div>
                     </div>
                   </div>

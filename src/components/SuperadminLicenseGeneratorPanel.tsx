@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   AlertTriangle,
   Building2,
@@ -480,13 +481,13 @@ export function SuperadminLicenseGeneratorPanel({
         </div>
 
         {showStandaloneLink && (
-          <a
+          <Link
             href="/superadmin/licenses"
             className="inline-flex items-center justify-center gap-2 min-h-[40px] px-3.5 py-2 rounded-xl border border-emerald-500/40 bg-white/80 dark:bg-slate-900/80 text-emerald-700 dark:text-emerald-300 font-bold text-xs hover:bg-emerald-50 dark:hover:bg-emerald-950/50 transition shrink-0"
           >
             <ExternalLink className="w-3.5 h-3.5" />
             <span>{isAr ? "فتح الصفحة المستقلة" : "Open Dedicated Page"}</span>
-          </a>
+          </Link>
         )}
       </div>
 
@@ -770,8 +771,8 @@ export function SuperadminLicenseGeneratorPanel({
               )}
               <span>
                 {isAr
-                  ? "نسخ بيانات الدخول (واتساب/إيميل)"
-                  : "Copy Credentials (WhatsApp/Email)"}
+                  ? "نسخ بيانات الدخول (إشعار/إيميل)"
+                  : "Copy Credentials (Notice/Email)"}
               </span>
             </button>
 

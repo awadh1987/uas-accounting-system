@@ -695,6 +695,15 @@ async function ensureAdditiveColumns(client: {
         { name: "mustChangePassword", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "mustChangePassword" INTEGER NOT NULL DEFAULT 0' },
         { name: "passwordUpdatedAt", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "passwordUpdatedAt" DATETIME' },
         { name: "sessionVersion", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "sessionVersion" INTEGER NOT NULL DEFAULT 1' },
+        { name: "sectorMode", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "sectorMode" TEXT NOT NULL DEFAULT \'INHERIT\'' },
+        { name: "suspendedAt", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "suspendedAt" DATETIME' },
+        { name: "archivedAt", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "archivedAt" DATETIME' },
+      ],
+    },
+    {
+      table: "ClientGoodsRequest",
+      columns: [
+        { name: "returnEditPermissionsJson", ddl: 'ALTER TABLE "ClientGoodsRequest" ADD COLUMN "returnEditPermissionsJson" TEXT NOT NULL DEFAULT \'{}\'' },
       ],
     },
   ];
@@ -798,6 +807,9 @@ async function ensureAdditiveColumns(client: {
       "mustChangePassword" INTEGER NOT NULL DEFAULT 0,
       "passwordUpdatedAt" DATETIME,
       "sessionVersion" INTEGER NOT NULL DEFAULT 1,
+      "sectorMode" TEXT NOT NULL DEFAULT 'INHERIT',
+      "suspendedAt" DATETIME,
+      "archivedAt" DATETIME,
       "deviceLimit" INTEGER NOT NULL DEFAULT 3,
       "clientType" TEXT NOT NULL DEFAULT 'DIRECT_CLIENT',
       "customClientType" TEXT,
@@ -875,6 +887,7 @@ async function ensureAdditiveColumns(client: {
       "returnedToClientAt" DATETIME,
       "returnedByUserId" TEXT,
       "returnedByName" TEXT,
+      "returnEditPermissionsJson" TEXT NOT NULL DEFAULT '{}',
       "clientResponseStatus" TEXT,
       "clientResponseNote" TEXT,
       "clientRespondedAt" DATETIME,

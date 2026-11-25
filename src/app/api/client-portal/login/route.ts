@@ -8,7 +8,7 @@ import {
   issueClientPortalToken,
   resolveRequestTenantScope,
 } from "@/lib/clientPortal/clientAuth";
-import { authenticateClientPortalAccount } from "@/lib/clientPortal/portalService";
+import { authenticateClientPortalAccount, resolveClientSectorAccess } from "@/lib/clientPortal/portalService";
 
 export const dynamic = "force-dynamic";
 
@@ -24,12 +24,13 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     const identifier = String(body.identifier || body.phone || body.email || "");
     const password = String(body.password || "");
 
-    const { sessionVersion, ...account } = await authenticateClientPortalAccount({
+    const { sessionVersion, ...baseAccount } = await authenticateClientPortalAccount({
       identifier,
       password,
       tenantSlug: scope.tenantSlug,
       tenantId: scope.tenantId,
     });
+    const account = { ...baseAccount, ...(await resolveClientSectorAccess(baseAccount)) };
     const token = issueClientPortalToken({
       clientAccountId: account.id,
       globalClientId: account.globalClientId,

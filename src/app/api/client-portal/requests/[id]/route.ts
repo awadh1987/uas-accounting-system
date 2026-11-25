@@ -9,6 +9,7 @@ import {
   updatePendingClientRequest,
   type ClientOrStaffLifecycleAction,
 } from "@/lib/clientPortal/portalService";
+import { stripPolicyPrefix } from "@/lib/clientPortal/portalPolicy";
 import { resolveTenantCloudUrl } from "@/lib/serverConnection";
 
 export const dynamic = "force-dynamic";
@@ -127,6 +128,9 @@ export const PATCH = withTenantRoute(async function PATCH(
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "تعذر تحديث حالة الطلب";
+    if (msg.startsWith("FORBIDDEN:")) {
+      return jsonError(stripPolicyPrefix(msg), 403);
+    }
     if (msg.startsWith("NOT_FOUND:")) {
       return jsonError(msg.replace(/^NOT_FOUND:\s*/, ""), 404);
     }

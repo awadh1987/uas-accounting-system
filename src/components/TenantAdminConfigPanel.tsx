@@ -494,7 +494,7 @@ export function TenantAdminConfigPanel({
               />
             </div>
             <div>
-              <label className="block font-bold mb-1">{isAr ? "واتساب الدعم" : "WhatsApp"}</label>
+              <label className="block font-bold mb-1">{isAr ? "رقم التواصل والإشعارات" : "Notification Phone"}</label>
               <PhoneContactInput
                 isAr={isAr}
                 format="whatsapp_digits"

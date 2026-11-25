@@ -628,7 +628,7 @@ export function CustomersTab({
               { id: "ledger" as const, label: `سجل الحركات والفواتير (${visibleRows.length})` },
               { id: "both" as const, label: "عرض مدمج" },
               { id: "portal" as const, label: "بوابة العملاء والطلبات" },
-              { id: "whatsapp" as const, label: "اعتماد وإرسال واتساب" },
+              { id: "whatsapp" as const, label: "الإشعارات" },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -919,6 +919,7 @@ export function CustomersTab({
                   currentUser?.role === "SUPER_ADMIN" ||
                   currentUser?.role === "CHIEF_ACCOUNTANT"
               )}
+              staffSignature={currentUser?.name ? `${currentUser.username || currentUser.name}${currentUser.department || currentUser.role ? ` (${currentUser.department || currentUser.role})` : ""}` : undefined}
               onRefreshState={onRefreshState}
               onToast={(m) => onToast?.(m)}
             />

@@ -1655,7 +1655,7 @@ export function SystemTab({
               {isAr ? "إعدادات مساحة المنشأة (Tenant Config)" : "Tenant Admin Config"}
             </option>
             <option value="client-portal">
-              {isAr ? "بوابة العملاء وإعدادات واتساب" : "Client Portal & WhatsApp Settings"}
+              {isAr ? "بوابة العملاء وإعدادات الإشعارات" : "Client Portal & Notification Settings"}
             </option>
             <option value="devices">
               {isAr ? "أجهزة المنشأة والمزامنة (Devices)" : "Tenant Devices Control"}
@@ -1732,7 +1732,7 @@ export function SystemTab({
               }`}
           >
             <MessageSquare className="w-4 h-4" />
-            <span>{isAr ? "بوابة العملاء وإعدادات واتساب" : "Client Portal & WhatsApp"}</span>
+            <span>{isAr ? "بوابة العملاء وإعدادات الإشعارات" : "Client Portal & Notifications"}</span>
           </button>
           <button
             type="button"
@@ -1830,6 +1830,7 @@ export function SystemTab({
               currentUser.role === "SUPER_ADMIN" ||
               currentUser.role === "CHIEF_ACCOUNTANT")
           )}
+          staffSignature={currentUser.name ? `${currentUser.username || currentUser.name}${currentUser.department || currentUser.role ? ` (${currentUser.department || currentUser.role})` : ""}` : undefined}
           onRefreshState={async () => {
             await onRefreshState?.();
           }}
@@ -3864,7 +3865,7 @@ export function SystemTab({
               />
             </div>
             <div>
-              <label className="block font-bold mb-1">{isAr ? "رقم واتساب التواصل" : "WhatsApp Number"}</label>
+              <label className="block font-bold mb-1">{isAr ? "رقم التواصل والإشعارات" : "Notification Number"}</label>
               <PhoneContactInput
                 isAr={isAr}
                 format="whatsapp_digits"

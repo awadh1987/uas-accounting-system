@@ -4,8 +4,11 @@ import { authorizeApiAction, corsOptionsResponse, forbiddenError, jsonError } fr
 import { canApprovePortalClients, canResetPortalClientPassword } from "@/lib/permissions";
 import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
 import { resolveRequestTenantScope } from "@/lib/clientPortal/clientAuth";
+import { portalErrorStatus, stripPolicyPrefix } from "@/lib/clientPortal/portalPolicy";
 import {
   sanitizeClientAccount,
+  staffBulkSetClientSectorMode,
+  staffManageClientAccount,
   staffResetClientPassword,
   staffReviewClientRegistration,
 } from "@/lib/clientPortal/portalService";
@@ -33,6 +36,7 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     const whereClause: Record<string, unknown> = {
       ...(scope.tenantSlug && scope.tenantSlug !== "default" ? { tenantSlug: scope.tenantSlug } : {}),
       ...(status && status !== "ALL" ? { status } : {}),
+      ...(status === "ALL" && searchParams.get("includeArchived") !== "1" ? { status: { not: "ARCHIVED" } } : {}),
       ...(search
         ? {
           OR: [
@@ -114,6 +118,52 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     });
     if (!auth.ok) return auth.response;
 
+    const rawAction = String(body.action || "").trim().toUpperCase();
+    const MANAGE_ACTIONS = [
+      "SUSPEND",
+      "ARCHIVE",
+      "REACTIVATE",
+      "REVOKE_SESSIONS",
+      "SET_SECTORS",
+      "SET_CREDIT_LIMIT",
+      "BULK_SET_SECTORS",
+    ];
+    if (MANAGE_ACTIONS.includes(rawAction)) {
+      if (!canApprovePortalClients(auth.actor.user || auth.actor.userRole)) {
+        return forbiddenError("⛔ ليس لديك صلاحية إدارة حسابات عملاء البوابة");
+      }
+      const actor = {
+        userId: auth.actor.userId,
+        userDisplay: auth.actor.userDisplay || "مسؤول النظام",
+        userRole: auth.actor.userRole,
+      };
+      try {
+        if (rawAction === "BULK_SET_SECTORS") {
+          const bulk = await staffBulkSetClientSectorMode({
+            clientAccountIds: Array.isArray(body.clientAccountIds)
+              ? body.clientAccountIds.map((x) => String(x))
+              : [],
+            sectorMode: String(body.sectorMode || ""),
+            tenantSlug: resolveRequestTenantScope(req).tenantSlug,
+            actor,
+          });
+          return NextResponse.json({ success: true, ...bulk, message: `✅ تم تحديث القطاعات لـ ${bulk.updatedCount} عميل` });
+        }
+        const client = await staffManageClientAccount({
+          clientAccountId: String(body.clientAccountId || "").trim(),
+          action: rawAction as "SUSPEND",
+          sectorMode: body.sectorMode !== undefined ? String(body.sectorMode) : undefined,
+          creditLimit: body.creditLimit !== undefined && body.creditLimit !== "" ? Number(body.creditLimit) : undefined,
+          reason: body.reason ? String(body.reason) : undefined,
+          actor,
+        });
+        return NextResponse.json({ success: true, client, message: "✅ تم تنفيذ الإجراء على حساب العميل" });
+      } catch (e: unknown) {
+        const m = e instanceof Error ? e.message : "تعذر تنفيذ الإجراء";
+        return jsonError(stripPolicyPrefix(m), portalErrorStatus(e));
+      }
+    }
+
     const clientAccountId = String(body.clientAccountId || "").trim();
     const actionRaw = String(body.action || "").trim().toUpperCase();
     const action =
@@ -158,7 +208,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         temporaryPassword: resetResult.temporaryPassword,
         resetCode: resetResult.resetCode,
         expiresAt: resetResult.expiresAt,
-        message: "✅ تم إنشاء كلمة مرور مؤقتة للعميل وإدراج إشعار واتساب للمراجعة والإرسال",
+        message: "✅ تم إنشاء كلمة مرور مؤقتة للعميل وإدراج إشعار للمراجعة والإرسال",
       });
     }
 
@@ -189,7 +239,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       client: updated,
       message:
         action === "APPROVE"
-          ? "✅ تم اعتماد حساب العميل وربطه بشجرة الحسابات وإعداد إشعار واتساب"
+          ? "✅ تم اعتماد حساب العميل وربطه بشجرة الحسابات وإعداد إشعار للعميل"
           : "✅ تم تحديث حالة حساب العميل",
     });
   } catch (err: unknown) {

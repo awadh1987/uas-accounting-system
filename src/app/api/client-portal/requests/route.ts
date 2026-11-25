@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
 import { corsOptionsResponse, jsonError } from "@/lib/apiHelpers";
+import { isSectorAllowed, portalErrorStatus, stripPolicyPrefix } from "@/lib/clientPortal/portalPolicy";
 import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
 import { resolveAuthenticatedClient } from "@/lib/clientPortal/clientAuth";
 import {
   bulkHideClientGoodsRequests,
   createClientGoodsRequest,
+  resolveClientSectorAccess,
   serializeRequest,
 } from "@/lib/clientPortal/portalService";
 
@@ -28,6 +30,10 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const status = (searchParams.get("status") || "ALL").trim().toUpperCase();
     const sectorType = (searchParams.get("sectorType") || "ALL").trim().toUpperCase();
+    const sectorAccess = await resolveClientSectorAccess(auth.account);
+    if (sectorType !== "ALL" && !isSectorAllowed(sectorAccess.sectorMode, sectorType)) {
+      return jsonError("⛔ هذا القطاع غير متاح لحسابك", 403);
+    }
     const includeHidden = searchParams.get("includeHidden") === "1";
     const includeArchived = searchParams.get("includeArchived") !== "0";
     const fromDate = (searchParams.get("fromDate") || "").trim();
@@ -41,7 +47,9 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
       ...(status && status !== "ALL" ? { status } : {}),
       ...(!includeHidden ? { isHiddenByClient: false } : {}),
       ...(!includeArchived ? { isArchivedByClient: false } : {}),
-      ...(sectorType && sectorType !== "ALL" ? { sectorType } : {}),
+      ...(sectorType && sectorType !== "ALL"
+        ? { sectorType }
+        : { sectorType: { in: sectorAccess.allowedSectors } }),
       ...(fromDate || toDate
         ? {
           createdAt: {
@@ -138,7 +146,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "تعذر إرسال الطلب";
-    return jsonError(msg, 400);
+    return jsonError(stripPolicyPrefix(msg), portalErrorStatus(err));
   }
 });
 

@@ -1005,8 +1005,8 @@ export function LicenseActivationModal({
                 </h4>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                   {isAr
-                    ? "خاص بمشتري الفلاش ميموري USB أو التراخيص المرسلة عبر البريد/الواتساب"
-                    : "For USB flash drive buyers or licenses received via WhatsApp/Email"}
+                    ? "خاص بمشتري الفلاش ميموري USB أو التراخيص المرسلة عبر البريد/الإشعارات"
+                    : "For USB flash drive buyers or licenses received via Notice/Email"}
                 </p>
               </div>
 
@@ -1236,7 +1236,7 @@ export function LicenseActivationModal({
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 text-xs font-bold hover:bg-emerald-500/20 transition"
                 >
                   <MessageCircle className="w-3.5 h-3.5" />
-                  <span>{isAr ? "إرسال عبر واتساب" : "Send via WhatsApp"}</span>
+                  <span>{isAr ? "إرسال إشعار التفعيل" : "Send Activation Notice"}</span>
                 </button>
               </div>
             </div>

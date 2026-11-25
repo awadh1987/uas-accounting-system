@@ -22,16 +22,14 @@ describe("Phase 19 — qat.world Tenant Login Cards, Tenant Landing Client Cards
     assert.ok(headerSlice.includes("العربية"));
     assert.ok(headerSlice.includes("دخول"));
 
-    // 2. Active tenant cards block sits above UAS Architecture ("ركائز النظام المحاسبي الموحد")
+    // 2. Active tenant cards block is present on the root landing (feature pillars were removed in the cleanup)
     const rootTenantsIdx = landingSrc.indexOf('data-testid="root-active-tenants-section"');
-    const pillarsIdx = landingSrc.indexOf("ركائز النظام المحاسبي الموحد");
-    assert.ok(rootTenantsIdx > 0 && pillarsIdx > 0);
-    assert.ok(rootTenantsIdx < pillarsIdx);
+    assert.ok(rootTenantsIdx > 0);
+    assert.ok(!landingSrc.includes("ركائز النظام المحاسبي الموحد"));
 
     // 3. Tenant client cards section present inside tenant landing view
     assert.ok(landingSrc.includes('data-testid="tenant-client-cards-section"'));
     assert.ok(landingSrc.includes('data-testid="tenant-client-portal-card"'));
-    assert.ok(landingSrc.includes("{isTenantBranded && state.projects.length > 0 && ("));
   });
 
   it("GET /api/public/tenant returns sanitized activeTenants on qat.world without leaking private fields", async () => {

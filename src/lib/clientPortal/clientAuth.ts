@@ -438,6 +438,9 @@ export async function resolveAuthenticatedClient(req?: Request | NextRequest) {
   if (account.status === "SUSPENDED") {
     return { ok: false as const, status: 403, error: "تم تعليق هذا الحساب، يرجى التواصل مع الإدارة" };
   }
+  if (account.status === "ARCHIVED") {
+    return { ok: false as const, status: 403, error: "تمت أرشفة هذا الحساب، يرجى التواصل مع الإدارة" };
+  }
 
   if ((account.sessionVersion ?? 1) !== (payload.sv ?? 1)) {
     return {

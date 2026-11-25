@@ -33,5 +33,30 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/:path*", "/", "/portal"],
+  matcher: [
+    "/api/:path*",
+    "/",
+    "/portal",
+    "/portal/:path*",
+    "/client/portal",
+    "/client/portal/:path*",
+    "/harvest",
+    "/commercial",
+    "/inbound-outbound",
+    "/payments",
+    "/dashboard",
+    "/sales",
+    "/inventory",
+    "/customers",
+    "/accounting",
+    "/coa",
+    "/ledger",
+    "/procurement",
+    "/reports",
+    "/projects",
+    "/expenses",
+    "/workers",
+    "/system",
+    "/audit",
+  ],
 };

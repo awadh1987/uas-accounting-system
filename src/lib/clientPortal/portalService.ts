@@ -10,6 +10,21 @@ import {
   postSalesInvoice,
   reverseJournalEntry,
 } from "@/lib/accounting/ledgerService";
+import {
+  allowedSectorsForMode,
+  assertReturnEditAllowed,
+  assertSectorAllowed,
+  canClientLogin,
+  forbiddenMessage,
+  isSectorAllowed,
+  lockedSectorForMode,
+  nextAccountStatus,
+  normalizeReturnEditPermissions,
+  normalizeSectorMode,
+  resolveEffectiveSectorMode,
+  type ClientAccountAction,
+  type SectorMode,
+} from "@/lib/clientPortal/portalPolicy";
 import { emitNotification } from "@/lib/notifications/notificationService";
 import {
   consumeClientResetRateLimit,
@@ -93,6 +108,9 @@ export interface ClientSafeAccountView {
   preferredPickup: string;
   customFields: Record<string, unknown>;
   status: string;
+  sectorMode: string;
+  suspendedAt: string | null;
+  archivedAt: string | null;
   notes: string | null;
   creditLimit: number;
   approvedAt: string | null;
@@ -122,6 +140,9 @@ export function sanitizeClientAccount(
     preferredPickup: string;
     customFieldsJson: string;
     status: string;
+    sectorMode?: string | null;
+    suspendedAt?: Date | null;
+    archivedAt?: Date | null;
     notes: string | null;
     approvedAt: Date | null;
     rejectedReason: string | null;
@@ -159,6 +180,9 @@ export function sanitizeClientAccount(
     preferredPickup: acc.preferredPickup,
     customFields,
     status: acc.status,
+    sectorMode: String(acc.sectorMode || "INHERIT").toUpperCase(),
+    suspendedAt: acc.suspendedAt ? acc.suspendedAt.toISOString() : null,
+    archivedAt: acc.archivedAt ? acc.archivedAt.toISOString() : null,
     notes: acc.notes,
     creditLimit,
     approvedAt: acc.approvedAt ? acc.approvedAt.toISOString() : null,
@@ -208,7 +232,10 @@ export async function registerClientPortalAccount(params: {
   tenantId?: string;
   tenantName?: string;
   skipGlobalPasswordCheck?: boolean;
+  /** Optional sector preference selected at self-registration (honoured only within the tenant default). */
+  sectorPreference?: string;
 }) {
+  const registrationSectorMode = await resolveRegistrationSectorMode(params.sectorPreference);
   const fullName = String(params.fullName || "").trim();
   if (fullName.length < 2) {
     throw new Error("يرجى إدخال الاسم الكامل / الاسم التجاري (حرفان على الأقل)");
@@ -315,6 +342,7 @@ export async function registerClientPortalAccount(params: {
         preferredPickup,
         customFieldsJson,
         status: autoApprove ? "ACTIVE" : "PENDING_APPROVAL",
+        sectorMode: registrationSectorMode,
         notes: params.notes?.trim() || null,
         approvedAt: autoApprove ? new Date() : null,
         approvedByName: autoApprove ? "اعتماد تلقائي للبوابة" : null,
@@ -412,8 +440,9 @@ export async function authenticateClientPortalAccount(params: {
   if (account.status === "REJECTED") {
     throw new Error(account.rejectedReason || "تم رفض هذا الحساب من قبل المنشأة");
   }
-  if (account.status === "SUSPENDED") {
-    throw new Error("تم تعليق الحساب، يرجى التواصل مع إدارة المنشأة");
+  const loginGate = canClientLogin(account.status);
+  if (!loginGate.ok) {
+    throw new Error(loginGate.message || "تعذر تسجيل الدخول لهذا الحساب");
   }
 
   const updated = await prisma.clientPortalAccount.update({
@@ -741,10 +770,15 @@ export async function authenticateClientPortalAccount(params: {
       throw new Error("MUST_CHANGE_PASSWORD: يرجى تحديث كلمة المرور المؤقتة من الملف الشخصي أولاً قبل إرسال الطلبات");
     }
 
-    const sectorType =
-      String(params.sectorType || "HARVEST").trim().toUpperCase() === "COMMERCIAL"
-        ? "COMMERCIAL"
-        : "HARVEST";
+    const tenantCfg = await getTenantFormConfig();
+    const effectiveSectorMode = resolveEffectiveSectorMode(
+      (account as { sectorMode?: string | null }).sectorMode,
+      tenantCfg.defaultSectorMode
+    );
+    const sectorType = assertSectorAllowed(
+      effectiveSectorMode,
+      String(params.sectorType || "").trim() ? params.sectorType : lockedSectorForMode(effectiveSectorMode) || "HARVEST"
+    );
     const submissionType =
       String(params.submissionType || "").trim() === "client_goods_registration"
         ? "client_goods_registration"
@@ -907,6 +941,43 @@ export async function authenticateClientPortalAccount(params: {
         : "MARKET";
     const nextPickupNotes =
       params.pickupNotes !== undefined ? params.pickupNotes.trim() || null : existing.pickupNotes;
+
+    if (existing.status === "RETURNED_TO_CLIENT") {
+      assertReturnEditAllowed(
+        {
+          pickupLocation: existing.pickupLocation,
+          pickupNotes: existing.pickupNotes,
+          lines: existing.lines.map((l) => ({
+            id: l.id,
+            itemTitle: l.itemTitle,
+            qty:
+              l.confirmedQty !== null && l.confirmedQty !== undefined
+                ? Number(l.confirmedQty)
+                : Number(l.requestedQty),
+            unitCode: l.unitCode,
+            unitLabel: l.unitLabel,
+            customUnitLabel: l.customUnitLabel,
+            unitPrice: Number(l.unitPrice || 0),
+          })),
+        },
+        {
+          pickupLocation: resolvedPickupLocation,
+          pickupNotes: nextPickupNotes,
+          lines: preparedLines.map((l) => ({
+            id: l.existingId || null,
+            itemTitle: l.itemTitle,
+            qty: l.requestedQty,
+            unitCode: l.unitCode,
+            unitLabel: l.unitLabel,
+            customUnitLabel: l.customUnitLabel,
+            unitPrice: l.unitPrice,
+          })),
+        },
+        normalizeReturnEditPermissions(
+          (existing as { returnEditPermissionsJson?: string | null }).returnEditPermissionsJson
+        )
+      );
+    }
 
     const beforeBaseTotal =
       Number(existing.totalConfirmed || 0) > 0
@@ -1087,6 +1158,7 @@ export async function authenticateClientPortalAccount(params: {
     handedOverAt: Date | null;
     staffNotes: string | null;
     reviewerRemarks?: string | null;
+    returnEditPermissionsJson?: string | null;
     amendmentDiffJson?: string;
     beforeSnapshotJson?: string | null;
     afterSnapshotJson?: string | null;
@@ -1215,6 +1287,7 @@ export async function authenticateClientPortalAccount(params: {
       handedOverAtDisplay: req.handedOverAt ? formatIsoToDmyTime(req.handedOverAt) : null,
       staffNotes: req.staffNotes,
       reviewerRemarks: req.reviewerRemarks ?? null,
+      returnEditPermissions: normalizeReturnEditPermissions(req.returnEditPermissionsJson),
       amendmentDiff,
       beforeSnapshot,
       afterSnapshot,
@@ -2242,6 +2315,8 @@ export async function authenticateClientPortalAccount(params: {
     overrideCreditLimit?: boolean;
     staffNotes?: string;
     reviewerRemarks?: string;
+    /** Per-return edit permissions (price/quantity/unit/pickupLocation/pickupNotes/lines). */
+    returnEditPermissions?: unknown;
     pickupType?: string;
     pickupLocation?: string;
     customPickupLocation?: string;
@@ -2940,6 +3015,13 @@ export async function authenticateClientPortalAccount(params: {
           where: { id: freshReq.id },
           data: {
             status: nextStatus,
+            ...(params.action === "RETURN_TO_CLIENT"
+              ? {
+                returnEditPermissionsJson: JSON.stringify(
+                  normalizeReturnEditPermissions(params.returnEditPermissions)
+                ),
+              }
+              : {}),
             pickupType: resolvedPatch.pickupType,
             pickupLocation: resolvedPatch.pickupLocation,
             pickupNotes: resolvedPatch.pickupNotes,
@@ -3582,7 +3664,7 @@ export async function authenticateClientPortalAccount(params: {
 
   const WA_STATUS_LABELS_AR: Record<string, string> = {
     PENDING_APPROVAL: "بانتظار الاعتماد",
-    DISPATCHED_LINK: "تم الإرسال (واتساب)",
+    DISPATCHED_LINK: "تم الإرسال (رابط مباشر)",
     APPROVED_SENT: "تم الإرسال",
     SKIPPED: "متجاهل",
     FAILED: "تعذر الإرسال",
@@ -3728,8 +3810,8 @@ export async function authenticateClientPortalAccount(params: {
       severity: "INFO",
       titleAr: `طلب استعادة كلمة مرور عميل (${account.fullName})`,
       titleEn: `Client Password Reset Request (${account.fullName})`,
-      messageAr: `طلب العميل ${account.fullName} رمز استعادة كلمة المرور — مسودة واتساب جاهزة في قائمة الاعتماد والإرسال.`,
-      messageEn: `Client ${account.fullName} requested password reset; WhatsApp draft queued.`,
+      messageAr: `طلب العميل ${account.fullName} رمز استعادة كلمة المرور — مسودة إشعار جاهزة في قائمة الاعتماد والإرسال.`,
+      messageEn: `Client ${account.fullName} requested password reset; Notification draft queued.`,
       targetTab: "customers",
       targetEntityType: "ClientPortalAccount",
       targetEntityId: account.id,
@@ -4203,3 +4285,174 @@ export async function authenticateClientPortalAccount(params: {
 
     return { updatedCount: targetIds.length, ids: targetIds };
   }
+
+
+// ---------------------------------------------------------------------------
+// Sector access + tenant control over client accounts
+// ---------------------------------------------------------------------------
+
+/** Effective sector access for an account (client override → tenant default → BOTH). */
+export async function resolveClientSectorAccess(account: { sectorMode?: string | null }) {
+  const cfg = await getTenantFormConfig();
+  const mode = resolveEffectiveSectorMode(account.sectorMode, cfg.defaultSectorMode);
+  return {
+    sectorMode: mode,
+    allowedSectors: allowedSectorsForMode(mode),
+    lockedSector: lockedSectorForMode(mode),
+  };
+}
+
+/** Self-registration preference is honoured only when it narrows (never widens) the tenant default. */
+export async function resolveRegistrationSectorMode(preference?: string | null): Promise<string> {
+  const raw = String(preference ?? "").trim();
+  if (!raw) return "INHERIT";
+  const cfg = await getTenantFormConfig();
+  if (!cfg.allowSectorPreferenceOnRegister) return "INHERIT";
+  const wanted = normalizeSectorMode(raw, cfg.defaultSectorMode);
+  const tenantAllowed = new Set<string>(allowedSectorsForMode(cfg.defaultSectorMode));
+  const wantedList = allowedSectorsForMode(wanted);
+  if (!wantedList.every((sec) => tenantAllowed.has(sec))) return "INHERIT";
+  return wanted === cfg.defaultSectorMode ? "INHERIT" : wanted;
+}
+
+/** Throws FORBIDDEN (HTTP 403) if the authenticated client may not access the sector. */
+export async function assertClientSectorAccess(
+  account: { sectorMode?: string | null },
+  sector: unknown
+) {
+  const access = await resolveClientSectorAccess(account);
+  return assertSectorAllowed(access.sectorMode, sector);
+}
+
+export async function clientCanAccessSector(account: { sectorMode?: string | null }, sector: unknown) {
+  const access = await resolveClientSectorAccess(account);
+  return isSectorAllowed(access.sectorMode, sector);
+}
+
+export interface StaffClientAccountActionParams {
+  clientAccountId: string;
+  action: ClientAccountAction;
+  sectorMode?: string;
+  creditLimit?: number;
+  reason?: string;
+  actor: { userId?: string | null; userDisplay: string; userRole: string };
+}
+
+/**
+ * Staff account management: suspend / archive / reactivate / revoke sessions / sector mode / credit limit.
+ * Every action is audited and bumps `sessionVersion` when access must be cut immediately.
+ */
+export async function staffManageClientAccount(params: StaffClientAccountActionParams) {
+  const existing = await prisma.clientPortalAccount.findUnique({ where: { id: params.clientAccountId } });
+  if (!existing) throw new Error("NOT_FOUND: حساب العميل غير موجود");
+
+  const now = new Date();
+  const data: Record<string, unknown> = {};
+  let detail = "";
+
+  switch (params.action) {
+    case "SUSPEND":
+    case "ARCHIVE": {
+      const next = nextAccountStatus(existing.status, params.action);
+      data.status = next;
+      data.sessionVersion = (existing.sessionVersion ?? 1) + 1;
+      if (params.action === "SUSPEND") data.suspendedAt = now;
+      else data.archivedAt = now;
+      if (params.reason?.trim()) data.rejectedReason = params.reason.trim();
+      detail = params.action === "SUSPEND" ? "إيقاف مؤقت" : "أرشفة";
+      break;
+    }
+    case "REACTIVATE": {
+      data.status = nextAccountStatus(existing.status, "REACTIVATE");
+      data.suspendedAt = null;
+      data.archivedAt = null;
+      data.rejectedReason = null;
+      data.sessionVersion = (existing.sessionVersion ?? 1) + 1;
+      detail = "إعادة تفعيل";
+      break;
+    }
+    case "REVOKE_SESSIONS": {
+      data.sessionVersion = (existing.sessionVersion ?? 1) + 1;
+      detail = "إنهاء الجلسات النشطة";
+      break;
+    }
+    case "SET_SECTORS": {
+      const raw = String(params.sectorMode || "").trim().toUpperCase();
+      if (raw !== "INHERIT" && raw !== "BOTH" && raw !== "HARVEST_ONLY" && raw !== "COMMERCIAL_ONLY") {
+        throw new Error("وضع القطاعات غير صالح (INHERIT / BOTH / HARVEST_ONLY / COMMERCIAL_ONLY)");
+      }
+      data.sectorMode = raw;
+      detail = `تحديد القطاعات المتاحة: ${raw}`;
+      break;
+    }
+    case "SET_CREDIT_LIMIT": {
+      const limit = Number(params.creditLimit);
+      if (!Number.isFinite(limit) || limit < 0) throw new Error("الحد الائتماني غير صالح");
+      if (!existing.customerId) throw new Error("لا يمكن تحديد الحد الائتماني قبل ربط الحساب بعميل محاسبي");
+      await prisma.customer.update({ where: { id: existing.customerId }, data: { creditLimit: limit } });
+      detail = `تعديل الحد الائتماني إلى ${limit}`;
+      break;
+    }
+    default:
+      throw new Error("إجراء غير معروف على حساب العميل");
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const acc = Object.keys(data).length
+      ? await tx.clientPortalAccount.update({ where: { id: existing.id }, data })
+      : existing;
+    await appendAuditLogTx(tx, {
+      userId: params.actor.userId,
+      userDisplay: params.actor.userDisplay,
+      userRole: params.actor.userRole,
+      actionType: `CLIENT_PORTAL_${params.action}`,
+      entityReference: acc.id,
+      details: `${detail} — العميل (${acc.fullName}) — ${formatIsoToDmyTime(now)}`,
+    });
+    return acc;
+  });
+
+  let creditLimit = 0;
+  if (updated.customerId) {
+    const cust = await prisma.customer.findUnique({
+      where: { id: updated.customerId },
+      select: { creditLimit: true },
+    });
+    creditLimit = Number(cust?.creditLimit || 0);
+  }
+  return sanitizeClientAccount(updated, creditLimit);
+}
+
+/** Bulk sector assignment for high-volume client lists (scoped by tenantSlug). */
+export async function staffBulkSetClientSectorMode(params: {
+  clientAccountIds: string[];
+  sectorMode: string;
+  tenantSlug?: string;
+  actor: { userId?: string | null; userDisplay: string; userRole: string };
+}) {
+  const raw = String(params.sectorMode || "").trim().toUpperCase();
+  if (raw !== "INHERIT" && raw !== "BOTH" && raw !== "HARVEST_ONLY" && raw !== "COMMERCIAL_ONLY") {
+    throw new Error("وضع القطاعات غير صالح");
+  }
+  const ids = [...new Set(params.clientAccountIds.map((x) => String(x).trim()).filter(Boolean))].slice(0, 2000);
+  if (ids.length === 0) throw new Error("لم يتم تحديد أي عميل");
+  const slug = (params.tenantSlug || "").trim().toLowerCase();
+  const result = await prisma.clientPortalAccount.updateMany({
+    where: { id: { in: ids }, ...(slug && slug !== "default" ? { tenantSlug: slug } : {}) },
+    data: { sectorMode: raw },
+  });
+  await prisma.$transaction(async (tx) => {
+    await appendAuditLogTx(tx, {
+      userId: params.actor.userId,
+      userDisplay: params.actor.userDisplay,
+      userRole: params.actor.userRole,
+      actionType: "CLIENT_PORTAL_BULK_SET_SECTORS",
+      entityReference: `bulk:${result.count}`,
+      details: `تعيين القطاعات (${raw}) لعدد ${result.count} عميل`,
+    });
+  });
+  return { updatedCount: result.count };
+}
+
+export { forbiddenMessage as portalForbiddenMessage };
+export type { SectorMode as PortalSectorMode };

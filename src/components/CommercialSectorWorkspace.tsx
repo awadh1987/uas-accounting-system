@@ -493,7 +493,7 @@ export function CommercialSectorWorkspace({
                       className="px-3 py-1.5 rounded-xl accent-bg font-extrabold inline-flex items-center gap-1"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>إتمام التسليم والترحيل للمحاسبة + واتساب</span>
+                      <span>إتمام التسليم والترحيل للمحاسبة + الإشعارات</span>
                     </button>
                   </div>
                 )}

@@ -582,13 +582,10 @@ describe("Domain Routing Audit, Two-Sided Order Editing & Tenant Landing Portal 
       "utf8"
     );
 
-    // 1. Client Portal card placed above Feature Pillars, KPIs, and Enterprise Portfolio sections
+    // 1. Client Portal card present while deprecated feature pillars / active projects showcase are removed
     const cardIdx = landingSrc.indexOf('data-testid="tenant-client-portal-card"');
-    const pillarsIdx = landingSrc.indexOf("ركائز النظام المحاسبي الموحد");
-    const portfolioIdx = landingSrc.indexOf("Enterprise Portfolio");
-    assert.ok(cardIdx > 0 && pillarsIdx > 0 && portfolioIdx > 0);
-    assert.ok(cardIdx < pillarsIdx, "Client Portal card must sit above Feature Pillars");
-    assert.ok(cardIdx < portfolioIdx, "Client Portal card must sit above Enterprise Portfolio");
+    assert.ok(cardIdx > 0);
+    assert.ok(!landingSrc.includes("ركائز النظام المحاسبي الموحد"));
 
     // 2. Full action directory & single clean "دخول" login button without exposed role labels
     for (const label of [
@@ -601,7 +598,7 @@ describe("Domain Routing Audit, Two-Sided Order Editing & Tenant Landing Portal 
     ]) {
       assert.ok(landingSrc.includes(label), `Missing Client Portal directory item: ${label}`);
     }
-    assert.ok(landingSrc.includes('data-testid="tenant-staff-login-cta"'));
+    assert.ok(!landingSrc.includes('data-testid="tenant-staff-login-cta"'));
     assert.ok(landingSrc.includes('data-testid="root-login-cta"'));
     assert.ok(!/<span>\s*تسجيل الدخول\s*<\/span>/.test(landingSrc));
     assert.ok(!landingSrc.includes("دخول مساحة العمل"));

@@ -551,6 +551,7 @@ export function SalesTab({
           <TenantClientPortalAdminPanel
             initialSection="requests"
             canManageSettings={canEditRecords}
+            staffSignature={currentUser?.name ? `${currentUser.username || currentUser.name}${currentUser.department || currentUser.role ? ` (${currentUser.department || currentUser.role})` : ""}` : undefined}
             onRefreshState={onRefreshState}
             onToast={onToast}
           />

@@ -1541,6 +1541,9 @@ model ClientPortalAccount {
   mustChangePassword Boolean   @default(false)
   passwordUpdatedAt  DateTime?
   sessionVersion     Int       @default(1)
+  sectorMode         String    @default("INHERIT") // INHERIT | BOTH | HARVEST_ONLY | COMMERCIAL_ONLY
+  suspendedAt        DateTime?
+  archivedAt         DateTime?
   deviceLimit        Int       @default(3)
   clientType         String    @default("DIRECT_CLIENT") // WHOLESALE | RETAIL | DISTRIBUTOR | DIRECT_CLIENT | OTHER
   customClientType   String?
@@ -1633,6 +1636,7 @@ model ClientGoodsRequest {
   returnedToClientAt  DateTime?
   returnedByUserId    String?
   returnedByName      String?
+  returnEditPermissionsJson String @default("{}")
   clientResponseStatus String?
   clientResponseNote  String?
   clientRespondedAt   DateTime?

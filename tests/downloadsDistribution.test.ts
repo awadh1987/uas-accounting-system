@@ -47,7 +47,8 @@ test("getPublicDownloadsInventory inspects present and missing artifacts safely"
 test("LandingPage and LoginView expose public /downloads links without admin leakage", () => {
   const repoRoot = path.resolve(__dirname, "..");
   const landing = fs.readFileSync(path.join(repoRoot, "src/components/LandingPage.tsx"), "utf8");
-  assert.ok(landing.includes('data-testid="public-downloads-section"'));
+  // Landing keeps only the two top download buttons (no duplicate downloads section).
+  assert.ok(!landing.includes('data-testid="public-downloads-section"'));
   assert.ok(landing.includes("/downloads/UAS-Mobile-Release-qat.world.apk"));
   assert.ok(landing.includes("/downloads/UAS-Setup-Win64.exe"));
   assert.ok(!landing.includes("superadmin") && !landing.includes("control-panel"));

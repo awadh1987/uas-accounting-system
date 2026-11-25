@@ -3748,7 +3748,7 @@ export function UasAiCopilot({
                                     className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-green-500/10 hover:bg-green-500/20 text-green-700 dark:text-green-300 text-[10px] font-bold"
                                   >
                                     <MessageSquare className="w-2.5 h-2.5" />
-                                    <span>واتساب</span>
+                                    <span>إشعار مباشر</span>
                                   </a>
                                 )}
                               </div>

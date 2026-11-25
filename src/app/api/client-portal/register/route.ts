@@ -38,6 +38,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
           ? (body.customFields as Record<string, unknown>)
           : undefined,
       notes: body.notes ? String(body.notes) : undefined,
+      sectorPreference: body.sectorPreference ? String(body.sectorPreference) : undefined,
       portalUrl,
       tenantSlug: scope.tenantSlug,
       tenantId: scope.tenantId,

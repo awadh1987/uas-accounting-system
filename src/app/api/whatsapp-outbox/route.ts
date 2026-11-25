@@ -50,7 +50,7 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     });
   } catch (err) {
     console.error("GET /api/whatsapp-outbox error:", err);
-    return jsonError("تعذر تحميل قائمة رسائل واتساب", 500);
+    return jsonError("تعذر تحميل قائمة الإشعارات", 500);
   }
 });
 
@@ -100,7 +100,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         settings,
-        message: "✅ تم حفظ إعدادات واتساب الخاصة بالمنشأة بأمان",
+        message: "✅ تم حفظ إعدادات الإشعارات الخاصة بالمنشأة بأمان",
       });
     }
 
@@ -136,8 +136,8 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         whatsappUrl: res.whatsappUrl,
         message:
           res.message.status === "FAILED"
-            ? "⚠️ تعذر الإرسال عبر بوابة API — يمكنك فتح رابط واتساب مباشرة"
-            : "✅ تم اعتماد وتجهيز رسالة واتساب وتسجيلها في سجل التدقيق",
+            ? "⚠️ تعذر الإرسال عبر بوابة API — يمكنك فتح رابط الإشعار مباشرة"
+            : "✅ تم اعتماد وتجهيز الإشعار وتسجيله في سجل التدقيق",
       });
     }
 
@@ -181,13 +181,13 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         draft,
-        message: "✅ تم إنشاء مسودة واتساب للمراجعة والاعتماد",
+        message: "✅ تم إنشاء مسودة إشعار للمراجعة والاعتماد",
       });
     }
 
-    return jsonError("إجراء غير معروف في قائمة واتساب", 400);
+    return jsonError("إجراء غير معروف في قائمة الإشعارات", 400);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "تعذر تنفيذ العملية على قائمة واتساب";
+    const msg = err instanceof Error ? err.message : "تعذر تنفيذ العملية على قائمة الإشعارات";
     return jsonError(msg, 400);
   }
 });

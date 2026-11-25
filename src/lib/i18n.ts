@@ -74,7 +74,7 @@ export const i18n = {
     mNavMobile: "الجوال",
     closeBtn: "إغلاق / Close",
     printPdfBtn: "طباعة / تصدير PDF (Print)",
-    whatsappBtn: "💬 إرسال السند عبر واتساب (WhatsApp)",
+    whatsappBtn: "💬 إرسال إشعار السند",
   },
   en: {
     appSubtitle:
@@ -150,7 +150,7 @@ export const i18n = {
     mNavMobile: "Mobile",
     closeBtn: "Close",
     printPdfBtn: "Print / Export PDF",
-    whatsappBtn: "💬 Send Voucher via WhatsApp",
+    whatsappBtn: "💬 Send Voucher Notification",
   },
 } as const;
 

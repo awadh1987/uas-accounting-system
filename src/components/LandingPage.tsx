@@ -4,17 +4,12 @@ import { isInstalledClientApp } from "@/lib/runtimePlatform";
 import React, { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import {
-  ArrowLeft,
-  ArrowRight,
-  BarChart3,
   Building2,
   CheckCircle2,
   ClipboardList,
-  Coins,
   CreditCard,
   Download,
   Globe2,
-  Layers,
   Lock,
   MapPin,
   MessageCircle,
@@ -24,7 +19,6 @@ import {
   QrCode,
   Search,
   ShieldCheck,
-  Smartphone,
   Sparkles,
   TrendingUp,
   UserPlus,
@@ -33,10 +27,6 @@ import {
 import { DualLogoBadge } from "@/components/DualLogoBadge";
 import { ThemeSwitcherControl } from "@/components/ThemeSwitcherControl";
 import { buildTenantAccentVars } from "@/lib/themeEngine";
-import {
-  FALLBACK_DOWNLOAD_PACKAGES,
-  type DownloadPackageInfo,
-} from "@/lib/downloadsTypes";
 import { getApiBaseUrl } from "@/lib/apiClient";
 import { resolveEffectiveTagline } from "@/lib/branding";
 import { fmtNum } from "@/lib/formulas";
@@ -105,7 +95,6 @@ export function LandingPage({
   onOpenClientPortal,
   onToggleLang,
   onChangeTheme,
-  onSelectProjectCard,
 }: LandingPageProps) {
   const profile = state.enterpriseProfile;
   const isAr = lang === "ar";
@@ -118,11 +107,6 @@ export function LandingPage({
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [publicMetrics, setPublicMetrics] = useState<PublicSummary | null>(null);
-  const [downloadPackages, setDownloadPackages] = useState<DownloadPackageInfo[]>(
-    FALLBACK_DOWNLOAD_PACKAGES
-  );
-  const [downloadsVersion, setDownloadsVersion] = useState<string>("1.0.0");
-  const [downloadsUpdatedAt, setDownloadsUpdatedAt] = useState<string | null>(null);
   const [activeTenants, setActiveTenants] = useState<
     Array<{ slug: string; nameAr: string; nameEn: string; tenantUrl: string }>
   >([]);
@@ -196,23 +180,10 @@ export function LandingPage({
       })
       .catch(() => null);
 
-    if (!isInstalledApp) {
-      fetch("/api/public/downloads", { cache: "no-store" })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (active && Array.isArray(data?.packages) && data.packages.length > 0) {
-            setDownloadPackages(data.packages as DownloadPackageInfo[]);
-            if (data.version) setDownloadsVersion(String(data.version));
-            if (data.updatedAt) setDownloadsUpdatedAt(String(data.updatedAt));
-          }
-        })
-        .catch(() => null);
-    }
-
     return () => {
       active = false;
     };
-  }, [isInstalledApp]);
+  }, []);
 
   async function runVerifyLookup(lookupTerm: string) {
     const trimmed = lookupTerm.trim();
@@ -263,7 +234,6 @@ export function LandingPage({
     lang
   );
 
-  const ArrowIcon = isAr ? ArrowLeft : ArrowRight;
   const totalSalesFallback = state.sales.reduce((s, x) => s + Number(x.total || 0), 0);
 
   return (
@@ -359,12 +329,6 @@ export function LandingPage({
                   <span className="sm:hidden">APK</span>
                 </a>
 
-                <a
-                  href="#downloads-center"
-                  className="hidden md:inline-flex px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold items-center gap-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
-                >
-                  <span>{isAr ? "التحميلات" : "Downloads"}</span>
-                </a>
               </>
             )}
 
@@ -391,7 +355,7 @@ export function LandingPage({
                   </button>
                 ) : (
                   <Link
-                    href="/portal"
+                    href="/client/portal/"
                     className="px-3.5 py-2 rounded-xl border border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold flex items-center gap-1.5 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition"
                   >
                     <Users className="w-3.5 h-3.5" />
@@ -456,27 +420,6 @@ export function LandingPage({
               </div>
             )}
 
-            {!isInstalledApp && !isTenantBranded && (
-              <div className="pt-2 flex flex-wrap gap-3">
-                <a
-                  href="/downloads/UAS-Setup-Win64.exe"
-                  download="UAS-Setup-Win64.exe"
-                  className="px-5 py-3.5 rounded-2xl border border-indigo-500/40 bg-indigo-50/50 dark:bg-indigo-950/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 text-sm font-bold shadow-xs flex items-center gap-2 text-indigo-700 dark:text-indigo-300 transition"
-                >
-                  <Monitor className="w-4 h-4 text-indigo-600" />
-                  <span>{isAr ? "تحميل نسخة ويندوز (Desktop / LAN)" : "Download Windows Setup"}</span>
-                </a>
-
-                <a
-                  href="/downloads/UAS-Mobile-Release-qat.world.apk"
-                  download="UAS-Mobile-Release-qat.world.apk"
-                  className="px-5 py-3.5 rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-bold shadow-xs flex items-center gap-2 text-slate-800 dark:text-slate-200 transition"
-                >
-                  <Download className="w-4 h-4 text-emerald-600" />
-                  <span>{isAr ? "تحميل تطبيق Android APK الميداني" : "Download Android APK"}</span>
-                </a>
-              </div>
-            )}
           </div>
 
           {/* Clean Public Voucher QR Verification Box */}
@@ -588,7 +531,7 @@ export function LandingPage({
                   : "";
               const buildPortalHref = (paramsStr?: string) => {
                 const parts = [paramsStr, slugQuery].filter(Boolean);
-                return parts.length > 0 ? `/portal?${parts.join("&")}` : "/portal";
+                return parts.length > 0 ? `/client/portal/?${parts.join("&")}` : "/client/portal/";
               };
               const directoryBtnClass =
                 "min-h-[44px] px-4 py-2.5 rounded-2xl border border-emerald-500/40 bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-200 text-xs font-extrabold inline-flex items-center justify-center gap-2 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition shadow-xs";
@@ -838,23 +781,6 @@ export function LandingPage({
                     </div>
                   </div>
 
-                  {/* Single Clean Workspace Login Entry */}
-                  <div className="pt-3 border-t border-emerald-200/70 dark:border-emerald-900/50 flex flex-wrap items-center justify-between gap-3">
-                    <div className="text-xs text-slate-600 dark:text-slate-300 font-semibold">
-                      {isAr
-                        ? `منطقة دخول فريق العمل في ${legalName}`
-                        : `${legalName} Workspace Portal Access`}
-                    </div>
-                    <button
-                      type="button"
-                      data-testid="tenant-staff-login-cta"
-                      onClick={currentUser ? () => onEnterErp("dashboard") : onOpenLogin}
-                      className="min-h-[44px] px-6 py-2.5 rounded-2xl border border-slate-300 dark:border-slate-700 bg-slate-900 text-white dark:bg-white dark:text-slate-900 text-xs sm:text-sm font-black inline-flex items-center gap-2 hover:opacity-90 transition shadow-sm"
-                    >
-                      <Lock className="w-4 h-4 shrink-0" />
-                      <span>{isAr ? "دخول" : "Sign In"}</span>
-                    </button>
-                  </div>
                 </div>
               );
             })()}
@@ -921,82 +847,6 @@ export function LandingPage({
           </section>
         )}
 
-        {/* Feature Pillars Grid (Global SaaS Standard) */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-8 py-8 sm:py-12 border-t border-slate-200/80 dark:border-slate-800">
-          <div className="text-center max-w-2xl mx-auto mb-10 space-y-2">
-            <h3 className="text-xl sm:text-2xl font-black">
-              {isAr ? "ركائز النظام المحاسبي الموحد" : "Enterprise Core Architecture"}
-            </h3>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-              {isAr
-                ? "بنية تحتية مالية متكاملة مصممة وفق أحدث المعايير المحاسبية الدولية"
-                : "Institutional-grade financial infrastructure built on international accounting standards"}
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-            {/* Pillar 1 */}
-            <div className="card-surface rounded-2xl p-6 space-y-3 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/50 transition">
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-                <ShieldCheck className="w-5 h-5" />
-              </div>
-              <h4 className="font-black text-sm">
-                {isAr ? "دفتر الأستاذ العام والقيد المزدوج" : "Double-Entry General Ledger"}
-              </h4>
-              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                {isAr
-                  ? "ترحيل ذري متوازن 100% مع شجرة حسابات قياسية من 5 مستويات وسجل تدقيق غير قابل للتعديل."
-                  : "Atomic balanced journal entries with 5-tier Chart of Accounts and immutable audit trail."}
-              </p>
-            </div>
-
-            {/* Pillar 2 */}
-            <div className="card-surface rounded-2xl p-6 space-y-3 border border-slate-200 dark:border-slate-800 hover:border-indigo-500/50 transition">
-              <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
-                <Layers className="w-5 h-5" />
-              </div>
-              <h4 className="font-black text-sm">
-                {isAr ? "إدارة المشاريع والمخزون" : "Projects & Inventory Control"}
-              </h4>
-              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                {isAr
-                  ? "تتبع دقيق لدورات الإنتاج والمشاريع والقطفات الزراعية مع مراقبة المستودعات وحركات التوريد."
-                  : "Multi-project tracking, harvest production cycles, inventory batches, and supply chain control."}
-              </p>
-            </div>
-
-            {/* Pillar 3 */}
-            <div className="card-surface rounded-2xl p-6 space-y-3 border border-slate-200 dark:border-slate-800 hover:border-amber-500/50 transition">
-              <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center">
-                <Coins className="w-5 h-5" />
-              </div>
-              <h4 className="font-black text-sm">
-                {isAr ? "الخزينة والعملات المتعددة" : "Treasury & Multi-Currency"}
-              </h4>
-              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                {isAr
-                  ? "مراقبة الصناديق النقدية والحسابات البنكية مع فروق أسعار الصرف وإصدار السندات والتحصيلات."
-                  : "Multi-currency bank & vault management (YER, SAR, USD) with real-time settlement vouchers."}
-              </p>
-            </div>
-
-            {/* Pillar 4 */}
-            <div className="card-surface rounded-2xl p-6 space-y-3 border border-slate-200 dark:border-slate-800 hover:border-cyan-500/50 transition">
-              <div className="w-10 h-10 rounded-xl bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 flex items-center justify-center">
-                <BarChart3 className="w-5 h-5" />
-              </div>
-              <h4 className="font-black text-sm">
-                {isAr ? "التقارير والقوائم المالية اللحظية" : "Live Financial Statements"}
-              </h4>
-              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                {isAr
-                  ? "ميزان مراجعة فوري، قائمة الدخل، وقائمة المركز المالي مع إمكانية التصدير إلى Excel و PDF."
-                  : "Instant trial balance, income statement, and balance sheet with one-click Excel & PDF export."}
-              </p>
-            </div>
-          </div>
-        </section>
-
         {/* Live Enterprise Track Record (Optional) */}
         {profile?.showPublicMetrics !== false && (
           <section className="max-w-7xl mx-auto px-4 sm:px-8 py-8">
@@ -1056,209 +906,6 @@ export function LandingPage({
           </section>
         )}
 
-        {/* Active Projects Showcase (Tenant Workspaces Only; root uses active tenant cards above) */}
-        {isTenantBranded && state.projects.length > 0 && (
-          <section className="max-w-7xl mx-auto px-4 sm:px-8 py-8 border-t border-slate-200/80 dark:border-slate-800">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-6">
-              <div>
-                <h3 className="text-lg font-black">
-                  {isAr ? "مشاريع المؤسسة الإنتاجية (Enterprise Portfolio)" : "Enterprise Portfolio"}
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  {isAr
-                    ? "انقر على أي مشروع للدخول المباشر إلى جذر المشروع وسجلات عملياته بعد التحقق الأمني"
-                    : "Click any project card to access its root workspace context & financial records"}
-                </p>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-              {state.projects.slice(0, 3).map((proj) => (
-                <div
-                  key={proj.id}
-                  data-testid={`portfolio-project-${proj.id}`}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() =>
-                    onSelectProjectCard
-                      ? onSelectProjectCard(proj.id)
-                      : onEnterErp("projects")
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      if (onSelectProjectCard) onSelectProjectCard(proj.id);
-                      else onEnterErp("projects");
-                    }
-                  }}
-                  className="card-surface rounded-2xl p-5 space-y-3 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/70 hover:shadow-lg transition cursor-pointer group focus:outline-none focus:ring-2 focus:ring-emerald-500/40 text-start"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 font-bold text-slate-700 dark:text-slate-300">
-                      {proj.code || proj.id.toUpperCase()}
-                    </span>
-                    <span className="accent-badge px-2.5 py-1 rounded-lg text-[11px] font-bold group-hover:bg-emerald-600 group-hover:text-white transition">
-                      {proj.status || "ACTIVE"}
-                    </span>
-                  </div>
-                  <div>
-                    <h4 className="font-extrabold text-base group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition">
-                      {proj.nameAr || proj.name}
-                    </h4>
-                    {proj.notes && <p className="text-xs text-slate-500 mt-1 line-clamp-2">{proj.notes}</p>}
-                  </div>
-                  <div className="flex justify-between items-center text-xs pt-2 border-t border-slate-100 dark:border-slate-800">
-                    <span className="text-slate-500">{isAr ? "الموازنة:" : "Budget:"}</span>
-                    <span className="font-extrabold text-emerald-600 flex items-center gap-1.5">
-                      <span>{fmtNum(proj.budgetTotal ?? proj.estimatedValue)} YER</span>
-                      <ArrowIcon className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100 group-hover:translate-x-[-2px] rtl:group-hover:translate-x-[-2px] ltr:group-hover:translate-x-[2px] transition" />
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* Visitor Downloads Center (Android APK & Windows Desktop/LAN .exe — Root Distribution Only) */}
-        {!isTenantBranded && !isInstalledApp && (
-          <section
-            id="downloads-center"
-            data-testid="public-downloads-section"
-            className="max-w-7xl mx-auto px-4 sm:px-8 py-10 border-t border-slate-200/80 dark:border-slate-800 space-y-5"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="text-lg sm:text-xl font-black flex items-center gap-2">
-                  <Download className="w-5 h-5 text-emerald-600 shrink-0" />
-                  <span>{isAr ? "التطبيقات والتحميلات الرسمية" : "Official Desktop & Mobile Downloads"}</span>
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  {isAr
-                    ? "تحميل مباشر دون الحاجة لتسجيل الدخول — حزم أندرويد وويندوز الموثقة مع حجم الملف والإصدار الفعلي"
-                    : "Direct public downloads without sign-in required — verified Android APK and Windows installers with live file sizes & version info"}
-                </p>
-              </div>
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                <span>{isAr ? `الإصدار: v${downloadsVersion}` : `Release v${downloadsVersion}`}</span>
-                {downloadsUpdatedAt && (
-                  <>
-                    <span>•</span>
-                    <span dir="ltr">{downloadsUpdatedAt.slice(0, 10)}</span>
-                  </>
-                )}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {downloadPackages.map((pkg) => {
-                const isAndroid = pkg.platform === "android";
-                const updatedDate = pkg.updatedAt ? pkg.updatedAt.slice(0, 10) : null;
-                return (
-                  <div
-                    key={pkg.id}
-                    data-testid={`download-card-${pkg.platform}`}
-                    className="card-surface rounded-3xl p-5 sm:p-6 border border-slate-200 dark:border-slate-800 flex flex-col justify-between gap-4 shadow-sm hover:border-emerald-500/50 transition"
-                  >
-                    <div className="space-y-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <div
-                            className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${isAndroid
-                              ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                              : "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400"
-                              }`}
-                          >
-                            {isAndroid ? <Smartphone className="w-5 h-5" /> : <Monitor className="w-5 h-5" />}
-                          </div>
-                          <div className="min-w-0">
-                            <h4 className="font-black text-sm sm:text-base truncate">
-                              {isAr ? pkg.titleAr : pkg.titleEn}
-                            </h4>
-                            <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate" dir="ltr">
-                              {pkg.fileName}
-                            </p>
-                          </div>
-                        </div>
-
-                        <span
-                          className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase ${pkg.exists
-                            ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                            : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                            }`}
-                        >
-                          {pkg.exists
-                            ? isAr ? "متاح للتحميل" : "Available"
-                            : isAr ? "غير مرفوع حالياً" : "Pending Upload"}
-                        </span>
-                      </div>
-
-                      <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                        {isAr ? pkg.subtitleAr : pkg.subtitleEn}
-                      </p>
-
-                      <div className="grid grid-cols-3 gap-2 text-[11px] bg-slate-50 dark:bg-slate-900/70 p-2.5 rounded-2xl border border-slate-200/70 dark:border-slate-800">
-                        <div>
-                          <div className="text-slate-400">{isAr ? "نوع الملف" : "File Type"}</div>
-                          <div className="font-black font-mono uppercase">{pkg.extension}</div>
-                        </div>
-                        <div>
-                          <div className="text-slate-400">{isAr ? "الحجم" : "File Size"}</div>
-                          <div className="font-black font-mono" dir="ltr">
-                            {pkg.sizeFormatted}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-slate-400">{isAr ? "الإصدار / التاريخ" : "Version / Date"}</div>
-                          <div className="font-bold font-mono truncate" dir="ltr">
-                            {updatedDate ? `v${pkg.version} (${updatedDate})` : `v${pkg.version}`}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      <a
-                        href={pkg.downloadUrl}
-                        download={pkg.fileName}
-                        data-testid={`download-link-${pkg.platform}`}
-                        aria-disabled={!pkg.exists}
-                        className={`flex-1 min-h-[44px] px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-black inline-flex items-center justify-center gap-2 transition shadow-sm ${pkg.exists
-                          ? isAndroid
-                            ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-                            : "bg-indigo-600 hover:bg-indigo-700 text-white"
-                          : "bg-slate-200 dark:bg-slate-800 text-slate-400 pointer-events-none"
-                          }`}
-                      >
-                        <Download className="w-4 h-4 shrink-0" />
-                        <span>
-                          {pkg.exists
-                            ? isAr
-                              ? `تحميل مباشر (${pkg.sizeFormatted})`
-                              : `Download Now (${pkg.sizeFormatted})`
-                            : isAr
-                              ? "غير متاح بعد"
-                              : "Not Yet Uploaded"}
-                        </span>
-                      </a>
-
-                      {pkg.exists && pkg.mirrorDownloadUrl && pkg.mirrorFileName && (
-                        <a
-                          href={pkg.mirrorDownloadUrl}
-                          download={pkg.mirrorFileName}
-                          className="min-h-[44px] px-3 py-2 rounded-2xl border border-slate-300 dark:border-slate-700 text-[11px] font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center justify-center"
-                          title={pkg.mirrorFileName}
-                        >
-                          {pkg.mirrorFileName}
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
         {/* Corporate Information Section */}
         <section className="max-w-7xl mx-auto px-4 sm:px-8 py-10 border-t border-slate-200/80 dark:border-slate-800">
           <div className="card-surface rounded-3xl p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center border border-slate-200 dark:border-slate-800">
@@ -1294,7 +941,7 @@ export function LandingPage({
                   className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 font-bold hover:bg-emerald-500/20 transition"
                 >
                   <MessageCircle className="w-4 h-4 shrink-0" />
-                  <span>{isAr ? "واتساب المؤسسة" : "Enterprise WhatsApp"}</span>
+                  <span>{isAr ? "التواصل المباشر مع المؤسسة" : "Direct Contact"}</span>
                 </button>
               )}
               {(profile?.contactAddress || profile?.address) && (

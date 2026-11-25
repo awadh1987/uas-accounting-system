@@ -100,7 +100,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     const msg = result.idempotentReplay
       ? "ℹ️ تم اعتماد وترحيل هذا الإيصال مسبقاً (حماية ضد التكرار)"
       : action === "APPROVE"
-      ? `✅ تم اعتماد الإيصال وترحيل سند القبض (${result.receiptVoucherNumber}) وإعداد مسودة واتساب`
+      ? `✅ تم اعتماد الإيصال وترحيل سند القبض (${result.receiptVoucherNumber}) وإعداد مسودة إشعار`
       : action === "RETURN_FOR_CLARIFICATION"
       ? "↩️ تم إعادة الإيصال للعميل للتوضيح دون التأثير على الأرصدة"
       : "❌ تم رفض الإيصال وإغلاقه في سجل المراجعة";

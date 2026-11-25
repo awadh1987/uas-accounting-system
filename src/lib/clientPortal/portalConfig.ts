@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { normalizeSectorMode, type SectorMode } from "@/lib/clientPortal/portalPolicy";
 
 export interface PickupOptionConfig {
   code: string;
@@ -44,6 +45,10 @@ export interface TenantFormConfig {
   allowCustomPickup: boolean;
   allowUnlistedItems: boolean;
   defaultReserveStock: boolean;
+  /** Tenant default sector visibility for clients (BOTH | HARVEST_ONLY | COMMERCIAL_ONLY). */
+  defaultSectorMode: SectorMode;
+  /** Let clients pick their preferred sector during self-registration. */
+  allowSectorPreferenceOnRegister: boolean;
   pickupOptions: PickupOptionConfig[];
   unitOptions: PortalUnitOption[];
   clientTypes: PortalClientTypeOption[];
@@ -83,6 +88,8 @@ export const DEFAULT_TENANT_FORM_CONFIG: TenantFormConfig = {
   allowCustomPickup: true,
   allowUnlistedItems: true,
   defaultReserveStock: false,
+  defaultSectorMode: "BOTH",
+  allowSectorPreferenceOnRegister: false,
   pickupOptions: [
     { code: "MARKET", labelAr: "السوق", labelEn: "Market", type: "MARKET" },
     { code: "BRANCH_MAIN", labelAr: "فرع المبيعات الرئيسي", labelEn: "Main Branch", type: "BRANCH" },
@@ -232,6 +239,8 @@ export function normalizeTenantFormConfig(raw: unknown): TenantFormConfig {
     allowCustomPickup: obj.allowCustomPickup === undefined ? true : Boolean(obj.allowCustomPickup),
     allowUnlistedItems: obj.allowUnlistedItems === undefined ? true : Boolean(obj.allowUnlistedItems),
     defaultReserveStock: Boolean(obj.defaultReserveStock),
+    defaultSectorMode: normalizeSectorMode(obj.defaultSectorMode, "BOTH"),
+    allowSectorPreferenceOnRegister: Boolean(obj.allowSectorPreferenceOnRegister),
     pickupOptions: sanitizePickupOptions(obj.pickupOptions),
     unitOptions: sanitizeUnitOptions(obj.unitOptions),
     clientTypes:

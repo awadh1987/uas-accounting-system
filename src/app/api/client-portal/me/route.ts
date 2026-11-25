@@ -9,6 +9,7 @@ import {
 } from "@/lib/clientPortal/clientAuth";
 import {
   getClientPortalFinancialSnapshot,
+  resolveClientSectorAccess,
   sanitizeClientAccount,
   updateClientPortalProfile,
 } from "@/lib/clientPortal/portalService";
@@ -35,7 +36,8 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
       creditLimit = Number(cust?.creditLimit || 0);
     }
 
-    const account = sanitizeClientAccount(auth.account, creditLimit);
+    const sectorAccess = await resolveClientSectorAccess(auth.account);
+    const account = { ...sanitizeClientAccount(auth.account, creditLimit), ...sectorAccess };
     const [memberships, snapshot] = await Promise.all([
       listClientTenantMemberships({
         globalClientId: auth.account.globalClientId,

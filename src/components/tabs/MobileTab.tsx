@@ -76,7 +76,13 @@ export function MobileTab({
   }, []);
 
   useEffect(() => {
-    void loadSyncDetails();
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) void loadSyncDetails();
+    });
+    return () => {
+      active = false;
+    };
   }, [offlineQueueCount, offlineMode, loadSyncDetails]);
 
   async function handleResolveConflict(
@@ -244,7 +250,7 @@ export function MobileTab({
                 ✅ <strong>توافق اللمس والشاشات الصغيرة:</strong> أزرار وحقول مكبرة (44px+) ومحاكي شاشة هاتف ذكي مدمج (412px).
               </li>
               <li>
-                ✅ <strong>مشاركة الفواتير عبر واتساب و QR:</strong> إرسال السند مباشرة لتطبيق واتساب على الجوال.
+                ✅ <strong>مشاركة الفواتير عبر الإشعارات و QR:</strong> إرسال السند مباشرة للعميل على الجوال.
               </li>
             </ul>
           </div>
