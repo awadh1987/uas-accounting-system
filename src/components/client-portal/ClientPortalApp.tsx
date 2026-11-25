@@ -2876,45 +2876,45 @@ export function ClientPortalApp({
 
             {/* Dual Trading Sector Top Switcher (Section 1 Harvest vs Section 2 Commercial) */}
             {showSectorSwitcher && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5" data-testid="portal-sector-switcher">
-              <button
-                type="button"
-                data-testid="portal-sector-tab-harvest"
-                onClick={() => switchPortalSector("HARVEST")}
-                className={`p-3.5 rounded-2xl border text-right transition flex items-center justify-between gap-2 ${activeSector === "HARVEST"
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5" data-testid="portal-sector-switcher">
+                <button
+                  type="button"
+                  data-testid="portal-sector-tab-harvest"
+                  onClick={() => switchPortalSector("HARVEST")}
+                  className={`p-3.5 rounded-2xl border text-right transition flex items-center justify-between gap-2 ${activeSector === "HARVEST"
                     ? "border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/40 shadow-sm"
                     : "card-surface border-slate-200 dark:border-slate-700 hover:border-emerald-300"
-                  }`}
-              >
-                <div>
-                  <div className="font-black text-xs sm:text-sm text-slate-900 dark:text-white">
-                    القطاع الزراعي
+                    }`}
+                >
+                  <div>
+                    <div className="font-black text-xs sm:text-sm text-slate-900 dark:text-white">
+                      القطاع الزراعي
+                    </div>
                   </div>
-                </div>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${activeSector === "HARVEST" ? "accent-bg" : "bg-slate-100 dark:bg-slate-800 text-slate-500"}`}>
-                  {activeSector === "HARVEST" ? "نشط" : "فتح"}
-                </span>
-              </button>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${activeSector === "HARVEST" ? "accent-bg" : "bg-slate-100 dark:bg-slate-800 text-slate-500"}`}>
+                    {activeSector === "HARVEST" ? "نشط" : "فتح"}
+                  </span>
+                </button>
 
-              <button
-                type="button"
-                data-testid="portal-sector-tab-commercial"
-                onClick={() => switchPortalSector("COMMERCIAL")}
-                className={`p-3.5 rounded-2xl border text-right transition flex items-center justify-between gap-2 ${activeSector === "COMMERCIAL"
+                <button
+                  type="button"
+                  data-testid="portal-sector-tab-commercial"
+                  onClick={() => switchPortalSector("COMMERCIAL")}
+                  className={`p-3.5 rounded-2xl border text-right transition flex items-center justify-between gap-2 ${activeSector === "COMMERCIAL"
                     ? "border-amber-500 bg-amber-50/80 dark:bg-amber-950/40 shadow-sm"
                     : "card-surface border-slate-200 dark:border-slate-700 hover:border-amber-300"
-                  }`}
-              >
-                <div>
-                  <div className="font-black text-xs sm:text-sm text-slate-900 dark:text-white">
-                    القطاع التجاري
+                    }`}
+                >
+                  <div>
+                    <div className="font-black text-xs sm:text-sm text-slate-900 dark:text-white">
+                      القطاع التجاري
+                    </div>
                   </div>
-                </div>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${activeSector === "COMMERCIAL" ? "bg-amber-600 text-white" : "bg-slate-100 dark:bg-slate-800 text-slate-500"}`}>
-                  {activeSector === "COMMERCIAL" ? "نشط" : "فتح"}
-                </span>
-              </button>
-            </div>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${activeSector === "COMMERCIAL" ? "bg-amber-600 text-white" : "bg-slate-100 dark:bg-slate-800 text-slate-500"}`}>
+                    {activeSector === "COMMERCIAL" ? "نشط" : "فتح"}
+                  </span>
+                </button>
+              </div>
             )}
 
             {/* Portal Top Summary + Sub-Tabs */}
@@ -3144,8 +3144,8 @@ export function ClientPortalApp({
                         {editingRequestId
                           ? "تعديل طلب قيد المراجعة"
                           : formConfig?.sectorForms?.[activeSector]?.headingAr ||
-                            formConfig?.requestHeadingAr ||
-                            "تسجيل طلب"}
+                          formConfig?.requestHeadingAr ||
+                          "تسجيل طلب"}
                       </h2>
                       <p className="text-xs text-slate-500">
                         {formConfig?.sectorForms?.[activeSector]?.subtitleAr ||
@@ -3226,11 +3226,10 @@ export function ClientPortalApp({
                             ].map((tag) => (
                               <span
                                 key={tag.label}
-                                className={`px-2 py-0.5 rounded-full font-bold ${
-                                  tag.ok
-                                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
-                                    : "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
-                                }`}
+                                className={`px-2 py-0.5 rounded-full font-bold ${tag.ok
+                                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+                                  : "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+                                  }`}
                               >
                                 {tag.ok ? "مسموح: " : "مقفل: "}
                                 {tag.label}
@@ -3831,8 +3830,8 @@ export function ClientPortalApp({
                       type="button"
                       onClick={() => setReqIncludeHidden((prev) => !prev)}
                       className={`px-2.5 py-2 rounded-xl border font-bold inline-flex items-center gap-1 ${reqIncludeHidden
-                          ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-200"
-                          : "border-slate-300 dark:border-slate-700"
+                        ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-200"
+                        : "border-slate-300 dark:border-slate-700"
                         }`}
                     >
                       {reqIncludeHidden ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
@@ -5123,8 +5122,8 @@ export function ClientPortalApp({
                     <div
                       key={m.id}
                       className={`p-3 rounded-xl border flex flex-wrap items-center justify-between gap-2 ${isCurrent
-                          ? "border-emerald-400 bg-emerald-50/60 dark:bg-emerald-950/30"
-                          : "border-slate-200 dark:border-slate-700"
+                        ? "border-emerald-400 bg-emerald-50/60 dark:bg-emerald-950/30"
+                        : "border-slate-200 dark:border-slate-700"
                         }`}
                     >
                       <div className="space-y-0.5">

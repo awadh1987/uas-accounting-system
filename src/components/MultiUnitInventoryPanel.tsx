@@ -565,9 +565,9 @@ export function MultiUnitInventoryPanel({
       }
       notify(
         res.data.warning ||
-          (isAr
-            ? `تم تسجيل الحركة المخزنية • الرصيد المركب: ${res.data.compoundBreakdown || ""}`
-            : `Movement recorded • Stock: ${res.data.compoundBreakdown || ""}`)
+        (isAr
+          ? `تم تسجيل الحركة المخزنية • الرصيد المركب: ${res.data.compoundBreakdown || ""}`
+          : `Movement recorded • Stock: ${res.data.compoundBreakdown || ""}`)
       );
       setMovQty("1");
       setMovReference("");
@@ -639,8 +639,8 @@ export function MultiUnitInventoryPanel({
                       ? "إخفاء الأصناف المؤرشفة"
                       : "Hide Archived Items"
                     : isAr
-                    ? "إظهار الأصناف المؤرشفة"
-                    : "Show Archived Items",
+                      ? "إظهار الأصناف المؤرشفة"
+                      : "Show Archived Items",
                   icon: <Archive className="w-3.5 h-3.5" />,
                   onClick: () => setShowArchivedItems((p) => !p),
                 },
@@ -651,8 +651,8 @@ export function MultiUnitInventoryPanel({
                       ? "إظهار الأصناف التجريبية"
                       : "Show Test Items"
                     : isAr
-                    ? "إخفاء الأصناف التجريبية"
-                    : "Hide Test Items",
+                      ? "إخفاء الأصناف التجريبية"
+                      : "Hide Test Items",
                   onClick: () => setHideTestRecords((p) => !p),
                 },
                 {
@@ -725,8 +725,8 @@ export function MultiUnitInventoryPanel({
                     ? "جاري الاستيراد..."
                     : "Importing..."
                   : isAr
-                  ? "اعتماد الاستيراد الجماعي"
-                  : "Run Bulk Import"}
+                    ? "اعتماد الاستيراد الجماعي"
+                    : "Run Bulk Import"}
               </button>
             </div>
           </form>
@@ -744,8 +744,8 @@ export function MultiUnitInventoryPanel({
                   ? "تعديل بطاقة الصنف والبيانات التجارية"
                   : "Edit Item Master Card"
                 : isAr
-                ? "بطاقة صنف جديدة (تدعم خيار أخرى / مخصص في كل الحقول)"
-                : "New Item Master (Universal Other / Custom Support)"}
+                  ? "بطاقة صنف جديدة (تدعم خيار أخرى / مخصص في كل الحقول)"
+                  : "New Item Master (Universal Other / Custom Support)"}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
@@ -1268,11 +1268,10 @@ export function MultiUnitInventoryPanel({
                         </td>
                         <td className="p-2 whitespace-nowrap">
                           <span
-                            className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] ${
-                              isInbound
-                                ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
-                                : "bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300"
-                            }`}
+                            className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] ${isInbound
+                              ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
+                              : "bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300"
+                              }`}
                           >
                             {m.directionLabelAr || (isInbound ? "وارد (+)" : "صادر (-)")} • {m.movementType}
                           </span>
@@ -1338,8 +1337,8 @@ export function MultiUnitInventoryPanel({
                     activeMovItem
                       ? `${activeMovItem.nameAr} (${activeMovItem.sku})`
                       : isAr
-                      ? "اختر الصنف"
-                      : "Select item"
+                        ? "اختر الصنف"
+                        : "Select item"
                   }
                   value={movItemId}
                   onChange={(e) => {
@@ -1501,19 +1500,18 @@ export function MultiUnitInventoryPanel({
           <button
             type="button"
             onClick={() => setShowArchivedItems((p) => !p)}
-            className={`px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${
-              showArchivedItems
-                ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700"
-                : "bg-slate-200/50 dark:bg-slate-700/50 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600"
-            }`}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${showArchivedItems
+              ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700"
+              : "bg-slate-200/50 dark:bg-slate-700/50 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600"
+              }`}
           >
             {showArchivedItems
               ? isAr
                 ? "إخفاء الأصناف المؤرشفة"
                 : "Hide Archived Items"
               : isAr
-              ? "إظهار الأصناف المؤرشفة"
-              : "Show Archived Items"}
+                ? "إظهار الأصناف المؤرشفة"
+                : "Show Archived Items"}
           </button>
         </div>
 
@@ -1540,11 +1538,10 @@ export function MultiUnitInventoryPanel({
                     return (
                       <tr
                         key={item.id}
-                        className={`hover:bg-slate-50/50 dark:hover:bg-slate-800/40 transition ${
-                          isArchived
-                            ? "bg-amber-50/20 dark:bg-amber-950/10 text-slate-500"
-                            : ""
-                        }`}
+                        className={`hover:bg-slate-50/50 dark:hover:bg-slate-800/40 transition ${isArchived
+                          ? "bg-amber-50/20 dark:bg-amber-950/10 text-slate-500"
+                          : ""
+                          }`}
                       >
                         <td className="p-2">
                           <div className="flex items-center gap-1.5 flex-wrap">
@@ -1616,8 +1613,8 @@ export function MultiUnitInventoryPanel({
                                       ? "استعادة الصنف"
                                       : "Restore Item"
                                     : isAr
-                                    ? "أرشفة الصنف"
-                                    : "Archive Item",
+                                      ? "أرشفة الصنف"
+                                      : "Archive Item",
                                   icon: isArchived ? (
                                     <RotateCcw className="w-3.5 h-3.5" />
                                   ) : (
@@ -1634,8 +1631,8 @@ export function MultiUnitInventoryPanel({
                                       ? "حذف نهائي"
                                       : "Delete Permanently"
                                     : isAr
-                                    ? "حذف الصنف"
-                                    : "Delete Item",
+                                      ? "حذف الصنف"
+                                      : "Delete Item",
                                   icon: <Trash2 className="w-3.5 h-3.5" />,
                                   tone: "danger",
                                   dividerBefore: true,

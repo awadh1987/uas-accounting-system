@@ -634,11 +634,10 @@ export function CustomersTab({
                 key={tab.id}
                 type="button"
                 onClick={() => setViewSection(tab.id)}
-                className={`px-3 py-1.5 rounded-lg font-bold transition ${
-                  viewSection === tab.id
-                    ? "accent-bg shadow-sm"
-                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
-                }`}
+                className={`px-3 py-1.5 rounded-lg font-bold transition ${viewSection === tab.id
+                  ? "accent-bg shadow-sm"
+                  : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  }`}
               >
                 {tab.label}
               </button>
@@ -666,247 +665,247 @@ export function CustomersTab({
 
         {/* Single Unified Customer Cards Grid */}
         {(viewSection === "cards" || viewSection === "both") && (
-        <div className="space-y-2.5">
-          <div className="text-xs font-extrabold text-slate-500 flex items-center justify-between">
-            <span className="flex items-center gap-1.5">
-              <Users className="w-3.5 h-3.5 text-emerald-600" />
-              <span>بطاقات العملاء الموحدة وملفات الأستاذ العام ({customerNames.length})</span>
-            </span>
-          </div>
+          <div className="space-y-2.5">
+            <div className="text-xs font-extrabold text-slate-500 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-emerald-600" />
+                <span>بطاقات العملاء الموحدة وملفات الأستاذ العام ({customerNames.length})</span>
+              </span>
+            </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-            {filterOutSyntheticTestRecords(
-              visibleCustomers.map((cName) => {
-                const master = customers.find((m) => m.nameAr === cName || m.name === cName);
-                const rows = allSales.filter((s) => s.customer === cName);
-                return { cName, master, rows, name: cName, code: master?.code || "" };
-              }),
-              hideTestRecords
-            ).visible.map(({ cName, master, rows }) => {
-              const isArchived = master ? master.isActive === false || Boolean(master.archivedAt) : false;
-              if (!showArchived && isArchived) return null;
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {filterOutSyntheticTestRecords(
+                visibleCustomers.map((cName) => {
+                  const master = customers.find((m) => m.nameAr === cName || m.name === cName);
+                  const rows = allSales.filter((s) => s.customer === cName);
+                  return { cName, master, rows, name: cName, code: master?.code || "" };
+                }),
+                hideTestRecords
+              ).visible.map(({ cName, master, rows }) => {
+                const isArchived = master ? master.isActive === false || Boolean(master.archivedAt) : false;
+                if (!showArchived && isArchived) return null;
 
-              const phone = master?.phone || rows[0]?.phone || "—";
-              const code = master?.code || "CUST-000";
-              const glAccountCode = master?.account?.code || "112190xxx";
-              const creditLimit = master?.creditLimit || 0;
-              const costCenterBadge = master?.costCenter?.nameAr || (master?.costCenterId ? "مركز تكلفة" : null);
-              const isTestCustomer = isSyntheticTestRecord({ nameAr: cName, code, phone });
+                const phone = master?.phone || rows[0]?.phone || "—";
+                const code = master?.code || "CUST-000";
+                const glAccountCode = master?.account?.code || "112190xxx";
+                const creditLimit = master?.creditLimit || 0;
+                const costCenterBadge = master?.costCenter?.nameAr || (master?.costCenterId ? "مركز تكلفة" : null);
+                const isTestCustomer = isSyntheticTestRecord({ nameAr: cName, code, phone });
 
-              const bundles = rows.reduce((a, b) => a + Number(b.bundles || 0), 0);
-              const total = master ? master.totalInvoiced : rows.reduce((a, b) => a + Number(b.total || 0), 0);
-              const credit = master ? master.totalCollected : rows.reduce((a, b) => a + Number(b.credit || 0), 0);
-              const debit = master ? master.totalReceivable : rows.reduce((a, b) => a + Number(b.debit || 0), 0);
+                const bundles = rows.reduce((a, b) => a + Number(b.bundles || 0), 0);
+                const total = master ? master.totalInvoiced : rows.reduce((a, b) => a + Number(b.total || 0), 0);
+                const credit = master ? master.totalCollected : rows.reduce((a, b) => a + Number(b.credit || 0), 0);
+                const debit = master ? master.totalReceivable : rows.reduce((a, b) => a + Number(b.debit || 0), 0);
 
-              return (
-                <div
-                  key={cName}
-                  className={`p-4 rounded-2xl border text-xs space-y-3 transition shadow-sm ${isArchived
-                    ? "border-amber-300 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20"
-                    : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                    }`}
-                >
-                  {/* Top: Code + COA + CostCenter + Overflow Menu */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="font-mono text-[10px] font-black px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                        {code}
-                      </span>
-                      <span className="font-mono text-[10px] font-black px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-300/40">
-                        COA {glAccountCode}
-                      </span>
-                      {costCenterBadge && (
-                        <span className="font-bold text-[10px] px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50">
-                          {costCenterBadge}
+                return (
+                  <div
+                    key={cName}
+                    className={`p-4 rounded-2xl border text-xs space-y-3 transition shadow-sm ${isArchived
+                      ? "border-amber-300 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20"
+                      : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                      }`}
+                  >
+                    {/* Top: Code + COA + CostCenter + Overflow Menu */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-mono text-[10px] font-black px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                          {code}
                         </span>
-                      )}
-                      {isArchived && (
-                        <span className="px-2 py-0.5 rounded-md bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-100 text-[10px] font-black">
-                          مؤرشف
+                        <span className="font-mono text-[10px] font-black px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-300/40">
+                          COA {glAccountCode}
                         </span>
-                      )}
-                      {isTestCustomer && (
-                        <span className="px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200 text-[10px] font-bold">
-                          تجريبي
-                        </span>
-                      )}
-                    </div>
+                        {costCenterBadge && (
+                          <span className="font-bold text-[10px] px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50">
+                            {costCenterBadge}
+                          </span>
+                        )}
+                        {isArchived && (
+                          <span className="px-2 py-0.5 rounded-md bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-100 text-[10px] font-black">
+                            مؤرشف
+                          </span>
+                        )}
+                        {isTestCustomer && (
+                          <span className="px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200 text-[10px] font-bold">
+                            تجريبي
+                          </span>
+                        )}
+                      </div>
 
-                    <ActionOverflowMenu
-                      size="xs"
-                      align="end"
-                      label="خيارات بطاقة العميل"
-                      items={[
-                        {
-                          id: "view-ledger",
-                          label: "عرض جدول الحركات والفواتير",
-                          onClick: () => {
-                            setSelectedCustomer(cName);
-                            setViewSection("ledger");
+                      <ActionOverflowMenu
+                        size="xs"
+                        align="end"
+                        label="خيارات بطاقة العميل"
+                        items={[
+                          {
+                            id: "view-ledger",
+                            label: "عرض جدول الحركات والفواتير",
+                            onClick: () => {
+                              setSelectedCustomer(cName);
+                              setViewSection("ledger");
+                            },
                           },
-                        },
-                        {
-                          id: "edit",
-                          label: "تعديل بيانات العميل",
-                          icon: <Edit3 className="w-3.5 h-3.5" />,
-                          hidden: readOnly || !canEditRecords || !master,
-                          onClick: () => master && openEditDrawer(master),
-                        },
-                        {
-                          id: "archive",
-                          label: isArchived ? "استعادة العميل" : "أرشفة العميل",
-                          icon: isArchived ? <RotateCcw className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />,
-                          tone: isArchived ? "default" : "warning",
-                          hidden: readOnly || !canEditRecords || !master,
-                          onClick: () =>
-                            master
-                              ? isArchived
-                                ? handleRestoreCustomer(master)
-                                : handleArchiveCustomer(master, true)
-                              : undefined,
-                        },
-                        {
-                          id: "delete",
-                          label: "حذف العميل",
-                          icon: <Trash2 className="w-3.5 h-3.5" />,
-                          tone: "danger",
-                          dividerBefore: true,
-                          hidden: readOnly || !canEditRecords || !master,
-                          confirmTitle: `حذف العميل (${cName})`,
-                          confirmMessage:
-                            "في حال وجود فواتير أو قيود مرتبطة بهذا العميل سيتم أرشفته آلياً حفاظاً على التاريخ المالي.",
-                          onClick: () => master && handleDeleteCustomer(master, true),
-                        },
-                      ]}
-                    />
-                  </div>
-
-                  {/* Middle: Customer Name, Phone, Credit Limit */}
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <h4 className="font-black text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                        <Users className="w-4 h-4 text-emerald-600 shrink-0" />
-                        <bdi dir="auto" className="truncate">{cName}</bdi>
-                      </h4>
-                      <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
-                        <Phone className="w-3 h-3 text-emerald-600 shrink-0" />
-                        <span>هاتف:</span>
-                        <bdi dir="ltr" className="font-mono font-bold text-slate-700 dark:text-slate-200">{phone}</bdi>
-                        {rows.length > 0 && <span> • العمليات: {rows.length}</span>}
-                      </p>
+                          {
+                            id: "edit",
+                            label: "تعديل بيانات العميل",
+                            icon: <Edit3 className="w-3.5 h-3.5" />,
+                            hidden: readOnly || !canEditRecords || !master,
+                            onClick: () => master && openEditDrawer(master),
+                          },
+                          {
+                            id: "archive",
+                            label: isArchived ? "استعادة العميل" : "أرشفة العميل",
+                            icon: isArchived ? <RotateCcw className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />,
+                            tone: isArchived ? "default" : "warning",
+                            hidden: readOnly || !canEditRecords || !master,
+                            onClick: () =>
+                              master
+                                ? isArchived
+                                  ? handleRestoreCustomer(master)
+                                  : handleArchiveCustomer(master, true)
+                                : undefined,
+                          },
+                          {
+                            id: "delete",
+                            label: "حذف العميل",
+                            icon: <Trash2 className="w-3.5 h-3.5" />,
+                            tone: "danger",
+                            dividerBefore: true,
+                            hidden: readOnly || !canEditRecords || !master,
+                            confirmTitle: `حذف العميل (${cName})`,
+                            confirmMessage:
+                              "في حال وجود فواتير أو قيود مرتبطة بهذا العميل سيتم أرشفته آلياً حفاظاً على التاريخ المالي.",
+                            onClick: () => master && handleDeleteCustomer(master, true),
+                          },
+                        ]}
+                      />
                     </div>
-                    <div className="text-end shrink-0">
-                      <div className="text-[10px] text-slate-500">الحد الائتماني</div>
-                      <div className="font-extrabold text-xs text-slate-700 dark:text-slate-300 tabular-nums">
-                        {formatMoney(creditLimit, "YER")}
-                      </div>
-                    </div>
-                  </div>
 
-                  {/* Bottom: Financial Metrics */}
-                  <div className="grid grid-cols-3 gap-2 pt-2.5 border-t border-slate-100 dark:border-slate-800 text-xs">
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-2 rounded-xl text-center">
-                      <div className="text-[10px] text-slate-500">إجمالي الفواتير</div>
-                      <div className="font-black text-slate-900 dark:text-slate-100 text-xs mt-0.5 tabular-nums">
-                        {formatMoney(total, "YER")}
+                    {/* Middle: Customer Name, Phone, Credit Limit */}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <h4 className="font-black text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                          <Users className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <bdi dir="auto" className="truncate">{cName}</bdi>
+                        </h4>
+                        <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
+                          <Phone className="w-3 h-3 text-emerald-600 shrink-0" />
+                          <span>هاتف:</span>
+                          <bdi dir="ltr" className="font-mono font-bold text-slate-700 dark:text-slate-200">{phone}</bdi>
+                          {rows.length > 0 && <span> • العمليات: {rows.length}</span>}
+                        </p>
                       </div>
-                      {bundles > 0 && (
-                        <div className="text-[9px] text-slate-400 mt-0.5">
-                          {fmtNum(bundles)} وحدة قياس
+                      <div className="text-end shrink-0">
+                        <div className="text-[10px] text-slate-500">الحد الائتماني</div>
+                        <div className="font-extrabold text-xs text-slate-700 dark:text-slate-300 tabular-nums">
+                          {formatMoney(creditLimit, "YER")}
                         </div>
-                      )}
-                    </div>
-                    <div className="bg-emerald-50 dark:bg-emerald-950/30 p-2 rounded-xl text-center">
-                      <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-bold">دائن (مسدد)</div>
-                      <div className="font-black text-emerald-700 dark:text-emerald-400 text-xs mt-0.5 tabular-nums">
-                        {formatMoney(credit, "YER")}
                       </div>
                     </div>
-                    <div className="bg-rose-50 dark:bg-rose-950/30 p-2 rounded-xl text-center">
-                      <div className="text-[10px] text-rose-700 dark:text-rose-400 font-bold">مدين (متبقي)</div>
-                      <div className="font-black text-rose-700 dark:text-rose-400 text-xs mt-0.5 tabular-nums">
-                        {formatMoney(debit, "YER")}
+
+                    {/* Bottom: Financial Metrics */}
+                    <div className="grid grid-cols-3 gap-2 pt-2.5 border-t border-slate-100 dark:border-slate-800 text-xs">
+                      <div className="bg-slate-50 dark:bg-slate-800/50 p-2 rounded-xl text-center">
+                        <div className="text-[10px] text-slate-500">إجمالي الفواتير</div>
+                        <div className="font-black text-slate-900 dark:text-slate-100 text-xs mt-0.5 tabular-nums">
+                          {formatMoney(total, "YER")}
+                        </div>
+                        {bundles > 0 && (
+                          <div className="text-[9px] text-slate-400 mt-0.5">
+                            {fmtNum(bundles)} وحدة قياس
+                          </div>
+                        )}
+                      </div>
+                      <div className="bg-emerald-50 dark:bg-emerald-950/30 p-2 rounded-xl text-center">
+                        <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-bold">دائن (مسدد)</div>
+                        <div className="font-black text-emerald-700 dark:text-emerald-400 text-xs mt-0.5 tabular-nums">
+                          {formatMoney(credit, "YER")}
+                        </div>
+                      </div>
+                      <div className="bg-rose-50 dark:bg-rose-950/30 p-2 rounded-xl text-center">
+                        <div className="text-[10px] text-rose-700 dark:text-rose-400 font-bold">مدين (متبقي)</div>
+                        <div className="font-black text-rose-700 dark:text-rose-400 text-xs mt-0.5 tabular-nums">
+                          {formatMoney(debit, "YER")}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
         )}
 
         {(viewSection === "ledger" || viewSection === "both") && (
-        <div className="overflow-x-auto pt-2 space-y-2 border-t border-slate-100 dark:border-slate-800">
-          <div className="flex items-center justify-between text-xs font-extrabold text-slate-500 pt-1">
-            <span>جدول العمليات وكشوفات الحساب ({visibleRows.length})</span>
-            {selectedCustomer !== "ALL" && (
-              <button
-                type="button"
-                onClick={() => setSelectedCustomer("ALL")}
-                className="text-emerald-600 hover:underline font-bold"
-              >
-                عرض جميع العملاء
-              </button>
+          <div className="overflow-x-auto pt-2 space-y-2 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex items-center justify-between text-xs font-extrabold text-slate-500 pt-1">
+              <span>جدول العمليات وكشوفات الحساب ({visibleRows.length})</span>
+              {selectedCustomer !== "ALL" && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedCustomer("ALL")}
+                  className="text-emerald-600 hover:underline font-bold"
+                >
+                  عرض جميع العملاء
+                </button>
+              )}
+            </div>
+            {visibleRows.length === 0 ? (
+              <EmptyState
+                title="لا توجد حركات مبيعات أو فواتير مطابقة"
+                description="اختر عميلاً آخر أو اضغط على تحديث لعرض الحركات المالية."
+                actionLabel={selectedCustomer !== "ALL" ? "إظهار جميع العملاء" : undefined}
+                onAction={selectedCustomer !== "ALL" ? () => setSelectedCustomer("ALL") : undefined}
+              />
+            ) : (
+              <table className="w-full text-xs text-right border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-800/60">
+                    <th className="p-2.5">اسم العميل</th>
+                    <th className="p-2.5">رقم الهاتف</th>
+                    <th className="p-2.5">المشروع / القطفة</th>
+                    <th className="p-2.5">عملية البيع</th>
+                    <th className="p-2.5">النوع</th>
+                    <th className="p-2.5">الكمية / وحدة القياس</th>
+                    <th className="p-2.5">السعر</th>
+                    <th className="p-2.5">الإجمالي</th>
+                    <th className="p-2.5">دائن (مدفوع)</th>
+                    <th className="p-2.5">مدين (متبقي)</th>
+                    <th className="p-2.5 no-print">إصدار فاتورة / سند</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                  {visibleRows.map((s) => {
+                    const proj = projects.find((p) => p.id === s.projectId);
+                    return (
+                      <tr key={s.id}>
+                        <td className="p-2.5 font-bold">{s.customer}</td>
+                        <td className="p-2.5 font-mono"><bdi dir="ltr">{s.phone}</bdi></td>
+                        <td className="p-2.5">
+                          {proj ? proj.name : ""} — {s.harvest}
+                        </td>
+                        <td className="p-2.5">{s.batch}</td>
+                        <td className="p-2.5">{s.grade}</td>
+                        <td className="p-2.5 font-bold tabular-nums">{fmtNum(s.bundles)}</td>
+                        <td className="p-2.5 tabular-nums">{fmtNum(s.price)}</td>
+                        <td className="p-2.5 font-extrabold tabular-nums">{fmtNum(s.total)}</td>
+                        <td className="p-2.5 text-emerald-600 font-bold tabular-nums">{fmtNum(s.credit)}</td>
+                        <td className="p-2.5 text-rose-600 font-bold tabular-nums">{fmtNum(s.debit)}</td>
+                        <td className="p-2.5 no-print">
+                          <button
+                            type="button"
+                            onClick={() => onOpenSaleVoucher(s)}
+                            className="px-2.5 py-1 rounded-lg accent-bg text-[11px] font-bold"
+                          >
+                            فاتورة / سند
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             )}
           </div>
-          {visibleRows.length === 0 ? (
-            <EmptyState
-              title="لا توجد حركات مبيعات أو فواتير مطابقة"
-              description="اختر عميلاً آخر أو اضغط على تحديث لعرض الحركات المالية."
-              actionLabel={selectedCustomer !== "ALL" ? "إظهار جميع العملاء" : undefined}
-              onAction={selectedCustomer !== "ALL" ? () => setSelectedCustomer("ALL") : undefined}
-            />
-          ) : (
-          <table className="w-full text-xs text-right border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-800/60">
-                <th className="p-2.5">اسم العميل</th>
-                <th className="p-2.5">رقم الهاتف</th>
-                <th className="p-2.5">المشروع / القطفة</th>
-                <th className="p-2.5">عملية البيع</th>
-                <th className="p-2.5">النوع</th>
-                <th className="p-2.5">الكمية / وحدة القياس</th>
-                <th className="p-2.5">السعر</th>
-                <th className="p-2.5">الإجمالي</th>
-                <th className="p-2.5">دائن (مدفوع)</th>
-                <th className="p-2.5">مدين (متبقي)</th>
-                <th className="p-2.5 no-print">إصدار فاتورة / سند</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-              {visibleRows.map((s) => {
-                const proj = projects.find((p) => p.id === s.projectId);
-                return (
-                  <tr key={s.id}>
-                    <td className="p-2.5 font-bold">{s.customer}</td>
-                    <td className="p-2.5 font-mono"><bdi dir="ltr">{s.phone}</bdi></td>
-                    <td className="p-2.5">
-                      {proj ? proj.name : ""} — {s.harvest}
-                    </td>
-                    <td className="p-2.5">{s.batch}</td>
-                    <td className="p-2.5">{s.grade}</td>
-                    <td className="p-2.5 font-bold tabular-nums">{fmtNum(s.bundles)}</td>
-                    <td className="p-2.5 tabular-nums">{fmtNum(s.price)}</td>
-                    <td className="p-2.5 font-extrabold tabular-nums">{fmtNum(s.total)}</td>
-                    <td className="p-2.5 text-emerald-600 font-bold tabular-nums">{fmtNum(s.credit)}</td>
-                    <td className="p-2.5 text-rose-600 font-bold tabular-nums">{fmtNum(s.debit)}</td>
-                    <td className="p-2.5 no-print">
-                      <button
-                        type="button"
-                        onClick={() => onOpenSaleVoucher(s)}
-                        className="px-2.5 py-1 rounded-lg accent-bg text-[11px] font-bold"
-                      >
-                        فاتورة / سند
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          )}
-        </div>
         )}
 
         {(viewSection === "portal" || viewSection === "whatsapp") && (
@@ -916,8 +915,8 @@ export function CustomersTab({
               initialSection={viewSection === "whatsapp" ? "whatsapp" : "requests"}
               canManageSettings={Boolean(
                 canEdit(currentUser, "system") ||
-                  currentUser?.role === "SUPER_ADMIN" ||
-                  currentUser?.role === "CHIEF_ACCOUNTANT"
+                currentUser?.role === "SUPER_ADMIN" ||
+                currentUser?.role === "CHIEF_ACCOUNTANT"
               )}
               staffSignature={currentUser?.name ? `${currentUser.username || currentUser.name}${currentUser.department || currentUser.role ? ` (${currentUser.department || currentUser.role})` : ""}` : undefined}
               onRefreshState={onRefreshState}
