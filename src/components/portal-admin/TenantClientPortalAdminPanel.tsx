@@ -9,6 +9,7 @@ import {
   Clock,
   Copy,
   CornerUpLeft,
+  CreditCard,
   Eye,
   EyeOff,
   FolderOpen,
@@ -19,12 +20,16 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Search,
   Send,
   Settings,
   Trash2,
   UserCheck,
+  Wallet,
   XCircle,
 } from "lucide-react";
+import { PortalAdminPaymentGateSection } from "@/components/portal-admin/PortalAdminPaymentGateSection";
+import type { PaymentPaginationMeta } from "@/components/client-portal/ClientPaymentsSection";
 import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
 import {
@@ -160,7 +165,14 @@ interface WhatsAppDraftRecord {
 }
 
 interface TenantClientPortalAdminPanelProps {
-  initialSection?: "registrations" | "requests" | "catalog" | "whatsapp" | "settings";
+  initialSection?:
+  | "registrations"
+  | "requests"
+  | "catalog"
+  | "payments"
+  | "payment_channels"
+  | "whatsapp"
+  | "settings";
   canManageSettings?: boolean;
   onRefreshState?: () => Promise<void>;
   onToast: (msg: string) => void;
@@ -173,7 +185,7 @@ export function TenantClientPortalAdminPanel({
   onToast,
 }: TenantClientPortalAdminPanelProps) {
   const [section, setSection] = useState<
-    "registrations" | "requests" | "catalog" | "whatsapp" | "settings"
+    "registrations" | "requests" | "catalog" | "payments" | "payment_channels" | "whatsapp" | "settings"
   >(initialSection);
   const [loading, setLoading] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState("");
@@ -185,6 +197,29 @@ export function TenantClientPortalAdminPanel({
   const [selectedMonthDir, setSelectedMonthDir] = useState<string>("ALL");
   const [sectorFilter, setSectorFilter] = useState<"ALL" | "HARVEST" | "COMMERCIAL">("ALL");
   const [collapsedDirs, setCollapsedDirs] = useState<Record<string, boolean>>({});
+
+  // Server-side search & pagination for 1,000+ scale
+  const [clientsSearchInput, setClientsSearchInput] = useState("");
+  const [clientsDebouncedSearch, setClientsDebouncedSearch] = useState("");
+  const [clientsPage, setClientsPage] = useState(1);
+  const [clientsPagination, setClientsPagination] = useState<PaymentPaginationMeta>({
+    page: 1,
+    pageSize: 50,
+    total: 0,
+    totalPages: 1,
+    hasMore: false,
+  });
+  const [requestsSearchInput, setRequestsSearchInput] = useState("");
+  const [requestsDebouncedSearch, setRequestsDebouncedSearch] = useState("");
+  const [requestsPage, setRequestsPage] = useState(1);
+  const [requestsPagination, setRequestsPagination] = useState<PaymentPaginationMeta>({
+    page: 1,
+    pageSize: 50,
+    total: 0,
+    totalPages: 1,
+    hasMore: false,
+  });
+  const [pendingPaymentsCount, setPendingPaymentsCount] = useState(0);
 
   // Registrations & Client Password Reset
   const [clients, setClients] = useState<StaffClientAccount[]>([]);
@@ -233,31 +268,65 @@ export function TenantClientPortalAdminPanel({
   // Form Config
   const [formCfg, setFormCfg] = useState<TenantFormConfig | null>(null);
 
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setClientsDebouncedSearch(clientsSearchInput.trim());
+      setClientsPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [clientsSearchInput]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setRequestsDebouncedSearch(requestsSearchInput.trim());
+      setRequestsPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [requestsSearchInput]);
+
   const loadAll = useCallback(async (manual = false) => {
     setLoading(true);
     try {
-      const [cRes, rRes, wRes, fRes] = await Promise.all([
-        fetch("/api/portal-admin/clients", { cache: "no-store" }),
-        fetch(`/api/portal-admin/requests${showHiddenStaffRequests ? "?includeHidden=1" : ""}`, { cache: "no-store" }),
+      const cQs = new URLSearchParams({
+        page: String(clientsPage),
+        pageSize: "50",
+      });
+      if (clientsDebouncedSearch) cQs.set("search", clientsDebouncedSearch);
+
+      const rQs = new URLSearchParams({
+        page: String(requestsPage),
+        pageSize: "50",
+      });
+      if (showHiddenStaffRequests) rQs.set("includeHidden", "1");
+      if (requestsDebouncedSearch) rQs.set("search", requestsDebouncedSearch);
+
+      const [cRes, rRes, wRes, fRes, pRes] = await Promise.all([
+        fetch(`/api/portal-admin/clients?${cQs.toString()}`, { cache: "no-store" }),
+        fetch(`/api/portal-admin/requests?${rQs.toString()}`, { cache: "no-store" }),
         fetch(`/api/whatsapp-outbox?status=${encodeURIComponent(waStatusFilter)}`, { cache: "no-store" }),
         fetch("/api/portal-admin/form-config", { cache: "no-store" }),
+        fetch("/api/portal-admin/payments?status=PENDING_VERIFICATION&pageSize=1", { cache: "no-store" }),
       ]);
 
       if (cRes.ok) {
         const cData = (await cRes.json()) as {
           clients?: StaffClientAccount[];
+          pagination?: PaymentPaginationMeta;
           availableCustomers?: Array<{ id: string; code: string; nameAr: string; phone: string }>;
         };
         setClients(cData.clients || []);
+        if (cData.pagination) setClientsPagination(cData.pagination);
         setAvailableCustomers(cData.availableCustomers || []);
       }
       if (rRes.ok) {
         const rData = (await rRes.json()) as {
           requests?: StaffRequestItem[];
+          pagination?: PaymentPaginationMeta;
           projects?: Array<{ id: string; code: string; nameAr: string }>;
           treasuries?: Array<{ id: string; code: string; nameAr: string }>;
         };
         setRequests(rData.requests || []);
+        if (rData.pagination) setRequestsPagination(rData.pagination);
         if (rData.projects) setProjects(rData.projects);
         if (rData.treasuries) setTreasuries(rData.treasuries);
       }
@@ -273,14 +342,18 @@ export function TenantClientPortalAdminPanel({
         const fData = (await fRes.json()) as { formConfig?: TenantFormConfig };
         if (fData.formConfig) setFormCfg(fData.formConfig);
       }
+      if (pRes.ok) {
+        const pData = (await pRes.json()) as { pagination?: { total?: number } };
+        setPendingPaymentsCount(pData.pagination?.total ?? 0);
+      }
       setLastRefreshedAt(new Date().toISOString());
-      if (manual) onToast("✅ تم تحديث بوابة العملاء وقائمة اعتماد واتساب");
+      if (manual) onToast("✅ تم تحديث بوابة العملاء وإيصالات السداد وقائمة واتساب");
     } catch {
       onToast("تعذر تحميل بيانات بوابة العملاء");
     } finally {
       setLoading(false);
     }
-  }, [waStatusFilter, showHiddenStaffRequests, onToast]);
+  }, [waStatusFilter, showHiddenStaffRequests, clientsPage, clientsDebouncedSearch, requestsPage, requestsDebouncedSearch, onToast]);
 
   useEffect(() => {
     let active = true;
@@ -576,11 +649,15 @@ export function TenantClientPortalAdminPanel({
         <div className="flex flex-wrap items-center gap-1.5">
           {[
             { id: "requests" as const, label: `طلبات العملاء الواردة (${openRequestsCount})`, Icon: PackageCheck },
+            { id: "payments" as const, label: `إيصالات السداد (${pendingPaymentsCount})`, Icon: CreditCard },
             { id: "catalog" as const, label: "لوحة الأصناف والفرز والأسعار", Icon: Layers },
             { id: "registrations" as const, label: `تسجيلات العملاء (${pendingClientsCount} معلق)`, Icon: UserCheck },
             { id: "whatsapp" as const, label: `قائمة اعتماد وإرسال واتساب (${pendingWaCount})`, Icon: MessageSquare },
             ...(canManageSettings
-              ? [{ id: "settings" as const, label: "تخصيص النماذج وواتساب", Icon: Settings }]
+              ? [
+                { id: "payment_channels" as const, label: "بوابات وحسابات الاستلام", Icon: Wallet },
+                { id: "settings" as const, label: "تخصيص النماذج وواتساب", Icon: Settings },
+              ]
               : []),
           ].map(({ id, label, Icon }) => (
             <button
@@ -670,6 +747,26 @@ export function TenantClientPortalAdminPanel({
           formConfig={formCfg}
           hideTestRecords={hideTestRecords}
           onToast={onToast}
+        />
+      )}
+
+      {/* SECTION 0B: PAYMENT RECEIPT VERIFICATION QUEUE */}
+      {section === "payments" && (
+        <PortalAdminPaymentGateSection
+          mode="payments"
+          canManageChannels={canManageSettings}
+          onToast={onToast}
+          onChanged={() => loadAll(false)}
+        />
+      )}
+
+      {/* SECTION 0C: TENANT PAYMENT CHANNELS SETUP */}
+      {section === "payment_channels" && canManageSettings && (
+        <PortalAdminPaymentGateSection
+          mode="channels"
+          canManageChannels={canManageSettings}
+          onToast={onToast}
+          onChanged={() => loadAll(false)}
         />
       )}
 
@@ -1289,6 +1386,16 @@ export function TenantClientPortalAdminPanel({
             {/* Client Monthly Directory Filter & Navigation Bar */}
             <div className="p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={requestsSearchInput}
+                    onChange={(e) => setRequestsSearchInput(e.target.value)}
+                    placeholder="بحث برقم الطلب أو اسم العميل..."
+                    className="rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 pr-8 pl-3 py-1.5"
+                  />
+                </div>
                 <select
                   data-testid="staff-dir-client-filter"
                   value={selectedClientDir}
@@ -1452,6 +1559,31 @@ export function TenantClientPortalAdminPanel({
                 })}
               </div>
             )}
+            {requestsPagination.totalPages > 1 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <span className="text-[11px] text-slate-500">
+                  صفحة {requestsPagination.page} من {requestsPagination.totalPages} (إجمالي {requestsPagination.total} طلب)
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={requestsPagination.page <= 1}
+                    onClick={() => setRequestsPage((p) => Math.max(1, p - 1))}
+                    className="px-3 py-1 rounded-lg border border-slate-300 dark:border-slate-700 font-bold disabled:opacity-40"
+                  >
+                    السابق
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!requestsPagination.hasMore}
+                    onClick={() => setRequestsPage((p) => p + 1)}
+                    className="px-3 py-1 rounded-lg border border-slate-300 dark:border-slate-700 font-bold disabled:opacity-40"
+                  >
+                    التالي
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         );
       })()}
@@ -1459,6 +1591,22 @@ export function TenantClientPortalAdminPanel({
       {/* SECTION 2: NEW CLIENT REGISTRATIONS */}
       {section === "registrations" && (
         <div className="space-y-3">
+          <div className="p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 flex flex-wrap items-center justify-between gap-2">
+            <div className="relative flex-1 min-w-[220px] max-w-md">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={clientsSearchInput}
+                onChange={(e) => setClientsSearchInput(e.target.value)}
+                placeholder="بحث باسم العميل، الجوال، البريد، أو الاسم التجاري..."
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 pr-8 pl-3 py-1.5"
+              />
+            </div>
+            <span className="text-[11px] font-bold text-slate-500">
+              إجمالي المسجلين: {clientsPagination.total} (صفحة {clientsPagination.page} من {clientsPagination.totalPages})
+            </span>
+          </div>
+
           {resetResultBanner && (
             <div
               data-testid="staff-client-reset-banner"
@@ -1650,6 +1798,31 @@ export function TenantClientPortalAdminPanel({
                 </div>
               </div>
             ))
+          )}
+          {clientsPagination.totalPages > 1 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+              <span className="text-[11px] text-slate-500">
+                صفحة {clientsPagination.page} من {clientsPagination.totalPages} (إجمالي {clientsPagination.total} عميل)
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={clientsPagination.page <= 1}
+                  onClick={() => setClientsPage((p) => Math.max(1, p - 1))}
+                  className="px-3 py-1 rounded-lg border border-slate-300 dark:border-slate-700 font-bold disabled:opacity-40"
+                >
+                  السابق
+                </button>
+                <button
+                  type="button"
+                  disabled={!clientsPagination.hasMore}
+                  onClick={() => setClientsPage((p) => p + 1)}
+                  className="px-3 py-1 rounded-lg border border-slate-300 dark:border-slate-700 font-bold disabled:opacity-40"
+                >
+                  التالي
+                </button>
+              </div>
+            </div>
           )}
         </div>
       )}

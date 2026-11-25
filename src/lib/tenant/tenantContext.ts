@@ -112,9 +112,9 @@ export function extractTenantResolutionFromRequest(
           const u = new URL(req.url, "http://localhost");
           hasExplicitQuerySlug = Boolean(
             u.searchParams.get("slug") ||
-              u.searchParams.get("tenantId") ||
-              u.searchParams.get("tenant") ||
-              u.searchParams.get("company")
+            u.searchParams.get("tenantId") ||
+            u.searchParams.get("tenant") ||
+            u.searchParams.get("company")
           );
         } catch {
           hasExplicitQuerySlug = false;
@@ -227,6 +227,14 @@ export function getActiveTenantId(): string {
   return tenantStorage.getStore()?.tenantId || "default";
 }
 
+export function getActiveTenantSlug(): string {
+  const ctx = tenantStorage.getStore();
+  if (ctx?.slug) return ctx.slug.trim().toLowerCase();
+  const tid = ctx?.tenantId || "default";
+  if (tid === "default") return "default";
+  return tid.replace(/_/g, "-");
+}
+
 /**
  * Executes an async callback within an explicit TenantContext.
  */
@@ -245,11 +253,20 @@ export async function runWithTenant<T>(
   fn: () => Promise<T>
 ): Promise<T> {
   const normTenant = normalizeTenantId(tenantId);
-  const { getTenantPrisma } = await import("./tenantDbManager");
+  const [{ getTenantPrisma }, { getTenantMetadata, findTenantBySlug, resolveTenantBySlugAsync }] = await Promise.all([
+    import("./tenantDbManager"),
+    import("./tenantRegistry"),
+  ]);
+  let meta = getTenantMetadata(normTenant) || findTenantBySlug(tenantId);
+  if (!meta && normTenant !== "default") {
+    meta = await resolveTenantBySlugAsync(String(tenantId || normTenant)).catch(() => null);
+  }
   const tenantPrisma = await getTenantPrisma(normTenant);
 
   const context: TenantContext = {
     tenantId: normTenant,
+    slug: meta?.slug || (normTenant === "default" ? "default" : normTenant.replace(/_/g, "-")),
+    companyName: meta?.companyName,
     prisma: tenantPrisma,
   };
 
@@ -268,7 +285,7 @@ export function withTenantRoute<Args extends unknown[]>(
   return async (req: NextRequest, ...args: Args): Promise<NextResponse> => {
     const resolution = extractTenantResolutionFromRequest(req);
     const tenantId = resolution.tenantId;
-    return runWithTenant(tenantId, async () => {
+    return runWithTenant(resolution.slug || tenantId, async () => {
       let pathname = "";
       try {
         pathname = req.nextUrl?.pathname || new URL(req.url, "http://localhost").pathname;

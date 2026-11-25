@@ -130,6 +130,8 @@ export interface PostVendorBillInput {
   gatewayEndpointUrl?: string;
   gatewayCredentialsEnc?: string;
   isSandbox?: boolean;
+  linkedPaymentReceiptId?: string | null;
+  tenantSlug?: string | null;
   tx?: Prisma.TransactionClient;
 }
 
@@ -155,6 +157,8 @@ export interface PostVendorPaymentInput {
   gatewayEndpointUrl?: string;
   gatewayCredentialsEnc?: string;
   isSandbox?: boolean;
+  linkedPaymentReceiptId?: string | null;
+  tenantSlug?: string | null;
   tx?: Prisma.TransactionClient;
 }
 
@@ -220,6 +224,8 @@ export interface PostCustomerReceiptInput {
   gatewayEndpointUrl?: string;
   gatewayCredentialsEnc?: string;
   isSandbox?: boolean;
+  linkedPaymentReceiptId?: string | null;
+  tenantSlug?: string | null;
   tx?: Prisma.TransactionClient;
 }
 
@@ -2288,6 +2294,8 @@ export async function postCustomerReceipt(input: PostCustomerReceiptInput) {
 
     const receipt = await tx.receiptVoucher.create({
       data: {
+        ...(input.tenantSlug ? { tenantSlug: input.tenantSlug } : {}),
+        ...(input.linkedPaymentReceiptId ? { linkedPaymentReceiptId: input.linkedPaymentReceiptId } : {}),
         voucherNumber,
         date: rcpDate,
         customerId: customer.id,
@@ -3429,6 +3437,8 @@ export interface CreateTreasuryAccountInput {
   gatewayEndpointUrl?: string;
   gatewayCredentialsEnc?: string;
   isSandbox?: boolean;
+  linkedPaymentReceiptId?: string | null;
+  tenantSlug?: string | null;
   tx?: Prisma.TransactionClient;
 }
 
@@ -3579,6 +3589,8 @@ export interface UpdateTreasuryAccountInput {
   gatewayEndpointUrl?: string;
   gatewayCredentialsEnc?: string;
   isSandbox?: boolean;
+  linkedPaymentReceiptId?: string | null;
+  tenantSlug?: string | null;
   tx?: Prisma.TransactionClient;
 }
 

@@ -7,6 +7,7 @@ import {
   Archive,
   ArrowRight,
   Bell,
+  Building2,
   Camera,
   Check,
   CheckCircle2,
@@ -35,9 +36,19 @@ import {
   Trash2,
   User,
   UserPlus,
+  Wallet,
   WifiOff,
+  X,
   XCircle,
 } from "lucide-react";
+import {
+  ClientPaymentsSection,
+  SubmitPaymentModal,
+  type ClientPaymentChannelView,
+  type ClientPaymentReceiptView,
+  type PaymentPaginationMeta,
+} from "@/components/client-portal/ClientPaymentsSection";
+import type { GlobalClientMembershipView } from "@/lib/clientPortal/globalClientService";
 import { UasDateInput } from "@/components/UasDateInput";
 import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
 import { PhoneContactInput } from "@/components/PhoneContactInput";
@@ -95,7 +106,7 @@ import type { TenantFormConfig } from "@/lib/clientPortal/portalConfig";
 
 const CLIENT_TOKEN_STORAGE_KEY = "uas_client_portal_token_v1";
 
-type PortalSectionTab = "catalog" | "new_request" | "requests" | "statement" | "profile";
+type PortalSectionTab = "catalog" | "new_request" | "requests" | "statement" | "payments" | "profile";
 
 function resolvePortalTenantEnv(): { slug: string | null; explicitWebScope: boolean } {
   if (typeof window === "undefined") {
@@ -131,26 +142,27 @@ function normalizeScopeKey(raw?: string | null): string {
     .replace(/-/g, "_");
 }
 
-function decodeClientTokenTenant(token: string): { tid: string; slug: string } | null {
+function decodeClientTokenTenant(token: string): { tid: string; slug: string; cid?: string } | null {
   try {
     const dotIdx = token.indexOf(".");
     if (dotIdx <= 0) return null;
     const b64 = token.slice(0, dotIdx).replace(/-/g, "+").replace(/_/g, "/");
     const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
     const json = decodeURIComponent(escape(window.atob(padded)));
-    const parsed = JSON.parse(json) as { tid?: string; slug?: string };
+    const parsed = JSON.parse(json) as { tid?: string; slug?: string; cid?: string };
     return {
       tid: normalizeScopeKey(parsed.tid || parsed.slug || "default"),
       slug: String(parsed.slug || parsed.tid || "default").trim().toLowerCase(),
+      cid: parsed.cid ? String(parsed.cid) : undefined,
     };
   } catch {
     return null;
   }
 }
 
-function getClientTokenStorageKey(): string {
+function getClientTokenStorageKey(overrideSlug?: string | null): string {
   const env = resolvePortalTenantEnv();
-  const keySlug = (env.slug || "default").trim().toLowerCase();
+  const keySlug = String(overrideSlug || env.slug || "default").trim().toLowerCase();
   return `${CLIENT_TOKEN_STORAGE_KEY}::${keySlug}`;
 }
 
@@ -372,20 +384,25 @@ function getClientToken(): string {
   }
 }
 
-function storeClientToken(token: string) {
+function storeClientToken(token: string, overrideSlug?: string | null) {
   if (typeof window === "undefined") return;
   try {
-    const scopedKey = getClientTokenStorageKey();
+    const scopedKey = getClientTokenStorageKey(overrideSlug);
+    const meta = token ? decodeClientTokenTenant(token) : null;
     if (token) {
       window.localStorage.setItem(scopedKey, token);
+      if (meta?.cid) {
+        window.localStorage.setItem(`${scopedKey}::cid`, meta.cid);
+      }
     } else {
       window.localStorage.removeItem(scopedKey);
+      window.localStorage.removeItem(`${scopedKey}::cid`);
       const legacyTok = window.localStorage.getItem(CLIENT_TOKEN_STORAGE_KEY);
       if (legacyTok) {
         const env = resolvePortalTenantEnv();
-        const expectedKey = normalizeScopeKey(env.slug || "default");
-        const meta = decodeClientTokenTenant(legacyTok);
-        if (!meta || meta.tid === expectedKey) {
+        const expectedKey = normalizeScopeKey(overrideSlug || env.slug || "default");
+        const legacyMeta = decodeClientTokenTenant(legacyTok);
+        if (!legacyMeta || legacyMeta.tid === expectedKey) {
           window.localStorage.removeItem(CLIENT_TOKEN_STORAGE_KEY);
         }
       }
@@ -412,6 +429,12 @@ function resolveClientHeaders(extra?: Record<string, string>): Record<string, st
 function apiUrl(path: string): string {
   const base = resolveApiBaseUrl().replace(/\/+$/, "");
   return `${base}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function navigateToTenantPortalUrl(tenantUrl: string): void {
+  if (typeof window === "undefined") return;
+  const dest = new URL("/portal", tenantUrl).toString();
+  window.location.href = dest;
 }
 
 export function ClientPortalApp({
@@ -459,6 +482,7 @@ export function ClientPortalApp({
           sec === "new_request" ||
           sec === "requests" ||
           sec === "statement" ||
+          sec === "payments" ||
           sec === "profile"
         ) {
           return sec;
@@ -546,11 +570,52 @@ export function ClientPortalApp({
   const [reqFilterFrom, setReqFilterFrom] = useState("");
   const [reqFilterTo, setReqFilterTo] = useState("");
   const [reqFilterQuery, setReqFilterQuery] = useState("");
+  const [reqDebouncedQuery, setReqDebouncedQuery] = useState("");
+  const [reqPage, setReqPage] = useState(1);
+  const [reqPagination, setReqPagination] = useState<PaymentPaginationMeta>({
+    page: 1,
+    pageSize: 25,
+    total: 0,
+    totalPages: 1,
+    hasMore: false,
+  });
   const [reqIncludeHidden, setReqIncludeHidden] = useState(false);
   const [reqArchiveView, setReqArchiveView] = useState<"ALL" | "ACTIVE" | "ARCHIVED">("ALL");
   const [selectedReqIds, setSelectedReqIds] = useState<Record<string, boolean>>({});
   const [reqLoading, setReqLoading] = useState(false);
   const [reqRefreshedAt, setReqRefreshedAt] = useState("");
+
+  // Multi-Tenant Workspace Switcher & Payment Gate State (Phases 21-22)
+  const [memberships, setMemberships] = useState<GlobalClientMembershipView[]>([]);
+  const [availableTenants, setAvailableTenants] = useState<
+    Array<{ slug: string; tenantId: string; nameAr: string; nameEn: string; tenantUrl: string }>
+  >([]);
+  const [showWorkspaceModal, setShowWorkspaceModal] = useState(false);
+  const [switchingTenantSlug, setSwitchingTenantSlug] = useState<string | null>(null);
+
+  const [paymentChannels, setPaymentChannels] = useState<ClientPaymentChannelView[]>([]);
+  const [clientPayments, setClientPayments] = useState<ClientPaymentReceiptView[]>([]);
+  const [paymentsPagination, setPaymentsPagination] = useState<PaymentPaginationMeta>({
+    page: 1,
+    pageSize: 25,
+    total: 0,
+    totalPages: 1,
+    hasMore: false,
+  });
+  const [paymentsStatusFilter, setPaymentsStatusFilter] = useState("ALL");
+  const [paymentsSearch, setPaymentsSearch] = useState("");
+  const [paymentsDebouncedSearch, setPaymentsDebouncedSearch] = useState("");
+  const [paymentsPage, setPaymentsPage] = useState(1);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [paymentModalKey, setPaymentModalKey] = useState(0);
+  const [paymentModalPreset, setPaymentModalPreset] = useState<{
+    channelId?: string;
+    amount?: string;
+    linkedInvoiceIds?: string[];
+    linkedRequestIds?: string[];
+    resubmitTarget?: ClientPaymentReceiptView | null;
+  }>({});
 
   const [stmtTab, setStmtTab] = useState<"bills" | "receipts" | "ledger" | "notifications">("bills");
   const [billStatusFilter, setBillStatusFilter] = useState<"ALL" | "OPEN" | "PAID">("ALL");
@@ -715,6 +780,63 @@ export function ClientPortalApp({
     }
   }, [showNotice]);
 
+  const loadWorkspaces = useCallback(async () => {
+    try {
+      const res = await fetch(apiUrl("/api/client-portal/tenants"), {
+        cache: "no-store",
+        credentials: "include",
+        headers: resolveClientHeaders(),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as {
+          memberships?: GlobalClientMembershipView[];
+          availableTenants?: Array<{
+            slug: string;
+            tenantId: string;
+            nameAr: string;
+            nameEn: string;
+            tenantUrl: string;
+          }>;
+        };
+        setMemberships(data.memberships || []);
+        setAvailableTenants(data.availableTenants || []);
+      }
+    } catch {
+      // non-fatal
+    }
+  }, []);
+
+  const loadPayments = useCallback(async (manual = false) => {
+    if (!account || account.status !== "ACTIVE") return;
+    setPaymentsLoading(true);
+    try {
+      const qs = new URLSearchParams({
+        status: paymentsStatusFilter,
+        page: String(paymentsPage),
+        pageSize: "25",
+      });
+      if (paymentsDebouncedSearch) qs.set("search", paymentsDebouncedSearch);
+      const res = await fetch(apiUrl(`/api/client-portal/payments?${qs.toString()}`), {
+        cache: "no-store",
+        credentials: "include",
+        headers: resolveClientHeaders(),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as {
+          channels?: ClientPaymentChannelView[];
+          payments?: ClientPaymentReceiptView[];
+          pagination?: PaymentPaginationMeta;
+        };
+        setPaymentChannels(data.channels || []);
+        setClientPayments(data.payments || []);
+        if (data.pagination) setPaymentsPagination(data.pagination);
+        if (manual) showNotice("✅ تم تحديث قنوات الدفع وسجل الإيصالات");
+      }
+    } finally {
+      setPaymentsLoading(false);
+    }
+  }, [account, paymentsStatusFilter, paymentsPage, paymentsDebouncedSearch, showNotice]);
+
   const loadRequests = useCallback(async (manual = false) => {
     if (!account || account.status !== "ACTIVE") return;
     setReqLoading(true);
@@ -723,23 +845,29 @@ export function ClientPortalApp({
       if (reqFilterStatus !== "ALL") qs.set("status", reqFilterStatus);
       if (reqFilterFrom) qs.set("fromDate", reqFilterFrom);
       if (reqFilterTo) qs.set("toDate", reqFilterTo);
-      if (reqFilterQuery.trim()) qs.set("q", reqFilterQuery.trim());
+      if (reqDebouncedQuery) qs.set("search", reqDebouncedQuery);
       if (reqIncludeHidden) qs.set("includeHidden", "1");
+      qs.set("page", String(reqPage));
+      qs.set("pageSize", "25");
       const res = await fetch(apiUrl(`/api/client-portal/requests?${qs.toString()}`), {
         cache: "no-store",
         credentials: "include",
         headers: resolveClientHeaders(),
       });
       if (res.ok) {
-        const data = (await res.json()) as { requests?: ClientRequestView[] };
+        const data = (await res.json()) as {
+          requests?: ClientRequestView[];
+          pagination?: PaymentPaginationMeta;
+        };
         setRequestsList(data.requests || []);
+        if (data.pagination) setReqPagination(data.pagination);
         setReqRefreshedAt(new Date().toISOString());
         if (manual) showNotice("✅ تم تحديث سجل الطلبات وحالاتها");
       }
     } finally {
       setReqLoading(false);
     }
-  }, [account, reqFilterStatus, reqFilterFrom, reqFilterTo, reqFilterQuery, reqIncludeHidden, showNotice]);
+  }, [account, reqFilterStatus, reqFilterFrom, reqFilterTo, reqDebouncedQuery, reqIncludeHidden, reqPage, showNotice]);
 
   const loadStatement = useCallback(async (manual = false) => {
     if (!account || account.status !== "ACTIVE") return;
@@ -773,6 +901,98 @@ export function ClientPortalApp({
       setStmtLoading(false);
     }
   }, [account, stmtFrom, stmtTo, showNotice]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setReqDebouncedQuery(reqFilterQuery.trim());
+      setReqPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [reqFilterQuery]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setPaymentsDebouncedSearch(paymentsSearch.trim());
+      setPaymentsPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [paymentsSearch]);
+
+  function openPaymentModal(preset?: {
+    channelId?: string;
+    amount?: string;
+    linkedInvoiceIds?: string[];
+    linkedRequestIds?: string[];
+    resubmitTarget?: ClientPaymentReceiptView | null;
+  }) {
+    setPaymentModalPreset(preset || {});
+    setPaymentModalKey((k) => k + 1);
+    setPaymentModalOpen(true);
+    if (paymentChannels.length === 0) {
+      void loadPayments(false);
+    }
+  }
+
+  async function handleSwitchTenant(targetSlug: string, joinIfMissing = false) {
+    setSwitchingTenantSlug(targetSlug);
+    try {
+      const res = await fetch(apiUrl("/api/client-portal/switch-tenant"), {
+        method: "POST",
+        credentials: "include",
+        headers: resolveClientHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ targetTenantSlug: targetSlug, joinIfMissing }),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        tenantSlug?: string;
+        tenantId?: string;
+        tenantUrl?: string;
+        token?: string;
+        account?: ClientAccountView;
+      };
+      if (!res.ok) {
+        showNotice(data.error || "تعذر التبديل إلى مساحة المنشأة المختارة");
+        return;
+      }
+      const nextSlug = data.tenantSlug || targetSlug;
+      if (data.token) {
+        storeClientToken(data.token, nextSlug);
+      }
+      setStoredTenantId(nextSlug);
+      if (
+        typeof window !== "undefined" &&
+        !isInstalledClientApp() &&
+        extractSubdomainSlugFromHost(window.location.host) &&
+        data.tenantUrl
+      ) {
+        navigateToTenantPortalUrl(data.tenantUrl);
+        return;
+      }
+      if (typeof window !== "undefined" && !isInstalledClientApp()) {
+        const nextUrl = new URL(window.location.href);
+        if (nextSlug && nextSlug !== "default") {
+          nextUrl.searchParams.set("slug", nextSlug);
+        } else {
+          nextUrl.searchParams.delete("slug");
+        }
+        window.history.replaceState({}, "", nextUrl.toString());
+      }
+      setTenantSlug(nextSlug);
+      setRequestsList([]);
+      setBillsList([]);
+      setReceiptsList([]);
+      setClientPayments([]);
+      setPaymentChannels([]);
+      setConfirmedReceipt(null);
+      setShowWorkspaceModal(false);
+      await Promise.all([loadConfig(), syncProfile(false)]);
+      showNotice(`✅ تم التبديل إلى مساحة منشأة: ${nextSlug}`);
+    } catch {
+      showNotice("تعذر الاتصال بالخادم أثناء تبديل المنشأة");
+    } finally {
+      setSwitchingTenantSlug(null);
+    }
+  }
 
   useEffect(() => {
     if (!initialAuthTab) return;
@@ -836,14 +1056,29 @@ export function ClientPortalApp({
     };
   }, [account, portalTab, loadStatement]);
 
-  // Pre-load recent requests/bills on login so Quick-Repeat Basket & KPIs are ready immediately
   useEffect(() => {
-    if (account?.status !== "ACTIVE") return;
+    if (account?.status !== "ACTIVE" || portalTab !== "payments") return;
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) void loadPayments(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [account, portalTab, loadPayments]);
+
+  // Pre-load workspaces, recent requests/bills & payment channels on login
+  useEffect(() => {
+    if (!account) return;
     let active = true;
     Promise.resolve().then(() => {
       if (!active) return;
-      if (requestsList.length === 0) void loadRequests(false);
-      if (billsList.length === 0) void loadStatement(false);
+      void loadWorkspaces();
+      if (account.status === "ACTIVE") {
+        if (requestsList.length === 0) void loadRequests(false);
+        if (billsList.length === 0) void loadStatement(false);
+        if (paymentChannels.length === 0) void loadPayments(false);
+      }
     });
     return () => {
       active = false;
@@ -1361,6 +1596,13 @@ export function ClientPortalApp({
     storeClientToken("");
     setAccount(null);
     setConfirmedReceipt(null);
+    setMemberships([]);
+    setAvailableTenants([]);
+    setClientPayments([]);
+    setPaymentChannels([]);
+    setRequestsList([]);
+    setBillsList([]);
+    setReceiptsList([]);
   }
 
   const activePickupOpt = formConfig?.pickupOptions.find((p) => p.code === pickupCode);
@@ -1675,8 +1917,8 @@ export function ClientPortalApp({
   async function handleBulkHideRequests(useSelectedOnly: boolean) {
     const pickedIds = useSelectedOnly
       ? Object.entries(selectedReqIds)
-          .filter(([, checked]) => checked)
-          .map(([id]) => id)
+        .filter(([, checked]) => checked)
+        .map(([id]) => id)
       : undefined;
     try {
       const res = await fetch(apiUrl("/api/client-portal/requests"), {
@@ -1933,7 +2175,21 @@ export function ClientPortalApp({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 text-xs">
+          <div className="flex items-center gap-2 text-xs flex-wrap">
+            {account && (
+              <button
+                type="button"
+                data-testid="portal-workspace-switcher-btn"
+                onClick={() => {
+                  setShowWorkspaceModal(true);
+                  void loadWorkspaces();
+                }}
+                className="px-3 py-1.5 rounded-xl border border-emerald-400 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 font-extrabold inline-flex items-center gap-1 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+              >
+                <Building2 className="w-3.5 h-3.5" />
+                <span>منشآتي ({Math.max(1, memberships.length)})</span>
+              </button>
+            )}
             <ThemeSwitcherControl
               theme={portalTheme}
               lang="ar"
@@ -1964,9 +2220,9 @@ export function ClientPortalApp({
               <Link
                 href={
                   typeof window !== "undefined" &&
-                  !extractSubdomainSlugFromHost(window.location.host) &&
-                  tenantSlug &&
-                  tenantSlug !== "default"
+                    !extractSubdomainSlugFromHost(window.location.host) &&
+                    tenantSlug &&
+                    tenantSlug !== "default"
                     ? `/?slug=${encodeURIComponent(tenantSlug)}`
                     : "/"
                 }
@@ -2053,142 +2309,98 @@ export function ClientPortalApp({
               </div>
             ) : (
               <div className="max-w-xl mx-auto card-surface rounded-2xl p-5 sm:p-6 space-y-5 shadow-md">
-            <div className="flex rounded-xl border border-slate-200 dark:border-slate-700 p-1 bg-slate-100 dark:bg-slate-800/60 text-xs">
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthTab("login");
-                  setAuthError(null);
-                  setAuthNotice(null);
-                }}
-                className={`flex-1 py-2 rounded-lg font-black inline-flex items-center justify-center gap-1.5 transition ${authTab === "login" ? "accent-bg shadow-sm" : "text-slate-600 dark:text-slate-300"
-                  }`}
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                <span>دخول العميل</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthTab("register");
-                  setAuthError(null);
-                  setAuthNotice(null);
-                }}
-                className={`flex-1 py-2 rounded-lg font-black inline-flex items-center justify-center gap-1.5 transition ${authTab === "register" ? "accent-bg shadow-sm" : "text-slate-600 dark:text-slate-300"
-                  }`}
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>تسجيل عميل جديد</span>
-              </button>
-              <button
-                type="button"
-                data-testid="portal-auth-tab-forgot"
-                onClick={() => {
-                  setAuthTab("forgot");
-                  setAuthError(null);
-                  setAuthNotice(null);
-                }}
-                className={`flex-1 py-2 rounded-lg font-black inline-flex items-center justify-center gap-1.5 transition ${authTab === "forgot" ? "accent-bg shadow-sm" : "text-slate-600 dark:text-slate-300"
-                  }`}
-              >
-                <KeyRound className="w-3.5 h-3.5" />
-                <span>نسيت كلمة المرور</span>
-              </button>
-            </div>
-
-            {authError && (
-              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-xs font-bold">
-                {authError}
-              </div>
-            )}
-            {authNotice && (
-              <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-200 text-xs font-bold">
-                {authNotice}
-              </div>
-            )}
-
-            {authTab === "login" ? (
-              <form onSubmit={handleLoginSubmit} className="space-y-3.5 text-xs">
-                <div>
-                  <label className="block font-bold mb-1">رقم الجوال أو البريد الإلكتروني</label>
-                  <input
-                    type="text"
-                    required
-                    value={loginIdentifier}
-                    onChange={(e) => setLoginIdentifier(e.target.value)}
-                    placeholder="777123456 أو client@example.com"
-                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2.5"
-                  />
+                <div className="flex rounded-xl border border-slate-200 dark:border-slate-700 p-1 bg-slate-100 dark:bg-slate-800/60 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthTab("login");
+                      setAuthError(null);
+                      setAuthNotice(null);
+                    }}
+                    className={`flex-1 py-2 rounded-lg font-black inline-flex items-center justify-center gap-1.5 transition ${authTab === "login" ? "accent-bg shadow-sm" : "text-slate-600 dark:text-slate-300"
+                      }`}
+                  >
+                    <LogIn className="w-3.5 h-3.5" />
+                    <span>دخول العميل</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthTab("register");
+                      setAuthError(null);
+                      setAuthNotice(null);
+                    }}
+                    className={`flex-1 py-2 rounded-lg font-black inline-flex items-center justify-center gap-1.5 transition ${authTab === "register" ? "accent-bg shadow-sm" : "text-slate-600 dark:text-slate-300"
+                      }`}
+                  >
+                    <UserPlus className="w-3.5 h-3.5" />
+                    <span>تسجيل عميل جديد</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="portal-auth-tab-forgot"
+                    onClick={() => {
+                      setAuthTab("forgot");
+                      setAuthError(null);
+                      setAuthNotice(null);
+                    }}
+                    className={`flex-1 py-2 rounded-lg font-black inline-flex items-center justify-center gap-1.5 transition ${authTab === "forgot" ? "accent-bg shadow-sm" : "text-slate-600 dark:text-slate-300"
+                      }`}
+                  >
+                    <KeyRound className="w-3.5 h-3.5" />
+                    <span>نسيت كلمة المرور</span>
+                  </button>
                 </div>
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block font-bold">كلمة المرور / رمز PIN</label>
-                    <button
-                      type="button"
-                      data-testid="portal-forgot-password-link"
-                      onClick={() => {
-                        setForgotIdentifier(loginIdentifier);
-                        setForgotStep("request");
-                        setAuthError(null);
-                        setAuthNotice(null);
-                        setAuthTab("forgot");
-                      }}
-                      className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300 hover:underline"
-                    >
-                      نسيت كلمة المرور؟
-                    </button>
+
+                {authError && (
+                  <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-xs font-bold">
+                    {authError}
                   </div>
-                  <input
-                    type="password"
-                    required
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    placeholder="••••••"
-                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2.5"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={authBusy}
-                  className="w-full py-2.5 rounded-xl accent-bg font-black text-sm shadow-sm disabled:opacity-60"
-                >
-                  {authBusy ? "جاري الدخول..." : "دخول إلى حساب العميل"}
-                </button>
-              </form>
-            ) : authTab === "forgot" ? (
-              <div className="space-y-4 text-xs">
-                <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => setForgotStep("request")}
-                    className={`px-3 py-1 rounded-lg font-bold ${forgotStep === "request" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300" : "text-slate-500"
-                      }`}
-                  >
-                    1. طلب رمز الاستعادة
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setForgotStep("confirm")}
-                    className={`px-3 py-1 rounded-lg font-bold ${forgotStep === "confirm" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300" : "text-slate-500"
-                      }`}
-                  >
-                    2. إدخال الرمز وكلمة المرور الجديدة
-                  </button>
-                </div>
+                )}
+                {authNotice && (
+                  <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-200 text-xs font-bold">
+                    {authNotice}
+                  </div>
+                )}
 
-                {forgotStep === "request" ? (
-                  <form onSubmit={handleForgotRequestSubmit} className="space-y-3">
-                    <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-                      أدخل رقم الجوال أو البريد الإلكتروني المسجل في بوابة هذه المنشأة لإصدار رمز تحقق صالح لمرة واحدة (تُرسل رسالة واتساب بعد مراجعة الإدارة أو عبر البريد المهيأ).
-                    </p>
+                {authTab === "login" ? (
+                  <form onSubmit={handleLoginSubmit} className="space-y-3.5 text-xs">
                     <div>
-                      <label className="block font-bold mb-1">رقم الجوال أو البريد الإلكتروني *</label>
-                      <PhoneContactInput
-                        testId="portal-forgot-identifier"
+                      <label className="block font-bold mb-1">رقم الجوال أو البريد الإلكتروني</label>
+                      <input
+                        type="text"
                         required
-                        value={forgotIdentifier}
-                        onChange={setForgotIdentifier}
+                        value={loginIdentifier}
+                        onChange={(e) => setLoginIdentifier(e.target.value)}
                         placeholder="777123456 أو client@example.com"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2.5"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block font-bold">كلمة المرور / رمز PIN</label>
+                        <button
+                          type="button"
+                          data-testid="portal-forgot-password-link"
+                          onClick={() => {
+                            setForgotIdentifier(loginIdentifier);
+                            setForgotStep("request");
+                            setAuthError(null);
+                            setAuthNotice(null);
+                            setAuthTab("forgot");
+                          }}
+                          className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300 hover:underline"
+                        >
+                          نسيت كلمة المرور؟
+                        </button>
+                      </div>
+                      <input
+                        type="password"
+                        required
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        placeholder="••••••"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2.5"
                       />
                     </div>
                     <button
@@ -2196,207 +2408,251 @@ export function ClientPortalApp({
                       disabled={authBusy}
                       className="w-full py-2.5 rounded-xl accent-bg font-black text-sm shadow-sm disabled:opacity-60"
                     >
-                      {authBusy ? "جاري الطلب..." : "طلب رمز استعادة كلمة المرور"}
+                      {authBusy ? "جاري الدخول..." : "دخول إلى حساب العميل"}
                     </button>
                   </form>
+                ) : authTab === "forgot" ? (
+                  <div className="space-y-4 text-xs">
+                    <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setForgotStep("request")}
+                        className={`px-3 py-1 rounded-lg font-bold ${forgotStep === "request" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300" : "text-slate-500"
+                          }`}
+                      >
+                        1. طلب رمز الاستعادة
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setForgotStep("confirm")}
+                        className={`px-3 py-1 rounded-lg font-bold ${forgotStep === "confirm" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300" : "text-slate-500"
+                          }`}
+                      >
+                        2. إدخال الرمز وكلمة المرور الجديدة
+                      </button>
+                    </div>
+
+                    {forgotStep === "request" ? (
+                      <form onSubmit={handleForgotRequestSubmit} className="space-y-3">
+                        <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+                          أدخل رقم الجوال أو البريد الإلكتروني المسجل في بوابة هذه المنشأة لإصدار رمز تحقق صالح لمرة واحدة (تُرسل رسالة واتساب بعد مراجعة الإدارة أو عبر البريد المهيأ).
+                        </p>
+                        <div>
+                          <label className="block font-bold mb-1">رقم الجوال أو البريد الإلكتروني *</label>
+                          <PhoneContactInput
+                            testId="portal-forgot-identifier"
+                            required
+                            value={forgotIdentifier}
+                            onChange={setForgotIdentifier}
+                            placeholder="777123456 أو client@example.com"
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={authBusy}
+                          className="w-full py-2.5 rounded-xl accent-bg font-black text-sm shadow-sm disabled:opacity-60"
+                        >
+                          {authBusy ? "جاري الطلب..." : "طلب رمز استعادة كلمة المرور"}
+                        </button>
+                      </form>
+                    ) : (
+                      <form onSubmit={handleForgotConfirmSubmit} className="space-y-3">
+                        <div>
+                          <label className="block font-bold mb-1">رقم الجوال أو البريد الإلكتروني *</label>
+                          <input
+                            type="text"
+                            required
+                            value={forgotIdentifier}
+                            onChange={(e) => setForgotIdentifier(e.target.value)}
+                            placeholder="777123456 أو client@example.com"
+                            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-bold mb-1">رمز التحقق ذو الـ 6 أرقام *</label>
+                          <input
+                            type="text"
+                            required
+                            dir="ltr"
+                            value={forgotCode}
+                            onChange={(e) => setForgotCode(e.target.value)}
+                            placeholder="123456"
+                            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono text-center tracking-widest"
+                          />
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="block font-bold mb-1">كلمة المرور الجديدة *</label>
+                            <input
+                              type="password"
+                              required
+                              minLength={4}
+                              value={forgotNewPassword}
+                              onChange={(e) => setForgotNewPassword(e.target.value)}
+                              placeholder="••••••"
+                              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                            />
+                          </div>
+                          <div>
+                            <label className="block font-bold mb-1">تأكيد كلمة المرور الجديدة *</label>
+                            <input
+                              type="password"
+                              required
+                              minLength={4}
+                              value={forgotConfirmPassword}
+                              onChange={(e) => setForgotConfirmPassword(e.target.value)}
+                              placeholder="••••••"
+                              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={authBusy}
+                          className="w-full py-2.5 rounded-xl accent-bg font-black text-sm shadow-sm disabled:opacity-60"
+                        >
+                          {authBusy ? "جاري التحديث..." : "تأكيد الرمز وتعيين كلمة المرور الجديدة"}
+                        </button>
+                      </form>
+                    )}
+                  </div>
                 ) : (
-                  <form onSubmit={handleForgotConfirmSubmit} className="space-y-3">
+                  <form onSubmit={handleRegisterSubmit} className="space-y-3 text-xs">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-bold mb-1">الاسم الكامل / الاسم التجاري *</label>
+                        <input
+                          type="text"
+                          required
+                          value={regFullName}
+                          onChange={(e) => setRegFullName(e.target.value)}
+                          placeholder="محمد علي / محلات البركة"
+                          className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-bold mb-1">الاسم التجاري المختصر (اختياري)</label>
+                        <input
+                          type="text"
+                          value={regTradeName}
+                          onChange={(e) => setRegTradeName(e.target.value)}
+                          placeholder="اختياري"
+                          className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-bold mb-1">رقم الجوال * (يمني أو دولي)</label>
+                        <PhoneContactInput
+                          testId="portal-reg-phone"
+                          required
+                          value={regPhone}
+                          onChange={setRegPhone}
+                          onContactSelected={(c) => {
+                            if (!regFullName.trim() && c.name) setRegFullName(c.name);
+                          }}
+                          placeholder="777123456"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-bold mb-1">البريد الإلكتروني *</label>
+                        <input
+                          type="email"
+                          required
+                          dir="ltr"
+                          value={regEmail}
+                          onChange={(e) => setRegEmail(e.target.value)}
+                          placeholder="client@example.com"
+                          className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-right"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-bold mb-1">نوع العميل *</label>
+                        <select
+                          value={regClientType}
+                          onChange={(e) => setRegClientType(e.target.value)}
+                          className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
+                        >
+                          {(formConfig?.clientTypes || []).map((ct) => (
+                            <option key={ct.code} value={ct.code}>
+                              {ct.labelAr}
+                            </option>
+                          ))}
+                        </select>
+                        {regClientType === "OTHER" && (
+                          <input
+                            type="text"
+                            required
+                            value={regCustomClientType}
+                            onChange={(e) => setRegCustomClientType(e.target.value)}
+                            placeholder="حدد نوع العميل..."
+                            className="mt-1.5 w-full rounded-xl border border-emerald-400 bg-transparent px-3 py-1.5"
+                          />
+                        )}
+                      </div>
+                      <div>
+                        <label className="block font-bold mb-1">موقع الاستلام المفضل</label>
+                        <select
+                          value={regPreferredPickup}
+                          onChange={(e) => setRegPreferredPickup(e.target.value)}
+                          className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
+                        >
+                          {(formConfig?.pickupOptions || [])
+                            .filter((p) => p.type !== "OTHER")
+                            .map((p) => (
+                              <option key={p.code} value={p.labelAr}>
+                                {p.labelAr}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                    </div>
+
                     <div>
-                      <label className="block font-bold mb-1">رقم الجوال أو البريد الإلكتروني *</label>
+                      <label className="block font-bold mb-1">كلمة المرور / رمز PIN (4 خانات فأكثر) *</label>
                       <input
-                        type="text"
+                        type="password"
                         required
-                        value={forgotIdentifier}
-                        onChange={(e) => setForgotIdentifier(e.target.value)}
-                        placeholder="777123456 أو client@example.com"
+                        minLength={4}
+                        value={regPassword}
+                        onChange={(e) => setRegPassword(e.target.value)}
+                        placeholder="••••••"
                         className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
                       />
                     </div>
-                    <div>
-                      <label className="block font-bold mb-1">رمز التحقق ذو الـ 6 أرقام *</label>
-                      <input
-                        type="text"
-                        required
-                        dir="ltr"
-                        value={forgotCode}
-                        onChange={(e) => setForgotCode(e.target.value)}
-                        placeholder="123456"
-                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono text-center tracking-widest"
-                      />
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      <div>
-                        <label className="block font-bold mb-1">كلمة المرور الجديدة *</label>
+
+                    {(formConfig?.customRegistrationFields || []).map((f) => (
+                      <div key={f.key}>
+                        <label className="block font-bold mb-1">
+                          {f.labelAr} {f.required ? "*" : ""}
+                        </label>
                         <input
-                          type="password"
-                          required
-                          minLength={4}
-                          value={forgotNewPassword}
-                          onChange={(e) => setForgotNewPassword(e.target.value)}
-                          placeholder="••••••"
+                          type={f.type === "number" ? "number" : "text"}
+                          required={f.required}
+                          placeholder={f.placeholder || f.labelAr}
+                          value={regCustomFields[f.key] || ""}
+                          onChange={(e) =>
+                            setRegCustomFields((prev) => ({ ...prev, [f.key]: e.target.value }))
+                          }
                           className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
                         />
                       </div>
-                      <div>
-                        <label className="block font-bold mb-1">تأكيد كلمة المرور الجديدة *</label>
-                        <input
-                          type="password"
-                          required
-                          minLength={4}
-                          value={forgotConfirmPassword}
-                          onChange={(e) => setForgotConfirmPassword(e.target.value)}
-                          placeholder="••••••"
-                          className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-                        />
-                      </div>
-                    </div>
+                    ))}
+
                     <button
                       type="submit"
                       disabled={authBusy}
                       className="w-full py-2.5 rounded-xl accent-bg font-black text-sm shadow-sm disabled:opacity-60"
                     >
-                      {authBusy ? "جاري التحديث..." : "تأكيد الرمز وتعيين كلمة المرور الجديدة"}
+                      {authBusy ? "جاري التسجيل..." : "إرسال طلب التسجيل"}
                     </button>
                   </form>
                 )}
-              </div>
-            ) : (
-              <form onSubmit={handleRegisterSubmit} className="space-y-3 text-xs">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-bold mb-1">الاسم الكامل / الاسم التجاري *</label>
-                    <input
-                      type="text"
-                      required
-                      value={regFullName}
-                      onChange={(e) => setRegFullName(e.target.value)}
-                      placeholder="محمد علي / محلات البركة"
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-bold mb-1">الاسم التجاري المختصر (اختياري)</label>
-                    <input
-                      type="text"
-                      value={regTradeName}
-                      onChange={(e) => setRegTradeName(e.target.value)}
-                      placeholder="اختياري"
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-bold mb-1">رقم الجوال * (يمني أو دولي)</label>
-                    <PhoneContactInput
-                      testId="portal-reg-phone"
-                      required
-                      value={regPhone}
-                      onChange={setRegPhone}
-                      onContactSelected={(c) => {
-                        if (!regFullName.trim() && c.name) setRegFullName(c.name);
-                      }}
-                      placeholder="777123456"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-bold mb-1">البريد الإلكتروني *</label>
-                    <input
-                      type="email"
-                      required
-                      dir="ltr"
-                      value={regEmail}
-                      onChange={(e) => setRegEmail(e.target.value)}
-                      placeholder="client@example.com"
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-right"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-bold mb-1">نوع العميل *</label>
-                    <select
-                      value={regClientType}
-                      onChange={(e) => setRegClientType(e.target.value)}
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
-                    >
-                      {(formConfig?.clientTypes || []).map((ct) => (
-                        <option key={ct.code} value={ct.code}>
-                          {ct.labelAr}
-                        </option>
-                      ))}
-                    </select>
-                    {regClientType === "OTHER" && (
-                      <input
-                        type="text"
-                        required
-                        value={regCustomClientType}
-                        onChange={(e) => setRegCustomClientType(e.target.value)}
-                        placeholder="حدد نوع العميل..."
-                        className="mt-1.5 w-full rounded-xl border border-emerald-400 bg-transparent px-3 py-1.5"
-                      />
-                    )}
-                  </div>
-                  <div>
-                    <label className="block font-bold mb-1">موقع الاستلام المفضل</label>
-                    <select
-                      value={regPreferredPickup}
-                      onChange={(e) => setRegPreferredPickup(e.target.value)}
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
-                    >
-                      {(formConfig?.pickupOptions || [])
-                        .filter((p) => p.type !== "OTHER")
-                        .map((p) => (
-                          <option key={p.code} value={p.labelAr}>
-                            {p.labelAr}
-                          </option>
-                        ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block font-bold mb-1">كلمة المرور / رمز PIN (4 خانات فأكثر) *</label>
-                  <input
-                    type="password"
-                    required
-                    minLength={4}
-                    value={regPassword}
-                    onChange={(e) => setRegPassword(e.target.value)}
-                    placeholder="••••••"
-                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-                  />
-                </div>
-
-                {(formConfig?.customRegistrationFields || []).map((f) => (
-                  <div key={f.key}>
-                    <label className="block font-bold mb-1">
-                      {f.labelAr} {f.required ? "*" : ""}
-                    </label>
-                    <input
-                      type={f.type === "number" ? "number" : "text"}
-                      required={f.required}
-                      placeholder={f.placeholder || f.labelAr}
-                      value={regCustomFields[f.key] || ""}
-                      onChange={(e) =>
-                        setRegCustomFields((prev) => ({ ...prev, [f.key]: e.target.value }))
-                      }
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-                    />
-                  </div>
-                ))}
-
-                <button
-                  type="submit"
-                  disabled={authBusy}
-                  className="w-full py-2.5 rounded-xl accent-bg font-black text-sm shadow-sm disabled:opacity-60"
-                >
-                  {authBusy ? "جاري التسجيل..." : "إرسال طلب التسجيل"}
-                </button>
-              </form>
-            )}
               </div>
             )}
           </div>
@@ -2455,11 +2711,10 @@ export function ClientPortalApp({
                   setActiveSector("HARVEST");
                   setSubmissionType("catalog_order");
                 }}
-                className={`p-3.5 rounded-2xl border text-right transition flex items-center justify-between gap-2 ${
-                  activeSector === "HARVEST"
+                className={`p-3.5 rounded-2xl border text-right transition flex items-center justify-between gap-2 ${activeSector === "HARVEST"
                     ? "border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/40 shadow-sm"
                     : "card-surface border-slate-200 dark:border-slate-700 hover:border-emerald-300"
-                }`}
+                  }`}
               >
                 <div>
                   <div className="font-black text-xs text-slate-900 dark:text-white">
@@ -2480,11 +2735,10 @@ export function ClientPortalApp({
                 onClick={() => {
                   setActiveSector("COMMERCIAL");
                 }}
-                className={`p-3.5 rounded-2xl border text-right transition flex items-center justify-between gap-2 ${
-                  activeSector === "COMMERCIAL"
+                className={`p-3.5 rounded-2xl border text-right transition flex items-center justify-between gap-2 ${activeSector === "COMMERCIAL"
                     ? "border-amber-500 bg-amber-50/80 dark:bg-amber-950/40 shadow-sm"
                     : "card-surface border-slate-200 dark:border-slate-700 hover:border-amber-300"
-                }`}
+                  }`}
               >
                 <div>
                   <div className="font-black text-xs text-slate-900 dark:text-white">
@@ -2543,6 +2797,7 @@ export function ClientPortalApp({
                   { id: "new_request" as const, label: formConfig?.requestHeadingAr || "تسجيل طلب", Icon: Plus },
                   { id: "requests" as const, label: "سجل الطلبات ومتابعة الحالة", Icon: ClipboardList },
                   { id: "statement" as const, label: "الفواتير وكشف الحساب", Icon: CreditCard },
+                  { id: "payments" as const, label: "المدفوعات والإيصالات", Icon: Wallet },
                   { id: "profile" as const, label: "الملف الشخصي", Icon: User },
                 ].map(({ id, label, Icon }) => (
                   <button
@@ -3306,11 +3561,10 @@ export function ClientPortalApp({
                     <button
                       type="button"
                       onClick={() => setReqIncludeHidden((prev) => !prev)}
-                      className={`px-2.5 py-2 rounded-xl border font-bold inline-flex items-center gap-1 ${
-                        reqIncludeHidden
+                      className={`px-2.5 py-2 rounded-xl border font-bold inline-flex items-center gap-1 ${reqIncludeHidden
                           ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-200"
                           : "border-slate-300 dark:border-slate-700"
-                      }`}
+                        }`}
                     >
                       {reqIncludeHidden ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
                       <span>{reqIncludeHidden ? "إخفاء المخفية" : "عرض المخفية"}</span>
@@ -3354,388 +3608,433 @@ export function ClientPortalApp({
                         return true;
                       })
                       .map((r) => {
-                      const stepperStages = [
-                        { key: "PENDING_REVIEW", label: "قيد المراجعة" },
-                        { key: "RETURNED_TO_CLIENT", label: "معاد للموافقة" },
-                        { key: "CONFIRMED", label: "مؤكد" },
-                        { key: "READY_FOR_PICKUP", label: "جاهز للاستلام" },
-                        { key: "COMPLETED", label: "تم الاستلام" },
-                      ];
-                      const activeStageIdx = stepperStages.findIndex((st) => st.key === r.status);
-                      const isTerminalClosed = r.status === "CANCELLED" || r.status === "REJECTED";
-                      const canClientModifyPending =
-                        (r.status === "PENDING_REVIEW" || r.status === "RETURNED_TO_CLIENT") &&
-                        !r.reserveStock &&
-                        !r.linkedSalesRecordId &&
-                        !r.linkedSaleId &&
-                        !r.linkedInvoiceId;
-                      const canClientCancelPending =
-                        r.canClientCancel ??
-                        ((r.status === "PENDING_REVIEW" || r.status === "RETURNED_TO_CLIENT") &&
+                        const stepperStages = [
+                          { key: "PENDING_REVIEW", label: "قيد المراجعة" },
+                          { key: "RETURNED_TO_CLIENT", label: "معاد للموافقة" },
+                          { key: "CONFIRMED", label: "مؤكد" },
+                          { key: "READY_FOR_PICKUP", label: "جاهز للاستلام" },
+                          { key: "COMPLETED", label: "تم الاستلام" },
+                        ];
+                        const activeStageIdx = stepperStages.findIndex((st) => st.key === r.status);
+                        const isTerminalClosed = r.status === "CANCELLED" || r.status === "REJECTED";
+                        const canClientModifyPending =
+                          (r.status === "PENDING_REVIEW" || r.status === "RETURNED_TO_CLIENT") &&
                           !r.reserveStock &&
                           !r.linkedSalesRecordId &&
                           !r.linkedSaleId &&
-                          !r.linkedInvoiceId);
-                      const canArchiveHide =
-                        r.canArchiveOrHide ??
-                        (["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status) || Boolean(r.isArchivedByClient));
-                      const canSafeDelete =
-                        r.canSafelyDelete ??
-                        (["CANCELLED", "REJECTED", "PENDING_REVIEW", "RETURNED_TO_CLIENT"].includes(r.status) &&
-                          !r.reserveStock &&
-                          !r.linkedSalesRecordId &&
-                          !r.linkedSaleId &&
-                          !r.linkedInvoiceId);
-                      return (
-                        <div key={r.id} className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {canArchiveHide && (
-                                <input
-                                  type="checkbox"
-                                  aria-label={`تحديد ${r.requestNumber}`}
-                                  checked={Boolean(selectedReqIds[r.id])}
-                                  onChange={(e) =>
-                                    setSelectedReqIds((prev) => ({
-                                      ...prev,
-                                      [r.id]: e.target.checked,
-                                    }))
-                                  }
-                                  className="rounded border-slate-300"
-                                />
-                              )}
-                              <span className="font-mono font-black px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
-                                <bdi dir="ltr">{r.requestNumber}</bdi>
-                              </span>
-                              <span
-                                className={`px-2.5 py-0.5 rounded-full font-extrabold ${r.status === "RETURNED_TO_CLIENT"
-                                  ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200"
-                                  : r.status === "CANCELLED" || r.status === "REJECTED"
-                                  ? "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200"
-                                  : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
-                                  }`}
-                              >
-                                {r.statusLabelAr}
-                              </span>
-                              {r.isArchivedByClient && (
-                                <span className="px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-bold">
-                                  مؤرشف
+                          !r.linkedInvoiceId;
+                        const canClientCancelPending =
+                          r.canClientCancel ??
+                          ((r.status === "PENDING_REVIEW" || r.status === "RETURNED_TO_CLIENT") &&
+                            !r.reserveStock &&
+                            !r.linkedSalesRecordId &&
+                            !r.linkedSaleId &&
+                            !r.linkedInvoiceId);
+                        const canArchiveHide =
+                          r.canArchiveOrHide ??
+                          (["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status) || Boolean(r.isArchivedByClient));
+                        const canSafeDelete =
+                          r.canSafelyDelete ??
+                          (["CANCELLED", "REJECTED", "PENDING_REVIEW", "RETURNED_TO_CLIENT"].includes(r.status) &&
+                            !r.reserveStock &&
+                            !r.linkedSalesRecordId &&
+                            !r.linkedSaleId &&
+                            !r.linkedInvoiceId);
+                        return (
+                          <div key={r.id} className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {canArchiveHide && (
+                                  <input
+                                    type="checkbox"
+                                    aria-label={`تحديد ${r.requestNumber}`}
+                                    checked={Boolean(selectedReqIds[r.id])}
+                                    onChange={(e) =>
+                                      setSelectedReqIds((prev) => ({
+                                        ...prev,
+                                        [r.id]: e.target.checked,
+                                      }))
+                                    }
+                                    className="rounded border-slate-300"
+                                  />
+                                )}
+                                <span className="font-mono font-black px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
+                                  <bdi dir="ltr">{r.requestNumber}</bdi>
                                 </span>
-                              )}
-                              {r.isHiddenByClient && (
-                                <span className="px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-200 text-[10px] font-bold">
-                                  مخفي
-                                </span>
-                              )}
-                              {r.clientResponseStatus === "PENDING_STAFF_APPROVAL" && (
                                 <span
-                                  data-testid={`portal-pending-staff-badge-${r.id}`}
-                                  className="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200 text-[10px] font-black"
+                                  className={`px-2.5 py-0.5 rounded-full font-extrabold ${r.status === "RETURNED_TO_CLIENT"
+                                    ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200"
+                                    : r.status === "CANCELLED" || r.status === "REJECTED"
+                                      ? "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200"
+                                      : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+                                    }`}
                                 >
-                                  بانتظار اعتماد الموظف
+                                  {r.statusLabelAr}
                                 </span>
-                              )}
-                              {(r.status === "CONFIRMED" || r.status === "READY_FOR_PICKUP") && (
-                                <span className="px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 font-mono font-bold text-indigo-700 dark:text-indigo-200 text-[11px]">
-                                  كود الاستلام: <bdi dir="ltr">{r.pickupPassCode || r.requestNumber}</bdi>
-                                </span>
-                              )}
-                              <span className="text-slate-500 inline-flex items-center gap-1">
-                                <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-                                {r.pickupLocation}
-                              </span>
-                              <span className="font-mono text-slate-500 inline-flex items-center gap-1">
-                                <Clock className="w-3 h-3" />
-                                <bdi dir="ltr">{r.createdAtDisplay || formatIsoToDmyTime(r.createdAt)}</bdi>
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              {canClientModifyPending && (
-                                <button
-                                  type="button"
-                                  data-testid={`portal-edit-req-${r.id}`}
-                                  onClick={() => handleStartEditPendingRequest(r)}
-                                  className="px-2.5 py-1 rounded-xl border border-indigo-400 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 font-bold text-[11px] inline-flex items-center gap-1"
-                                >
-                                  <Edit3 className="w-3 h-3" />
-                                  <span>تعديل الطلب</span>
-                                </button>
-                              )}
-                              {canClientCancelPending && (
-                                <button
-                                  type="button"
-                                  data-testid={`portal-cancel-req-${r.id}`}
-                                  onClick={() => void handleCancelPendingRequest(r.id)}
-                                  className="px-2.5 py-1 rounded-xl border border-rose-400 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-bold text-[11px] inline-flex items-center gap-1"
-                                >
-                                  <XCircle className="w-3 h-3" />
-                                  <span>إلغاء الطلب</span>
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                data-testid={`portal-reorder-req-${r.id}`}
-                                onClick={() => handleQuickReorderFromRequest(r)}
-                                className="px-2.5 py-1 rounded-xl border border-emerald-400 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 font-bold text-[11px] inline-flex items-center gap-1"
-                              >
-                                <RotateCcw className="w-3 h-3" />
-                                <span>إعادة طلب سريع</span>
-                              </button>
-                              <ActionOverflowMenu
-                                size="xs"
-                                align="end"
-                                items={[
-                                  {
-                                    id: "reorder",
-                                    label: "إعادة طلب سريع",
-                                    icon: <RotateCcw className="w-3.5 h-3.5" />,
-                                    onClick: () => handleQuickReorderFromRequest(r),
-                                  },
-                                  {
-                                    id: "edit",
-                                    label: "تعديل الطلب",
-                                    icon: <Edit3 className="w-3.5 h-3.5" />,
-                                    hidden: !canClientModifyPending,
-                                    onClick: () => handleStartEditPendingRequest(r),
-                                  },
-                                  {
-                                    id: "print",
-                                    label: "طباعة الإيصال / بطاقة الاستلام PDF",
-                                    icon: <Printer className="w-3.5 h-3.5" />,
-                                    onClick: () => printReceiptSpec(r),
-                                  },
-                                  {
-                                    id: "archive",
-                                    label: r.isArchivedByClient ? "إلغاء الأرشفة" : "أرشفة",
-                                    icon: <Archive className="w-3.5 h-3.5" />,
-                                    hidden: !canArchiveHide,
-                                    onClick: () =>
-                                      handleRequestLifecycle(
-                                        r.id,
-                                        r.isArchivedByClient ? "UNARCHIVE" : "ARCHIVE"
-                                      ),
-                                  },
-                                  {
-                                    id: "hide",
-                                    label: r.isHiddenByClient ? "إظهار الطلب" : "إخفاء",
-                                    icon: r.isHiddenByClient ? (
-                                      <Eye className="w-3.5 h-3.5" />
-                                    ) : (
-                                      <EyeOff className="w-3.5 h-3.5" />
-                                    ),
-                                    hidden: !canArchiveHide,
-                                    onClick: () =>
-                                      handleRequestLifecycle(
-                                        r.id,
-                                        r.isHiddenByClient ? "UNHIDE" : "HIDE"
-                                      ),
-                                  },
-                                  {
-                                    id: "cancel",
-                                    label: "إلغاء الطلب",
-                                    icon: <XCircle className="w-3.5 h-3.5" />,
-                                    tone: "danger",
-                                    hidden: !canClientCancelPending,
-                                    confirmTitle: `إلغاء الطلب (${r.requestNumber})`,
-                                    confirmMessage: "هل أنت متأكد من إلغاء هذا الطلب قبل معالجة الإدارة؟",
-                                    onClick: () => handleCancelPendingRequest(r.id),
-                                  },
-                                  {
-                                    id: "delete-safe",
-                                    label: "حذف نهائي (للطلبات الملغاة/غير المرحّلة)",
-                                    icon: <Trash2 className="w-3.5 h-3.5" />,
-                                    tone: "danger",
-                                    hidden: !canSafeDelete,
-                                    confirmTitle: `حذف الطلب (${r.requestNumber})`,
-                                    confirmMessage: "سيتم حذف الطلب غير المرحّل نهائياً دون المساس بأي قيود مالية. هل تريد المتابعة؟",
-                                    onClick: () => handleRequestLifecycle(r.id, "DELETE"),
-                                  },
-                                ]}
-                              />
-                            </div>
-                          </div>
-
-                          {!isTerminalClosed && (
-                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 pt-1 text-[10px]">
-                              {stepperStages.map((st, idx) => {
-                                const done = activeStageIdx >= idx;
-                                const isCurrent = activeStageIdx === idx;
-                                return (
-                                  <div
-                                    key={st.key}
-                                    className={`px-2 py-1 rounded-lg border text-center font-bold transition ${isCurrent
-                                      ? st.key === "RETURNED_TO_CLIENT"
-                                        ? "bg-amber-500 text-white border-amber-500 shadow-xs"
-                                        : "bg-emerald-600 text-white border-emerald-600 shadow-xs"
-                                      : done
-                                        ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
-                                        : "bg-slate-50 dark:bg-slate-900 text-slate-400 border-slate-200 dark:border-slate-800"
-                                      }`}
+                                {r.isArchivedByClient && (
+                                  <span className="px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-bold">
+                                    مؤرشف
+                                  </span>
+                                )}
+                                {r.isHiddenByClient && (
+                                  <span className="px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-200 text-[10px] font-bold">
+                                    مخفي
+                                  </span>
+                                )}
+                                {r.clientResponseStatus === "PENDING_STAFF_APPROVAL" && (
+                                  <span
+                                    data-testid={`portal-pending-staff-badge-${r.id}`}
+                                    className="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200 text-[10px] font-black"
                                   >
-                                    {idx + 1}. {st.label}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-
-                          {/* Phase 14 Pickup Pass Card */}
-                          {(r.status === "CONFIRMED" || r.status === "READY_FOR_PICKUP") && (
-                            <div
-                              data-testid={`portal-pickup-pass-${r.id}`}
-                              className="p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex flex-wrap items-center justify-between gap-2 text-[11px]"
-                            >
-                              <div className="space-y-0.5">
-                                <div className="font-black text-emerald-800 dark:text-emerald-200">
-                                  بطاقة الاستلام — رمز الاستلام: <bdi dir="ltr" className="font-mono">{r.pickupPassCode || r.requestNumber}</bdi>
-                                </div>
-                                <div className="text-slate-600 dark:text-slate-300">
-                                  استلام من: <strong>{r.pickupLocation}</strong>
-                                  {r.pickupNotes ? ` • التعليمات: ${r.pickupNotes}` : ""}
-                                </div>
+                                    بانتظار اعتماد الموظف
+                                  </span>
+                                )}
+                                {(r.status === "CONFIRMED" || r.status === "READY_FOR_PICKUP") && (
+                                  <span className="px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 font-mono font-bold text-indigo-700 dark:text-indigo-200 text-[11px]">
+                                    كود الاستلام: <bdi dir="ltr">{r.pickupPassCode || r.requestNumber}</bdi>
+                                  </span>
+                                )}
+                                <span className="text-slate-500 inline-flex items-center gap-1">
+                                  <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                                  {r.pickupLocation}
+                                </span>
+                                <span className="font-mono text-slate-500 inline-flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  <bdi dir="ltr">{r.createdAtDisplay || formatIsoToDmyTime(r.createdAt)}</bdi>
+                                </span>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => printReceiptSpec(r)}
-                                className="px-3 py-1 rounded-xl bg-white dark:bg-slate-900 border border-emerald-400 text-emerald-700 dark:text-emerald-300 font-bold inline-flex items-center gap-1"
-                              >
-                                <Printer className="w-3 h-3" />
-                                <span>طباعة بطاقة الاستلام</span>
-                              </button>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {canClientModifyPending && (
+                                  <button
+                                    type="button"
+                                    data-testid={`portal-edit-req-${r.id}`}
+                                    onClick={() => handleStartEditPendingRequest(r)}
+                                    className="px-2.5 py-1 rounded-xl border border-indigo-400 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 font-bold text-[11px] inline-flex items-center gap-1"
+                                  >
+                                    <Edit3 className="w-3 h-3" />
+                                    <span>تعديل الطلب</span>
+                                  </button>
+                                )}
+                                {canClientCancelPending && (
+                                  <button
+                                    type="button"
+                                    data-testid={`portal-cancel-req-${r.id}`}
+                                    onClick={() => void handleCancelPendingRequest(r.id)}
+                                    className="px-2.5 py-1 rounded-xl border border-rose-400 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-bold text-[11px] inline-flex items-center gap-1"
+                                  >
+                                    <XCircle className="w-3 h-3" />
+                                    <span>إلغاء الطلب</span>
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  data-testid={`portal-reorder-req-${r.id}`}
+                                  onClick={() => handleQuickReorderFromRequest(r)}
+                                  className="px-2.5 py-1 rounded-xl border border-emerald-400 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 font-bold text-[11px] inline-flex items-center gap-1"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  <span>إعادة طلب سريع</span>
+                                </button>
+                                <ActionOverflowMenu
+                                  size="xs"
+                                  align="end"
+                                  items={[
+                                    {
+                                      id: "reorder",
+                                      label: "إعادة طلب سريع",
+                                      icon: <RotateCcw className="w-3.5 h-3.5" />,
+                                      onClick: () => handleQuickReorderFromRequest(r),
+                                    },
+                                    {
+                                      id: "edit",
+                                      label: "تعديل الطلب",
+                                      icon: <Edit3 className="w-3.5 h-3.5" />,
+                                      hidden: !canClientModifyPending,
+                                      onClick: () => handleStartEditPendingRequest(r),
+                                    },
+                                    {
+                                      id: "print",
+                                      label: "طباعة الإيصال / بطاقة الاستلام PDF",
+                                      icon: <Printer className="w-3.5 h-3.5" />,
+                                      onClick: () => printReceiptSpec(r),
+                                    },
+                                    {
+                                      id: "archive",
+                                      label: r.isArchivedByClient ? "إلغاء الأرشفة" : "أرشفة",
+                                      icon: <Archive className="w-3.5 h-3.5" />,
+                                      hidden: !canArchiveHide,
+                                      onClick: () =>
+                                        handleRequestLifecycle(
+                                          r.id,
+                                          r.isArchivedByClient ? "UNARCHIVE" : "ARCHIVE"
+                                        ),
+                                    },
+                                    {
+                                      id: "hide",
+                                      label: r.isHiddenByClient ? "إظهار الطلب" : "إخفاء",
+                                      icon: r.isHiddenByClient ? (
+                                        <Eye className="w-3.5 h-3.5" />
+                                      ) : (
+                                        <EyeOff className="w-3.5 h-3.5" />
+                                      ),
+                                      hidden: !canArchiveHide,
+                                      onClick: () =>
+                                        handleRequestLifecycle(
+                                          r.id,
+                                          r.isHiddenByClient ? "UNHIDE" : "HIDE"
+                                        ),
+                                    },
+                                    {
+                                      id: "cancel",
+                                      label: "إلغاء الطلب",
+                                      icon: <XCircle className="w-3.5 h-3.5" />,
+                                      tone: "danger",
+                                      hidden: !canClientCancelPending,
+                                      confirmTitle: `إلغاء الطلب (${r.requestNumber})`,
+                                      confirmMessage: "هل أنت متأكد من إلغاء هذا الطلب قبل معالجة الإدارة؟",
+                                      onClick: () => handleCancelPendingRequest(r.id),
+                                    },
+                                    {
+                                      id: "delete-safe",
+                                      label: "حذف نهائي (للطلبات الملغاة/غير المرحّلة)",
+                                      icon: <Trash2 className="w-3.5 h-3.5" />,
+                                      tone: "danger",
+                                      hidden: !canSafeDelete,
+                                      confirmTitle: `حذف الطلب (${r.requestNumber})`,
+                                      confirmMessage: "سيتم حذف الطلب غير المرحّل نهائياً دون المساس بأي قيود مالية. هل تريد المتابعة؟",
+                                      onClick: () => handleRequestLifecycle(r.id, "DELETE"),
+                                    },
+                                  ]}
+                                />
+                              </div>
                             </div>
-                          )}
 
-                          {/* Phase 13 Return to Client for Approval Banner + Client Pending Diff Summary */}
-                          {r.status !== "RETURNED_TO_CLIENT" &&
-                            r.amendmentDiff &&
-                            r.amendmentDiff.length > 0 && (
-                              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 space-y-2 text-[11px]">
-                                <div className="font-bold text-slate-700 dark:text-slate-200">
-                                  ملخص التعديلات المسجلة ({r.revisionNumber ? `مراجعة #${r.revisionNumber}` : "محدث"}):
-                                </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                                  {r.amendmentDiff.map((diff, i) => (
-                                    <div key={`${diff.field}-${i}`} className="px-2 py-1 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
-                                      <span className="font-bold">{diff.labelAr}: </span>
-                                      <span className="text-rose-600 line-through mx-1">{diff.before}</span>
-                                      <span>←</span>
-                                      <strong className="text-emerald-700 dark:text-emerald-300 mx-1">{diff.after}</strong>
+                            {!isTerminalClosed && (
+                              <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 pt-1 text-[10px]">
+                                {stepperStages.map((st, idx) => {
+                                  const done = activeStageIdx >= idx;
+                                  const isCurrent = activeStageIdx === idx;
+                                  return (
+                                    <div
+                                      key={st.key}
+                                      className={`px-2 py-1 rounded-lg border text-center font-bold transition ${isCurrent
+                                        ? st.key === "RETURNED_TO_CLIENT"
+                                          ? "bg-amber-500 text-white border-amber-500 shadow-xs"
+                                          : "bg-emerald-600 text-white border-emerald-600 shadow-xs"
+                                        : done
+                                          ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
+                                          : "bg-slate-50 dark:bg-slate-900 text-slate-400 border-slate-200 dark:border-slate-800"
+                                        }`}
+                                    >
+                                      {idx + 1}. {st.label}
                                     </div>
-                                  ))}
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            {/* Phase 14 Pickup Pass Card */}
+                            {(r.status === "CONFIRMED" || r.status === "READY_FOR_PICKUP") && (
+                              <div
+                                data-testid={`portal-pickup-pass-${r.id}`}
+                                className="p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex flex-wrap items-center justify-between gap-2 text-[11px]"
+                              >
+                                <div className="space-y-0.5">
+                                  <div className="font-black text-emerald-800 dark:text-emerald-200">
+                                    بطاقة الاستلام — رمز الاستلام: <bdi dir="ltr" className="font-mono">{r.pickupPassCode || r.requestNumber}</bdi>
+                                  </div>
+                                  <div className="text-slate-600 dark:text-slate-300">
+                                    استلام من: <strong>{r.pickupLocation}</strong>
+                                    {r.pickupNotes ? ` • التعليمات: ${r.pickupNotes}` : ""}
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => printReceiptSpec(r)}
+                                  className="px-3 py-1 rounded-xl bg-white dark:bg-slate-900 border border-emerald-400 text-emerald-700 dark:text-emerald-300 font-bold inline-flex items-center gap-1"
+                                >
+                                  <Printer className="w-3 h-3" />
+                                  <span>طباعة بطاقة الاستلام</span>
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Phase 13 Return to Client for Approval Banner + Client Pending Diff Summary */}
+                            {r.status !== "RETURNED_TO_CLIENT" &&
+                              r.amendmentDiff &&
+                              r.amendmentDiff.length > 0 && (
+                                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 space-y-2 text-[11px]">
+                                  <div className="font-bold text-slate-700 dark:text-slate-200">
+                                    ملخص التعديلات المسجلة ({r.revisionNumber ? `مراجعة #${r.revisionNumber}` : "محدث"}):
+                                  </div>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                    {r.amendmentDiff.map((diff, i) => (
+                                      <div key={`${diff.field}-${i}`} className="px-2 py-1 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                                        <span className="font-bold">{diff.labelAr}: </span>
+                                        <span className="text-rose-600 line-through mx-1">{diff.before}</span>
+                                        <span>←</span>
+                                        <strong className="text-emerald-700 dark:text-emerald-300 mx-1">{diff.after}</strong>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                            {r.status === "RETURNED_TO_CLIENT" && (
+                              <div
+                                data-testid={`portal-amendment-review-${r.id}`}
+                                className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 space-y-3 text-xs"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="font-black text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                                    <CornerUpLeft className="w-4 h-4 text-amber-600" />
+                                    <span>تم تعديل الطلب وإعادته لموافقتك</span>
+                                  </div>
+                                  {r.returnedByName && (
+                                    <span className="text-[11px] text-amber-800 dark:text-amber-300">
+                                      بواسطة: {r.returnedByName}
+                                      {r.returnedToClientAt ? ` • ${r.returnedToClientAtDisplay || formatIsoToDmyTime(r.returnedToClientAt)}` : ""}
+                                    </span>
+                                  )}
+                                </div>
+
+                                {r.reviewerRemarks && (
+                                  <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/60 border border-amber-200 dark:border-amber-800">
+                                    <span className="font-bold text-amber-900 dark:text-amber-200">ملاحظات المراجع: </span>
+                                    <span>{r.reviewerRemarks}</span>
+                                  </div>
+                                )}
+
+                                {r.amendmentDiff && r.amendmentDiff.length > 0 && (
+                                  <div className="overflow-x-auto rounded-xl border border-amber-200 dark:border-amber-800 bg-white dark:bg-slate-900">
+                                    <table className="w-full text-[11px] text-right border-collapse">
+                                      <thead>
+                                        <tr className="bg-amber-100/70 dark:bg-amber-950/60 border-b border-amber-200 dark:border-amber-800">
+                                          <th className="p-2">البند المعدل</th>
+                                          <th className="p-2">قبل التعديل</th>
+                                          <th className="p-2">بعد التعديل</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-amber-100 dark:divide-amber-900/40">
+                                        {r.amendmentDiff.map((diff, i) => (
+                                          <tr key={`${diff.field}-${i}`}>
+                                            <td className="p-2 font-bold">{diff.labelAr}</td>
+                                            <td className="p-2 text-rose-600 line-through">{diff.before}</td>
+                                            <td className="p-2 text-emerald-700 dark:text-emerald-300 font-bold">{diff.after}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+
+                                <div className="flex flex-wrap items-center gap-2 pt-1">
+                                  <input
+                                    type="text"
+                                    value={amendReplyNotes[r.id] || ""}
+                                    onChange={(e) =>
+                                      setAmendReplyNotes((prev) => ({ ...prev, [r.id]: e.target.value }))
+                                    }
+                                    placeholder="ملاحظة اختيارية (أو سبب طلب التعديل عند الرفض)..."
+                                    className="flex-1 min-w-[200px] rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 px-3 py-1.5"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={respondingReqId === r.id}
+                                    data-testid={`portal-approve-amend-${r.id}`}
+                                    onClick={() => void handleRespondToAmendment(r.id, "APPROVE_AMENDMENTS")}
+                                    className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold inline-flex items-center gap-1 disabled:opacity-50"
+                                  >
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>اعتماد التعديلات</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={respondingReqId === r.id}
+                                    data-testid={`portal-decline-amend-${r.id}`}
+                                    onClick={() => void handleRespondToAmendment(r.id, "DECLINE_AMENDMENTS")}
+                                    className="px-3 py-1.5 rounded-xl border border-rose-400 text-rose-700 dark:text-rose-300 font-bold inline-flex items-center gap-1 disabled:opacity-50"
+                                  >
+                                    <CornerUpLeft className="w-3.5 h-3.5" />
+                                    <span>رفض / طلب تعديل</span>
+                                  </button>
                                 </div>
                               </div>
                             )}
 
-                          {r.status === "RETURNED_TO_CLIENT" && (
-                            <div
-                              data-testid={`portal-amendment-review-${r.id}`}
-                              className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 space-y-3 text-xs"
-                            >
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div className="font-black text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
-                                  <CornerUpLeft className="w-4 h-4 text-amber-600" />
-                                  <span>تم تعديل الطلب وإعادته لموافقتك</span>
-                                </div>
-                                {r.returnedByName && (
-                                  <span className="text-[11px] text-amber-800 dark:text-amber-300">
-                                    بواسطة: {r.returnedByName}
-                                    {r.returnedToClientAt ? ` • ${r.returnedToClientAtDisplay || formatIsoToDmyTime(r.returnedToClientAt)}` : ""}
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap gap-2">
+                                {r.lines.map((l) => (
+                                  <span
+                                    key={l.id}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold"
+                                  >
+                                    {l.itemTitle}: <strong>{fmtNum(l.confirmedQty ?? l.requestedQty)}</strong> {l.displayUnitLabel}
+                                    {l.unitPrice > 0 && (
+                                      <span className="text-emerald-700 dark:text-emerald-300 font-mono">
+                                        {" "}× {fmtNum(l.unitPrice)} = {formatMoney(l.lineTotal, r.currency || "YER")}
+                                      </span>
+                                    )}
                                   </span>
+                                ))}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300">
+                                  {(r.totalConfirmed > 0 ? r.totalConfirmed : r.totalEstimated) > 0
+                                    ? `الإجمالي: ${formatMoney(
+                                      r.totalConfirmed > 0 ? r.totalConfirmed : r.totalEstimated,
+                                      r.currency || "YER"
+                                    )}`
+                                    : "التسعير: يُحدد عند المراجعة"}
+                                </span>
+                                {["CONFIRMED", "READY_FOR_PICKUP", "COMPLETED"].includes(r.status) && (
+                                  <button
+                                    type="button"
+                                    data-testid={`portal-pay-request-${r.id}`}
+                                    onClick={() => {
+                                      const due = r.totalConfirmed > 0 ? r.totalConfirmed : r.totalEstimated;
+                                      openPaymentModal({
+                                        amount: due > 0 ? String(due) : "",
+                                        linkedRequestIds: [r.id],
+                                        linkedInvoiceIds: r.linkedInvoiceId ? [r.linkedInvoiceId] : [],
+                                      });
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold inline-flex items-center gap-1"
+                                  >
+                                    <CreditCard className="w-3 h-3" />
+                                    <span>تسجيل سداد</span>
+                                  </button>
                                 )}
                               </div>
-
-                              {r.reviewerRemarks && (
-                                <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/60 border border-amber-200 dark:border-amber-800">
-                                  <span className="font-bold text-amber-900 dark:text-amber-200">ملاحظات المراجع: </span>
-                                  <span>{r.reviewerRemarks}</span>
-                                </div>
-                              )}
-
-                              {r.amendmentDiff && r.amendmentDiff.length > 0 && (
-                                <div className="overflow-x-auto rounded-xl border border-amber-200 dark:border-amber-800 bg-white dark:bg-slate-900">
-                                  <table className="w-full text-[11px] text-right border-collapse">
-                                    <thead>
-                                      <tr className="bg-amber-100/70 dark:bg-amber-950/60 border-b border-amber-200 dark:border-amber-800">
-                                        <th className="p-2">البند المعدل</th>
-                                        <th className="p-2">قبل التعديل</th>
-                                        <th className="p-2">بعد التعديل</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-amber-100 dark:divide-amber-900/40">
-                                      {r.amendmentDiff.map((diff, i) => (
-                                        <tr key={`${diff.field}-${i}`}>
-                                          <td className="p-2 font-bold">{diff.labelAr}</td>
-                                          <td className="p-2 text-rose-600 line-through">{diff.before}</td>
-                                          <td className="p-2 text-emerald-700 dark:text-emerald-300 font-bold">{diff.after}</td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              )}
-
-                              <div className="flex flex-wrap items-center gap-2 pt-1">
-                                <input
-                                  type="text"
-                                  value={amendReplyNotes[r.id] || ""}
-                                  onChange={(e) =>
-                                    setAmendReplyNotes((prev) => ({ ...prev, [r.id]: e.target.value }))
-                                  }
-                                  placeholder="ملاحظة اختيارية (أو سبب طلب التعديل عند الرفض)..."
-                                  className="flex-1 min-w-[200px] rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 px-3 py-1.5"
-                                />
-                                <button
-                                  type="button"
-                                  disabled={respondingReqId === r.id}
-                                  data-testid={`portal-approve-amend-${r.id}`}
-                                  onClick={() => void handleRespondToAmendment(r.id, "APPROVE_AMENDMENTS")}
-                                  className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold inline-flex items-center gap-1 disabled:opacity-50"
-                                >
-                                  <Check className="w-3.5 h-3.5" />
-                                  <span>اعتماد التعديلات</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={respondingReqId === r.id}
-                                  data-testid={`portal-decline-amend-${r.id}`}
-                                  onClick={() => void handleRespondToAmendment(r.id, "DECLINE_AMENDMENTS")}
-                                  className="px-3 py-1.5 rounded-xl border border-rose-400 text-rose-700 dark:text-rose-300 font-bold inline-flex items-center gap-1 disabled:opacity-50"
-                                >
-                                  <CornerUpLeft className="w-3.5 h-3.5" />
-                                  <span>رفض / طلب تعديل</span>
-                                </button>
-                              </div>
                             </div>
-                          )}
-
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex flex-wrap gap-2">
-                              {r.lines.map((l) => (
-                                <span
-                                  key={l.id}
-                                  className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold"
-                                >
-                                  {l.itemTitle}: <strong>{fmtNum(l.confirmedQty ?? l.requestedQty)}</strong> {l.displayUnitLabel}
-                                  {l.unitPrice > 0 && (
-                                    <span className="text-emerald-700 dark:text-emerald-300 font-mono">
-                                      {" "}× {fmtNum(l.unitPrice)} = {formatMoney(l.lineTotal, r.currency || "YER")}
-                                    </span>
-                                  )}
-                                </span>
-                              ))}
-                            </div>
-                            <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300">
-                              {(r.totalConfirmed > 0 ? r.totalConfirmed : r.totalEstimated) > 0
-                                ? `الإجمالي: ${formatMoney(
-                                  r.totalConfirmed > 0 ? r.totalConfirmed : r.totalEstimated,
-                                  r.currency || "YER"
-                                )}`
-                                : "التسعير: يُحدد عند المراجعة"}
-                            </span>
                           </div>
+                        );
+                      })}
+                    {reqPagination.totalPages > 1 && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                        <span className="text-[11px] text-slate-500">
+                          صفحة {reqPagination.page} من {reqPagination.totalPages} (إجمالي {reqPagination.total} طلب)
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={reqPagination.page <= 1}
+                            onClick={() => setReqPage((p) => Math.max(1, p - 1))}
+                            className="px-3 py-1 rounded-lg border border-slate-300 dark:border-slate-700 font-bold disabled:opacity-40"
+                          >
+                            السابق
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!reqPagination.hasMore}
+                            onClick={() => setReqPage((p) => p + 1)}
+                            className="px-3 py-1 rounded-lg border border-slate-300 dark:border-slate-700 font-bold disabled:opacity-40"
+                          >
+                            التالي
+                          </button>
                         </div>
-                      );
-                    })}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -3795,6 +4094,19 @@ export function ClientPortalApp({
                 <div className="card-surface rounded-2xl p-5 space-y-4 text-xs">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="inline-flex flex-wrap rounded-xl border border-slate-200 dark:border-slate-700 p-1 bg-slate-50 dark:bg-slate-900 gap-1">
+                      <button
+                        type="button"
+                        data-testid="portal-open-payment-modal-btn"
+                        onClick={() =>
+                          openPaymentModal({
+                            amount: stmtSummary.totalUnpaid > 0 ? String(stmtSummary.totalUnpaid) : "",
+                          })
+                        }
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold inline-flex items-center gap-1"
+                      >
+                        <CreditCard className="w-3.5 h-3.5" />
+                        <span>تسجيل سداد / دفع على الحساب</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => setStmtTab("bills")}
@@ -3977,7 +4289,23 @@ export function ClientPortalApp({
                                   <td className="p-2.5 font-bold tabular-nums">{fmtNum(b.totalAmount)}</td>
                                   <td className="p-2.5 text-emerald-600 font-bold tabular-nums">{fmtNum(b.paidAmount)}</td>
                                   <td className="p-2.5 text-rose-600 font-bold tabular-nums">{fmtNum(b.balanceDue)}</td>
-                                  <td className="p-2.5">
+                                  <td className="p-2.5 flex flex-wrap items-center gap-1.5">
+                                    {b.billStatus !== "PAID" && b.balanceDue > 0 && (
+                                      <button
+                                        type="button"
+                                        data-testid={`portal-pay-bill-${b.id}`}
+                                        onClick={() =>
+                                          openPaymentModal({
+                                            amount: String(b.balanceDue),
+                                            linkedInvoiceIds: [b.id],
+                                          })
+                                        }
+                                        className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold inline-flex items-center gap-1"
+                                      >
+                                        <CreditCard className="w-3 h-3" />
+                                        <span>سداد هذه الفاتورة</span>
+                                      </button>
+                                    )}
                                     <button
                                       type="button"
                                       data-testid={`portal-reorder-bill-${b.id}`}
@@ -4145,32 +4473,32 @@ export function ClientPortalApp({
                           )}
                         </div>
                       ) : (
-                      <table className="w-full text-xs text-right border-collapse">
-                        <thead>
-                          <tr className="border-b bg-slate-100/80 dark:bg-slate-800/70">
-                            <th className="p-2.5">التاريخ</th>
-                            <th className="p-2.5">المرجع</th>
-                            <th className="p-2.5">الحركة</th>
-                            <th className="p-2.5">البيان</th>
-                            <th className="p-2.5">مدين</th>
-                            <th className="p-2.5">دائن</th>
-                            <th className="p-2.5">الرصيد</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                          {statementRows.map((r) => (
-                            <tr key={r.id}>
-                              <td className="p-2.5 font-mono"><bdi dir="ltr">{formatIsoToDmy(r.date)}</bdi></td>
-                              <td className="p-2.5 font-mono font-bold"><bdi dir="ltr">{r.reference}</bdi></td>
-                              <td className="p-2.5 font-bold">{r.typeAr}</td>
-                              <td className="p-2.5">{r.description}</td>
-                              <td className="p-2.5 tabular-nums">{fmtNum(r.debit)}</td>
-                              <td className="p-2.5 text-emerald-600 font-bold tabular-nums">{fmtNum(r.credit)}</td>
-                              <td className="p-2.5 font-black tabular-nums">{fmtNum(r.runningBalance)}</td>
+                        <table className="w-full text-xs text-right border-collapse">
+                          <thead>
+                            <tr className="border-b bg-slate-100/80 dark:bg-slate-800/70">
+                              <th className="p-2.5">التاريخ</th>
+                              <th className="p-2.5">المرجع</th>
+                              <th className="p-2.5">الحركة</th>
+                              <th className="p-2.5">البيان</th>
+                              <th className="p-2.5">مدين</th>
+                              <th className="p-2.5">دائن</th>
+                              <th className="p-2.5">الرصيد</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                            {statementRows.map((r) => (
+                              <tr key={r.id}>
+                                <td className="p-2.5 font-mono"><bdi dir="ltr">{formatIsoToDmy(r.date)}</bdi></td>
+                                <td className="p-2.5 font-mono font-bold"><bdi dir="ltr">{r.reference}</bdi></td>
+                                <td className="p-2.5 font-bold">{r.typeAr}</td>
+                                <td className="p-2.5">{r.description}</td>
+                                <td className="p-2.5 tabular-nums">{fmtNum(r.debit)}</td>
+                                <td className="p-2.5 text-emerald-600 font-bold tabular-nums">{fmtNum(r.credit)}</td>
+                                <td className="p-2.5 font-black tabular-nums">{fmtNum(r.runningBalance)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       )}
                     </div>
                   )}
@@ -4413,9 +4741,179 @@ export function ClientPortalApp({
                 </form>
               </div>
             )}
+
+            {/* TAB 4: PAYMENTS & RECEIPT UPLOADS */}
+            {portalTab === "payments" && (
+              <ClientPaymentsSection
+                channels={paymentChannels}
+                payments={clientPayments}
+                pagination={paymentsPagination}
+                loading={paymentsLoading}
+                statusFilter={paymentsStatusFilter}
+                onStatusFilterChange={(next) => {
+                  setPaymentsStatusFilter(next);
+                  setPaymentsPage(1);
+                }}
+                searchQuery={paymentsSearch}
+                onSearchQueryChange={setPaymentsSearch}
+                onPageChange={setPaymentsPage}
+                onRefresh={() => void loadPayments(true)}
+                onOpenNewPayment={openPaymentModal}
+                resolveHeaders={resolveClientHeaders}
+                apiUrl={apiUrl}
+                onToast={showNotice}
+              />
+            )}
           </div>
         )}
       </main>
+
+      {/* Submit Payment & Attach Receipt Modal */}
+      {account && (
+        <SubmitPaymentModal
+          key={paymentModalKey}
+          open={paymentModalOpen}
+          channels={paymentChannels}
+          openBills={billsList
+            .filter((b) => b.billStatus !== "PAID" && b.balanceDue > 0)
+            .map((b) => ({
+              id: b.id,
+              invoiceNumber: b.invoiceNumber,
+              balanceDue: b.balanceDue,
+              currency: b.currency,
+            }))}
+          initialChannelId={paymentModalPreset.channelId}
+          initialAmount={paymentModalPreset.amount}
+          initialLinkedInvoiceIds={paymentModalPreset.linkedInvoiceIds}
+          initialLinkedRequestIds={paymentModalPreset.linkedRequestIds}
+          resubmitTarget={paymentModalPreset.resubmitTarget}
+          onClose={() => setPaymentModalOpen(false)}
+          onSubmitted={async () => {
+            await Promise.all([loadPayments(false), loadStatement(false), syncProfile(false)]);
+          }}
+          resolveHeaders={resolveClientHeaders}
+          apiUrl={apiUrl}
+          onToast={showNotice}
+        />
+      )}
+
+      {/* Multi-Tenant Workspace Switcher Modal (Phase 21) */}
+      {showWorkspaceModal && account && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowWorkspaceModal(false)}
+        >
+          <div
+            dir="rtl"
+            className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-5 space-y-4 shadow-2xl border border-slate-200 dark:border-slate-700 text-xs max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+              <h3 className="text-sm font-black flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-emerald-600" />
+                <span>منشآتي ومساحات العمل المسجلة</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowWorkspaceModal(false)}
+                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-[11px] font-bold text-slate-500">
+                حساباتك الحالية ({memberships.length || 1})
+              </div>
+              {memberships.length === 0 ? (
+                <div className="p-3 rounded-xl border border-emerald-300 bg-emerald-50/50 dark:bg-emerald-950/30 flex items-center justify-between">
+                  <div>
+                    <div className="font-black">{tenantNameAr}</div>
+                    <div className="text-[11px] font-mono text-slate-500">
+                      <bdi dir="ltr">{tenantSlug}</bdi>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-600 text-white font-bold">
+                    الحالية
+                  </span>
+                </div>
+              ) : (
+                memberships.map((m) => {
+                  const isCurrent = m.tenantSlug === tenantSlug;
+                  return (
+                    <div
+                      key={m.id}
+                      className={`p-3 rounded-xl border flex flex-wrap items-center justify-between gap-2 ${isCurrent
+                          ? "border-emerald-400 bg-emerald-50/60 dark:bg-emerald-950/30"
+                          : "border-slate-200 dark:border-slate-700"
+                        }`}
+                    >
+                      <div className="space-y-0.5">
+                        <div className="font-black text-xs flex items-center gap-2">
+                          <span>{m.tenantName}</span>
+                          <span className="font-mono text-[10px] text-slate-500">
+                            <bdi dir="ltr">{m.tenantSlug}</bdi>
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          الرصيد: <strong>{formatMoney(m.balance)}</strong> • الحد الائتماني:{" "}
+                          <strong>{formatMoney(m.creditLimit)}</strong>
+                        </div>
+                      </div>
+                      {isCurrent ? (
+                        <span className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-extrabold">
+                          المساحة النشطة
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={switchingTenantSlug === m.tenantSlug}
+                          onClick={() => void handleSwitchTenant(m.tenantSlug, false)}
+                          className="px-3 py-1.5 rounded-lg border border-emerald-500 text-emerald-700 dark:text-emerald-300 font-extrabold hover:bg-emerald-50 dark:hover:bg-emerald-950/40 disabled:opacity-50"
+                        >
+                          {switchingTenantSlug === m.tenantSlug ? "جاري التبديل..." : "الدخول للمنشأة"}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {availableTenants.length > 0 && (
+              <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <div className="text-[11px] font-bold text-slate-500">
+                  الانضمام السريع لمنشأة أخرى بنفس رقم الجوال والبريد الموحد
+                </div>
+                <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                  {availableTenants.map((t) => (
+                    <div
+                      key={t.slug}
+                      className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-2"
+                    >
+                      <div>
+                        <div className="font-bold">{t.nameAr}</div>
+                        <div className="text-[10px] font-mono text-slate-500">
+                          <bdi dir="ltr">{t.slug}</bdi>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={switchingTenantSlug === t.slug}
+                        onClick={() => void handleSwitchTenant(t.slug, true)}
+                        className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold disabled:opacity-50"
+                      >
+                        {switchingTenantSlug === t.slug ? "جاري الربط..." : "تسجيل ودخول"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

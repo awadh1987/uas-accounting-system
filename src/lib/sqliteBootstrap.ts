@@ -527,6 +527,12 @@ async function ensureAdditiveColumns(client: {
       ],
     },
     {
+      table: "Customer",
+      columns: [
+        { name: "tenantSlug", ddl: 'ALTER TABLE "Customer" ADD COLUMN "tenantSlug" TEXT NOT NULL DEFAULT \'default\'' },
+      ],
+    },
+    {
       table: "SalesInvoice",
       columns: [
         { name: "invoiceType", ddl: 'ALTER TABLE "SalesInvoice" ADD COLUMN "invoiceType" TEXT NOT NULL DEFAULT \'INVOICE\'' },
@@ -536,12 +542,15 @@ async function ensureAdditiveColumns(client: {
         { name: "taxAmount", ddl: 'ALTER TABLE "SalesInvoice" ADD COLUMN "taxAmount" REAL NOT NULL DEFAULT 0' },
         { name: "whtAmount", ddl: 'ALTER TABLE "SalesInvoice" ADD COLUMN "whtAmount" REAL NOT NULL DEFAULT 0' },
         { name: "cogsJournalEntryId", ddl: 'ALTER TABLE "SalesInvoice" ADD COLUMN "cogsJournalEntryId" TEXT' },
+        { name: "tenantSlug", ddl: 'ALTER TABLE "SalesInvoice" ADD COLUMN "tenantSlug" TEXT NOT NULL DEFAULT \'default\'' },
       ],
     },
     {
       table: "ReceiptVoucher",
       columns: [
         { name: "allocationsJson", ddl: 'ALTER TABLE "ReceiptVoucher" ADD COLUMN "allocationsJson" TEXT' },
+        { name: "tenantSlug", ddl: 'ALTER TABLE "ReceiptVoucher" ADD COLUMN "tenantSlug" TEXT NOT NULL DEFAULT \'default\'' },
+        { name: "linkedPaymentReceiptId", ddl: 'ALTER TABLE "ReceiptVoucher" ADD COLUMN "linkedPaymentReceiptId" TEXT' },
       ],
     },
     {
@@ -628,6 +637,7 @@ async function ensureAdditiveColumns(client: {
         { name: "hiddenByClientAt", ddl: 'ALTER TABLE "ClientGoodsRequest" ADD COLUMN "hiddenByClientAt" DATETIME' },
         { name: "isHiddenByStaff", ddl: 'ALTER TABLE "ClientGoodsRequest" ADD COLUMN "isHiddenByStaff" BOOLEAN NOT NULL DEFAULT false' },
         { name: "hiddenByStaffAt", ddl: 'ALTER TABLE "ClientGoodsRequest" ADD COLUMN "hiddenByStaffAt" DATETIME' },
+        { name: "tenantSlug", ddl: 'ALTER TABLE "ClientGoodsRequest" ADD COLUMN "tenantSlug" TEXT NOT NULL DEFAULT \'default\'' },
       ],
     },
     {
@@ -658,6 +668,11 @@ async function ensureAdditiveColumns(client: {
     {
       table: "ClientPortalAccount",
       columns: [
+        { name: "tenantSlug", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "tenantSlug" TEXT NOT NULL DEFAULT \'default\'' },
+        { name: "globalClientId", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "globalClientId" TEXT' },
+        { name: "normalizedPhone", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "normalizedPhone" TEXT NOT NULL DEFAULT \'\'' },
+        { name: "normalizedEmail", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "normalizedEmail" TEXT NOT NULL DEFAULT \'\'' },
+        { name: "deviceLimit", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "deviceLimit" INTEGER NOT NULL DEFAULT 3' },
         { name: "avatarUrl", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "avatarUrl" TEXT' },
         { name: "avatarColor", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "avatarColor" TEXT NOT NULL DEFAULT \'#059669\'' },
         { name: "mustChangePassword", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "mustChangePassword" INTEGER NOT NULL DEFAULT 0' },
@@ -751,17 +766,22 @@ async function ensureAdditiveColumns(client: {
     )`,
     `CREATE TABLE IF NOT EXISTS "ClientPortalAccount" (
       "id" TEXT NOT NULL PRIMARY KEY,
+      "tenantSlug" TEXT NOT NULL DEFAULT 'default',
+      "globalClientId" TEXT,
       "customerId" TEXT,
       "fullName" TEXT NOT NULL,
       "tradeName" TEXT,
       "phone" TEXT NOT NULL,
+      "normalizedPhone" TEXT NOT NULL DEFAULT '',
       "email" TEXT NOT NULL,
+      "normalizedEmail" TEXT NOT NULL DEFAULT '',
       "passwordHash" TEXT NOT NULL,
       "avatarUrl" TEXT,
       "avatarColor" TEXT NOT NULL DEFAULT '#059669',
       "mustChangePassword" INTEGER NOT NULL DEFAULT 0,
       "passwordUpdatedAt" DATETIME,
       "sessionVersion" INTEGER NOT NULL DEFAULT 1,
+      "deviceLimit" INTEGER NOT NULL DEFAULT 3,
       "clientType" TEXT NOT NULL DEFAULT 'DIRECT_CLIENT',
       "customClientType" TEXT,
       "preferredPickup" TEXT NOT NULL DEFAULT 'السوق',
@@ -776,10 +796,9 @@ async function ensureAdditiveColumns(client: {
       "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "ClientPortalAccount_phone_key" ON "ClientPortalAccount"("phone")`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "ClientPortalAccount_email_key" ON "ClientPortalAccount"("email")`,
     `CREATE INDEX IF NOT EXISTS "ClientPortalAccount_status_createdAt_idx" ON "ClientPortalAccount"("status", "createdAt")`,
     `CREATE INDEX IF NOT EXISTS "ClientPortalAccount_customerId_idx" ON "ClientPortalAccount"("customerId")`,
+    `CREATE INDEX IF NOT EXISTS "ClientPortalAccount_globalClientId_idx" ON "ClientPortalAccount"("globalClientId")`,
     `CREATE TABLE IF NOT EXISTS "ClientPasswordResetToken" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "clientAccountId" TEXT NOT NULL,
@@ -991,6 +1010,137 @@ async function ensureAdditiveColumns(client: {
     `CREATE UNIQUE INDEX IF NOT EXISTS "CommercialDispatchOrder_dispatchNumber_key" ON "CommercialDispatchOrder"("dispatchNumber")`,
     `CREATE INDEX IF NOT EXISTS "CommercialDispatchOrder_tripStatus_createdAt_idx" ON "CommercialDispatchOrder"("tripStatus", "createdAt")`,
     `CREATE INDEX IF NOT EXISTS "CommercialDispatchOrder_requestId_idx" ON "CommercialDispatchOrder"("requestId")`,
+    `CREATE TABLE IF NOT EXISTS "tenants" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "tenantId" TEXT NOT NULL,
+      "slug" TEXT NOT NULL,
+      "companyName" TEXT NOT NULL,
+      "nameAr" TEXT,
+      "nameEn" TEXT,
+      "tenantUrl" TEXT,
+      "licenseId" TEXT,
+      "plan" TEXT,
+      "isolationMode" TEXT NOT NULL DEFAULT 'DEDICATED_DB',
+      "postgresDb" TEXT,
+      "sqliteDbPath" TEXT,
+      "schemaOrDb" TEXT NOT NULL,
+      "allowedModesJson" TEXT NOT NULL DEFAULT '["local","lan","cloud"]',
+      "maxSeats" INTEGER NOT NULL DEFAULT 10,
+      "status" TEXT NOT NULL DEFAULT 'ACTIVE',
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "tenants_tenantId_key" ON "tenants"("tenantId")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "tenants_slug_key" ON "tenants"("slug")`,
+    `CREATE INDEX IF NOT EXISTS "tenants_status_updatedAt_idx" ON "tenants"("status", "updatedAt")`,
+    `CREATE INDEX IF NOT EXISTS "tenants_slug_status_idx" ON "tenants"("slug", "status")`,
+    `CREATE TABLE IF NOT EXISTS "GlobalClientIdentity" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "normalizedPhone" TEXT NOT NULL,
+      "normalizedEmail" TEXT NOT NULL,
+      "fullName" TEXT NOT NULL,
+      "tradeName" TEXT,
+      "passwordHash" TEXT NOT NULL,
+      "avatarUrl" TEXT,
+      "avatarColor" TEXT NOT NULL DEFAULT '#059669',
+      "sessionVersion" INTEGER NOT NULL DEFAULT 1,
+      "lastLoginAt" DATETIME,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "GlobalClientIdentity_normalizedPhone_key" ON "GlobalClientIdentity"("normalizedPhone")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "GlobalClientIdentity_normalizedEmail_key" ON "GlobalClientIdentity"("normalizedEmail")`,
+    `CREATE TABLE IF NOT EXISTS "GlobalClientMembership" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "globalClientId" TEXT NOT NULL,
+      "tenantSlug" TEXT NOT NULL,
+      "tenantId" TEXT NOT NULL,
+      "tenantName" TEXT,
+      "clientAccountId" TEXT NOT NULL,
+      "customerId" TEXT,
+      "normalizedPhone" TEXT NOT NULL,
+      "normalizedEmail" TEXT NOT NULL,
+      "status" TEXT NOT NULL DEFAULT 'PENDING_APPROVAL',
+      "creditLimit" DECIMAL NOT NULL DEFAULT 0,
+      "balance" DECIMAL NOT NULL DEFAULT 0,
+      "deviceLimit" INTEGER NOT NULL DEFAULT 3,
+      "lastSyncedAt" DATETIME,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "GlobalClientMembership_globalClientId_fkey" FOREIGN KEY ("globalClientId") REFERENCES "GlobalClientIdentity" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "GlobalClientMembership_tenantSlug_normalizedPhone_key" ON "GlobalClientMembership"("tenantSlug", "normalizedPhone")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "GlobalClientMembership_tenantSlug_normalizedEmail_key" ON "GlobalClientMembership"("tenantSlug", "normalizedEmail")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "GlobalClientMembership_tenantSlug_clientAccountId_key" ON "GlobalClientMembership"("tenantSlug", "clientAccountId")`,
+    `CREATE INDEX IF NOT EXISTS "GlobalClientMembership_globalClientId_status_idx" ON "GlobalClientMembership"("globalClientId", "status")`,
+    `CREATE INDEX IF NOT EXISTS "GlobalClientMembership_tenantSlug_status_createdAt_idx" ON "GlobalClientMembership"("tenantSlug", "status", "createdAt")`,
+    `CREATE TABLE IF NOT EXISTS "TenantPaymentChannel" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "tenantSlug" TEXT NOT NULL DEFAULT 'default',
+      "category" TEXT NOT NULL,
+      "providerCode" TEXT NOT NULL DEFAULT 'CUSTOM',
+      "displayNameAr" TEXT NOT NULL,
+      "displayNameEn" TEXT,
+      "currency" TEXT NOT NULL DEFAULT 'YER',
+      "accountOrWalletNumber" TEXT NOT NULL,
+      "beneficiaryName" TEXT NOT NULL,
+      "ibanOrBranch" TEXT,
+      "qrImageUrl" TEXT,
+      "instructionsAr" TEXT,
+      "treasuryAccountId" TEXT NOT NULL,
+      "glAccountId" TEXT,
+      "displayOrder" INTEGER NOT NULL DEFAULT 1,
+      "isActive" BOOLEAN NOT NULL DEFAULT true,
+      "createdById" TEXT,
+      "createdByName" TEXT,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE INDEX IF NOT EXISTS "TenantPaymentChannel_tenantSlug_isActive_displayOrder_idx" ON "TenantPaymentChannel"("tenantSlug", "isActive", "displayOrder")`,
+    `CREATE INDEX IF NOT EXISTS "TenantPaymentChannel_treasuryAccountId_idx" ON "TenantPaymentChannel"("treasuryAccountId")`,
+    `CREATE TABLE IF NOT EXISTS "ClientPaymentReceipt" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "submissionNumber" TEXT NOT NULL,
+      "tenantSlug" TEXT NOT NULL DEFAULT 'default',
+      "clientAccountId" TEXT NOT NULL,
+      "customerId" TEXT,
+      "channelId" TEXT NOT NULL,
+      "channelCategory" TEXT NOT NULL,
+      "channelNameAr" TEXT NOT NULL,
+      "treasuryAccountId" TEXT NOT NULL,
+      "amount" DECIMAL NOT NULL,
+      "currency" TEXT NOT NULL DEFAULT 'YER',
+      "transferReference" TEXT NOT NULL,
+      "normalizedReference" TEXT NOT NULL,
+      "transferAt" DATETIME NOT NULL,
+      "transferDateDmy" TEXT NOT NULL,
+      "transferTimeHm" TEXT NOT NULL,
+      "linkedInvoiceIdsJson" TEXT NOT NULL DEFAULT '[]',
+      "linkedRequestIdsJson" TEXT NOT NULL DEFAULT '[]',
+      "clientNotes" TEXT,
+      "receiptFileName" TEXT,
+      "receiptFilePath" TEXT,
+      "receiptMimeType" TEXT,
+      "receiptFileSize" INTEGER,
+      "status" TEXT NOT NULL DEFAULT 'PENDING_VERIFICATION',
+      "staffNotes" TEXT,
+      "clarificationReason" TEXT,
+      "rejectionReason" TEXT,
+      "reviewedByUserId" TEXT,
+      "reviewedByName" TEXT,
+      "reviewedAt" DATETIME,
+      "linkedReceiptVoucherId" TEXT,
+      "linkedJournalEntryId" TEXT,
+      "auditHistoryJson" TEXT NOT NULL DEFAULT '[]',
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "ClientPaymentReceipt_clientAccountId_fkey" FOREIGN KEY ("clientAccountId") REFERENCES "ClientPortalAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "ClientPaymentReceipt_submissionNumber_key" ON "ClientPaymentReceipt"("submissionNumber")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "ClientPaymentReceipt_tenantSlug_channelId_normalizedReference_key" ON "ClientPaymentReceipt"("tenantSlug", "channelId", "normalizedReference")`,
+    `CREATE INDEX IF NOT EXISTS "ClientPaymentReceipt_tenantSlug_clientAccountId_createdAt_idx" ON "ClientPaymentReceipt"("tenantSlug", "clientAccountId", "createdAt")`,
+    `CREATE INDEX IF NOT EXISTS "ClientPaymentReceipt_tenantSlug_status_createdAt_idx" ON "ClientPaymentReceipt"("tenantSlug", "status", "createdAt")`,
+    `CREATE INDEX IF NOT EXISTS "ClientPaymentReceipt_customerId_status_idx" ON "ClientPaymentReceipt"("customerId", "status")`,
   ];
 
   for (const ddl of additiveTables) {
@@ -1018,6 +1168,35 @@ async function ensureAdditiveColumns(client: {
       }
     } catch {
       // Ignore if table doesn't exist yet
+    }
+  }
+
+  // Post-column additive backfill & Phase 21/22 composite indexes
+  const postColumnSql = [
+    `UPDATE "ClientPortalAccount" SET "tenantSlug" = 'default' WHERE "tenantSlug" IS NULL OR "tenantSlug" = ''`,
+    `UPDATE "ClientPortalAccount" SET "normalizedPhone" = TRIM("phone") WHERE "normalizedPhone" IS NULL OR "normalizedPhone" = ''`,
+    `UPDATE "ClientPortalAccount" SET "normalizedEmail" = LOWER(TRIM("email")) WHERE "normalizedEmail" IS NULL OR "normalizedEmail" = ''`,
+    `DROP INDEX IF EXISTS "ClientPortalAccount_phone_key"`,
+    `DROP INDEX IF EXISTS "ClientPortalAccount_email_key"`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "ClientPortalAccount_tenantSlug_normalizedPhone_key" ON "ClientPortalAccount"("tenantSlug", "normalizedPhone")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "ClientPortalAccount_tenantSlug_normalizedEmail_key" ON "ClientPortalAccount"("tenantSlug", "normalizedEmail")`,
+    `CREATE INDEX IF NOT EXISTS "ClientPortalAccount_tenantSlug_status_createdAt_idx" ON "ClientPortalAccount"("tenantSlug", "status", "createdAt")`,
+    `CREATE INDEX IF NOT EXISTS "ClientPortalAccount_tenantSlug_normalizedPhone_idx" ON "ClientPortalAccount"("tenantSlug", "normalizedPhone")`,
+    `CREATE INDEX IF NOT EXISTS "ClientPortalAccount_tenantSlug_normalizedEmail_idx" ON "ClientPortalAccount"("tenantSlug", "normalizedEmail")`,
+    `CREATE INDEX IF NOT EXISTS "Customer_tenantSlug_phone_idx" ON "Customer"("tenantSlug", "phone")`,
+    `CREATE INDEX IF NOT EXISTS "Customer_tenantSlug_isActive_idx" ON "Customer"("tenantSlug", "isActive")`,
+    `CREATE INDEX IF NOT EXISTS "SalesInvoice_tenantSlug_customerId_createdAt_idx" ON "SalesInvoice"("tenantSlug", "customerId", "createdAt")`,
+    `CREATE INDEX IF NOT EXISTS "SalesInvoice_tenantSlug_status_idx" ON "SalesInvoice"("tenantSlug", "status")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "ReceiptVoucher_linkedPaymentReceiptId_key" ON "ReceiptVoucher"("linkedPaymentReceiptId")`,
+    `CREATE INDEX IF NOT EXISTS "ReceiptVoucher_tenantSlug_customerId_createdAt_idx" ON "ReceiptVoucher"("tenantSlug", "customerId", "createdAt")`,
+    `CREATE INDEX IF NOT EXISTS "ClientGoodsRequest_tenantSlug_clientAccountId_createdAt_idx" ON "ClientGoodsRequest"("tenantSlug", "clientAccountId", "createdAt")`,
+    `CREATE INDEX IF NOT EXISTS "ClientGoodsRequest_tenantSlug_status_createdAt_idx" ON "ClientGoodsRequest"("tenantSlug", "status", "createdAt")`,
+  ];
+  for (const sql of postColumnSql) {
+    try {
+      await client.$executeRawUnsafe(sql);
+    } catch {
+      // Non-fatal idempotent index guard
     }
   }
 }

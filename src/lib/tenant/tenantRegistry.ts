@@ -3,6 +3,8 @@ import path from "node:path";
 import { normalizeTenantId } from "./tenantContext";
 import { buildTenantWorkspaceUrl, generateTenantSlug } from "./tenantSlug";
 
+export type TenantIsolationMode = "DEDICATED_DB" | "SCHEMA" | "POOLED_RLS";
+
 export interface TenantMetadata {
   tenantId: string;
   slug: string;
@@ -12,6 +14,7 @@ export interface TenantMetadata {
   tenantUrl?: string;
   licenseId?: string;
   plan?: string;
+  isolationMode?: TenantIsolationMode;
   postgresDb?: string;
   sqliteDbPath?: string;
   allowedModes?: ("local" | "lan" | "cloud")[];
@@ -23,8 +26,39 @@ export interface TenantMetadata {
 }
 
 const inMemoryRegistry = new Map<string, TenantMetadata>();
+const slugIndexMap = new Map<string, TenantMetadata>();
 let isRegistryInitialized = false;
-let lastLoadedMtimeMs = -1;
+let cacheLoadedAtMs = 0;
+let centralDbSyncedOnce = false;
+
+function getRegistryCacheTtlMs(): number {
+  const raw = Number(process.env.UAS_TENANT_REGISTRY_TTL_MS || 30_000);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 30_000;
+}
+
+function indexTenantMetadata(meta: TenantMetadata): void {
+  const normId = normalizeTenantId(meta.tenantId || meta.slug);
+  const slugKey = String(meta.slug || normId).trim().toLowerCase();
+  inMemoryRegistry.set(normId, meta);
+  if (slugKey) {
+    slugIndexMap.set(slugKey, meta);
+  }
+}
+
+function removeTenantFromIndexes(normId: string): boolean {
+  const existing = inMemoryRegistry.get(normId);
+  if (!existing) return false;
+  inMemoryRegistry.delete(normId);
+  if (existing.slug) {
+    slugIndexMap.delete(existing.slug.trim().toLowerCase());
+  }
+  return true;
+}
+
+export function invalidateTenantRegistryCache(): void {
+  cacheLoadedAtMs = 0;
+  centralDbSyncedOnce = false;
+}
 
 function createDefaultTenantMetadata(): TenantMetadata {
   const now = new Date().toISOString();
@@ -112,29 +146,23 @@ function loadRegistryFromDisk(): void {
     }
 
     if (fs.existsSync(/*turbopackIgnore: true*/ filePath)) {
-      try {
-        lastLoadedMtimeMs = fs.statSync(/*turbopackIgnore: true*/ filePath).mtimeMs;
-      } catch {
-        lastLoadedMtimeMs = -1;
-      }
       const raw = fs.readFileSync(/*turbopackIgnore: true*/ filePath, "utf8");
       const list = JSON.parse(raw);
       if (Array.isArray(list)) {
         inMemoryRegistry.clear();
+        slugIndexMap.clear();
         for (const item of list) {
           if (item && (item.tenantId || item.slug)) {
-            const key = normalizeTenantId(item.slug || item.tenantId);
-            inMemoryRegistry.set(key, item);
+            indexTenantMetadata(item as TenantMetadata);
           }
         }
       }
     } else {
       // Lazily create initial default registry file on disk if missing
       const defaultMeta = createDefaultTenantMetadata();
-      inMemoryRegistry.set("default", defaultMeta);
+      indexTenantMetadata(defaultMeta);
       try {
         fs.writeFileSync(/*turbopackIgnore: true*/ filePath, JSON.stringify([defaultMeta], null, 2), "utf8");
-        lastLoadedMtimeMs = fs.statSync(/*turbopackIgnore: true*/ filePath).mtimeMs;
       } catch (writeErr) {
         console.warn("[TenantRegistry] Notice writing initial registry to disk:", writeErr);
       }
@@ -145,8 +173,9 @@ function loadRegistryFromDisk(): void {
 
   // Ensure default tenant always exists in memory
   if (!inMemoryRegistry.has("default")) {
-    inMemoryRegistry.set("default", createDefaultTenantMetadata());
+    indexTenantMetadata(createDefaultTenantMetadata());
   }
+  cacheLoadedAtMs = Date.now();
 }
 
 function saveRegistryToDisk(): void {
@@ -170,34 +199,211 @@ function saveRegistryToDisk(): void {
     } catch {
       // Non-fatal standalone registry mirror notice
     }
-    try {
-      lastLoadedMtimeMs = fs.statSync(/*turbopackIgnore: true*/ filePath).mtimeMs;
-    } catch {
-      // Ignore stat error
-    }
+    cacheLoadedAtMs = Date.now();
   } catch (err) {
     console.warn("[TenantRegistry] Warning saving registry to disk:", err);
   }
 }
 
+function mapDbRowToTenantMetadata(row: {
+  tenantId: string;
+  slug: string;
+  companyName: string;
+  nameAr: string | null;
+  nameEn: string | null;
+  tenantUrl: string | null;
+  licenseId: string | null;
+  plan: string | null;
+  isolationMode: string;
+  postgresDb: string | null;
+  sqliteDbPath: string | null;
+  schemaOrDb: string;
+  allowedModesJson: string;
+  maxSeats: number;
+  status: string;
+  createdAt: Date;
+  updatedAt: Date;
+}): TenantMetadata {
+  let allowedModes: ("local" | "lan" | "cloud")[] | undefined;
+  try {
+    const parsed = JSON.parse(row.allowedModesJson || "[]");
+    if (Array.isArray(parsed)) {
+      allowedModes = parsed as ("local" | "lan" | "cloud")[];
+    }
+  } catch {
+    allowedModes = undefined;
+  }
+  const iso =
+    row.isolationMode === "POOLED_RLS" || row.isolationMode === "SCHEMA"
+      ? row.isolationMode
+      : "DEDICATED_DB";
+  return {
+    tenantId: row.tenantId,
+    slug: row.slug,
+    companyName: row.companyName,
+    ...(row.nameAr ? { nameAr: row.nameAr } : {}),
+    ...(row.nameEn ? { nameEn: row.nameEn } : {}),
+    ...(row.tenantUrl ? { tenantUrl: row.tenantUrl } : {}),
+    ...(row.licenseId ? { licenseId: row.licenseId } : {}),
+    ...(row.plan ? { plan: row.plan } : {}),
+    isolationMode: iso,
+    ...(row.postgresDb ? { postgresDb: row.postgresDb } : {}),
+    ...(row.sqliteDbPath ? { sqliteDbPath: row.sqliteDbPath } : {}),
+    ...(allowedModes ? { allowedModes } : {}),
+    schemaOrDb: row.schemaOrDb,
+    status: (row.status as TenantMetadata["status"]) || "ACTIVE",
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    maxSeats: row.maxSeats || 10,
+  };
+}
+
+/**
+ * Persists a single tenant record to the central `tenants` table asynchronously (non-blocking for sync callers).
+ */
+export async function upsertTenantInCentralDb(meta: TenantMetadata): Promise<void> {
+  try {
+    const { defaultPrisma } = await import("@/lib/prisma");
+    const { ensureCentralPostgresRegistryReady } = await import("@/lib/clientPortal/ensurePortalSchema");
+    const { ensureSqliteDatabaseReady, isSqliteRuntime } = await import("@/lib/sqliteBootstrap");
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    } else {
+      await ensureCentralPostgresRegistryReady();
+    }
+    await defaultPrisma.tenantRegistry.upsert({
+      where: { tenantId: meta.tenantId },
+      update: {
+        slug: meta.slug,
+        companyName: meta.companyName,
+        nameAr: meta.nameAr ?? null,
+        nameEn: meta.nameEn ?? null,
+        tenantUrl: meta.tenantUrl ?? null,
+        licenseId: meta.licenseId ?? null,
+        plan: meta.plan ?? null,
+        isolationMode: meta.isolationMode || "DEDICATED_DB",
+        postgresDb: meta.postgresDb ?? null,
+        sqliteDbPath: meta.sqliteDbPath ?? null,
+        schemaOrDb: meta.schemaOrDb,
+        allowedModesJson: JSON.stringify(meta.allowedModes || ["local", "lan", "cloud"]),
+        maxSeats: meta.maxSeats ?? 10,
+        status: meta.status || "ACTIVE",
+      },
+      create: {
+        tenantId: meta.tenantId,
+        slug: meta.slug,
+        companyName: meta.companyName,
+        nameAr: meta.nameAr ?? null,
+        nameEn: meta.nameEn ?? null,
+        tenantUrl: meta.tenantUrl ?? null,
+        licenseId: meta.licenseId ?? null,
+        plan: meta.plan ?? null,
+        isolationMode: meta.isolationMode || "DEDICATED_DB",
+        postgresDb: meta.postgresDb ?? null,
+        sqliteDbPath: meta.sqliteDbPath ?? null,
+        schemaOrDb: meta.schemaOrDb,
+        allowedModesJson: JSON.stringify(meta.allowedModes || ["local", "lan", "cloud"]),
+        maxSeats: meta.maxSeats ?? 10,
+        status: meta.status || "ACTIVE",
+      },
+    });
+  } catch {
+    // Non-fatal during early bootstrap or isolated unit test contexts
+  }
+}
+
+/**
+ * Syncs the in-memory O(1) registry cache with the central `tenants` table in `uas_qat_prod` (or SQLite central DB).
+ * Ensures any legacy entries from `tenants_registry.json` are seeded into `tenants`, and any DB entries are loaded into memory.
+ */
+export async function syncTenantRegistryWithDb(force = false): Promise<void> {
+  ensureRegistryInitialized();
+  const ttl = getRegistryCacheTtlMs();
+  if (!force && centralDbSyncedOnce && Date.now() - cacheLoadedAtMs < ttl) {
+    return;
+  }
+  try {
+    const { defaultPrisma } = await import("@/lib/prisma");
+    const { ensureCentralPostgresRegistryReady } = await import("@/lib/clientPortal/ensurePortalSchema");
+    const { ensureSqliteDatabaseReady, isSqliteRuntime } = await import("@/lib/sqliteBootstrap");
+    if (isSqliteRuntime()) {
+      await ensureSqliteDatabaseReady();
+    } else {
+      await ensureCentralPostgresRegistryReady();
+    }
+
+    const rows = await defaultPrisma.tenantRegistry.findMany();
+    const dbByTenantId = new Map<string, TenantMetadata>();
+    for (const r of rows) {
+      const mapped = mapDbRowToTenantMetadata(r);
+      dbByTenantId.set(mapped.tenantId, mapped);
+      indexTenantMetadata(mapped);
+    }
+
+    // Backfill any JSON-only entries into central `tenants` table
+    for (const meta of inMemoryRegistry.values()) {
+      if (!dbByTenantId.has(meta.tenantId)) {
+        await upsertTenantInCentralDb(meta);
+      }
+    }
+    centralDbSyncedOnce = true;
+    cacheLoadedAtMs = Date.now();
+  } catch {
+    // Non-fatal fallback to in-memory registry
+  }
+}
+
+/**
+ * O(1) tenant resolution by slug backed by TTL in-memory cache + central `tenants` table lookup on miss.
+ */
+export async function resolveTenantBySlugAsync(rawSlug?: string | null): Promise<TenantMetadata | null> {
+  const clean = String(rawSlug || "").trim().toLowerCase();
+  if (!clean) return null;
+
+  const ttl = getRegistryCacheTtlMs();
+  const isWarm = centralDbSyncedOnce && isRegistryInitialized && Date.now() - cacheLoadedAtMs < ttl;
+  ensureRegistryInitialized();
+  if (!isWarm) {
+    await syncTenantRegistryWithDb(true).catch(() => {});
+  }
+
+  const hit = slugIndexMap.get(clean) || inMemoryRegistry.get(normalizeTenantId(clean));
+  if (hit && (isWarm || centralDbSyncedOnce)) {
+    return hit;
+  }
+
+  try {
+    const { defaultPrisma } = await import("@/lib/prisma");
+    const { ensureCentralPostgresRegistryReady } = await import("@/lib/clientPortal/ensurePortalSchema");
+    const { isSqliteRuntime } = await import("@/lib/sqliteBootstrap");
+    if (!isSqliteRuntime()) {
+      await ensureCentralPostgresRegistryReady();
+    }
+    const row = await defaultPrisma.tenantRegistry.findFirst({
+      where: {
+        OR: [{ slug: clean }, { tenantId: normalizeTenantId(clean) }],
+      },
+    });
+    if (row) {
+      const mapped = mapDbRowToTenantMetadata(row);
+      indexTenantMetadata(mapped);
+      return mapped;
+    }
+  } catch {
+    // Fallback to memory hit
+  }
+
+  return hit || null;
+}
+
 /**
  * Ensures the tenant registry is loaded into memory lazily upon first access at runtime,
- * never during static module evaluation or build-time bundling.
- * Reloads transparently if `tenants_registry.json` was updated externally on disk.
+ * with a pure in-memory TTL cache (zero per-request disk I/O inside TTL window).
  */
 export function ensureRegistryInitialized(): void {
-  if (isRegistryInitialized) {
-    try {
-      const filePath = getRegistryFilePath();
-      if (fs.existsSync(/*turbopackIgnore: true*/ filePath)) {
-        const mtimeMs = fs.statSync(/*turbopackIgnore: true*/ filePath).mtimeMs;
-        if (mtimeMs !== lastLoadedMtimeMs) {
-          loadRegistryFromDisk();
-        }
-      }
-    } catch {
-      // Non-fatal
-    }
+  const now = Date.now();
+  const ttl = getRegistryCacheTtlMs();
+  if (isRegistryInitialized && (ttl === 0 ? false : now - cacheLoadedAtMs < ttl)) {
     return;
   }
   isRegistryInitialized = true;
@@ -209,17 +415,34 @@ export function ensureRegistryInitialized(): void {
  */
 export function resetRegistryForTests(): void {
   inMemoryRegistry.clear();
+  slugIndexMap.clear();
   isRegistryInitialized = false;
-  lastLoadedMtimeMs = -1;
+  cacheLoadedAtMs = 0;
+  centralDbSyncedOnce = false;
 }
 
 export function unregisterTenant(rawTenantId?: string | null): boolean {
   ensureRegistryInitialized();
   const normId = normalizeTenantId(rawTenantId);
   if (normId === "default") return false;
-  const existed = inMemoryRegistry.delete(normId);
+  const existed = removeTenantFromIndexes(normId);
   if (existed) {
     saveRegistryToDisk();
+    void (async () => {
+      try {
+        const { defaultPrisma } = await import("@/lib/prisma");
+        const dbUrl = String(process.env.DATABASE_URL || "").trim().toLowerCase();
+        if (dbUrl.startsWith("file:")) {
+          const exists = await defaultPrisma.$queryRawUnsafe<Array<{ name: string }>>(
+            `SELECT name FROM sqlite_master WHERE type='table' AND name='tenants'`
+          );
+          if (!exists || exists.length === 0) return;
+        }
+        await defaultPrisma.tenantRegistry.deleteMany({ where: { tenantId: normId } });
+      } catch {
+        // Non-fatal
+      }
+    })();
   }
   return existed;
 }
@@ -237,21 +460,14 @@ export function updateTenantMetadata(
       | "companyName"
       | "nameAr"
       | "nameEn"
+      | "isolationMode"
     >
   >
 ): TenantMetadata | null {
   ensureRegistryInitialized();
   const clean = String(rawTenantIdOrSlug || "").trim().toLowerCase();
   if (!clean) return null;
-  let existing = inMemoryRegistry.get(normalizeTenantId(clean)) || null;
-  if (!existing) {
-    for (const item of inMemoryRegistry.values()) {
-      if (item.slug?.toLowerCase() === clean) {
-        existing = item;
-        break;
-      }
-    }
-  }
+  const existing = slugIndexMap.get(clean) || inMemoryRegistry.get(normalizeTenantId(clean)) || null;
   if (!existing) return null;
 
   const updated: TenantMetadata = {
@@ -264,12 +480,13 @@ export function updateTenantMetadata(
     ...(patch.companyName !== undefined ? { companyName: patch.companyName } : {}),
     ...(patch.nameAr !== undefined ? { nameAr: patch.nameAr } : {}),
     ...(patch.nameEn !== undefined ? { nameEn: patch.nameEn } : {}),
+    ...(patch.isolationMode !== undefined ? { isolationMode: patch.isolationMode } : {}),
     updatedAt: new Date().toISOString(),
   };
 
-  const key = normalizeTenantId(updated.slug || updated.tenantId);
-  inMemoryRegistry.set(key, updated);
+  indexTenantMetadata(updated);
   saveRegistryToDisk();
+  void upsertTenantInCentralDb(updated);
   return updated;
 }
 
@@ -286,20 +503,15 @@ export function listRegisteredTenants(): TenantMetadata[] {
 
 export function listExistingSlugs(): Set<string> {
   ensureRegistryInitialized();
-  const slugs = new Set<string>();
-  for (const item of inMemoryRegistry.values()) {
-    if (item.slug) slugs.add(item.slug.trim().toLowerCase());
-  }
-  return slugs;
+  return new Set<string>(slugIndexMap.keys());
 }
 
 export function findTenantBySlug(rawSlug?: string | null): TenantMetadata | null {
   ensureRegistryInitialized();
   const clean = String(rawSlug || "").trim().toLowerCase();
   if (!clean) return null;
-  for (const item of inMemoryRegistry.values()) {
-    if (item.slug?.toLowerCase() === clean) return item;
-  }
+  const slugHit = slugIndexMap.get(clean);
+  if (slugHit) return slugHit;
   const norm = normalizeTenantId(clean);
   return inMemoryRegistry.get(norm) || null;
 }
@@ -329,6 +541,7 @@ export function registerTenant(params: {
   tenantUrl?: string;
   licenseId?: string;
   plan?: string;
+  isolationMode?: TenantIsolationMode;
   postgresDb?: string;
   sqliteDbPath?: string;
   allowedModes?: ("local" | "lan" | "cloud")[];
@@ -362,17 +575,22 @@ export function registerTenant(params: {
     !existing?.postgresDb &&
     !params.postgresDb;
 
+  const resolvedIsolationMode: TenantIsolationMode =
+    params.isolationMode ||
+    existing?.isolationMode ||
+    (isLegacySchemaTenant ? "SCHEMA" : "DEDICATED_DB");
+
   const resolvedPostgresDb =
-    normId === "default"
+    normId === "default" || resolvedIsolationMode === "POOLED_RLS"
       ? undefined
       : params.postgresDb ??
-        existing?.postgresDb ??
-        (isPostgresRuntimeUrl() && !isLegacySchemaTenant
-          ? `uas_${normId.replace(/^uas_/, "")}`
-          : undefined);
+      existing?.postgresDb ??
+      (isPostgresRuntimeUrl() && !isLegacySchemaTenant
+        ? `uas_${normId.replace(/^uas_/, "")}`
+        : undefined);
 
   const resolvedSqliteDbPath =
-    normId === "default"
+    normId === "default" || resolvedIsolationMode === "POOLED_RLS"
       ? undefined
       : params.sqliteDbPath ?? existing?.sqliteDbPath ?? `data/tenants/${resolvedSlug}.db`;
 
@@ -388,18 +606,22 @@ export function registerTenant(params: {
     tenantUrl: resolvedUrl,
     licenseId: params.licenseId ?? existing?.licenseId,
     ...(params.plan ?? existing?.plan ? { plan: params.plan ?? existing?.plan } : {}),
+    isolationMode: resolvedIsolationMode,
     ...(resolvedPostgresDb ? { postgresDb: resolvedPostgresDb } : {}),
     ...(resolvedSqliteDbPath ? { sqliteDbPath: resolvedSqliteDbPath } : {}),
     ...(resolvedAllowedModes ? { allowedModes: resolvedAllowedModes } : {}),
-    schemaOrDb: params.schemaOrDb || resolvedPostgresDb || resolveSchemaOrDbIdentifier(normId),
+    schemaOrDb:
+      params.schemaOrDb ||
+      (resolvedIsolationMode === "POOLED_RLS" ? "pooled_rls" : resolvedPostgresDb || resolveSchemaOrDbIdentifier(normId)),
     status: existing?.status || "ACTIVE",
     createdAt: existing?.createdAt || now,
     updatedAt: now,
     maxSeats: params.maxSeats ?? existing?.maxSeats ?? 10,
   };
 
-  inMemoryRegistry.set(normId, meta);
+  indexTenantMetadata(meta);
   saveRegistryToDisk();
+  void upsertTenantInCentralDb(meta);
   return meta;
 }
 
@@ -412,6 +634,7 @@ export function ensureTenantRegistered(
     nameEn?: string;
     licenseId?: string;
     plan?: string;
+    isolationMode?: TenantIsolationMode;
     postgresDb?: string;
     sqliteDbPath?: string;
     allowedModes?: ("local" | "lan" | "cloud")[];
@@ -428,6 +651,7 @@ export function ensureTenantRegistered(
       changed = true;
     }
     if (extra?.slug && extra.slug !== existing.slug) {
+      if (existing.slug) slugIndexMap.delete(existing.slug.trim().toLowerCase());
       existing.slug = extra.slug.trim().toLowerCase();
       existing.tenantUrl = buildTenantWorkspaceUrl(existing.slug);
       changed = true;
@@ -448,6 +672,10 @@ export function ensureTenantRegistered(
       existing.plan = extra.plan;
       changed = true;
     }
+    if (extra?.isolationMode && extra.isolationMode !== existing.isolationMode) {
+      existing.isolationMode = extra.isolationMode;
+      changed = true;
+    }
     if (extra?.postgresDb && extra.postgresDb !== existing.postgresDb) {
       existing.postgresDb = extra.postgresDb;
       existing.schemaOrDb = extra.postgresDb;
@@ -456,7 +684,7 @@ export function ensureTenantRegistered(
     if (extra?.sqliteDbPath && extra.sqliteDbPath !== existing.sqliteDbPath) {
       existing.sqliteDbPath = extra.sqliteDbPath;
       changed = true;
-    } else if (!existing.sqliteDbPath && normId !== "default" && existing.slug) {
+    } else if (!existing.sqliteDbPath && normId !== "default" && existing.slug && existing.isolationMode !== "POOLED_RLS") {
       existing.sqliteDbPath = `data/tenants/${existing.slug}.db`;
       changed = true;
     }
@@ -468,7 +696,7 @@ export function ensureTenantRegistered(
       existing.maxSeats = extra.maxSeats;
       changed = true;
     }
-    if (!existing.postgresDb) {
+    if (!existing.postgresDb && existing.isolationMode !== "POOLED_RLS") {
       const expectedSchemaOrDb = resolveSchemaOrDbIdentifier(normId);
       if (existing.schemaOrDb !== expectedSchemaOrDb) {
         existing.schemaOrDb = expectedSchemaOrDb;
@@ -477,7 +705,9 @@ export function ensureTenantRegistered(
     }
     if (changed) {
       existing.updatedAt = new Date().toISOString();
+      indexTenantMetadata(existing);
       saveRegistryToDisk();
+      void upsertTenantInCentralDb(existing);
     }
     return existing;
   }
@@ -490,6 +720,7 @@ export function ensureTenantRegistered(
     nameEn: extra?.nameEn,
     licenseId: extra?.licenseId,
     plan: extra?.plan,
+    isolationMode: extra?.isolationMode,
     postgresDb: extra?.postgresDb,
     sqliteDbPath: extra?.sqliteDbPath,
     allowedModes: extra?.allowedModes,

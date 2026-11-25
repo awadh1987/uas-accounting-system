@@ -454,6 +454,7 @@ CREATE TABLE "PaymentVoucher" (
 -- CreateTable
 CREATE TABLE "Customer" (
     "id" TEXT NOT NULL PRIMARY KEY,
+    "tenantSlug" TEXT NOT NULL DEFAULT 'default',
     "code" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
@@ -475,6 +476,7 @@ CREATE TABLE "Customer" (
 -- CreateTable
 CREATE TABLE "SalesInvoice" (
     "id" TEXT NOT NULL PRIMARY KEY,
+    "tenantSlug" TEXT NOT NULL DEFAULT 'default',
     "invoiceNumber" TEXT NOT NULL,
     "invoiceType" TEXT NOT NULL DEFAULT 'INVOICE',
     "originalInvoiceId" TEXT,
@@ -540,7 +542,9 @@ CREATE TABLE "SalesInvoiceItem" (
 -- CreateTable
 CREATE TABLE "ReceiptVoucher" (
     "id" TEXT NOT NULL PRIMARY KEY,
+    "tenantSlug" TEXT NOT NULL DEFAULT 'default',
     "voucherNumber" TEXT NOT NULL,
+    "linkedPaymentReceiptId" TEXT,
     "date" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "customerId" TEXT NOT NULL,
     "invoiceId" TEXT,
@@ -1286,12 +1290,22 @@ CREATE TABLE "TenantDevice" (
 -- CreateTable
 CREATE TABLE "ClientPortalAccount" (
     "id" TEXT NOT NULL PRIMARY KEY,
+    "tenantSlug" TEXT NOT NULL DEFAULT 'default',
+    "globalClientId" TEXT,
     "customerId" TEXT,
     "fullName" TEXT NOT NULL,
     "tradeName" TEXT,
     "phone" TEXT NOT NULL,
+    "normalizedPhone" TEXT NOT NULL DEFAULT '',
     "email" TEXT NOT NULL,
+    "normalizedEmail" TEXT NOT NULL DEFAULT '',
     "passwordHash" TEXT NOT NULL,
+    "avatarUrl" TEXT,
+    "avatarColor" TEXT NOT NULL DEFAULT '#059669',
+    "mustChangePassword" BOOLEAN NOT NULL DEFAULT false,
+    "passwordUpdatedAt" DATETIME,
+    "sessionVersion" INTEGER NOT NULL DEFAULT 1,
+    "deviceLimit" INTEGER NOT NULL DEFAULT 3,
     "clientType" TEXT NOT NULL DEFAULT 'DIRECT_CLIENT',
     "customClientType" TEXT,
     "preferredPickup" TEXT NOT NULL DEFAULT 'السوق',
@@ -1308,8 +1322,24 @@ CREATE TABLE "ClientPortalAccount" (
 );
 
 -- CreateTable
+CREATE TABLE "ClientPasswordResetToken" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "clientAccountId" TEXT NOT NULL,
+    "codeHash" TEXT NOT NULL,
+    "initiatedBy" TEXT NOT NULL DEFAULT 'SELF',
+    "staffUserId" TEXT,
+    "staffUserName" TEXT,
+    "expiresAt" DATETIME NOT NULL,
+    "usedAt" DATETIME,
+    "attempts" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "ClientPasswordResetToken_clientAccountId_fkey" FOREIGN KEY ("clientAccountId") REFERENCES "ClientPortalAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
 CREATE TABLE "ClientGoodsRequest" (
     "id" TEXT NOT NULL PRIMARY KEY,
+    "tenantSlug" TEXT NOT NULL DEFAULT 'default',
     "requestNumber" TEXT NOT NULL,
     "clientAccountId" TEXT NOT NULL,
     "customerId" TEXT,
@@ -1344,6 +1374,17 @@ CREATE TABLE "ClientGoodsRequest" (
     "handedOverByName" TEXT,
     "handedOverAt" DATETIME,
     "staffNotes" TEXT,
+    "reviewerRemarks" TEXT,
+    "amendmentDiffJson" TEXT NOT NULL DEFAULT '[]',
+    "beforeSnapshotJson" TEXT,
+    "afterSnapshotJson" TEXT,
+    "revisionNumber" INTEGER NOT NULL DEFAULT 1,
+    "returnedToClientAt" DATETIME,
+    "returnedByUserId" TEXT,
+    "returnedByName" TEXT,
+    "clientResponseStatus" TEXT,
+    "clientResponseNote" TEXT,
+    "clientRespondedAt" DATETIME,
     "sectorType" TEXT NOT NULL DEFAULT 'HARVEST',
     "submissionType" TEXT NOT NULL DEFAULT 'catalog_order',
     "isArchived" BOOLEAN NOT NULL DEFAULT false,
@@ -1421,6 +1462,195 @@ CREATE TABLE "TenantIntegrationSetting" (
     "updatedAt" DATETIME NOT NULL
 );
 
+-- CreateTable
+CREATE TABLE "PortalCatalogBoardItem" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "inventoryItemId" TEXT,
+    "harvestBatchId" TEXT,
+    "projectId" TEXT,
+    "harvestName" TEXT,
+    "sku" TEXT,
+    "titleAr" TEXT NOT NULL,
+    "titleEn" TEXT,
+    "gradeLabel" TEXT NOT NULL DEFAULT 'درجة أولى',
+    "categoryLabel" TEXT NOT NULL DEFAULT 'أصناف عامة',
+    "sectorType" TEXT NOT NULL DEFAULT 'HARVEST',
+    "categoryGroup" TEXT NOT NULL DEFAULT 'HARVEST',
+    "saleMode" TEXT NOT NULL DEFAULT 'BOTH',
+    "unitCode" TEXT NOT NULL DEFAULT 'QAT_BUNCH',
+    "unitLabel" TEXT NOT NULL DEFAULT 'علاقية قات',
+    "customUnitLabel" TEXT,
+    "unitPrice" DECIMAL NOT NULL DEFAULT 0,
+    "bulkUnitLabel" TEXT,
+    "partialUnitLabel" TEXT,
+    "partialUnitPrice" DECIMAL NOT NULL DEFAULT 0,
+    "multiplierToBase" DECIMAL NOT NULL DEFAULT 1,
+    "publishedQty" DECIMAL,
+    "remainingQty" DECIMAL,
+    "lowStockThreshold" DECIMAL NOT NULL DEFAULT 5,
+    "currency" TEXT NOT NULL DEFAULT 'YER',
+    "availabilityStatus" TEXT NOT NULL DEFAULT 'AVAILABLE',
+    "pickupLocation" TEXT,
+    "freshnessLabel" TEXT NOT NULL DEFAULT 'قائمة أسعار اليوم',
+    "effectiveDate" TEXT,
+    "validityNote" TEXT,
+    "displayOrder" INTEGER NOT NULL DEFAULT 1,
+    "isPublished" BOOLEAN NOT NULL DEFAULT false,
+    "publishedAt" DATETIME,
+    "publishedById" TEXT,
+    "publishedByName" TEXT,
+    "notes" TEXT,
+    "createdById" TEXT,
+    "createdByName" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "CommercialDispatchOrder" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "dispatchNumber" TEXT NOT NULL,
+    "requestId" TEXT,
+    "sectorType" TEXT NOT NULL DEFAULT 'COMMERCIAL',
+    "warehouseId" TEXT,
+    "driverName" TEXT,
+    "vehicleInfo" TEXT,
+    "tripStatus" TEXT NOT NULL DEFAULT 'PENDING_PICK',
+    "podNotes" TEXT,
+    "pickedAt" DATETIME,
+    "packedAt" DATETIME,
+    "dispatchedAt" DATETIME,
+    "deliveredAt" DATETIME,
+    "itemsJson" TEXT NOT NULL DEFAULT '[]',
+    "createdById" TEXT,
+    "createdByName" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "tenants" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "tenantId" TEXT NOT NULL,
+    "slug" TEXT NOT NULL,
+    "companyName" TEXT NOT NULL,
+    "nameAr" TEXT,
+    "nameEn" TEXT,
+    "tenantUrl" TEXT,
+    "licenseId" TEXT,
+    "plan" TEXT,
+    "isolationMode" TEXT NOT NULL DEFAULT 'DEDICATED_DB',
+    "postgresDb" TEXT,
+    "sqliteDbPath" TEXT,
+    "schemaOrDb" TEXT NOT NULL,
+    "allowedModesJson" TEXT NOT NULL DEFAULT '["local","lan","cloud"]',
+    "maxSeats" INTEGER NOT NULL DEFAULT 10,
+    "status" TEXT NOT NULL DEFAULT 'ACTIVE',
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "GlobalClientIdentity" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "normalizedPhone" TEXT NOT NULL,
+    "normalizedEmail" TEXT NOT NULL,
+    "fullName" TEXT NOT NULL,
+    "tradeName" TEXT,
+    "passwordHash" TEXT NOT NULL,
+    "avatarUrl" TEXT,
+    "avatarColor" TEXT NOT NULL DEFAULT '#059669',
+    "sessionVersion" INTEGER NOT NULL DEFAULT 1,
+    "lastLoginAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "GlobalClientMembership" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "globalClientId" TEXT NOT NULL,
+    "tenantSlug" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "tenantName" TEXT,
+    "clientAccountId" TEXT NOT NULL,
+    "customerId" TEXT,
+    "normalizedPhone" TEXT NOT NULL,
+    "normalizedEmail" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'PENDING_APPROVAL',
+    "creditLimit" DECIMAL NOT NULL DEFAULT 0,
+    "balance" DECIMAL NOT NULL DEFAULT 0,
+    "deviceLimit" INTEGER NOT NULL DEFAULT 3,
+    "lastSyncedAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "GlobalClientMembership_globalClientId_fkey" FOREIGN KEY ("globalClientId") REFERENCES "GlobalClientIdentity" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "TenantPaymentChannel" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "tenantSlug" TEXT NOT NULL DEFAULT 'default',
+    "category" TEXT NOT NULL,
+    "providerCode" TEXT NOT NULL DEFAULT 'CUSTOM',
+    "displayNameAr" TEXT NOT NULL,
+    "displayNameEn" TEXT,
+    "currency" TEXT NOT NULL DEFAULT 'YER',
+    "accountOrWalletNumber" TEXT NOT NULL,
+    "beneficiaryName" TEXT NOT NULL,
+    "ibanOrBranch" TEXT,
+    "qrImageUrl" TEXT,
+    "instructionsAr" TEXT,
+    "treasuryAccountId" TEXT NOT NULL,
+    "glAccountId" TEXT,
+    "displayOrder" INTEGER NOT NULL DEFAULT 1,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdById" TEXT,
+    "createdByName" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "ClientPaymentReceipt" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "submissionNumber" TEXT NOT NULL,
+    "tenantSlug" TEXT NOT NULL DEFAULT 'default',
+    "clientAccountId" TEXT NOT NULL,
+    "customerId" TEXT,
+    "channelId" TEXT NOT NULL,
+    "channelCategory" TEXT NOT NULL,
+    "channelNameAr" TEXT NOT NULL,
+    "treasuryAccountId" TEXT NOT NULL,
+    "amount" DECIMAL NOT NULL,
+    "currency" TEXT NOT NULL DEFAULT 'YER',
+    "transferReference" TEXT NOT NULL,
+    "normalizedReference" TEXT NOT NULL,
+    "transferAt" DATETIME NOT NULL,
+    "transferDateDmy" TEXT NOT NULL,
+    "transferTimeHm" TEXT NOT NULL,
+    "linkedInvoiceIdsJson" TEXT NOT NULL DEFAULT '[]',
+    "linkedRequestIdsJson" TEXT NOT NULL DEFAULT '[]',
+    "clientNotes" TEXT,
+    "receiptFileName" TEXT,
+    "receiptFilePath" TEXT,
+    "receiptMimeType" TEXT,
+    "receiptFileSize" INTEGER,
+    "status" TEXT NOT NULL DEFAULT 'PENDING_VERIFICATION',
+    "staffNotes" TEXT,
+    "clarificationReason" TEXT,
+    "rejectionReason" TEXT,
+    "reviewedByUserId" TEXT,
+    "reviewedByName" TEXT,
+    "reviewedAt" DATETIME,
+    "linkedReceiptVoucherId" TEXT,
+    "linkedJournalEntryId" TEXT,
+    "auditHistoryJson" TEXT NOT NULL DEFAULT '[]',
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "ClientPaymentReceipt_clientAccountId_fkey" FOREIGN KEY ("clientAccountId") REFERENCES "ClientPortalAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "Account_code_key" ON "Account"("code");
 
@@ -1476,7 +1706,19 @@ CREATE UNIQUE INDEX "Customer_name_key" ON "Customer"("name");
 CREATE UNIQUE INDEX "Customer_accountId_key" ON "Customer"("accountId");
 
 -- CreateIndex
+CREATE INDEX "Customer_tenantSlug_phone_idx" ON "Customer"("tenantSlug", "phone");
+
+-- CreateIndex
+CREATE INDEX "Customer_tenantSlug_isActive_idx" ON "Customer"("tenantSlug", "isActive");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "SalesInvoice_invoiceNumber_key" ON "SalesInvoice"("invoiceNumber");
+
+-- CreateIndex
+CREATE INDEX "SalesInvoice_tenantSlug_customerId_createdAt_idx" ON "SalesInvoice"("tenantSlug", "customerId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "SalesInvoice_tenantSlug_status_idx" ON "SalesInvoice"("tenantSlug", "status");
 
 -- CreateIndex
 CREATE INDEX "SalesInvoiceItem_invoiceId_idx" ON "SalesInvoiceItem"("invoiceId");
@@ -1486,6 +1728,12 @@ CREATE INDEX "SalesInvoiceItem_itemId_idx" ON "SalesInvoiceItem"("itemId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "ReceiptVoucher_voucherNumber_key" ON "ReceiptVoucher"("voucherNumber");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ReceiptVoucher_linkedPaymentReceiptId_key" ON "ReceiptVoucher"("linkedPaymentReceiptId");
+
+-- CreateIndex
+CREATE INDEX "ReceiptVoucher_tenantSlug_customerId_createdAt_idx" ON "ReceiptVoucher"("tenantSlug", "customerId", "createdAt");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "InventoryLot_lotNumber_key" ON "InventoryLot"("lotNumber");
@@ -1641,10 +1889,13 @@ CREATE INDEX "TenantDevice_status_lastSeenAt_idx" ON "TenantDevice"("status", "l
 CREATE INDEX "TenantDevice_userId_idx" ON "TenantDevice"("userId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "ClientPortalAccount_phone_key" ON "ClientPortalAccount"("phone");
+CREATE INDEX "ClientPortalAccount_tenantSlug_status_createdAt_idx" ON "ClientPortalAccount"("tenantSlug", "status", "createdAt");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "ClientPortalAccount_email_key" ON "ClientPortalAccount"("email");
+CREATE INDEX "ClientPortalAccount_tenantSlug_normalizedPhone_idx" ON "ClientPortalAccount"("tenantSlug", "normalizedPhone");
+
+-- CreateIndex
+CREATE INDEX "ClientPortalAccount_tenantSlug_normalizedEmail_idx" ON "ClientPortalAccount"("tenantSlug", "normalizedEmail");
 
 -- CreateIndex
 CREATE INDEX "ClientPortalAccount_status_createdAt_idx" ON "ClientPortalAccount"("status", "createdAt");
@@ -1653,7 +1904,28 @@ CREATE INDEX "ClientPortalAccount_status_createdAt_idx" ON "ClientPortalAccount"
 CREATE INDEX "ClientPortalAccount_customerId_idx" ON "ClientPortalAccount"("customerId");
 
 -- CreateIndex
+CREATE INDEX "ClientPortalAccount_globalClientId_idx" ON "ClientPortalAccount"("globalClientId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ClientPortalAccount_tenantSlug_normalizedPhone_key" ON "ClientPortalAccount"("tenantSlug", "normalizedPhone");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ClientPortalAccount_tenantSlug_normalizedEmail_key" ON "ClientPortalAccount"("tenantSlug", "normalizedEmail");
+
+-- CreateIndex
+CREATE INDEX "ClientPasswordResetToken_clientAccountId_createdAt_idx" ON "ClientPasswordResetToken"("clientAccountId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "ClientPasswordResetToken_expiresAt_idx" ON "ClientPasswordResetToken"("expiresAt");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "ClientGoodsRequest_requestNumber_key" ON "ClientGoodsRequest"("requestNumber");
+
+-- CreateIndex
+CREATE INDEX "ClientGoodsRequest_tenantSlug_clientAccountId_createdAt_idx" ON "ClientGoodsRequest"("tenantSlug", "clientAccountId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "ClientGoodsRequest_tenantSlug_status_createdAt_idx" ON "ClientGoodsRequest"("tenantSlug", "status", "createdAt");
 
 -- CreateIndex
 CREATE INDEX "ClientGoodsRequest_clientAccountId_createdAt_idx" ON "ClientGoodsRequest"("clientAccountId", "createdAt");
@@ -1668,6 +1940,9 @@ CREATE INDEX "ClientGoodsRequest_status_createdAt_idx" ON "ClientGoodsRequest"("
 CREATE INDEX "ClientGoodsRequest_linkedSalesRecordId_idx" ON "ClientGoodsRequest"("linkedSalesRecordId");
 
 -- CreateIndex
+CREATE INDEX "ClientGoodsRequest_sectorType_status_idx" ON "ClientGoodsRequest"("sectorType", "status");
+
+-- CreateIndex
 CREATE INDEX "ClientGoodsRequestLine_requestId_idx" ON "ClientGoodsRequestLine"("requestId");
 
 -- CreateIndex
@@ -1680,4 +1955,82 @@ CREATE INDEX "WhatsAppOutboxMessage_status_createdAt_idx" ON "WhatsAppOutboxMess
 CREATE INDEX "WhatsAppOutboxMessage_clientAccountId_createdAt_idx" ON "WhatsAppOutboxMessage"("clientAccountId", "createdAt");
 
 -- CreateIndex
-CREATE INDEX "WhatsAppOutboxMessage_customerId_createdAt_idx" ON "WhatsAppOutboxMessage"("customerId", "createdAt");`;
+CREATE INDEX "WhatsAppOutboxMessage_customerId_createdAt_idx" ON "WhatsAppOutboxMessage"("customerId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "PortalCatalogBoardItem_isPublished_displayOrder_idx" ON "PortalCatalogBoardItem"("isPublished", "displayOrder");
+
+-- CreateIndex
+CREATE INDEX "PortalCatalogBoardItem_gradeLabel_availabilityStatus_idx" ON "PortalCatalogBoardItem"("gradeLabel", "availabilityStatus");
+
+-- CreateIndex
+CREATE INDEX "PortalCatalogBoardItem_sectorType_isPublished_idx" ON "PortalCatalogBoardItem"("sectorType", "isPublished");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "CommercialDispatchOrder_dispatchNumber_key" ON "CommercialDispatchOrder"("dispatchNumber");
+
+-- CreateIndex
+CREATE INDEX "CommercialDispatchOrder_tripStatus_createdAt_idx" ON "CommercialDispatchOrder"("tripStatus", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "CommercialDispatchOrder_requestId_idx" ON "CommercialDispatchOrder"("requestId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "tenants_tenantId_key" ON "tenants"("tenantId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "tenants_slug_key" ON "tenants"("slug");
+
+-- CreateIndex
+CREATE INDEX "tenants_status_updatedAt_idx" ON "tenants"("status", "updatedAt");
+
+-- CreateIndex
+CREATE INDEX "tenants_slug_status_idx" ON "tenants"("slug", "status");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "GlobalClientIdentity_normalizedPhone_key" ON "GlobalClientIdentity"("normalizedPhone");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "GlobalClientIdentity_normalizedEmail_key" ON "GlobalClientIdentity"("normalizedEmail");
+
+-- CreateIndex
+CREATE INDEX "GlobalClientIdentity_normalizedPhone_idx" ON "GlobalClientIdentity"("normalizedPhone");
+
+-- CreateIndex
+CREATE INDEX "GlobalClientIdentity_normalizedEmail_idx" ON "GlobalClientIdentity"("normalizedEmail");
+
+-- CreateIndex
+CREATE INDEX "GlobalClientMembership_globalClientId_status_idx" ON "GlobalClientMembership"("globalClientId", "status");
+
+-- CreateIndex
+CREATE INDEX "GlobalClientMembership_tenantSlug_status_createdAt_idx" ON "GlobalClientMembership"("tenantSlug", "status", "createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "GlobalClientMembership_tenantSlug_normalizedPhone_key" ON "GlobalClientMembership"("tenantSlug", "normalizedPhone");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "GlobalClientMembership_tenantSlug_normalizedEmail_key" ON "GlobalClientMembership"("tenantSlug", "normalizedEmail");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "GlobalClientMembership_tenantSlug_clientAccountId_key" ON "GlobalClientMembership"("tenantSlug", "clientAccountId");
+
+-- CreateIndex
+CREATE INDEX "TenantPaymentChannel_tenantSlug_isActive_displayOrder_idx" ON "TenantPaymentChannel"("tenantSlug", "isActive", "displayOrder");
+
+-- CreateIndex
+CREATE INDEX "TenantPaymentChannel_treasuryAccountId_idx" ON "TenantPaymentChannel"("treasuryAccountId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ClientPaymentReceipt_submissionNumber_key" ON "ClientPaymentReceipt"("submissionNumber");
+
+-- CreateIndex
+CREATE INDEX "ClientPaymentReceipt_tenantSlug_clientAccountId_createdAt_idx" ON "ClientPaymentReceipt"("tenantSlug", "clientAccountId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "ClientPaymentReceipt_tenantSlug_status_createdAt_idx" ON "ClientPaymentReceipt"("tenantSlug", "status", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "ClientPaymentReceipt_customerId_status_idx" ON "ClientPaymentReceipt"("customerId", "status");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ClientPaymentReceipt_tenantSlug_channelId_normalizedReference_key" ON "ClientPaymentReceipt"("tenantSlug", "channelId", "normalizedReference");`;

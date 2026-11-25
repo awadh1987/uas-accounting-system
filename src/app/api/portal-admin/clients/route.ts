@@ -24,13 +24,35 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     if (!auth.ok) return auth.response;
 
     const { searchParams } = new URL(req.url);
+    const scope = resolveRequestTenantScope(req);
     const status = (searchParams.get("status") || "ALL").trim().toUpperCase();
+    const search = (searchParams.get("search") || searchParams.get("q") || "").trim();
+    const page = Math.max(1, Number.parseInt(searchParams.get("page") || "1", 10) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number.parseInt(searchParams.get("pageSize") || searchParams.get("limit") || "50", 10) || 50));
 
-    const [accounts, customers] = await Promise.all([
+    const whereClause: Record<string, unknown> = {
+      ...(scope.tenantSlug && scope.tenantSlug !== "default" ? { tenantSlug: scope.tenantSlug } : {}),
+      ...(status && status !== "ALL" ? { status } : {}),
+      ...(search
+        ? {
+          OR: [
+            { fullName: { contains: search } },
+            { tradeName: { contains: search } },
+            { phone: { contains: search } },
+            { normalizedPhone: { contains: search } },
+            { email: { contains: search } },
+          ],
+        }
+        : {}),
+    };
+
+    const [total, accounts, customers] = await Promise.all([
+      prisma.clientPortalAccount.count({ where: whereClause }),
       prisma.clientPortalAccount.findMany({
-        where: status && status !== "ALL" ? { status } : undefined,
+        where: whereClause,
         orderBy: [{ createdAt: "desc" }],
-        take: 250,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
       }),
       prisma.customer.findMany({
         where: { isActive: true },
@@ -43,13 +65,22 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
           account: { select: { code: true } },
         },
         orderBy: { nameAr: "asc" },
+        take: 250,
       }),
     ]);
 
     const custMap = new Map(customers.map((c) => [c.id, c]));
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
     return NextResponse.json({
       success: true,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages,
+        hasMore: page < totalPages,
+      },
       clients: accounts.map((acc) => {
         const linkedCust = acc.customerId ? custMap.get(acc.customerId) : undefined;
         return {

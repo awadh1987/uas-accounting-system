@@ -27,13 +27,35 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const status = (searchParams.get("status") || "ALL").trim().toUpperCase();
     const pickup = (searchParams.get("pickup") || "").trim();
+    const search = (searchParams.get("search") || searchParams.get("q") || "").trim();
     const sectorType = (searchParams.get("sectorType") || "ALL").trim().toUpperCase();
     const includeHidden = searchParams.get("includeHidden") === "1";
     const includeArchived = searchParams.get("includeArchived") !== "0";
+    const page = Math.max(1, Number.parseInt(searchParams.get("page") || "1", 10) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number.parseInt(searchParams.get("pageSize") || searchParams.get("limit") || "50", 10) || 50));
 
-    const [rows, projects, treasuries] = await Promise.all([
+    const whereClause: Record<string, unknown> = {
+      ...(status && status !== "ALL" ? { status } : {}),
+      ...(!includeHidden ? { isHiddenByStaff: false } : {}),
+      ...(!includeArchived ? { isArchived: false } : {}),
+      ...(sectorType && sectorType !== "ALL" ? { sectorType } : {}),
+      ...(pickup ? { pickupLocation: { contains: pickup } } : {}),
+      ...(search
+        ? {
+          OR: [
+            { requestNumber: { contains: search } },
+            { pickupLocation: { contains: search } },
+            { clientAccount: { fullName: { contains: search } } },
+            { clientAccount: { phone: { contains: search } } },
+          ],
+        }
+        : {}),
+    };
+
+    const [total, rows, projects, treasuries] = await Promise.all([
+      prisma.clientGoodsRequest.count({ where: whereClause }),
       prisma.clientGoodsRequest.findMany({
-        where: status && status !== "ALL" ? { status } : undefined,
+        where: whereClause,
         include: {
           clientAccount: {
             select: {
@@ -49,7 +71,8 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
           lines: { orderBy: { lineOrder: "asc" } },
         },
         orderBy: [{ createdAt: "desc" }],
-        take: 400,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
       }),
       prisma.project.findMany({
         where: { isActive: true },
@@ -63,18 +86,18 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
       }),
     ]);
 
-    const filtered = rows
-      .map(serializeRequest)
-      .filter((r) => {
-        if (!includeHidden && r.isHiddenByStaff) return false;
-        if (!includeArchived && r.isArchived) return false;
-        if (sectorType && sectorType !== "ALL" && r.sectorType !== sectorType) return false;
-        if (pickup && !r.pickupLocation.includes(pickup)) return false;
-        return true;
-      });
+    const filtered = rows.map(serializeRequest);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
     return NextResponse.json({
       success: true,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages,
+        hasMore: page < totalPages,
+      },
       requests: filtered,
       projects,
       treasuries,
@@ -150,23 +173,23 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
           actionRaw === "DELETE"
             ? "✅ تم حذف الطلب غير المرحّل بأمان"
             : actionRaw === "ARCHIVE"
-            ? "✅ تمت أرشفة الطلب بنجاح"
-            : actionRaw === "UNARCHIVE"
-            ? "✅ تمت استعادة الطلب من الأرشيف"
-            : actionRaw === "HIDE"
-            ? "✅ تم إخفاء الطلب من القائمة"
-            : "✅ تم إظهار الطلب في القائمة",
+              ? "✅ تمت أرشفة الطلب بنجاح"
+              : actionRaw === "UNARCHIVE"
+                ? "✅ تمت استعادة الطلب من الأرشيف"
+                : actionRaw === "HIDE"
+                  ? "✅ تم إخفاء الطلب من القائمة"
+                  : "✅ تم إظهار الطلب في القائمة",
       });
     }
 
     const action =
       actionRaw === "CONFIRM" ||
-      actionRaw === "MARK_READY" ||
-      actionRaw === "HANDOVER" ||
-      actionRaw === "AMEND" ||
-      actionRaw === "RETURN_TO_CLIENT" ||
-      actionRaw === "REJECT" ||
-      actionRaw === "CANCEL"
+        actionRaw === "MARK_READY" ||
+        actionRaw === "HANDOVER" ||
+        actionRaw === "AMEND" ||
+        actionRaw === "RETURN_TO_CLIENT" ||
+        actionRaw === "REJECT" ||
+        actionRaw === "CANCEL"
         ? actionRaw
         : null;
 
@@ -183,22 +206,22 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
 
     const lines = Array.isArray(body.lines)
       ? (body.lines as Array<Record<string, unknown>>).map((l) => ({
-          id: l.id ? String(l.id) : undefined,
-          itemId: l.itemId !== undefined ? (l.itemId ? String(l.itemId) : null) : undefined,
-          itemTitle: l.itemTitle !== undefined ? String(l.itemTitle) : undefined,
-          confirmedQty: l.confirmedQty !== undefined ? Number(l.confirmedQty) : undefined,
-          unitCode: l.unitCode !== undefined ? String(l.unitCode) : undefined,
-          unitLabel: l.unitLabel !== undefined ? String(l.unitLabel) : undefined,
-          customUnitLabel:
-            l.customUnitLabel !== undefined
-              ? l.customUnitLabel
-                ? String(l.customUnitLabel)
-                : null
-              : undefined,
-          unitPrice: l.unitPrice !== undefined ? Number(l.unitPrice) : undefined,
-          notes: l.notes !== undefined ? (l.notes ? String(l.notes) : null) : undefined,
-          remove: Boolean(l.remove),
-        }))
+        id: l.id ? String(l.id) : undefined,
+        itemId: l.itemId !== undefined ? (l.itemId ? String(l.itemId) : null) : undefined,
+        itemTitle: l.itemTitle !== undefined ? String(l.itemTitle) : undefined,
+        confirmedQty: l.confirmedQty !== undefined ? Number(l.confirmedQty) : undefined,
+        unitCode: l.unitCode !== undefined ? String(l.unitCode) : undefined,
+        unitLabel: l.unitLabel !== undefined ? String(l.unitLabel) : undefined,
+        customUnitLabel:
+          l.customUnitLabel !== undefined
+            ? l.customUnitLabel
+              ? String(l.customUnitLabel)
+              : null
+            : undefined,
+        unitPrice: l.unitPrice !== undefined ? Number(l.unitPrice) : undefined,
+        notes: l.notes !== undefined ? (l.notes ? String(l.notes) : null) : undefined,
+        remove: Boolean(l.remove),
+      }))
       : undefined;
 
     const portalOrigin = resolveTenantCloudUrl(scope.tenantSlug);
@@ -244,12 +267,12 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         action === "HANDOVER"
           ? "✅ تم تسليم الطلب وترحيل الفاتورة والقيد المحاسبي وإعداد مسودة واتساب"
           : action === "RETURN_TO_CLIENT"
-          ? "✅ تم حفظ التعديلات وإعادة الطلب للعميل للموافقة وإدراج مسودة واتساب"
-          : action === "AMEND"
-          ? "✅ تم حفظ تعديلات المراجع وتحديث الفروقات"
-          : replay
-          ? "ℹ️ هذا الطلب معتمد ومرتبط مسبقاً بسجل المبيعات (تم الحفاظ على عدم التكرار)"
-          : "✅ تم اعتماد الطلب وفتح دورة البيع في المبيعات والعملاء بنجاح",
+            ? "✅ تم حفظ التعديلات وإعادة الطلب للعميل للموافقة وإدراج مسودة واتساب"
+            : action === "AMEND"
+              ? "✅ تم حفظ تعديلات المراجع وتحديث الفروقات"
+              : replay
+                ? "ℹ️ هذا الطلب معتمد ومرتبط مسبقاً بسجل المبيعات (تم الحفاظ على عدم التكرار)"
+                : "✅ تم اعتماد الطلب وفتح دورة البيع في المبيعات والعملاء بنجاح",
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "تعذر معالجة طلب العميل";

@@ -569,6 +569,7 @@ model PaymentVoucher {
 
 model Customer {
   id          String  @id @default(cuid())
+  tenantSlug  String  @default("default")
   code        String  @unique
   name        String  @unique
   nameAr      String
@@ -592,10 +593,14 @@ model Customer {
 
   isActive     Boolean     @default(true)
   archivedAt   DateTime?
+
+  @@index([tenantSlug, phone])
+  @@index([tenantSlug, isActive])
 }
 
 model SalesInvoice {
   id             String        @id @default(cuid())
+  tenantSlug     String        @default("default")
   invoiceNumber  String        @unique
   invoiceType    String        @default("INVOICE") // INVOICE | CREDIT_NOTE | DEBIT_NOTE
   originalInvoiceId String?
@@ -643,6 +648,9 @@ model SalesInvoice {
   costCenter     CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
   documentStatus String      @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | AMENDMENT_PENDING | REJECTED | VOIDED
   revisionNumber Int         @default(1)
+
+  @@index([tenantSlug, customerId, createdAt])
+  @@index([tenantSlug, status])
 }
 
 model SalesInvoiceItem {
@@ -667,9 +675,11 @@ model SalesInvoiceItem {
 }
 
 model ReceiptVoucher {
-  id            String          @id @default(cuid())
-  voucherNumber String          @unique
-  date          DateTime        @default(now())
+  id                     String          @id @default(cuid())
+  tenantSlug             String          @default("default")
+  voucherNumber          String          @unique
+  linkedPaymentReceiptId String?         @unique
+  date                   DateTime        @default(now())
   customerId    String
   customer      Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
   invoiceId     String?
@@ -695,6 +705,8 @@ model ReceiptVoucher {
   costCenter     CostCenter? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
   documentStatus String      @default("POSTED") // DRAFT | PENDING_APPROVAL | APPROVED | POSTED | AMENDMENT_PENDING | REJECTED | VOIDED
   revisionNumber Int         @default(1)
+
+  @@index([tenantSlug, customerId, createdAt])
 }
 
 // ---------------------------------------------------------
@@ -1505,17 +1517,22 @@ model TenantDevice {
 
 model ClientPortalAccount {
   id                 String    @id @default(cuid())
+  tenantSlug         String    @default("default")
+  globalClientId     String?
   customerId         String?
   fullName           String
   tradeName          String?
-  phone              String    @unique
-  email              String    @unique
+  phone              String
+  normalizedPhone    String    @default("")
+  email              String
+  normalizedEmail    String    @default("")
   passwordHash       String
   avatarUrl          String?
   avatarColor        String    @default("#059669")
   mustChangePassword Boolean   @default(false)
   passwordUpdatedAt  DateTime?
   sessionVersion     Int       @default(1)
+  deviceLimit        Int       @default(3)
   clientType         String    @default("DIRECT_CLIENT") // WHOLESALE | RETAIL | DISTRIBUTOR | DIRECT_CLIENT | OTHER
   customClientType   String?
   preferredPickup    String    @default("السوق")
@@ -1530,11 +1547,18 @@ model ClientPortalAccount {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  requests    ClientGoodsRequest[]
-  resetTokens ClientPasswordResetToken[]
+  requests        ClientGoodsRequest[]
+  resetTokens     ClientPasswordResetToken[]
+  paymentReceipts ClientPaymentReceipt[]
 
+  @@unique([tenantSlug, normalizedPhone])
+  @@unique([tenantSlug, normalizedEmail])
+  @@index([tenantSlug, status, createdAt])
+  @@index([tenantSlug, normalizedPhone])
+  @@index([tenantSlug, normalizedEmail])
   @@index([status, createdAt])
   @@index([customerId])
+  @@index([globalClientId])
 }
 
 model ClientPasswordResetToken {
@@ -1556,6 +1580,7 @@ model ClientPasswordResetToken {
 
 model ClientGoodsRequest {
   id                  String                @id @default(cuid())
+  tenantSlug          String                @default("default")
   requestNumber       String                @unique
   clientAccountId     String
   clientAccount       ClientPortalAccount   @relation(fields: [clientAccountId], references: [id], onDelete: Cascade)
@@ -1618,6 +1643,8 @@ model ClientGoodsRequest {
 
   lines ClientGoodsRequestLine[]
 
+  @@index([tenantSlug, clientAccountId, createdAt])
+  @@index([tenantSlug, status, createdAt])
   @@index([clientAccountId, createdAt])
   @@index([customerId, status])
   @@index([status, createdAt])
@@ -1758,6 +1785,155 @@ model CommercialDispatchOrder {
 
   @@index([tripStatus, createdAt])
   @@index([requestId])
+}
+
+// =============================================================================
+// Phase 21: Unlimited Multi-Tenant Registry & Global Client Identity
+// =============================================================================
+
+model TenantRegistry {
+  id               String   @id @default(cuid())
+  tenantId         String   @unique
+  slug             String   @unique
+  companyName      String
+  nameAr           String?
+  nameEn           String?
+  tenantUrl        String?
+  licenseId        String?
+  plan             String?
+  isolationMode    String   @default("DEDICATED_DB") // DEDICATED_DB | SCHEMA | POOLED_RLS
+  postgresDb       String?
+  sqliteDbPath     String?
+  schemaOrDb       String
+  allowedModesJson String   @default("[\"local\",\"lan\",\"cloud\"]")
+  maxSeats         Int      @default(10)
+  status           String   @default("ACTIVE") // ACTIVE | SUSPENDED | REVOKED | EXPIRED | ARCHIVED
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([slug, status])
+  @@map("tenants")
+}
+
+model GlobalClientIdentity {
+  id              String                   @id @default(cuid())
+  normalizedPhone String                   @unique
+  normalizedEmail String                   @unique
+  fullName        String
+  tradeName       String?
+  passwordHash    String
+  avatarUrl       String?
+  avatarColor     String                   @default("#059669")
+  sessionVersion  Int                      @default(1)
+  lastLoginAt     DateTime?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  memberships GlobalClientMembership[]
+
+  @@index([normalizedPhone])
+  @@index([normalizedEmail])
+}
+
+model GlobalClientMembership {
+  id              String               @id @default(cuid())
+  globalClientId  String
+  globalClient    GlobalClientIdentity @relation(fields: [globalClientId], references: [id], onDelete: Cascade)
+  tenantSlug      String
+  tenantId        String
+  tenantName      String?
+  clientAccountId String
+  customerId      String?
+  normalizedPhone String
+  normalizedEmail String
+  status          String               @default("PENDING_APPROVAL")
+  creditLimit     Decimal              @default(0)
+  balance         Decimal              @default(0)
+  deviceLimit     Int                  @default(3)
+  lastSyncedAt    DateTime?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@unique([tenantSlug, normalizedPhone])
+  @@unique([tenantSlug, normalizedEmail])
+  @@unique([tenantSlug, clientAccountId])
+  @@index([globalClientId, status])
+  @@index([tenantSlug, status, createdAt])
+}
+
+// =============================================================================
+// Phase 22: End-to-End Client Portal Payment Gate & Receipt Verification
+// =============================================================================
+
+model TenantPaymentChannel {
+  id                    String   @id @default(cuid())
+  tenantSlug            String   @default("default")
+  category              String   // WALLET | BANK | CASH_DEPOSIT
+  providerCode          String   @default("CUSTOM") // JAWALI | KURAIMI_JAWAL | ONE_CASH | FLOOSAK | CASH | MOBILE_MONEY | KURAIMI_BANK | TADHAMON | CAC_BANK | SABA_ISLAMIC | BRANCH_DEPOSIT | CUSTOM
+  displayNameAr         String
+  displayNameEn         String?
+  currency              String   @default("YER")
+  accountOrWalletNumber String
+  beneficiaryName       String
+  ibanOrBranch          String?
+  qrImageUrl            String?
+  instructionsAr        String?
+  treasuryAccountId     String
+  glAccountId           String?
+  displayOrder          Int      @default(1)
+  isActive              Boolean  @default(true)
+  createdById           String?
+  createdByName         String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([tenantSlug, isActive, displayOrder])
+  @@index([treasuryAccountId])
+}
+
+model ClientPaymentReceipt {
+  id                     String              @id @default(cuid())
+  submissionNumber       String              @unique
+  tenantSlug             String              @default("default")
+  clientAccountId        String
+  clientAccount          ClientPortalAccount @relation(fields: [clientAccountId], references: [id], onDelete: Cascade)
+  customerId             String?
+  channelId              String
+  channelCategory        String              // WALLET | BANK | CASH_DEPOSIT
+  channelNameAr          String
+  treasuryAccountId      String
+  amount                 Decimal
+  currency               String              @default("YER")
+  transferReference      String
+  normalizedReference    String
+  transferAt             DateTime
+  transferDateDmy        String
+  transferTimeHm         String
+  linkedInvoiceIdsJson   String              @default("[]")
+  linkedRequestIdsJson   String              @default("[]")
+  clientNotes            String?
+  receiptFileName        String?
+  receiptFilePath        String?
+  receiptMimeType        String?
+  receiptFileSize        Int?
+  status                 String              @default("PENDING_VERIFICATION") // PENDING_VERIFICATION | APPROVED | RETURNED_FOR_CLARIFICATION | REJECTED
+  staffNotes             String?
+  clarificationReason    String?
+  rejectionReason        String?
+  reviewedByUserId       String?
+  reviewedByName         String?
+  reviewedAt             DateTime?
+  linkedReceiptVoucherId String?
+  linkedJournalEntryId   String?
+  auditHistoryJson       String              @default("[]")
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  @@unique([tenantSlug, channelId, normalizedReference])
+  @@index([tenantSlug, clientAccountId, createdAt])
+  @@index([tenantSlug, status, createdAt])
+  @@index([customerId, status])
 }
 
 

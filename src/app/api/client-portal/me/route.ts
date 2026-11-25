@@ -12,6 +12,7 @@ import {
   sanitizeClientAccount,
   updateClientPortalProfile,
 } from "@/lib/clientPortal/portalService";
+import { listClientTenantMemberships } from "@/lib/clientPortal/globalClientService";
 
 export const dynamic = "force-dynamic";
 
@@ -35,31 +36,38 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     }
 
     const account = sanitizeClientAccount(auth.account, creditLimit);
-    const snapshot =
+    const [memberships, snapshot] = await Promise.all([
+      listClientTenantMemberships({
+        globalClientId: auth.account.globalClientId,
+        normalizedPhone: auth.account.normalizedPhone || auth.account.phone,
+        normalizedEmail: auth.account.normalizedEmail || auth.account.email,
+      }).catch(() => []),
       auth.account.status === "ACTIVE"
-        ? await getClientPortalFinancialSnapshot({ customerId: auth.account.customerId })
-        : {
-            summary: {
-              creditLimit: 0,
-              totalInvoiced: 0,
-              totalPaid: 0,
-              totalUnpaid: 0,
-              creditAvailable: null,
-              creditUtilizationPct: 0,
-              openBillsCount: 0,
-              paidBillsCount: 0,
-              currency: "YER",
-            },
-            bills: [],
-            receipts: [],
-            statementRows: [],
-          };
+        ? getClientPortalFinancialSnapshot({ customerId: auth.account.customerId })
+        : Promise.resolve({
+          summary: {
+            creditLimit: 0,
+            totalInvoiced: 0,
+            totalPaid: 0,
+            totalUnpaid: 0,
+            creditAvailable: null,
+            creditUtilizationPct: 0,
+            openBillsCount: 0,
+            paidBillsCount: 0,
+            currency: "YER",
+          },
+          bills: [],
+          receipts: [],
+          statementRows: [],
+        }),
+    ]);
 
     return NextResponse.json({
       success: true,
       tenantSlug: auth.scope.tenantSlug,
       account,
       summary: snapshot.summary,
+      memberships,
     });
   } catch (err) {
     console.error("GET /api/client-portal/me error:", err);
@@ -93,6 +101,7 @@ export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
     if (updated.passwordChanged) {
       const freshToken = issueClientPortalToken({
         clientAccountId: updated.account.id,
+        globalClientId: updated.account.globalClientId,
         customerId: updated.account.customerId,
         tenantId: auth.scope.tenantId,
         tenantSlug: auth.scope.tenantSlug,
@@ -106,7 +115,7 @@ export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
         token: freshToken,
         message: "✅ تم تحديث كلمة المرور والملف الشخصي بنجاح",
       });
-      return attachClientSessionCookie(res, freshToken, req);
+      return attachClientSessionCookie(res, freshToken, req, auth.scope.tenantSlug);
     }
 
     return NextResponse.json({

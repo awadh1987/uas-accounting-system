@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import {
   extractTenantResolutionFromRequest,
   getActiveTenantId,
+  getActiveTenantSlug,
   normalizeTenantId,
 } from "@/lib/tenant/tenantContext";
 import { findTenantBySlug } from "@/lib/tenant/tenantRegistry";
@@ -12,9 +13,18 @@ export const CLIENT_PORTAL_COOKIE_NAME = "uas_client_session";
 export const CLIENT_PORTAL_TOKEN_HEADER = "x-uas-client-token";
 export const CLIENT_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 
+export function getTenantScopedClientCookieName(tenantSlug?: string | null): string {
+  const clean = String(tenantSlug || "default")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_");
+  return `${CLIENT_PORTAL_COOKIE_NAME}__${clean || "default"}`;
+}
+
 export interface ClientPortalSessionPayload {
   kind: "client_portal";
   cid: string;
+  gcid?: string | null;
   custId?: string | null;
   tid: string;
   slug: string;
@@ -128,6 +138,7 @@ function signClientPayloadB64(payloadB64: string): string {
 
 export function issueClientPortalToken(input: {
   clientAccountId: string;
+  globalClientId?: string | null;
   customerId?: string | null;
   tenantId: string;
   tenantSlug?: string | null;
@@ -145,6 +156,7 @@ export function issueClientPortalToken(input: {
   const payload: ClientPortalSessionPayload = {
     kind: "client_portal",
     cid: String(input.clientAccountId).trim(),
+    ...(input.globalClientId ? { gcid: String(input.globalClientId).trim() } : {}),
     custId: input.customerId ?? null,
     tid: normalizeTenantId(input.tenantId),
     slug: String(input.tenantSlug || input.tenantId || "default").trim().toLowerCase(),
@@ -198,6 +210,7 @@ export function verifyClientPortalToken(token: string | null | undefined): Clien
     return {
       kind: "client_portal",
       cid: parsed.cid.trim(),
+      gcid: typeof parsed.gcid === "string" && parsed.gcid.trim() ? parsed.gcid.trim() : null,
       custId: parsed.custId ?? null,
       tid: normalizeTenantId(parsed.tid),
       slug: String(parsed.slug || parsed.tid).trim().toLowerCase(),
@@ -260,7 +273,10 @@ export function consumeClientResetRateLimit(
   return true;
 }
 
-export function extractClientTokenFromRequest(req?: Request | NextRequest | null): string | null {
+export function extractClientTokenFromRequest(
+  req?: Request | NextRequest | null,
+  tenantSlug?: string | null
+): string | null {
   if (!req) return null;
   const headerToken = req.headers.get(CLIENT_PORTAL_TOKEN_HEADER);
   if (headerToken?.trim()) return headerToken.trim();
@@ -270,17 +286,30 @@ export function extractClientTokenFromRequest(req?: Request | NextRequest | null
     return authHeader.slice("clientbearer ".length).trim();
   }
 
+  const scopedCookieName = tenantSlug ? getTenantScopedClientCookieName(tenantSlug) : null;
+
   if ("cookies" in req && typeof req.cookies?.get === "function") {
+    if (scopedCookieName) {
+      const scopedVal = req.cookies.get(scopedCookieName)?.value;
+      if (scopedVal?.trim()) return scopedVal.trim();
+    }
     const c = req.cookies.get(CLIENT_PORTAL_COOKIE_NAME)?.value;
     if (c?.trim()) return c.trim();
   }
 
   const cookieHdr = req.headers.get("cookie") || "";
+  const cookieMap = new Map<string, string>();
   for (const part of cookieHdr.split(";")) {
     const [k, ...rest] = part.trim().split("=");
-    if (k === CLIENT_PORTAL_COOKIE_NAME) {
-      return decodeURIComponent(rest.join("="));
+    if (k) {
+      cookieMap.set(k, decodeURIComponent(rest.join("=")));
     }
+  }
+  if (scopedCookieName && cookieMap.get(scopedCookieName)?.trim()) {
+    return cookieMap.get(scopedCookieName)!.trim();
+  }
+  if (cookieMap.get(CLIENT_PORTAL_COOKIE_NAME)?.trim()) {
+    return cookieMap.get(CLIENT_PORTAL_COOKIE_NAME)!.trim();
   }
   return null;
 }
@@ -288,39 +317,47 @@ export function extractClientTokenFromRequest(req?: Request | NextRequest | null
 export function attachClientSessionCookie(
   res: NextResponse,
   token: string,
-  req?: Request | NextRequest
+  req?: Request | NextRequest,
+  tenantSlug?: string | null
 ): NextResponse {
   const host = req?.headers.get("host") || "";
   const isHttps =
     (req?.headers.get("x-forwarded-proto") || "").includes("https") ||
     process.env.NODE_ENV === "production";
-
-  res.cookies.set(CLIENT_PORTAL_COOKIE_NAME, token, {
+  const cookieOpts = {
     httpOnly: true,
-    sameSite: "lax",
+    sameSite: "lax" as const,
     path: "/",
     maxAge: Math.floor(CLIENT_SESSION_TTL_MS / 1000),
     secure: isHttps && !host.startsWith("localhost") && !host.startsWith("127.0.0.1"),
-  });
+  };
+
+  const resolvedSlug = tenantSlug || resolveRequestTenantScope(req).tenantSlug;
+  res.cookies.set(getTenantScopedClientCookieName(resolvedSlug), token, cookieOpts);
+  res.cookies.set(CLIENT_PORTAL_COOKIE_NAME, token, cookieOpts);
   return res;
 }
 
 export function clearClientSessionCookie(
   res: NextResponse,
-  req?: Request | NextRequest
+  req?: Request | NextRequest,
+  tenantSlug?: string | null
 ): NextResponse {
   const host = req?.headers.get("host") || "";
   const isHttps =
     (req?.headers.get("x-forwarded-proto") || "").includes("https") ||
     process.env.NODE_ENV === "production";
-
-  res.cookies.set(CLIENT_PORTAL_COOKIE_NAME, "", {
+  const cookieOpts = {
     httpOnly: true,
-    sameSite: "lax",
+    sameSite: "lax" as const,
     path: "/",
     maxAge: 0,
     secure: isHttps && !host.startsWith("localhost") && !host.startsWith("127.0.0.1"),
-  });
+  };
+
+  const resolvedSlug = tenantSlug || resolveRequestTenantScope(req).tenantSlug;
+  res.cookies.set(getTenantScopedClientCookieName(resolvedSlug), "", cookieOpts);
+  res.cookies.set(CLIENT_PORTAL_COOKIE_NAME, "", cookieOpts);
   return res;
 }
 
@@ -329,11 +366,12 @@ export function resolveRequestTenantScope(req?: Request | NextRequest): {
   tenantSlug: string;
 } {
   const activeTid = getActiveTenantId();
+  const activeSlug = getActiveTenantSlug();
   if (!req) {
-    const meta = findTenantBySlug(activeTid);
+    const meta = findTenantBySlug(activeSlug) || findTenantBySlug(activeTid);
     return {
       tenantId: activeTid,
-      tenantSlug: meta?.slug || activeTid,
+      tenantSlug: (meta?.slug || activeSlug || activeTid || "default").toLowerCase(),
     };
   }
   const resolved = extractTenantResolutionFromRequest(req);
@@ -341,12 +379,13 @@ export function resolveRequestTenantScope(req?: Request | NextRequest): {
   const meta = findTenantBySlug(resolved.slug || tid);
   return {
     tenantId: normalizeTenantId(tid),
-    tenantSlug: (meta?.slug || resolved.slug || tid || "default").toLowerCase(),
+    tenantSlug: (meta?.slug || resolved.slug || activeSlug || tid || "default").toLowerCase(),
   };
 }
 
 export async function resolveAuthenticatedClient(req?: Request | NextRequest) {
-  const token = extractClientTokenFromRequest(req);
+  const scope = resolveRequestTenantScope(req);
+  const token = extractClientTokenFromRequest(req, scope.tenantSlug);
   if (!token) {
     return { ok: false as const, status: 401, error: "يرجى تسجيل الدخول إلى بوابة العميل أولاً" };
   }
@@ -356,12 +395,18 @@ export async function resolveAuthenticatedClient(req?: Request | NextRequest) {
     return { ok: false as const, status: 401, error: "انتهت صلاحية جلسة العميل أو أنها غير صالحة" };
   }
 
-  const scope = resolveRequestTenantScope(req);
   if (normalizeTenantId(payload.tid) !== normalizeTenantId(scope.tenantId)) {
     return {
       ok: false as const,
       status: 403,
       error: "⛔ الجلسة تابعة لمساحة منشأة أخرى (Cross-tenant access blocked)",
+    };
+  }
+  if (payload.slug && payload.slug.toLowerCase() !== scope.tenantSlug.toLowerCase()) {
+    return {
+      ok: false as const,
+      status: 403,
+      error: "⛔ رمز الجلسة لا يطابق نطاق المنشأة الحالي (Tenant slug mismatch)",
     };
   }
 
@@ -371,6 +416,13 @@ export async function resolveAuthenticatedClient(req?: Request | NextRequest) {
 
   if (!account) {
     return { ok: false as const, status: 401, error: "حساب العميل غير موجود في هذه المنشأة" };
+  }
+  if (account.tenantSlug && account.tenantSlug !== scope.tenantSlug && !(account.tenantSlug === "default" && scope.tenantId === "default")) {
+    return {
+      ok: false as const,
+      status: 403,
+      error: "⛔ حساب العميل تابع لمساحة منشأة أخرى",
+    };
   }
 
   if (account.status === "REJECTED") {

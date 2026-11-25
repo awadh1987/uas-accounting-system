@@ -14,20 +14,51 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export const GET = withTenantRoute(async function GET() {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
-    const customers = await prisma.customer.findMany({
-      orderBy: { code: "asc" },
-      include: {
-        account: { select: { id: true, code: true, nameAr: true, nameEn: true } },
-        invoices: {
-          select: { id: true, totalAmount: true, paidAmount: true, balanceDue: true },
+    const { searchParams } = new URL(req.url);
+    const search = (searchParams.get("search") || searchParams.get("q") || "").trim();
+    const hasPaging = searchParams.has("page") || searchParams.has("pageSize") || searchParams.has("limit") || Boolean(search);
+    const page = Math.max(1, Number.parseInt(searchParams.get("page") || "1", 10) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number.parseInt(searchParams.get("pageSize") || searchParams.get("limit") || "50", 10) || 50));
+
+    const whereClause = search
+      ? {
+        OR: [
+          { nameAr: { contains: search } },
+          { name: { contains: search } },
+          { code: { contains: search } },
+          { phone: { contains: search } },
+        ],
+      }
+      : undefined;
+
+    const [total, customers] = await Promise.all([
+      prisma.customer.count({ where: whereClause }),
+      prisma.customer.findMany({
+        where: whereClause,
+        orderBy: { code: "asc" },
+        ...(hasPaging ? { skip: (page - 1) * pageSize, take: pageSize } : {}),
+        include: {
+          account: { select: { id: true, code: true, nameAr: true, nameEn: true } },
+          invoices: {
+            select: { id: true, totalAmount: true, paidAmount: true, balanceDue: true },
+          },
+          sales: { select: { id: true, totalAmount: true, creditPaid: true, debitReceivable: true } },
         },
-        sales: { select: { id: true, totalAmount: true, creditPaid: true, debitReceivable: true } },
-      },
-    });
+      }),
+    ]);
+
+    const totalPages = hasPaging ? Math.max(1, Math.ceil(total / pageSize)) : 1;
 
     return NextResponse.json({
+      pagination: {
+        page,
+        pageSize: hasPaging ? pageSize : total || 50,
+        total,
+        totalPages,
+        hasMore: hasPaging ? page < totalPages : false,
+      },
       customers: customers.map((c) => {
         const totalInvoiced = c.invoices.reduce((s, i) => s + Number(i.totalAmount), 0);
         const totalCollected = c.invoices.reduce((s, i) => s + Number(i.paidAmount), 0);
@@ -130,8 +161,8 @@ async function handleUpdateCustomer(req: NextRequest) {
       body.nameAr !== undefined
         ? String(body.nameAr).trim()
         : body.name !== undefined
-        ? String(body.name).trim()
-        : existing.nameAr;
+          ? String(body.name).trim()
+          : existing.nameAr;
     const nextNameEn =
       body.nameEn !== undefined ? String(body.nameEn || nextNameAr).trim() : existing.nameEn;
 

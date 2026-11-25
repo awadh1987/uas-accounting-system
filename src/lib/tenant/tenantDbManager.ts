@@ -21,9 +21,82 @@ export interface TenantInitOptions {
   forceReinitialize?: boolean;
 }
 
-const tenantPrismaCache = new Map<string, PrismaClient>();
+interface CachedTenantClientEntry {
+  client: PrismaClient;
+  dbUrl: string;
+  lastUsedAt: number;
+  createdAt: number;
+}
+
+const tenantPrismaCache = new Map<string, CachedTenantClientEntry>();
 const readyTenantDbUrls = new Set<string>();
 const pendingTenantInitializations = new Map<string, Promise<PrismaClient>>();
+
+export function getMaxCachedTenantClients(): number {
+  const parsed = Number(process.env.UAS_TENANT_PRISMA_MAX_CLIENTS || 64);
+  return Number.isFinite(parsed) && parsed >= 2 ? Math.floor(parsed) : 64;
+}
+
+export function getTenantPrismaIdleTtlMs(): number {
+  const parsed = Number(process.env.UAS_TENANT_PRISMA_IDLE_MS || 10 * 60 * 1000);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10 * 60 * 1000;
+}
+
+export function getTenantPrismaCacheStats(): {
+  size: number;
+  maxClients: number;
+  idleTtlMs: number;
+  tenantIds: string[];
+} {
+  return {
+    size: tenantPrismaCache.size,
+    maxClients: getMaxCachedTenantClients(),
+    idleTtlMs: getTenantPrismaIdleTtlMs(),
+    tenantIds: Array.from(tenantPrismaCache.keys()),
+  };
+}
+
+/**
+ * Evicts idle tenant PrismaClients beyond `idleTtlMs` and caps total cached clients via LRU.
+ */
+export async function evictTenantPrismaCacheIfNeeded(preserveTenantId?: string): Promise<number> {
+  const now = Date.now();
+  const idleMs = getTenantPrismaIdleTtlMs();
+  const maxClients = getMaxCachedTenantClients();
+  let evicted = 0;
+
+  // 1. Idle eviction (never evict "default" or the currently requested tenant)
+  for (const [tid, entry] of Array.from(tenantPrismaCache.entries())) {
+    if (tid === "default" || tid === preserveTenantId) continue;
+    if (now - entry.lastUsedAt >= idleMs) {
+      tenantPrismaCache.delete(tid);
+      readyTenantDbUrls.delete(entry.dbUrl);
+      evicted++;
+      await entry.client.$disconnect().catch(() => { });
+    }
+  }
+
+  // 2. LRU capacity cap eviction (Map preserves insertion/access order)
+  while (tenantPrismaCache.size > maxClients) {
+    let victimKey: string | null = null;
+    for (const k of tenantPrismaCache.keys()) {
+      if (k !== "default" && k !== preserveTenantId) {
+        victimKey = k;
+        break;
+      }
+    }
+    if (!victimKey) break;
+    const victim = tenantPrismaCache.get(victimKey);
+    tenantPrismaCache.delete(victimKey);
+    if (victim) {
+      readyTenantDbUrls.delete(victim.dbUrl);
+      evicted++;
+      await victim.client.$disconnect().catch(() => { });
+    }
+  }
+
+  return evicted;
+}
 
 function cleanEnvDatabaseUrl(raw?: string | null): string {
   return (raw || "").trim().replace(/^["']|["']$/g, "");
@@ -111,9 +184,37 @@ export function resolveTenantSchemaName(rawTenantId?: string | null): string {
   return tenantId.startsWith("tenant_") ? tenantId : `tenant_${tenantId}`;
 }
 
+export function applyPgBouncerParams(
+  rawUrl: string,
+  options?: { pgbouncer?: boolean; connectionLimit?: number }
+): string {
+  const usePgBouncer =
+    options?.pgbouncer === true ||
+    process.env.UAS_PGBOUNCER_ENABLED === "true" ||
+    Boolean(process.env.UAS_PGBOUNCER_URL?.trim()) ||
+    rawUrl.includes("pgbouncer=true");
+  const connLimit =
+    options?.connectionLimit ??
+    Number(process.env.UAS_PRISMA_CONNECTION_LIMIT || (usePgBouncer ? 3 : 5));
+  const poolBase = process.env.UAS_PGBOUNCER_URL?.trim() || rawUrl;
+
+  try {
+    const url = new URL(poolBase);
+    if (usePgBouncer) {
+      url.searchParams.set("pgbouncer", "true");
+    }
+    if (!url.searchParams.has("connection_limit") && Number.isFinite(connLimit) && connLimit > 0) {
+      url.searchParams.set("connection_limit", String(Math.floor(connLimit)));
+    }
+    return url.toString();
+  } catch {
+    return poolBase;
+  }
+}
+
 function replacePostgresDatabaseName(rawUrl: string, dbName: string, schemaName = "public"): string {
   try {
-    const url = new URL(rawUrl);
+    const url = new URL(applyPgBouncerParams(rawUrl));
     url.pathname = `/${dbName}`;
     url.searchParams.set("schema", schemaName);
     return url.toString();
@@ -128,9 +229,11 @@ function replacePostgresDatabaseName(rawUrl: string, dbName: string, schemaName 
 
 /**
  * Resolves connection URL for a tenant.
- * - SQLite: returns file:<path-to-data/tenants/<slug>.db>
- * - PostgreSQL: routes registered isolated-DB tenants to `/${meta.postgresDb}?schema=public`,
- *   or falls back to `?schema=tenant_<slug>` for legacy schema-isolated tenants.
+ * - SQLite: returns file:<path-to-data/tenants/<slug>.db> (or default DB for POOLED_RLS)
+ * - PostgreSQL:
+ *   - `POOLED_RLS`: routes to the shared pooled PostgreSQL DB with `?pgbouncer=true` (when enabled) + RLS context.
+ *   - `DEDICATED_DB`: routes registered isolated-DB tenants to `/${meta.postgresDb}?schema=public`.
+ *   - `SCHEMA`: falls back to `?schema=tenant_<slug>`.
  */
 export function resolveTenantDatabaseUrl(
   rawTenantId?: string | null,
@@ -146,8 +249,10 @@ export function resolveTenantDatabaseUrl(
       !lowerBaseUrl.startsWith("postgres://") &&
       !lowerBaseUrl.includes("://"));
 
+  const meta = !overrideBaseUrl ? getTenantMetadata(tenantId) || findTenantBySlug(rawTenantId) : null;
+
   if (isSqlite) {
-    if (tenantId === "default") {
+    if (tenantId === "default" || meta?.isolationMode === "POOLED_RLS") {
       return rawBaseUrl;
     }
     const tenantPath = resolveTenantSqliteFilePath(rawTenantId || tenantId);
@@ -155,25 +260,94 @@ export function resolveTenantDatabaseUrl(
   }
 
   // PostgreSQL runtime:
-  if (tenantId === "default") {
-    return rawBaseUrl;
+  if (tenantId === "default" || meta?.isolationMode === "POOLED_RLS") {
+    return applyPgBouncerParams(rawBaseUrl);
   }
 
-  if (!overrideBaseUrl) {
-    const meta = getTenantMetadata(tenantId) || findTenantBySlug(rawTenantId);
-    if (meta?.postgresDb) {
-      return replacePostgresDatabaseName(rawBaseUrl, meta.postgresDb, "public");
-    }
+  if (meta?.postgresDb) {
+    return replacePostgresDatabaseName(rawBaseUrl, meta.postgresDb, "public");
   }
 
   const schemaName = resolveTenantSchemaName(tenantId);
   try {
-    const url = new URL(rawBaseUrl);
+    const url = new URL(applyPgBouncerParams(rawBaseUrl));
     url.searchParams.set("schema", schemaName);
     return url.toString();
   } catch {
     const sep = rawBaseUrl.includes("?") ? "&" : "?";
     return `${rawBaseUrl}${sep}schema=${schemaName}`;
+  }
+}
+
+/**
+ * Sets transaction-local PostgreSQL RLS tenant context (`SET LOCAL` equivalent via `set_config(..., true)`),
+ * which is 100% safe under PgBouncer `pool_mode = transaction`.
+ */
+export async function setTenantRlsContextTx(
+  client: QueryableClient,
+  tenantSlug: string
+): Promise<void> {
+  if (isSqliteRuntime()) return;
+  const cleanSlug = String(tenantSlug || "default").trim().toLowerCase() || "default";
+  await client.$queryRawUnsafe(
+    `SELECT set_config('app.current_tenant', $1, true);`,
+    cleanSlug
+  );
+}
+
+export function buildPooledTenantRlsStatements(
+  tables: string[],
+  schemaName = "public"
+): string[] {
+  const stmts: string[] = [];
+  for (const tbl of tables) {
+    const fq = `"${schemaName}"."${tbl}"`;
+    const policyName = `uas_rls_${tbl.toLowerCase()}_tenant`;
+    stmts.push(
+      `ALTER TABLE ${fq} ENABLE ROW LEVEL SECURITY;`,
+      `ALTER TABLE ${fq} FORCE ROW LEVEL SECURITY;`,
+      `DROP POLICY IF EXISTS "${policyName}" ON ${fq};`,
+      `CREATE POLICY "${policyName}" ON ${fq} USING (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR NULLIF(current_setting('app.current_tenant', true), '') IS NULL
+        OR "tenantSlug" = current_setting('app.current_tenant', true)
+      ) WITH CHECK (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR NULLIF(current_setting('app.current_tenant', true), '') IS NULL
+        OR "tenantSlug" = current_setting('app.current_tenant', true)
+      );`
+    );
+  }
+  return stmts;
+}
+
+/**
+ * Enables and forces PostgreSQL Row-Level Security (RLS) on pooled multi-tenant tables
+ * so `POOLED_RLS` tenants are isolated at the database engine layer.
+ */
+export async function provisionPooledTenantRlsPolicies(
+  client: QueryableClient,
+  schemaName = "public"
+): Promise<void> {
+  if (isSqliteRuntime()) return;
+  const stmts = buildPooledTenantRlsStatements(
+    [
+      "ClientPortalAccount",
+      "ClientGoodsRequest",
+      "TenantPaymentChannel",
+      "ClientPaymentReceipt",
+      "Customer",
+      "SalesInvoice",
+      "ReceiptVoucher",
+    ],
+    schemaName
+  );
+  for (const sql of stmts) {
+    try {
+      await client.$executeRawUnsafe(sql);
+    } catch {
+      // Table may not exist on partial schemas yet
+    }
   }
 }
 
@@ -558,10 +732,11 @@ async function executePostgresFallbackDdl(
 
 async function ensurePostgresPhase9Tables(
   client: QueryableClient,
-  schemaName: string
+  schemaName: string,
+  tenantSlug = "default"
 ): Promise<void> {
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schemaName)) return;
-  const statements = buildPostgresPortalDdlStatements(schemaName);
+  const statements = buildPostgresPortalDdlStatements(schemaName, tenantSlug);
   for (const stmt of statements) {
     try {
       await client.$executeRawUnsafe(stmt);
@@ -795,7 +970,10 @@ async function initializeTenantDatabase(
     } catch {
       // Non-fatal additive column check
     }
-    await ensurePostgresPhase9Tables(client, schemaName);
+    await ensurePostgresPhase9Tables(client, schemaName, meta.slug || tenantId);
+    if (meta.isolationMode === "POOLED_RLS") {
+      await provisionPooledTenantRlsPolicies(client, schemaName);
+    }
   }
 
   // 1. EnterpriseProfile
@@ -1088,7 +1266,7 @@ async function ensurePostgresDatabaseExists(baseDbUrl: string, dbName: string): 
       await adminClient.$executeRawUnsafe(`CREATE DATABASE "${dbName}";`);
     }
   } finally {
-    await adminClient.$disconnect().catch(() => {});
+    await adminClient.$disconnect().catch(() => { });
   }
 }
 
@@ -1105,15 +1283,24 @@ export async function getTenantPrisma(
 
   if (!options?.forceReinitialize) {
     const existing = tenantPrismaCache.get(tenantId);
-    if (existing && readyTenantDbUrls.has(tenantDbUrl)) {
-      return existing;
+    if (existing && existing.dbUrl === tenantDbUrl && readyTenantDbUrls.has(tenantDbUrl)) {
+      // LRU touch: update timestamp and move to end of Map
+      existing.lastUsedAt = Date.now();
+      tenantPrismaCache.delete(tenantId);
+      tenantPrismaCache.set(tenantId, existing);
+      return existing.client;
+    }
+    if (existing && existing.dbUrl !== tenantDbUrl) {
+      tenantPrismaCache.delete(tenantId);
+      readyTenantDbUrls.delete(existing.dbUrl);
+      await existing.client.$disconnect().catch(() => { });
     }
   } else {
     const stale = tenantPrismaCache.get(tenantId);
     if (stale) {
       tenantPrismaCache.delete(tenantId);
       readyTenantDbUrls.delete(tenantDbUrl);
-      await stale.$disconnect().catch(() => {});
+      await stale.client.$disconnect().catch(() => { });
     }
   }
 
@@ -1124,7 +1311,12 @@ export async function getTenantPrisma(
 
   const initPromise = (async (): Promise<PrismaClient> => {
     const meta = getTenantMetadata(tenantId) || findTenantBySlug(rawTenantId);
-    if (isPostgresRuntime() && tenantId !== "default" && meta?.postgresDb) {
+    if (
+      isPostgresRuntime() &&
+      tenantId !== "default" &&
+      meta?.postgresDb &&
+      meta?.isolationMode !== "POOLED_RLS"
+    ) {
       await ensurePostgresDatabaseExists(cleanEnvDatabaseUrl(process.env.DATABASE_URL), meta.postgresDb);
     }
 
@@ -1138,14 +1330,28 @@ export async function getTenantPrisma(
     });
 
     try {
-      await initializeTenantDatabase(client, tenantId, options);
+      if (meta?.isolationMode !== "POOLED_RLS") {
+        await initializeTenantDatabase(client, tenantId, options);
+      } else if (!isSqliteRuntime()) {
+        await ensurePostgresPhase9Tables(client, "public", meta?.slug || tenantId);
+        await provisionPooledTenantRlsPolicies(client, "public");
+      } else {
+        await ensureSqliteAdditiveSchema(client);
+      }
       readyTenantDbUrls.add(tenantDbUrl);
-      tenantPrismaCache.set(tenantId, client);
+      const now = Date.now();
+      tenantPrismaCache.set(tenantId, {
+        client,
+        dbUrl: tenantDbUrl,
+        lastUsedAt: now,
+        createdAt: now,
+      });
+      await evictTenantPrismaCacheIfNeeded(tenantId);
       return client;
     } catch (err) {
       readyTenantDbUrls.delete(tenantDbUrl);
       tenantPrismaCache.delete(tenantId);
-      await client.$disconnect().catch(() => {});
+      await client.$disconnect().catch(() => { });
       console.error(`[TenantDbManager] Error initializing tenant DB for '${tenantId}':`, err);
       throw err;
     }
@@ -1161,9 +1367,9 @@ export async function getTenantPrisma(
  * Resets tenant clients cache and disconnects all connections (for test cleanup).
  */
 export async function resetTenantClientsForTests(): Promise<void> {
-  for (const client of tenantPrismaCache.values()) {
+  for (const entry of tenantPrismaCache.values()) {
     try {
-      await client.$disconnect();
+      await entry.client.$disconnect();
     } catch {
       // Ignore disconnect error
     }

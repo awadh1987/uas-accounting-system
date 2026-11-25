@@ -18,8 +18,8 @@ export async function OPTIONS(req: NextRequest) {
 
 export const POST = withTenantRoute(async function POST(req: NextRequest) {
   try {
-    await ensurePortalSchemaReady();
     const scope = resolveRequestTenantScope(req);
+    await ensurePortalSchemaReady(scope.tenantSlug);
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
 
     const portalUrl = `${resolveTenantCloudUrl(scope.tenantSlug)}/portal`;
@@ -39,10 +39,13 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
           : undefined,
       notes: body.notes ? String(body.notes) : undefined,
       portalUrl,
+      tenantSlug: scope.tenantSlug,
+      tenantId: scope.tenantId,
     });
 
     const token = issueClientPortalToken({
       clientAccountId: account.id,
+      globalClientId: account.globalClientId,
       customerId: account.customerId,
       tenantId: scope.tenantId,
       tenantSlug: scope.tenantSlug,
@@ -53,6 +56,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     const res = NextResponse.json(
       {
         success: true,
+        tenantSlug: scope.tenantSlug,
         account,
         token,
         requiresApproval: account.status !== "ACTIVE",
@@ -63,7 +67,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       },
       { status: 201 }
     );
-    return attachClientSessionCookie(res, token, req);
+    return attachClientSessionCookie(res, token, req, scope.tenantSlug);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "تعذر تسجيل الحساب";
     const status = msg.includes("مسجل مسبقاً") ? 409 : 400;

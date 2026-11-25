@@ -32,40 +32,59 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     const includeArchived = searchParams.get("includeArchived") !== "0";
     const fromDate = (searchParams.get("fromDate") || "").trim();
     const toDate = (searchParams.get("toDate") || "").trim();
-    const q = (searchParams.get("q") || "").trim().toLowerCase();
+    const q = (searchParams.get("q") || searchParams.get("search") || "").trim();
+    const page = Math.max(1, Number.parseInt(searchParams.get("page") || "1", 10) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number.parseInt(searchParams.get("pageSize") || searchParams.get("limit") || "50", 10) || 50));
 
-    const rows = await prisma.clientGoodsRequest.findMany({
-      where: {
-        clientAccountId: auth.account.id,
-        ...(status && status !== "ALL" ? { status } : {}),
-      },
-      include: { lines: { orderBy: { lineOrder: "asc" } } },
-      orderBy: { createdAt: "desc" },
-      take: 250,
-    });
-
-    const filtered = rows
-      .map(serializeRequest)
-      .filter((r) => {
-        if (!includeHidden && r.isHiddenByClient) return false;
-        if (!includeArchived && r.isArchivedByClient) return false;
-        if (sectorType && sectorType !== "ALL" && r.sectorType !== sectorType) return false;
-        const d = r.createdAt.slice(0, 10);
-        if (fromDate && d < fromDate) return false;
-        if (toDate && d > toDate) return false;
-        if (q) {
-          const hit =
-            r.requestNumber.toLowerCase().includes(q) ||
-            r.pickupLocation.toLowerCase().includes(q) ||
-            r.lines.some((l) => l.itemTitle.toLowerCase().includes(q));
-          if (!hit) return false;
+    const whereClause: Record<string, unknown> = {
+      clientAccountId: auth.account.id,
+      ...(status && status !== "ALL" ? { status } : {}),
+      ...(!includeHidden ? { isHiddenByClient: false } : {}),
+      ...(!includeArchived ? { isArchivedByClient: false } : {}),
+      ...(sectorType && sectorType !== "ALL" ? { sectorType } : {}),
+      ...(fromDate || toDate
+        ? {
+          createdAt: {
+            ...(fromDate ? { gte: new Date(`${fromDate}T00:00:00.000Z`) } : {}),
+            ...(toDate ? { lte: new Date(`${toDate}T23:59:59.999Z`) } : {}),
+          },
         }
-        return true;
-      });
+        : {}),
+      ...(q
+        ? {
+          OR: [
+            { requestNumber: { contains: q } },
+            { pickupLocation: { contains: q } },
+            { lines: { some: { itemTitle: { contains: q } } } },
+          ],
+        }
+        : {}),
+    };
+
+    const [total, rows] = await Promise.all([
+      prisma.clientGoodsRequest.count({ where: whereClause }),
+      prisma.clientGoodsRequest.findMany({
+        where: whereClause,
+        include: { lines: { orderBy: { lineOrder: "asc" } } },
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+
+    const filtered = rows.map(serializeRequest);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
     return NextResponse.json({
       success: true,
       tenantSlug: auth.scope.tenantSlug,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages,
+        hasMore: page < totalPages,
+      },
       requests: filtered,
     });
   } catch (err) {
