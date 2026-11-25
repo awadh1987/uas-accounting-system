@@ -59,6 +59,11 @@ export function sanitizeClientCatalogBoardItem(row: {
   sectorType?: string;
   categoryGroup?: string;
   saleMode?: string;
+  producerCompany?: string | null;
+  countryOfOrigin?: string | null;
+  productionDate?: string | null;
+  expiryDate?: string | null;
+  taxRate?: Prisma.Decimal | number | string | null;
   unitCode: string;
   unitLabel: string;
   customUnitLabel?: string | null;
@@ -103,6 +108,11 @@ export function sanitizeClientCatalogBoardItem(row: {
     sectorType: row.sectorType || "HARVEST",
     categoryGroup: row.categoryGroup || "HARVEST",
     saleMode: row.saleMode || "BOTH",
+    producerCompany: row.producerCompany ?? null,
+    countryOfOrigin: row.countryOfOrigin ?? null,
+    productionDate: row.productionDate ? String(row.productionDate).slice(0, 10) : null,
+    expiryDate: row.expiryDate ? String(row.expiryDate).slice(0, 10) : null,
+    taxRate: Math.max(0, Number(row.taxRate || 0)),
     unitCode: row.unitCode || "QAT_BUNCH",
     unitLabel: row.unitLabel || "علاقية قات",
     customUnitLabel: row.customUnitLabel ?? null,
@@ -165,6 +175,11 @@ export async function listPublishedClientCatalogBoard(): Promise<{
       sectorType: true,
       categoryGroup: true,
       saleMode: true,
+      producerCompany: true,
+      countryOfOrigin: true,
+      productionDate: true,
+      expiryDate: true,
+      taxRate: true,
       unitCode: true,
       unitLabel: true,
       customUnitLabel: true,
@@ -209,6 +224,7 @@ export async function listStaffCatalogBoard(): Promise<{
     sellPrice: number;
     baseUnitCode: string;
     baseUnitLabel: string;
+    sectorType: "HARVEST" | "COMMERCIAL";
   }>;
 }> {
   await syncPublishedCatalogStockTx(prisma).catch(() => null);
@@ -225,6 +241,7 @@ export async function listStaffCatalogBoard(): Promise<{
         nameAr: true,
         nameEn: true,
         grade: true,
+        sectorType: true,
         wholesalePrice: true,
         retailPrice: true,
         baseUnit: { select: { code: true, nameAr: true } },
@@ -255,6 +272,10 @@ export async function listStaffCatalogBoard(): Promise<{
       sellPrice: Number(it.wholesalePrice || it.retailPrice || 0),
       baseUnitCode: it.baseUnit?.code || "QAT_BUNCH",
       baseUnitLabel: it.baseUnit?.nameAr || "علاقية قات",
+      sectorType:
+        String(it.sectorType || "").toUpperCase() === "COMMERCIAL"
+          ? "COMMERCIAL"
+          : "HARVEST",
     })),
   };
 }
@@ -273,6 +294,11 @@ export async function upsertStaffCatalogBoardItem(params: {
   sectorType?: string;
   categoryGroup?: string;
   saleMode?: string;
+  producerCompany?: string | null;
+  countryOfOrigin?: string | null;
+  productionDate?: string | null;
+  expiryDate?: string | null;
+  taxRate?: number;
   unitCode?: string;
   unitLabel?: string;
   customUnitLabel?: string | null;
@@ -350,6 +376,11 @@ export async function upsertStaffCatalogBoardItem(params: {
     sectorType,
     categoryGroup,
     saleMode,
+    producerCompany: params.producerCompany?.trim() || null,
+    countryOfOrigin: params.countryOfOrigin?.trim() || null,
+    productionDate: params.productionDate?.trim() ? params.productionDate.trim().slice(0, 10) : null,
+    expiryDate: params.expiryDate?.trim() ? params.expiryDate.trim().slice(0, 10) : null,
+    taxRate: Math.max(0, Number(params.taxRate) || 0),
     unitCode,
     unitLabel:
       unitCode === "OTHER"

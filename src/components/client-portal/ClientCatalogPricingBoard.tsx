@@ -327,6 +327,37 @@ export function ClientCatalogPricingBoard({
                   </div>
 
                   <div className="flex flex-wrap gap-3 text-[11px] text-slate-500">
+                    {it.producerCompany && (
+                      <span>
+                        المنتج: <strong className="text-slate-700 dark:text-slate-200">{it.producerCompany}</strong>
+                      </span>
+                    )}
+                    {it.countryOfOrigin && (
+                      <span>
+                        بلد المنشأ: <strong className="text-slate-700 dark:text-slate-200">{it.countryOfOrigin}</strong>
+                      </span>
+                    )}
+                    {it.productionDate && (
+                      <span>
+                        تاريخ الإنتاج:{" "}
+                        <bdi dir="ltr" className="font-mono">
+                          {String(it.productionDate).replace(/^(\d{4})-(\d{2})-(\d{2})$/, "$3 / $2 / $1")}
+                        </bdi>
+                      </span>
+                    )}
+                    {it.expiryDate && (
+                      <span>
+                        تاريخ الانتهاء:{" "}
+                        <bdi dir="ltr" className="font-mono text-rose-600 dark:text-rose-400 font-bold">
+                          {String(it.expiryDate).replace(/^(\d{4})-(\d{2})-(\d{2})$/, "$3 / $2 / $1")}
+                        </bdi>
+                      </span>
+                    )}
+                    {Number(it.taxRate || 0) > 0 && (
+                      <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-mono text-[10px]">
+                        الضريبة: {it.taxRate}%
+                      </span>
+                    )}
                     {it.effectiveDateDmy && (
                       <span>
                         تاريخ القائمة: <bdi dir="ltr" className="font-mono">{it.effectiveDateDmy}</bdi>

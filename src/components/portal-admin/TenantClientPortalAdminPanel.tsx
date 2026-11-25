@@ -1430,8 +1430,8 @@ export function TenantClientPortalAdminPanel({
                   className="rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 font-bold"
                 >
                   <option value="ALL">كلا القطاعين</option>
-                  <option value="HARVEST">القطاع الحالي (المحصول والفرز)</option>
-                  <option value="COMMERCIAL">القطاع التجاري (الجملة والتجزئة)</option>
+                  <option value="HARVEST">القطاع الزراعي</option>
+                  <option value="COMMERCIAL">القطاع التجاري</option>
                 </select>
               </div>
 
@@ -2026,6 +2026,171 @@ export function TenantClientPortalAdminPanel({
                   ))}
                 </div>
               </div>
+
+              {/* Per-Sector Request Form Customization (Harvest vs Commercial) */}
+              <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-3">
+                <div className="font-black text-slate-800 dark:text-slate-100">
+                  تخصيص نماذج القطاعات (القطاع الزراعي / القطاع التجاري)
+                </div>
+                {(["HARVEST", "COMMERCIAL"] as const).map((secKey) => {
+                  const secLabel = secKey === "HARVEST" ? "القطاع الزراعي" : "القطاع التجاري";
+                  const currentSec = formCfg.sectorForms?.[secKey] || {
+                    headingAr: secKey === "HARVEST" ? "طلب بضاعة جديدة" : "طلب تجاري (جملة / تجزئة)",
+                    subtitleAr: "",
+                    allowUnlistedItems: true,
+                    customFields: [] as Array<{
+                      key: string;
+                      labelAr: string;
+                      required?: boolean;
+                      type?: "text" | "number" | "select";
+                      options?: string[];
+                      placeholder?: string;
+                    }>,
+                  };
+                  const updateSec = (patch: Partial<typeof currentSec>) =>
+                    setFormCfg({
+                      ...formCfg,
+                      sectorForms: {
+                        HARVEST: formCfg.sectorForms?.HARVEST || {
+                          headingAr: "طلب بضاعة جديدة",
+                          subtitleAr: "",
+                          allowUnlistedItems: true,
+                          customFields: [],
+                        },
+                        COMMERCIAL: formCfg.sectorForms?.COMMERCIAL || {
+                          headingAr: "طلب تجاري (جملة / تجزئة)",
+                          subtitleAr: "",
+                          allowUnlistedItems: true,
+                          customFields: [],
+                        },
+                        [secKey]: { ...currentSec, ...patch },
+                      },
+                    });
+                  return (
+                    <div
+                      key={secKey}
+                      className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 space-y-2"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-black text-xs">{secLabel}</span>
+                        <label className="inline-flex items-center gap-1.5 text-[11px] font-bold cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={currentSec.allowUnlistedItems !== false}
+                            onChange={(e) => updateSec({ allowUnlistedItems: e.target.checked })}
+                          />
+                          <span>السماح بأصناف غير مدرجة بالكتالوج</span>
+                        </label>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={currentSec.headingAr}
+                          onChange={(e) => updateSec({ headingAr: e.target.value })}
+                          placeholder={`عنوان نموذج ${secLabel}`}
+                          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 font-bold"
+                        />
+                        <input
+                          type="text"
+                          value={currentSec.subtitleAr}
+                          onChange={(e) => updateSec({ subtitleAr: e.target.value })}
+                          placeholder={`وصف مختصر لنموذج ${secLabel}`}
+                          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-slate-500">
+                            الحقول المخصصة ({currentSec.customFields.length})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateSec({
+                                customFields: [
+                                  ...currentSec.customFields,
+                                  {
+                                    key: `field_${Date.now().toString(36)}`,
+                                    labelAr: "حقل إضافي",
+                                    type: "text",
+                                    required: false,
+                                  },
+                                ],
+                              })
+                            }
+                            className="px-2 py-0.5 rounded-lg border border-emerald-400 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold"
+                          >
+                            + إضافة حقل لـ {secLabel}
+                          </button>
+                        </div>
+                        {currentSec.customFields.map((cf, cfIdx) => (
+                          <div key={cf.key} className="grid grid-cols-1 sm:grid-cols-4 gap-1.5 items-center">
+                            <input
+                              type="text"
+                              value={cf.labelAr}
+                              onChange={(e) => {
+                                const nextFields = currentSec.customFields.map((f, i) =>
+                                  i === cfIdx ? { ...f, labelAr: e.target.value } : f
+                                );
+                                updateSec({ customFields: nextFields });
+                              }}
+                              placeholder="اسم الحقل بالعربية"
+                              className="sm:col-span-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold"
+                            />
+                            <select
+                              value={cf.type || "text"}
+                              onChange={(e) => {
+                                const nextType: "text" | "number" | "select" =
+                                  e.target.value === "number"
+                                    ? "number"
+                                    : e.target.value === "select"
+                                    ? "select"
+                                    : "text";
+                                const nextFields = currentSec.customFields.map((f, i) =>
+                                  i === cfIdx ? { ...f, type: nextType } : f
+                                );
+                                updateSec({ customFields: nextFields });
+                              }}
+                              className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px]"
+                            >
+                              <option value="text">نص</option>
+                              <option value="number">رقم</option>
+                              <option value="select">قائمة اختيارات</option>
+                            </select>
+                            <div className="flex items-center justify-between gap-2">
+                              <label className="inline-flex items-center gap-1 text-[10px] font-bold">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(cf.required)}
+                                  onChange={(e) => {
+                                    const nextFields = currentSec.customFields.map((f, i) =>
+                                      i === cfIdx ? { ...f, required: e.target.checked } : f
+                                    );
+                                    updateSec({ customFields: nextFields });
+                                  }}
+                                />
+                                <span>إلزامي</span>
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateSec({
+                                    customFields: currentSec.customFields.filter((_, i) => i !== cfIdx),
+                                  })
+                                }
+                                className="text-rose-600 text-[10px] font-bold hover:underline"
+                              >
+                                حذف
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
               <div>
                 <button type="submit" className="px-4 py-2 rounded-xl accent-bg font-extrabold inline-flex items-center gap-1.5">
                   <Save className="w-3.5 h-3.5" />

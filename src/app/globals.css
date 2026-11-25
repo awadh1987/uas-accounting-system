@@ -77,6 +77,12 @@ body.theme-royal {
   --light-border: rgba(99, 102, 241, 0.35);
 }
 
+html,
+body {
+  max-width: 100%;
+  overflow-x: clip;
+}
+
 body {
   font-family:
     var(--font-cairo), var(--font-inter), "Cairo", "Inter", sans-serif;
@@ -85,7 +91,7 @@ body {
   transition:
     background-color 0.2s ease,
     color 0.2s ease;
-  padding-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(4.25rem + env(safe-area-inset-bottom, 0px));
 }
 
 @media (min-width: 768px) {

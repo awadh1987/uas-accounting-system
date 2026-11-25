@@ -178,8 +178,8 @@ export function InventoryTab({
 
   return (
     <section className="space-y-6">
-      {/* Phase 3: Item Master Data & Multi-Unit Inventory Panel (with universal Other/Custom support) */}
-      <MultiUnitInventoryPanel readOnly={readOnly} onRefreshState={onRefreshState} onToast={onToast} />
+      {/* Phase 3: Item Master Data & Multi-Unit Inventory Panel (Harvest Sector Isolated) */}
+      <MultiUnitInventoryPanel sectorFilter="HARVEST" readOnly={readOnly} onRefreshState={onRefreshState} onToast={onToast} />
 
       <SlideOverDrawer
         open={drawerOpen && !readOnly}

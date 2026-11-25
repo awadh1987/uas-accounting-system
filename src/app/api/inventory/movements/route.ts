@@ -13,6 +13,7 @@ import { appendAuditLogTx } from "@/lib/serverBootstrap";
 import { emitNotification } from "@/lib/notifications/notificationService";
 import { withIdempotency } from "@/lib/idempotencyGuard";
 import { syncPublishedCatalogStockTx } from "@/lib/clientPortal/catalogStockSync";
+import { formatIsoToDmyTime } from "@/lib/uiFormatters";
 
 import { convertToBaseQty } from "@/lib/multiUnitInventoryEngine";
 
@@ -26,14 +27,18 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
 
     const itemId = req.nextUrl.searchParams.get("itemId")?.trim() || undefined;
     const warehouseId = req.nextUrl.searchParams.get("warehouseId")?.trim() || undefined;
+    const rawSector = (req.nextUrl.searchParams.get("sectorType") || "").trim().toUpperCase();
+    const sectorType =
+      rawSector === "COMMERCIAL" || rawSector === "HARVEST" ? rawSector : undefined;
 
     const movements = await prisma.stockMovement.findMany({
       where: {
         ...(itemId ? { itemId } : {}),
         ...(warehouseId ? { warehouseId } : {}),
+        ...(sectorType ? { item: { sectorType } } : {}),
       },
       orderBy: { createdAt: "desc" },
-      take: 100,
+      take: 150,
       include: {
         item: { include: { baseUnit: true, conversions: { include: { unit: true } } } },
         warehouse: true,
@@ -41,7 +46,18 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
       },
     });
 
-    return NextResponse.json({ movements });
+    const formatted = movements.map((m) => ({
+      ...m,
+      enteredQty: Number(m.enteredQty),
+      factorToBase: Number(m.factorToBase),
+      baseQtyDelta: Number(m.baseQtyDelta),
+      unitCostBase: Number(m.unitCostBase),
+      direction: Number(m.baseQtyDelta) >= 0 ? "INBOUND" : "OUTBOUND",
+      directionLabelAr: Number(m.baseQtyDelta) >= 0 ? "وارد (+)" : "صادر (-)",
+      createdAtDisplay: formatIsoToDmyTime(m.createdAt),
+    }));
+
+    return NextResponse.json({ movements: formatted });
   } catch (error) {
     console.error("GET /api/inventory/movements error:", error);
     return jsonError("تعذر تحميل حركات المخزون / Failed to load stock movements", 500);

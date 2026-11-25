@@ -88,6 +88,11 @@ export function PortalCatalogBoardAdminSection({
   );
   const [validityNote, setValidityNote] = useState("");
   const [notes, setNotes] = useState("");
+  const [producerCompany, setProducerCompany] = useState("");
+  const [countryOfOrigin, setCountryOfOrigin] = useState("");
+  const [productionDate, setProductionDate] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
+  const [taxRate, setTaxRate] = useState("");
   const [isPublished, setIsPublished] = useState(true);
 
   const loadBoard = useCallback(
@@ -149,6 +154,11 @@ export function PortalCatalogBoardAdminSection({
     setEffectiveDate(batchEffectiveDate || new Date().toISOString().slice(0, 10));
     setValidityNote(batchValidityNote || "");
     setNotes("");
+    setProducerCompany("");
+    setCountryOfOrigin("");
+    setProductionDate("");
+    setExpiryDate("");
+    setTaxRate("");
     setIsPublished(true);
   }
 
@@ -187,6 +197,11 @@ export function PortalCatalogBoardAdminSection({
     setEffectiveDate(it.effectiveDate || new Date().toISOString().slice(0, 10));
     setValidityNote(it.validityNote || "");
     setNotes(it.notes || "");
+    setProducerCompany(it.producerCompany || "");
+    setCountryOfOrigin(it.countryOfOrigin || "");
+    setProductionDate(it.productionDate || "");
+    setExpiryDate(it.expiryDate || "");
+    setTaxRate(it.taxRate !== undefined && it.taxRate !== null ? String(it.taxRate) : "");
     setIsPublished(it.isPublished);
   }
 
@@ -225,6 +240,11 @@ export function PortalCatalogBoardAdminSection({
           effectiveDate,
           validityNote: validityNote.trim() || null,
           notes: notes.trim() || null,
+          producerCompany: producerCompany.trim() || null,
+          countryOfOrigin: countryOfOrigin.trim() || null,
+          productionDate: productionDate.trim() || null,
+          expiryDate: expiryDate.trim() || null,
+          taxRate: taxRate !== "" ? Number(taxRate) : undefined,
           isPublished: forcePublish !== undefined ? forcePublish : isPublished,
         }),
       });
@@ -621,7 +641,7 @@ export function PortalCatalogBoardAdminSection({
           </div>
 
           <div className="sm:col-span-3">
-            <label className="block font-bold mb-1">القطاع التجاري</label>
+            <label className="block font-bold mb-1">القطاع</label>
             <select
               value={sectorType}
               onChange={(e) => {
@@ -635,8 +655,8 @@ export function PortalCatalogBoardAdminSection({
               }}
               className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 font-bold"
             >
-              <option value="HARVEST">القطاع الحالي (المحصول والفرز)</option>
-              <option value="COMMERCIAL">القطاع التجاري (الجملة والتجزئة والسلع)</option>
+              <option value="HARVEST">القطاع الزراعي</option>
+              <option value="COMMERCIAL">القطاع التجاري</option>
             </select>
           </div>
           <div className="sm:col-span-3">
@@ -687,6 +707,51 @@ export function PortalCatalogBoardAdminSection({
                 className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-1.5 font-mono"
               />
             </div>
+          </div>
+        </div>
+
+        {/* Commercial Product Metadata (Safe Display Fields Only — No Internal Costs) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+          <div>
+            <label className="block font-bold mb-1">الشركة المنتجة (اختياري)</label>
+            <input
+              type="text"
+              value={producerCompany}
+              onChange={(e) => setProducerCompany(e.target.value)}
+              placeholder="مثال: هائل سعيد / المراعي"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
+            />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">بلد المنشأ (اختياري)</label>
+            <input
+              type="text"
+              value={countryOfOrigin}
+              onChange={(e) => setCountryOfOrigin(e.target.value)}
+              placeholder="مثال: اليمن / السعودية"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
+            />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">تاريخ الإنتاج (اختياري)</label>
+            <UasDateInput value={productionDate} onChange={setProductionDate} />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">تاريخ الانتهاء (اختياري)</label>
+            <UasDateInput value={expiryDate} onChange={setExpiryDate} />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">نسبة الضريبة %</label>
+            <input
+              type="number"
+              step="any"
+              min="0"
+              max="100"
+              value={taxRate}
+              onChange={(e) => setTaxRate(e.target.value)}
+              placeholder="0"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5 font-mono"
+            />
           </div>
         </div>
 

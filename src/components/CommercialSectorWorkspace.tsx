@@ -14,14 +14,25 @@ import {
   Truck,
 } from "lucide-react";
 import { fmtNum } from "@/lib/formulas";
-import { formatIsoToDmyTime, formatMoney, formatRefreshTimestamp } from "@/lib/uiFormatters";
+import { formatIsoToDmy, formatIsoToDmyTime, formatMoney, formatRefreshTimestamp } from "@/lib/uiFormatters";
 import type { ClientCatalogBoardItemView } from "@/lib/clientPortal/portalTypes";
+import { MultiUnitInventoryPanel } from "@/components/MultiUnitInventoryPanel";
 
 interface CommercialStockBucket {
   id: string;
   itemId: string;
   sku: string;
   itemNameAr: string;
+  sectorType?: string;
+  producerCompany?: string | null;
+  countryOfOrigin?: string | null;
+  productionDate?: string | null;
+  expiryDate?: string | null;
+  taxRate?: number;
+  purchasePrice?: number;
+  dispatchCost?: number;
+  wholesalePrice?: number;
+  retailPrice?: number;
   baseUnitLabel: string;
   warehouseId: string;
   warehouseNameAr: string;
@@ -31,6 +42,22 @@ interface CommercialStockBucket {
   availableBaseQty: number;
   avgUnitCostBase: number;
   updatedAtDisplay: string;
+}
+
+interface CommercialMovementRow {
+  id: string;
+  movementType: string;
+  direction?: "INBOUND" | "OUTBOUND";
+  directionLabelAr?: string;
+  enteredQty: number;
+  baseQtyDelta: number;
+  unitCostBase: number;
+  createdAt: string;
+  createdAtDisplay?: string;
+  notes?: string | null;
+  item?: { sku: string; nameAr: string; baseUnit?: { nameAr: string } };
+  warehouse?: { nameAr: string };
+  enteredUnit?: { nameAr: string };
 }
 
 interface CommercialDispatchView {
@@ -111,6 +138,7 @@ export function CommercialSectorWorkspace({
   const [commercialCatalog, setCommercialCatalog] = useState<ClientCatalogBoardItemView[]>([]);
   const [requests, setRequests] = useState<CommercialRequestView[]>([]);
   const [stockBuckets, setStockBuckets] = useState<CommercialStockBucket[]>([]);
+  const [movements, setMovements] = useState<CommercialMovementRow[]>([]);
   const [warehouses, setWarehouses] = useState<Array<{ id: string; code: string; nameAr: string }>>([]);
   const [vendors, setVendors] = useState<Array<{ id: string; code: string; nameAr: string }>>([]);
   const [dispatches, setDispatches] = useState<CommercialDispatchView[]>([]);
@@ -127,6 +155,13 @@ export function CommercialSectorWorkspace({
   const [catPartialPrice, setCatPartialPrice] = useState("");
   const [catQty, setCatQty] = useState("50");
   const [catPickup, setCatPickup] = useState("المستودع الرئيسي");
+  const [catProducer, setCatProducer] = useState("");
+  const [catOrigin, setCatOrigin] = useState("");
+  const [catProdDate, setCatProdDate] = useState("");
+  const [catExpDate, setCatExpDate] = useState("");
+  const [catTaxRate, setCatTaxRate] = useState("");
+  const [catPurchasePrice, setCatPurchasePrice] = useState("");
+  const [catDispatchCost, setCatDispatchCost] = useState("");
 
   // Quick GRN Form
   const [grnItemId, setGrnItemId] = useState("");
@@ -150,6 +185,7 @@ export function CommercialSectorWorkspace({
         commercialCatalog?: ClientCatalogBoardItemView[];
         requests?: CommercialRequestView[];
         stockBuckets?: CommercialStockBucket[];
+        movements?: CommercialMovementRow[];
         warehouses?: Array<{ id: string; code: string; nameAr: string }>;
         vendors?: Array<{ id: string; code: string; nameAr: string }>;
         dispatches?: CommercialDispatchView[];
@@ -164,6 +200,7 @@ export function CommercialSectorWorkspace({
       setCommercialCatalog(data.commercialCatalog || []);
       setRequests(data.requests || []);
       setStockBuckets(data.stockBuckets || []);
+      setMovements(data.movements || []);
       setWarehouses(data.warehouses || []);
       setVendors(data.vendors || []);
       setDispatches(data.dispatches || []);
@@ -209,6 +246,13 @@ export function CommercialSectorWorkspace({
         publishedQty: Number(catQty || 0),
         remainingQty: Number(catQty || 0),
         pickupLocation: catPickup,
+        producerCompany: catProducer.trim() || null,
+        countryOfOrigin: catOrigin.trim() || null,
+        productionDate: catProdDate.trim() || null,
+        expiryDate: catExpDate.trim() || null,
+        taxRate: catTaxRate !== "" ? Number(catTaxRate) : 0,
+        purchasePrice: catPurchasePrice !== "" ? Number(catPurchasePrice) : 0,
+        dispatchCost: catDispatchCost !== "" ? Number(catDispatchCost) : 0,
         isPublished: true,
       }),
     });
@@ -218,6 +262,13 @@ export function CommercialSectorWorkspace({
       setCatTitle("");
       setCatBulkPrice("");
       setCatPartialPrice("");
+      setCatProducer("");
+      setCatOrigin("");
+      setCatProdDate("");
+      setCatExpDate("");
+      setCatTaxRate("");
+      setCatPurchasePrice("");
+      setCatDispatchCost("");
       await loadCommercial(false);
     }
   }
@@ -300,7 +351,7 @@ export function CommercialSectorWorkspace({
           <div className="flex flex-wrap items-center gap-2">
             <ShoppingBag className="w-5 h-5 text-amber-600" />
             <h2 className="text-base font-black text-slate-900 dark:text-white">
-              القطاع التجاري وتجارة الجملة والتجزئة والسلع (الغذائية، غير الغذائية، المحروقات والتجارة العامة)
+              القطاع التجاري
             </h2>
           </div>
           <p className="text-[11px] text-slate-600 dark:text-slate-300">
@@ -319,7 +370,7 @@ export function CommercialSectorWorkspace({
               onClick={onSwitchToHarvestSector}
               className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold"
             >
-              العودة إلى القطاع الحالي (المحصول)
+              العودة إلى القطاع الزراعي
             </button>
           )}
           <button
@@ -547,6 +598,62 @@ export function CommercialSectorWorkspace({
                 <span>نشر</span>
               </button>
             </div>
+            <div className="sm:col-span-6 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <input
+                value={catProducer}
+                onChange={(e) => setCatProducer(e.target.value)}
+                placeholder="الشركة المنتجة"
+                className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5"
+              />
+              <input
+                value={catOrigin}
+                onChange={(e) => setCatOrigin(e.target.value)}
+                placeholder="بلد المنشأ"
+                className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5"
+              />
+              <input
+                type="date"
+                title="تاريخ الإنتاج"
+                value={catProdDate}
+                onChange={(e) => setCatProdDate(e.target.value)}
+                className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5 font-mono"
+              />
+              <input
+                type="date"
+                title="تاريخ الانتهاء"
+                value={catExpDate}
+                onChange={(e) => setCatExpDate(e.target.value)}
+                className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5 font-mono"
+              />
+              <input
+                type="number"
+                step="any"
+                min="0"
+                value={catPurchasePrice}
+                onChange={(e) => setCatPurchasePrice(e.target.value)}
+                placeholder="سعر الشراء"
+                className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5 font-mono"
+              />
+              <input
+                type="number"
+                step="any"
+                min="0"
+                value={catDispatchCost}
+                onChange={(e) => setCatDispatchCost(e.target.value)}
+                placeholder="تكلفة التوصيل"
+                className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5 font-mono"
+              />
+              <input
+                type="number"
+                step="any"
+                min="0"
+                max="100"
+                value={catTaxRate}
+                onChange={(e) => setCatTaxRate(e.target.value)}
+                placeholder="الضريبة %"
+                className="rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5 font-mono"
+              />
+            </div>
           </form>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -564,6 +671,26 @@ export function CommercialSectorWorkspace({
                     <span className="px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 font-mono font-bold">
                       المتبقي: {item.remainingQty ?? "مفتوح"}
                     </span>
+                    {item.producerCompany && (
+                      <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold">
+                        {item.producerCompany}
+                      </span>
+                    )}
+                    {item.countryOfOrigin && (
+                      <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                        {item.countryOfOrigin}
+                      </span>
+                    )}
+                    {item.expiryDate && (
+                      <span className="px-2 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 font-mono">
+                        انتهاء: <bdi dir="ltr">{formatIsoToDmy(item.expiryDate)}</bdi>
+                      </span>
+                    )}
+                    {Number(item.taxRate || 0) > 0 && (
+                      <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-mono">
+                        ضريبة {item.taxRate}%
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="text-left">
@@ -665,6 +792,9 @@ export function CommercialSectorWorkspace({
               <thead>
                 <tr className="border-b bg-slate-100 dark:bg-slate-800">
                   <th className="p-2">الصنف / SKU</th>
+                  <th className="p-2">المنتج والمنشأ</th>
+                  <th className="p-2">الإنتاج والانتهاء</th>
+                  <th className="p-2">التكلفة / الضريبة / البيع</th>
                   <th className="p-2">المستودع</th>
                   <th className="p-2">الرصيد الفعلي (onHand)</th>
                   <th className="p-2">المحجوز (Reserved)</th>
@@ -679,6 +809,22 @@ export function CommercialSectorWorkspace({
                     <td className="p-2 font-bold">
                       {b.itemNameAr} <span className="text-slate-400 font-mono">({b.sku})</span>
                     </td>
+                    <td className="p-2 text-[11px] text-slate-600 dark:text-slate-300">
+                      <div>{b.producerCompany || "—"}</div>
+                      <div className="text-slate-400">{b.countryOfOrigin || "—"}</div>
+                    </td>
+                    <td className="p-2 font-mono text-[10px]">
+                      <div>إنتاج: <bdi dir="ltr">{b.productionDate ? formatIsoToDmy(b.productionDate) : "—"}</bdi></div>
+                      <div className="text-rose-600 dark:text-rose-400">
+                        انتهاء: <bdi dir="ltr">{b.expiryDate ? formatIsoToDmy(b.expiryDate) : "—"}</bdi>
+                      </div>
+                    </td>
+                    <td className="p-2 font-mono text-[10px]">
+                      <div>شراء: {fmtNum(Number(b.purchasePrice || 0))} | توصيل: {fmtNum(Number(b.dispatchCost || 0))}</div>
+                      <div className="text-emerald-700 dark:text-emerald-300 font-bold">
+                        جملة: {fmtNum(Number(b.wholesalePrice || 0))} | ضريبة: {fmtNum(Number(b.taxRate || 0))}%
+                      </div>
+                    </td>
                     <td className="p-2">{b.warehouseNameAr}</td>
                     <td className="p-2 font-mono">{fmtNum(b.onHandBaseQty)} {b.baseUnitLabel}</td>
                     <td className="p-2 font-mono text-amber-600">{fmtNum(b.reservedBaseQty)}</td>
@@ -692,6 +838,71 @@ export function CommercialSectorWorkspace({
               </tbody>
             </table>
           </div>
+
+          {/* Commercial Inbound & Outbound Movements Ledger (الوارد والصادر) */}
+          <div className="card-surface rounded-2xl p-4 border border-slate-200 dark:border-slate-700 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="font-black text-slate-800 dark:text-slate-100">
+                سجل حركات الوارد والصادر للقطاع التجاري ({movements.length})
+              </div>
+              <span className="text-[11px] text-slate-500">توثيق زمني: يوم / شهر / سنة — س:د</span>
+            </div>
+            {movements.length === 0 ? (
+              <div className="text-center py-4 text-slate-500">لا توجد حركات وارد أو صادر في القطاع التجاري حتى الآن.</div>
+            ) : (
+              <div className="overflow-x-auto max-h-64">
+                <table className="w-full text-right border-collapse text-[11px]">
+                  <thead>
+                    <tr className="bg-slate-100 dark:bg-slate-800">
+                      <th className="p-2">التاريخ والوقت</th>
+                      <th className="p-2">نوع الحركة</th>
+                      <th className="p-2">الصنف</th>
+                      <th className="p-2">المستودع</th>
+                      <th className="p-2">الكمية</th>
+                      <th className="p-2">ملاحظات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                    {movements.map((m) => {
+                      const isIn = m.direction === "INBOUND" || Number(m.baseQtyDelta) >= 0;
+                      const ts = m.createdAtDisplay || formatIsoToDmyTime(m.createdAt);
+                      return (
+                        <tr key={m.id}>
+                          <td className="p-2 font-mono whitespace-nowrap"><bdi dir="ltr">{ts}</bdi></td>
+                          <td className="p-2 whitespace-nowrap">
+                            <span
+                              className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] ${
+                                isIn
+                                  ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
+                                  : "bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300"
+                              }`}
+                            >
+                              {m.directionLabelAr || (isIn ? "وارد (+)" : "صادر (-)")} • {m.movementType}
+                            </span>
+                          </td>
+                          <td className="p-2 font-bold">{m.item?.nameAr || "—"}</td>
+                          <td className="p-2 text-slate-500">{m.warehouse?.nameAr || "—"}</td>
+                          <td className="p-2 font-mono font-bold whitespace-nowrap">
+                            <bdi dir="ltr">
+                              {isIn ? "+" : "-"}
+                              {fmtNum(Math.abs(Number(m.baseQtyDelta || m.enteredQty)))} {m.item?.baseUnit?.nameAr || ""}
+                            </bdi>
+                          </td>
+                          <td className="p-2 text-slate-500">{m.notes || "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <MultiUnitInventoryPanel
+            sectorFilter="COMMERCIAL"
+            onRefreshState={() => loadCommercial(false)}
+            onToast={onToast}
+          />
         </div>
       )}
 

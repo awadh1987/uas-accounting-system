@@ -19,7 +19,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export const GET = withTenantRoute(async function GET() {
+export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     await ensureSqliteDatabaseReady();
     await Promise.all([
@@ -28,7 +28,12 @@ export const GET = withTenantRoute(async function GET() {
       ensureDefaultWarehousesSeeded(),
     ]);
 
+    const rawSector = (req.nextUrl.searchParams.get("sectorType") || "").trim().toUpperCase();
+    const sectorFilter =
+      rawSector === "COMMERCIAL" || rawSector === "HARVEST" ? rawSector : undefined;
+
     const items = await prisma.inventoryItem.findMany({
+      where: sectorFilter ? { sectorType: sectorFilter } : undefined,
       orderBy: { createdAt: "desc" },
       include: {
         category: true,
@@ -80,6 +85,177 @@ async function upsertItem(req: NextRequest) {
     });
     if (!auth.ok) return auth.response;
     const actor = auth.actor;
+
+    if (String(body.action || "").toUpperCase() === "BULK_IMPORT_ITEMS") {
+      const rawRows = Array.isArray(body.rows)
+        ? (body.rows as Array<Record<string, unknown>>)
+        : [];
+      if (rawRows.length === 0) {
+        return jsonError("يرجى توفير صفوف الأصناف للاستيراد / Bulk rows are required.", 400);
+      }
+      if (rawRows.length > 100) {
+        return jsonError("الحد الأقصى للاستيراد الجماعي هو 100 صنف في الدفعة.", 400);
+      }
+      const defaultSector =
+        String(body.sectorType || "COMMERCIAL").trim().toUpperCase() === "HARVEST"
+          ? "HARVEST"
+          : "COMMERCIAL";
+
+      const imported = await prisma.$transaction(async (tx) => {
+        const fallbackUnit = await tx.unitOfMeasure.findFirst({
+          orderBy: { isBaseDefault: "desc" },
+        });
+        const fallbackWh = await tx.warehouse.findFirst({
+          orderBy: { isDefault: "desc" },
+        });
+        if (!fallbackUnit) throw new Error("No default unit available");
+
+        const results: Array<{ id: string; sku: string; nameAr: string }> = [];
+        for (let idx = 0; idx < rawRows.length; idx++) {
+          const row = rawRows[idx] || {};
+          const rowName = String(row.nameAr || row.titleAr || "").trim();
+          if (!rowName) continue;
+
+          const rowSector =
+            String(row.sectorType || defaultSector).trim().toUpperCase() === "HARVEST"
+              ? "HARVEST"
+              : "COMMERCIAL";
+          const rowSku =
+            String(row.sku || "").trim().toUpperCase() ||
+            `BULK-${Date.now().toString(36).toUpperCase()}-${idx + 1}`;
+
+          const unitText = String(row.unitLabel || row.baseUnitLabel || "").trim();
+          let resolvedUnitId = fallbackUnit.id;
+          if (unitText) {
+            const matchedUom = await tx.unitOfMeasure.findFirst({
+              where: {
+                OR: [{ code: unitText.toUpperCase() }, { nameAr: unitText }, { nameEn: unitText }],
+              },
+            });
+            if (matchedUom) {
+              resolvedUnitId = matchedUom.id;
+            } else {
+              const uomCode = slugifyLookupCode(unitText, "UOM");
+              const createdUom = await tx.unitOfMeasure.upsert({
+                where: { code: uomCode },
+                update: { nameAr: unitText },
+                create: {
+                  code: uomCode,
+                  nameAr: unitText,
+                  nameEn: unitText,
+                  isBaseDefault: false,
+                  isCustom: true,
+                },
+              });
+              resolvedUnitId = createdUom.id;
+            }
+          }
+
+          const catText = String(row.categoryLabel || row.category || "").trim();
+          let resolvedCatId: string | null = null;
+          if (catText) {
+            const catCode = slugifyLookupCode(catText, "CAT");
+            const cat = await tx.itemCategory.upsert({
+              where: { code: catCode },
+              update: { nameAr: catText },
+              create: { code: catCode, nameAr: catText, nameEn: catText, isCustom: true },
+            });
+            resolvedCatId = cat.id;
+          }
+
+          const country = row.countryOfOrigin ? String(row.countryOfOrigin).trim() || null : null;
+          const producer = row.producerCompany ? String(row.producerCompany).trim() || null : null;
+          const prodDate = row.productionDate ? String(row.productionDate).trim().slice(0, 10) || null : null;
+          const expDate = row.expiryDate ? String(row.expiryDate).trim().slice(0, 10) || null : null;
+          const pPrice = Math.max(0, Number(row.purchasePrice || 0));
+          const dCost = Math.max(0, Number(row.dispatchCost || 0));
+          const tRate = Math.max(0, Number(row.taxRate || 0));
+          const wPrice = Math.max(0, Number(row.wholesalePrice || row.salePrice || 0));
+          const rPrice = Math.max(0, Number(row.retailPrice || wPrice));
+
+          const itemPayload = {
+            sku: rowSku,
+            nameAr: rowName,
+            nameEn: String(row.nameEn || rowName).trim(),
+            categoryId: resolvedCatId,
+            itemType: String(row.itemType || "STOCKABLE").trim() || "STOCKABLE",
+            sectorType: rowSector,
+            grade: row.grade ? String(row.grade).trim() || null : null,
+            origin: country,
+            producerCompany: producer,
+            countryOfOrigin: country,
+            productionDate: prodDate,
+            expiryDate: expDate,
+            baseUnitId: resolvedUnitId,
+            defaultWarehouseId: fallbackWh?.id || null,
+            purchasePrice: pPrice,
+            dispatchCost: dCost,
+            taxRate: tRate,
+            wholesalePrice: wPrice,
+            retailPrice: rPrice,
+            isActive: true,
+          };
+
+          const upserted = await tx.inventoryItem.upsert({
+            where: { sku: rowSku },
+            update: itemPayload,
+            create: itemPayload,
+          });
+
+          const openQty = Number(row.openingQty ?? row.quantity ?? 0);
+          if (fallbackWh?.id && Number.isFinite(openQty) && openQty > 0) {
+            const existingBal = await tx.stockBalance.findUnique({
+              where: { itemId_warehouseId: { itemId: upserted.id, warehouseId: fallbackWh.id } },
+            });
+            if (!existingBal) {
+              const unitCostBase = pPrice + dCost;
+              await tx.stockBalance.create({
+                data: {
+                  itemId: upserted.id,
+                  warehouseId: fallbackWh.id,
+                  qtyOnHandBase: openQty,
+                  avgUnitCostBase: unitCostBase,
+                },
+              });
+              await tx.stockMovement.create({
+                data: {
+                  itemId: upserted.id,
+                  warehouseId: fallbackWh.id,
+                  movementType: "OPENING",
+                  enteredQty: openQty,
+                  enteredUnitId: resolvedUnitId,
+                  factorToBase: 1,
+                  baseQtyDelta: openQty,
+                  unitCostBase,
+                  referenceType: "BULK_IMPORT",
+                  referenceId: upserted.id,
+                  notes: "استيراد جماعي — رصيد افتتاحي",
+                },
+              });
+            }
+          }
+          results.push({ id: upserted.id, sku: upserted.sku, nameAr: upserted.nameAr });
+        }
+
+        await appendAuditLogTx(tx, {
+          ...actor,
+          actionType: "استيراد جماعي للأصناف",
+          entityReference: `BulkImport:${results.length}`,
+          details: `تم استيراد/تحديث ${results.length} صنفاً في ${defaultSector}`,
+        });
+        return results;
+      });
+
+      return NextResponse.json(
+        {
+          success: true,
+          importedCount: imported.length,
+          items: imported,
+          message: `✅ تم استيراد ${imported.length} صنفاً بنجاح`,
+        },
+        { status: 201 }
+      );
+    }
 
     const nameAr = String(body.nameAr || "").trim();
     const nameEn = String(body.nameEn || nameAr).trim();
@@ -185,6 +361,13 @@ async function upsertItem(req: NextRequest) {
           ? String(body.customOrigin).trim()
           : rawOrigin || null;
 
+      const rawSectorType = String(body.sectorType || "HARVEST").trim().toUpperCase();
+      const sectorType = rawSectorType === "COMMERCIAL" ? "COMMERCIAL" : "HARVEST";
+      const producerCompany = body.producerCompany ? String(body.producerCompany).trim() || null : null;
+      const countryOfOrigin = body.countryOfOrigin ? String(body.countryOfOrigin).trim() || null : null;
+      const productionDate = body.productionDate ? String(body.productionDate).trim().slice(0, 10) || null : null;
+      const expiryDate = body.expiryDate ? String(body.expiryDate).trim().slice(0, 10) || null : null;
+
       const itemData = {
         sku,
         barcode: body.barcode ? String(body.barcode).trim() : null,
@@ -192,11 +375,18 @@ async function upsertItem(req: NextRequest) {
         nameEn,
         categoryId,
         itemType,
+        sectorType,
         grade,
-        origin,
+        origin: origin || countryOfOrigin,
+        producerCompany,
+        countryOfOrigin: countryOfOrigin || origin,
+        productionDate,
+        expiryDate,
         baseUnitId,
         defaultWarehouseId,
         purchasePrice: Number(body.purchasePrice || 0),
+        dispatchCost: Number(body.dispatchCost || 0),
+        taxRate: Number(body.taxRate || 0),
         wholesalePrice: Number(body.wholesalePrice || 0),
         retailPrice: Number(body.retailPrice || 0),
         minSellPrice: Number(body.minSellPrice || 0),
@@ -271,11 +461,52 @@ async function upsertItem(req: NextRequest) {
         }
       }
 
+      // 5b. Record opening stock balance & movement if openingQty > 0 on creation
+      const openingQty = Number(body.openingQty || 0);
+      if (!body.id && Number.isFinite(openingQty) && openingQty > 0) {
+        const whId =
+          defaultWarehouseId ||
+          (await tx.warehouse.findFirst({ orderBy: { isDefault: "desc" } }))?.id ||
+          null;
+        if (whId) {
+          const unitCostBase =
+            Math.max(0, Number(body.purchasePrice || 0)) + Math.max(0, Number(body.dispatchCost || 0));
+          const existingBal = await tx.stockBalance.findUnique({
+            where: { itemId_warehouseId: { itemId: item.id, warehouseId: whId } },
+          });
+          if (!existingBal) {
+            await tx.stockBalance.create({
+              data: {
+                itemId: item.id,
+                warehouseId: whId,
+                qtyOnHandBase: openingQty,
+                avgUnitCostBase: unitCostBase,
+              },
+            });
+            await tx.stockMovement.create({
+              data: {
+                itemId: item.id,
+                warehouseId: whId,
+                movementType: "OPENING",
+                enteredQty: openingQty,
+                enteredUnitId: baseUnitId,
+                factorToBase: 1,
+                baseQtyDelta: openingQty,
+                unitCostBase,
+                referenceType: "ITEM_OPENING",
+                referenceId: item.id,
+                notes: "رصيد افتتاحي عند إنشاء الصنف",
+              },
+            });
+          }
+        }
+      }
+
       await appendAuditLogTx(tx, {
         ...actor,
         actionType: body.id ? "تحديث بطاقة صنف" : "إنشاء بطاقة صنف متعددة الوحدات",
         entityReference: `Item:${item.sku}`,
-        details: `${item.nameAr} (${item.sku})`,
+        details: `${item.nameAr} (${item.sku}) [${sectorType}]`,
       });
 
       return tx.inventoryItem.findUnique({

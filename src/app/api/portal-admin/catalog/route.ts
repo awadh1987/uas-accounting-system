@@ -182,6 +182,11 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       displayOrder: body.displayOrder !== undefined ? Number(body.displayOrder) : undefined,
       isPublished: Boolean(body.isPublished),
       notes: body.notes ? String(body.notes) : null,
+      producerCompany: body.producerCompany ? String(body.producerCompany) : null,
+      countryOfOrigin: body.countryOfOrigin ? String(body.countryOfOrigin) : null,
+      productionDate: body.productionDate ? String(body.productionDate) : null,
+      expiryDate: body.expiryDate ? String(body.expiryDate) : null,
+      taxRate: body.taxRate !== undefined && body.taxRate !== null ? Number(body.taxRate) : undefined,
       tenantSlug: scope.tenantSlug,
       actor,
     });

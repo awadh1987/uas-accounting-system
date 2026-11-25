@@ -1112,13 +1112,20 @@ model InventoryItem {
   categoryId         String?
   category           ItemCategory?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   itemType           String               @default("STOCKABLE") // STOCKABLE | SERVICE | CONSUMABLE | or custom type
+  sectorType         String               @default("HARVEST") // HARVEST | COMMERCIAL
   grade              String? // Open string supporting custom grades
   origin             String? // Open string supporting custom origins
+  producerCompany    String? // الشركة المنتجة / المصنّعة
+  countryOfOrigin    String? // بلد المنشأ
+  productionDate     String? // تاريخ الإنتاج YYYY-MM-DD
+  expiryDate         String? // تاريخ الانتهاء YYYY-MM-DD
   baseUnitId         String
   baseUnit           UnitOfMeasure        @relation("ItemBaseUnit", fields: [baseUnitId], references: [id], onDelete: Restrict)
   defaultWarehouseId String?
   defaultWarehouse   Warehouse?           @relation("ItemDefaultWarehouse", fields: [defaultWarehouseId], references: [id], onDelete: SetNull)
   purchasePrice      Decimal              @default(0)
+  dispatchCost       Decimal              @default(0) // تكلفة التوصيل / الشحن
+  taxRate            Decimal              @default(0) // نسبة الضريبة %
   wholesalePrice     Decimal              @default(0)
   retailPrice        Decimal              @default(0)
   minSellPrice       Decimal              @default(0)
@@ -1134,6 +1141,8 @@ model InventoryItem {
   movements          StockMovement[]
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
+
+  @@index([sectorType, isActive])
 }
 
 model ItemUnitConversion {
@@ -1730,6 +1739,11 @@ model PortalCatalogBoardItem {
   sectorType         String    @default("HARVEST") // HARVEST | COMMERCIAL
   categoryGroup      String    @default("HARVEST") // HARVEST | FOOD | NON_FOOD | FUEL | GENERAL_COMMERCIAL
   saleMode           String    @default("BOTH") // BULK | PARTIAL | BOTH
+  producerCompany    String?
+  countryOfOrigin    String?
+  productionDate     String?
+  expiryDate         String?
+  taxRate            Decimal   @default(0)
   unitCode           String    @default("QAT_BUNCH")
   unitLabel          String    @default("علاقية قات")
   customUnitLabel    String?

@@ -26,7 +26,7 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     if (!auth.ok) return auth.response;
 
     const scope = resolveRequestTenantScope(req);
-    const [catalogData, reqRows, stockRows, warehouseRows, dispatchRows, vendorRows] =
+    const [catalogData, reqRows, stockRows, movementRows, warehouseRows, dispatchRows, vendorRows] =
       await Promise.all([
         listStaffCatalogBoard(),
         prisma.clientGoodsRequest.findMany({
@@ -49,11 +49,22 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
           take: 200,
         }),
         prisma.stockBalance.findMany({
+          where: { item: { sectorType: "COMMERCIAL" } },
           include: {
-            item: { include: { baseUnit: true } },
+            item: { include: { baseUnit: true, category: true } },
             warehouse: true,
           },
           orderBy: { updatedAt: "desc" },
+          take: 150,
+        }),
+        prisma.stockMovement.findMany({
+          where: { item: { sectorType: "COMMERCIAL" } },
+          include: {
+            item: { include: { baseUnit: true, category: true } },
+            warehouse: true,
+            enteredUnit: true,
+          },
+          orderBy: { createdAt: "desc" },
           take: 150,
         }),
         prisma.warehouse.findMany({
@@ -63,6 +74,7 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
         }),
         prisma.commercialDispatchOrder
           .findMany({
+            where: { sectorType: "COMMERCIAL" },
             orderBy: { createdAt: "desc" },
             take: 100,
           })
@@ -115,6 +127,11 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
         itemId: sb.itemId,
         sku: sb.item.sku,
         itemNameAr: sb.item.nameAr,
+        producerCompany: sb.item.producerCompany ?? null,
+        countryOfOrigin: sb.item.countryOfOrigin ?? sb.item.origin ?? null,
+        productionDate: sb.item.productionDate ?? null,
+        expiryDate: sb.item.expiryDate ?? null,
+        taxRate: Number(sb.item.taxRate || 0),
         baseUnitLabel: sb.item.baseUnit?.nameAr || "وحدة",
         warehouseId: sb.warehouseId,
         warehouseNameAr: sb.warehouse.nameAr,
@@ -126,6 +143,25 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
         updatedAtDisplay: formatIsoToDmyTime(sb.updatedAt),
       };
     });
+
+    const movements = movementRows.map((m) => ({
+      id: m.id,
+      itemId: m.itemId,
+      sku: m.item.sku,
+      itemNameAr: m.item.nameAr,
+      warehouseNameAr: m.warehouse.nameAr,
+      movementType: m.movementType,
+      direction: Number(m.baseQtyDelta) >= 0 ? "INBOUND" : "OUTBOUND",
+      directionLabelAr: Number(m.baseQtyDelta) >= 0 ? "وارد (+)" : "صادر (-)",
+      enteredQty: Number(m.enteredQty),
+      unitLabel: m.enteredUnit?.nameAr || m.item.baseUnit?.nameAr || "وحدة",
+      baseQtyDelta: Number(m.baseQtyDelta),
+      unitCostBase: Number(m.unitCostBase),
+      referenceType: m.referenceType,
+      notes: m.notes,
+      createdAt: m.createdAt.toISOString(),
+      createdAtDisplay: formatIsoToDmyTime(m.createdAt),
+    }));
 
     const dispatches = dispatchRows.map((d) => {
       let items: unknown[] = [];
@@ -151,9 +187,12 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
       success: true,
       tenantSlug: scope.tenantSlug,
       commercialCatalog,
-      allInventorySuggestions: catalogData.inventorySuggestions,
+      allInventorySuggestions: catalogData.inventorySuggestions.filter(
+        (s) => (s.sectorType || "HARVEST").toUpperCase() === "COMMERCIAL"
+      ),
       requests: reqRows.map(serializeRequest),
       stockBuckets,
+      movements,
       warehouses: warehouseRows,
       vendors: vendorRows,
       dispatches,
@@ -195,6 +234,11 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         sectorType: "COMMERCIAL",
         categoryGroup: String(body.categoryGroup || "GENERAL_COMMERCIAL"),
         saleMode: String(body.saleMode || "BOTH"),
+        producerCompany: body.producerCompany ? String(body.producerCompany) : null,
+        countryOfOrigin: body.countryOfOrigin ? String(body.countryOfOrigin) : null,
+        productionDate: body.productionDate ? String(body.productionDate) : null,
+        expiryDate: body.expiryDate ? String(body.expiryDate) : null,
+        taxRate: body.taxRate !== undefined ? Number(body.taxRate) : 0,
         unitCode: String(body.unitCode || "CARTON"),
         unitLabel: String(body.unitLabel || "كرتون / طرد"),
         customUnitLabel: body.customUnitLabel ? String(body.customUnitLabel) : null,

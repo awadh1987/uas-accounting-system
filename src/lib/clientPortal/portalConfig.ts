@@ -29,6 +29,13 @@ export interface PortalCustomFieldDef {
   placeholder?: string;
 }
 
+export interface SectorFormSectionConfig {
+  headingAr: string;
+  subtitleAr: string;
+  allowUnlistedItems: boolean;
+  customFields: PortalCustomFieldDef[];
+}
+
 export interface TenantFormConfig {
   portalEnabled: boolean;
   approvalPolicy: "MANUAL" | "AUTO";
@@ -42,9 +49,31 @@ export interface TenantFormConfig {
   clientTypes: PortalClientTypeOption[];
   customRegistrationFields: PortalCustomFieldDef[];
   customRequestFields: PortalCustomFieldDef[];
+  sectorForms?: {
+    HARVEST: SectorFormSectionConfig;
+    COMMERCIAL: SectorFormSectionConfig;
+  };
 }
 
 export const PORTAL_FORM_SETTING_ID = "portal_form";
+
+export const DEFAULT_SECTOR_FORMS: {
+  HARVEST: SectorFormSectionConfig;
+  COMMERCIAL: SectorFormSectionConfig;
+} = {
+  HARVEST: {
+    headingAr: "تسجيل طلب — القطاع الزراعي",
+    subtitleAr: "طلب أصناف الفرز اليومية وعلاقيات القات مع تحديد موقع الاستلام المباشر",
+    allowUnlistedItems: true,
+    customFields: [],
+  },
+  COMMERCIAL: {
+    headingAr: "تسجيل طلب — القطاع التجاري",
+    subtitleAr: "طلب بضائع الجملة والتجزئة والمواد الغذائية وغير الغذائية والوقود",
+    allowUnlistedItems: true,
+    customFields: [],
+  },
+};
 
 export const DEFAULT_TENANT_FORM_CONFIG: TenantFormConfig = {
   portalEnabled: true,
@@ -77,6 +106,10 @@ export const DEFAULT_TENANT_FORM_CONFIG: TenantFormConfig = {
   ],
   customRegistrationFields: [],
   customRequestFields: [],
+  sectorForms: {
+    HARVEST: { ...DEFAULT_SECTOR_FORMS.HARVEST },
+    COMMERCIAL: { ...DEFAULT_SECTOR_FORMS.COMMERCIAL },
+  },
 };
 
 function sanitizePickupOptions(input: unknown): PickupOptionConfig[] {
@@ -164,10 +197,31 @@ function sanitizeCustomFields(input: unknown): PortalCustomFieldDef[] {
 
 export function normalizeTenantFormConfig(raw: unknown): TenantFormConfig {
   if (!raw || typeof raw !== "object") {
-    return { ...DEFAULT_TENANT_FORM_CONFIG };
+    return {
+      ...DEFAULT_TENANT_FORM_CONFIG,
+      sectorForms: {
+        HARVEST: { ...DEFAULT_SECTOR_FORMS.HARVEST },
+        COMMERCIAL: { ...DEFAULT_SECTOR_FORMS.COMMERCIAL },
+      },
+    };
   }
   const obj = raw as Record<string, unknown>;
   const policyRaw = String(obj.approvalPolicy || "MANUAL").toUpperCase();
+  const rawSectors =
+    obj.sectorForms && typeof obj.sectorForms === "object"
+      ? (obj.sectorForms as Record<string, Record<string, unknown>>)
+      : {};
+  const normalizeSector = (key: "HARVEST" | "COMMERCIAL"): SectorFormSectionConfig => {
+    const def = DEFAULT_SECTOR_FORMS[key];
+    const src = rawSectors[key] || {};
+    return {
+      headingAr: String(src.headingAr || "").trim() || def.headingAr,
+      subtitleAr: String(src.subtitleAr || "").trim() || def.subtitleAr,
+      allowUnlistedItems:
+        src.allowUnlistedItems === undefined ? def.allowUnlistedItems : Boolean(src.allowUnlistedItems),
+      customFields: sanitizeCustomFields(src.customFields),
+    };
+  };
   return {
     portalEnabled: obj.portalEnabled === undefined ? true : Boolean(obj.portalEnabled),
     approvalPolicy: policyRaw === "AUTO" ? "AUTO" : "MANUAL",
@@ -186,6 +240,10 @@ export function normalizeTenantFormConfig(raw: unknown): TenantFormConfig {
         : [...DEFAULT_TENANT_FORM_CONFIG.clientTypes],
     customRegistrationFields: sanitizeCustomFields(obj.customRegistrationFields),
     customRequestFields: sanitizeCustomFields(obj.customRequestFields),
+    sectorForms: {
+      HARVEST: normalizeSector("HARVEST"),
+      COMMERCIAL: normalizeSector("COMMERCIAL"),
+    },
   };
 }
 

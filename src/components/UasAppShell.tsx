@@ -1384,7 +1384,7 @@ export function UasAppShell() {
           onToast={showToast}
         />
       ) : (
-        <div id="erpAppFrame" className="min-h-screen flex flex-col bg-slate-50/50 dark:bg-slate-950/30">
+        <div id="erpAppFrame" className="min-h-screen flex flex-col overflow-x-clip bg-slate-50/50 dark:bg-slate-950/30">
           <SidebarNav
             orgName={state.settings.orgName}
             logoText={state.settings.logoText}
@@ -1519,7 +1519,7 @@ export function UasAppShell() {
               onLogout={handleLogout}
             />
 
-            <main className="max-w-7xl w-full mx-auto flex-1 p-4 md:p-6 pb-28 md:pb-24 space-y-5">
+            <main className="max-w-7xl w-full min-w-0 overflow-x-clip mx-auto flex-1 p-3 sm:p-4 md:p-6 pb-6 md:pb-8 space-y-4 sm:space-y-5">
               {loading && (
                 <div className="card-surface rounded-2xl p-3 text-xs text-center text-slate-500">
                   جاري تحميل البيانات المحاسبية...
@@ -1556,10 +1556,8 @@ export function UasAppShell() {
                       <Sprout className="w-4 h-4" />
                     </div>
                     <div>
-                      <div className="text-xs font-black">
-                        {lang === "ar"
-                          ? "1. القطاع الحالي — المحصول والفرز والعمليات الميدانية"
-                          : "1. Current Sector — Harvest, Sorting & Field Ops"}
+                      <div className="text-xs sm:text-sm font-black">
+                        {lang === "ar" ? "القطاع الزراعي" : "Agricultural Sector"}
                       </div>
                       <div className="text-[10px] text-slate-500">
                         {lang === "ar"
@@ -1592,10 +1590,8 @@ export function UasAppShell() {
                       <ShoppingBag className="w-4 h-4" />
                     </div>
                     <div>
-                      <div className="text-xs font-black">
-                        {lang === "ar"
-                          ? "2. القطاع التجاري — الجملة والتجزئة والسلع المتعددة"
-                          : "2. Commercial Sector — Bulk & Partial Wholesale/Retail"}
+                      <div className="text-xs sm:text-sm font-black">
+                        {lang === "ar" ? "القطاع التجاري" : "Commercial Sector"}
                       </div>
                       <div className="text-[10px] text-slate-500">
                         {lang === "ar"

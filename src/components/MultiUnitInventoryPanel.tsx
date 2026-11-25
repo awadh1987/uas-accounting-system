@@ -8,7 +8,7 @@ import { Archive, ArrowDownUp, Boxes, Layers, Plus, RefreshCw, RotateCcw, Trash2
 import { safeFetchJson } from "@/lib/apiClient";
 import { fmtNum } from "@/lib/formulas";
 import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
-import { formatRefreshTimestamp } from "@/lib/uiFormatters";
+import { formatIsoToDmyTime, formatRefreshTimestamp } from "@/lib/uiFormatters";
 import { filterOutSyntheticTestRecords, isSyntheticTestRecord } from "@/lib/testRecordHygiene";
 
 interface UomRecord {
@@ -56,9 +56,16 @@ interface InventoryItemRecord {
   nameAr: string;
   nameEn: string;
   itemType: string;
+  sectorType?: string;
   grade?: string | null;
   origin?: string | null;
+  producerCompany?: string | null;
+  countryOfOrigin?: string | null;
+  productionDate?: string | null;
+  expiryDate?: string | null;
   purchasePrice: number;
+  dispatchCost?: number;
+  taxRate?: number;
   wholesalePrice: number;
   retailPrice: number;
   minSellPrice: number;
@@ -80,8 +87,26 @@ interface InventoryItemRecord {
   archivedAt?: string | null;
 }
 
+interface StockMovementRecord {
+  id: string;
+  movementType: string;
+  direction?: "INBOUND" | "OUTBOUND";
+  directionLabelAr?: string;
+  enteredQty: number;
+  factorToBase: number;
+  baseQtyDelta: number;
+  unitCostBase: number;
+  notes?: string | null;
+  createdAt: string;
+  createdAtDisplay?: string;
+  item?: { id: string; sku: string; nameAr: string; sectorType?: string; baseUnit?: { nameAr: string } };
+  warehouse?: { id: string; nameAr: string };
+  enteredUnit?: { id: string; nameAr: string };
+}
+
 interface MultiUnitInventoryPanelProps {
   lang?: "ar" | "en";
+  sectorFilter?: "HARVEST" | "COMMERCIAL";
   readOnly?: boolean;
   onRefreshState?: () => Promise<void>;
   onToast?: (msg: string) => void;
@@ -89,6 +114,7 @@ interface MultiUnitInventoryPanelProps {
 
 export function MultiUnitInventoryPanel({
   lang = "ar",
+  sectorFilter,
   readOnly = false,
   onRefreshState,
   onToast,
@@ -100,10 +126,17 @@ export function MultiUnitInventoryPanel({
   const [categories, setCategories] = useState<CategoryRecord[]>([]);
   const [warehouses, setWarehouses] = useState<WarehouseRecord[]>([]);
   const [items, setItems] = useState<InventoryItemRecord[]>([]);
+  const [movements, setMovements] = useState<StockMovementRecord[]>([]);
   const [loading, setLoading] = useState(false);
 
   // Item Master Form State (every selector has "OTHER" custom inline option)
   const [showItemForm, setShowItemForm] = useState(false);
+  const [showBulkImport, setShowBulkImport] = useState(false);
+  const [bulkImportText, setBulkImportText] = useState("");
+  const [importingBulk, setImportingBulk] = useState(false);
+  const [itemSectorType, setItemSectorType] = useState<"HARVEST" | "COMMERCIAL">(
+    sectorFilter || "HARVEST"
+  );
   const [sku, setSku] = useState("");
   const [barcode, setBarcode] = useState("");
   const [nameAr, setNameAr] = useState("");
@@ -116,11 +149,18 @@ export function MultiUnitInventoryPanel({
   const [customGrade, setCustomGrade] = useState("");
   const [origin, setOrigin] = useState("محلي");
   const [customOrigin, setCustomOrigin] = useState("");
+  const [producerCompany, setProducerCompany] = useState("");
+  const [countryOfOrigin, setCountryOfOrigin] = useState("");
+  const [productionDate, setProductionDate] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
   const [baseUnitId, setBaseUnitId] = useState("");
   const [customBaseUnitName, setCustomBaseUnitName] = useState("");
   const [defaultWarehouseId, setDefaultWarehouseId] = useState("");
   const [customWarehouseName, setCustomWarehouseName] = useState("");
+  const [openingQty, setOpeningQty] = useState("");
   const [purchasePrice, setPurchasePrice] = useState("");
+  const [dispatchCost, setDispatchCost] = useState("");
+  const [taxRate, setTaxRate] = useState("");
   const [wholesalePrice, setWholesalePrice] = useState("");
   const [retailPrice, setRetailPrice] = useState("");
   const [conversions, setConversions] = useState<ConversionRowDraft[]>([]);
@@ -142,11 +182,16 @@ export function MultiUnitInventoryPanel({
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [uRes, cRes, wRes, iRes] = await Promise.all([
+      const sectorQuery = sectorFilter ? `?sectorType=${sectorFilter}` : "";
+      const movQuery = sectorFilter
+        ? `/api/inventory/movements?limit=50&sectorType=${sectorFilter}`
+        : "/api/inventory/movements?limit=50";
+      const [uRes, cRes, wRes, iRes, mRes] = await Promise.all([
         safeFetchJson<{ units?: UomRecord[] }>("/api/inventory/uom"),
         safeFetchJson<{ categories?: CategoryRecord[] }>("/api/inventory/categories"),
         safeFetchJson<{ warehouses?: WarehouseRecord[] }>("/api/inventory/warehouses"),
-        safeFetchJson<{ items?: InventoryItemRecord[] }>("/api/inventory/items"),
+        safeFetchJson<{ items?: InventoryItemRecord[] }>(`/api/inventory/items${sectorQuery}`),
+        safeFetchJson<{ movements?: StockMovementRecord[] }>(movQuery),
       ]);
       if (uRes.ok && uRes.data?.units) {
         setUnits(uRes.data.units);
@@ -174,10 +219,13 @@ export function MultiUnitInventoryPanel({
           setMovUnitId(iRes.data.items[0].baseUnitId);
         }
       }
+      if (mRes.ok && mRes.data?.movements) {
+        setMovements(mRes.data.movements);
+      }
     } finally {
       setLoading(false);
     }
-  }, [baseUnitId, categoryId, defaultWarehouseId, movItemId]);
+  }, [sectorFilter, baseUnitId, categoryId, defaultWarehouseId, movItemId]);
 
   const [showArchivedItems, setShowArchivedItems] = useState(false);
   const [hideTestRecords, setHideTestRecords] = useState(false);
@@ -298,6 +346,7 @@ export function MultiUnitInventoryPanel({
           barcode: barcode.trim() || undefined,
           nameAr: nameAr.trim(),
           nameEn: nameEn.trim() || nameAr.trim(),
+          sectorType: sectorFilter || itemSectorType,
           categoryId,
           customCategoryName: categoryId === "OTHER" ? customCategoryName.trim() : undefined,
           itemType,
@@ -306,11 +355,18 @@ export function MultiUnitInventoryPanel({
           customGrade: grade === "OTHER" ? customGrade.trim() : undefined,
           origin,
           customOrigin: origin === "OTHER" ? customOrigin.trim() : undefined,
+          producerCompany: producerCompany.trim() || undefined,
+          countryOfOrigin: countryOfOrigin.trim() || undefined,
+          productionDate: productionDate.trim() || undefined,
+          expiryDate: expiryDate.trim() || undefined,
           baseUnitId,
           customBaseUnitName: baseUnitId === "OTHER" ? customBaseUnitName.trim() : undefined,
           defaultWarehouseId,
           customWarehouseName: defaultWarehouseId === "OTHER" ? customWarehouseName.trim() : undefined,
+          openingQty: Number(openingQty) || 0,
           purchasePrice: Number(purchasePrice) || 0,
+          dispatchCost: Number(dispatchCost) || 0,
+          taxRate: Number(taxRate) || 0,
           wholesalePrice: Number(wholesalePrice) || 0,
           retailPrice: Number(retailPrice) || 0,
           conversions: conversions.map((c) => ({
@@ -339,11 +395,85 @@ export function MultiUnitInventoryPanel({
       setCustomItemType("");
       setCustomGrade("");
       setCustomOrigin("");
+      setProducerCompany("");
+      setCountryOfOrigin("");
+      setProductionDate("");
+      setExpiryDate("");
+      setOpeningQty("");
+      setPurchasePrice("");
+      setDispatchCost("");
+      setTaxRate("");
+      setWholesalePrice("");
+      setRetailPrice("");
       setConversions([]);
       setShowItemForm(false);
       await loadAll();
     } finally {
       setSavingItem(false);
+    }
+  }
+
+  async function handleBulkImportSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const rawLines = bulkImportText
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (rawLines.length === 0) return;
+
+    const rows = rawLines
+      .map((line) => {
+        const parts = line.split(/[,;\t|]+/).map((p) => p.trim());
+        const name = parts[0] || "";
+        if (!name || name === "الاسم" || name.toLowerCase() === "name") return null;
+        return {
+          nameAr: name,
+          sku: parts[1] || undefined,
+          producerCompany: parts[2] || undefined,
+          countryOfOrigin: parts[3] || undefined,
+          productionDate: parts[4] || undefined,
+          expiryDate: parts[5] || undefined,
+          unitLabel: parts[6] || (sectorFilter === "COMMERCIAL" ? "كرتون" : "علاقية قات"),
+          categoryLabel: parts[7] || undefined,
+          openingQty: Number(parts[8] || 0),
+          purchasePrice: Number(parts[9] || 0),
+          dispatchCost: Number(parts[10] || 0),
+          taxRate: Number(parts[11] || 0),
+          wholesalePrice: Number(parts[12] || 0),
+          retailPrice: Number(parts[13] || parts[12] || 0),
+        };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null);
+
+    if (rows.length === 0) {
+      notify(isAr ? "لم يتم العثور على صفوف صالحة للاستيراد" : "No valid rows found");
+      return;
+    }
+
+    setImportingBulk(true);
+    try {
+      const res = await safeFetchJson<{ success?: boolean; importedCount?: number; message?: string; error?: string }>(
+        "/api/inventory/items",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "BULK_IMPORT_ITEMS",
+            sectorType: sectorFilter || itemSectorType,
+            rows,
+          }),
+        }
+      );
+      if (!res.ok || !res.data?.success) {
+        notify(res.data?.error || (isAr ? "تعذر الاستيراد الجماعي" : "Bulk import failed"));
+        return;
+      }
+      notify(res.data.message || `✅ تم استيراد ${res.data.importedCount ?? rows.length} صنفاً`);
+      setBulkImportText("");
+      setShowBulkImport(false);
+      await loadAll();
+    } finally {
+      setImportingBulk(false);
     }
   }
 
@@ -482,8 +612,74 @@ export function MultiUnitInventoryPanel({
                 },
               ]}
             />
+            {!readOnly && (
+              <button
+                type="button"
+                data-testid="inventory-bulk-import-toggle"
+                onClick={() => setShowBulkImport((p) => !p)}
+                className="px-2.5 py-1.5 rounded-lg border border-indigo-400 text-indigo-700 dark:text-indigo-300 font-bold text-xs inline-flex items-center gap-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>{isAr ? "استيراد جماعي للأصناف" : "Bulk Import Items"}</span>
+              </button>
+            )}
           </div>
         </div>
+
+        {/* Bulk Items Import Drawer (CSV / Tab / Pipe Paste) */}
+        {showBulkImport && !readOnly && (
+          <form
+            onSubmit={handleBulkImportSubmit}
+            className="p-4 rounded-xl bg-indigo-50/40 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800 space-y-2.5"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="font-extrabold text-indigo-800 dark:text-indigo-200">
+                {isAr
+                  ? "استيراد جماعي للأصناف والكميات والأسعار (سطر لكل صنف)"
+                  : "Bulk Item Import (One row per line)"}
+              </div>
+              <span className="text-[11px] text-slate-500">
+                {isAr
+                  ? "الصيغة: الاسم، SKU، الشركة المنتجة، بلد المنشأ، تاريخ الإنتاج، تاريخ الانتهاء، الوحدة، التصنيف، الكمية، سعر الشراء، تكلفة التوصيل، الضريبة %، سعر الجملة، سعر التجزئة"
+                  : "Format: Name, SKU, Producer, Country, ProdDate, ExpDate, Unit, Category, Qty, PurchasePrice, DispatchCost, Tax%, Wholesale, Retail"}
+              </span>
+            </div>
+            <textarea
+              rows={4}
+              value={bulkImportText}
+              onChange={(e) => setBulkImportText(e.target.value)}
+              placeholder={
+                isAr
+                  ? "أرز بسمتي 10 كجم, RICE-10, شركة الأرز, الهند, 2026-01-10, 2027-01-10, كيس 10 كجم, مواد غذائية, 50, 7500, 300, 5, 8800, 9200"
+                  : "Basmati Rice 10kg, RICE-10, Rice Co, India, 2026-01-10, 2027-01-10, Bag 10kg, Food, 50, 7500, 300, 5, 8800, 9200"
+              }
+              className="w-full rounded-xl border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 p-2.5 font-mono text-[11px]"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowBulkImport(false)}
+                className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 font-bold"
+              >
+                {isAr ? "إلغاء" : "Cancel"}
+              </button>
+              <button
+                type="submit"
+                disabled={importingBulk}
+                data-testid="inventory-bulk-import-submit"
+                className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-black disabled:opacity-50"
+              >
+                {importingBulk
+                  ? isAr
+                    ? "جاري الاستيراد..."
+                    : "Importing..."
+                  : isAr
+                  ? "اعتماد الاستيراد الجماعي"
+                  : "Run Bulk Import"}
+              </button>
+            </div>
+          </form>
+        )}
 
         {/* Item Master Creation Form */}
         {showItemForm && !readOnly && (
@@ -525,6 +721,116 @@ export function MultiUnitInventoryPanel({
                 placeholder={isAr ? "الباركود" : "Barcode"}
                 className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-mono"
               />
+            </div>
+
+            {/* Commercial & Expiry Metadata + Cost/Tax/Opening Inputs */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+              {!sectorFilter && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-0.5">
+                    {isAr ? "القطاع" : "Sector"}
+                  </label>
+                  <select
+                    value={itemSectorType}
+                    onChange={(e) =>
+                      setItemSectorType(e.target.value === "COMMERCIAL" ? "COMMERCIAL" : "HARVEST")
+                    }
+                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold"
+                  >
+                    <option value="HARVEST">{isAr ? "القطاع الزراعي" : "Agricultural Sector"}</option>
+                    <option value="COMMERCIAL">{isAr ? "القطاع التجاري" : "Commercial Sector"}</option>
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-0.5">
+                  {isAr ? "الشركة المنتجة" : "Producer Company"}
+                </label>
+                <input
+                  type="text"
+                  value={producerCompany}
+                  onChange={(e) => setProducerCompany(e.target.value)}
+                  placeholder={isAr ? "اسم الشركة المصنعة / المنتجة" : "Producer / Brand"}
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-0.5">
+                  {isAr ? "بلد المنشأ" : "Country of Origin"}
+                </label>
+                <input
+                  type="text"
+                  value={countryOfOrigin}
+                  onChange={(e) => setCountryOfOrigin(e.target.value)}
+                  placeholder={isAr ? "اليمن / السعودية / الهند..." : "Country"}
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-0.5">
+                  {isAr ? "تاريخ الإنتاج" : "Production Date"}
+                </label>
+                <input
+                  type="date"
+                  value={productionDate}
+                  onChange={(e) => setProductionDate(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-0.5">
+                  {isAr ? "تاريخ الانتهاء" : "Expiry Date"}
+                </label>
+                <input
+                  type="date"
+                  value={expiryDate}
+                  onChange={(e) => setExpiryDate(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-0.5">
+                  {isAr ? "الكمية الافتتاحية" : "Opening Qty"}
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  value={openingQty}
+                  onChange={(e) => setOpeningQty(e.target.value)}
+                  placeholder="0"
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-0.5">
+                  {isAr ? "تكلفة الشحن / الترحيل" : "Dispatch Cost"}
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  value={dispatchCost}
+                  onChange={(e) => setDispatchCost(e.target.value)}
+                  placeholder="0"
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-0.5">
+                  {isAr ? "نسبة الضريبة %" : "Tax Rate %"}
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  max="100"
+                  value={taxRate}
+                  onChange={(e) => setTaxRate(e.target.value)}
+                  placeholder="0"
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-mono"
+                />
+              </div>
             </div>
 
             {/* Universal "Other / Custom" Lookup Selectors */}
@@ -836,6 +1142,79 @@ export function MultiUnitInventoryPanel({
           </form>
         )}
 
+        {/* Inbound & Outbound Stock Movements Ledger (الوارد والصادر) */}
+        <div
+          data-testid="inventory-movements-ledger"
+          className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3.5 space-y-2.5"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-extrabold inline-flex items-center gap-1.5 text-slate-800 dark:text-slate-100">
+              <ArrowDownUp className="w-4 h-4 text-emerald-600" />
+              <span>{isAr ? `سجل حركات الوارد والصادر (${movements.length})` : `Inbound & Outbound Movements (${movements.length})`}</span>
+            </span>
+            <span className="text-[11px] text-slate-500">
+              {isAr ? "التاريخ والوقت بنمط يوم / شهر / سنة — س:د" : "Timestamps in dd / mm / yyyy — HH:mm"}
+            </span>
+          </div>
+          {movements.length === 0 ? (
+            <div className="text-center py-4 text-slate-500 text-[11px]">
+              {isAr ? "لا توجد حركات وارد أو صادر مسجلة في هذا القطاع بعد." : "No inbound/outbound movements yet."}
+            </div>
+          ) : (
+            <div className="overflow-x-auto max-h-64">
+              <table className="w-full text-[11px] border-collapse">
+                <thead>
+                  <tr className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                    <th className="p-2 text-right font-bold">{isAr ? "التاريخ والوقت" : "Date & Time"}</th>
+                    <th className="p-2 text-right font-bold">{isAr ? "الحركة" : "Type"}</th>
+                    <th className="p-2 text-right font-bold">{isAr ? "الصنف" : "Item"}</th>
+                    <th className="p-2 text-right font-bold">{isAr ? "المستودع" : "Warehouse"}</th>
+                    <th className="p-2 text-right font-bold">{isAr ? "الكمية" : "Qty"}</th>
+                    <th className="p-2 text-right font-bold">{isAr ? "ملاحظات" : "Notes"}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {movements.map((m) => {
+                    const isInbound = m.direction === "INBOUND" || Number(m.baseQtyDelta) >= 0;
+                    const stamp = m.createdAtDisplay || formatIsoToDmyTime(m.createdAt);
+                    return (
+                      <tr key={m.id}>
+                        <td className="p-2 font-mono whitespace-nowrap">
+                          <bdi dir="ltr">{stamp}</bdi>
+                        </td>
+                        <td className="p-2 whitespace-nowrap">
+                          <span
+                            className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] ${
+                              isInbound
+                                ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
+                                : "bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300"
+                            }`}
+                          >
+                            {m.directionLabelAr || (isInbound ? "وارد (+)" : "صادر (-)")} • {m.movementType}
+                          </span>
+                        </td>
+                        <td className="p-2 font-bold">
+                          {m.item?.nameAr || "—"}
+                        </td>
+                        <td className="p-2 text-slate-500">
+                          {m.warehouse?.nameAr || "—"}
+                        </td>
+                        <td className="p-2 font-mono font-bold whitespace-nowrap">
+                          <bdi dir="ltr">
+                            {isInbound ? "+" : "-"}
+                            {fmtNum(Math.abs(Number(m.baseQtyDelta || m.enteredQty)))} {m.item?.baseUnit?.nameAr || m.enteredUnit?.nameAr || ""}
+                          </bdi>
+                        </td>
+                        <td className="p-2 text-slate-500">{m.notes || "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
         {/* Quick Multi-Unit Stock Movement Bar */}
         {!readOnly && items.length > 0 && (
           <form
@@ -856,7 +1235,7 @@ export function MultiUnitInventoryPanel({
               )}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-2 items-center">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 items-stretch">
               <select
                 dir={isAr ? "rtl" : "ltr"}
                 aria-label={isAr ? "الصنف المخزني" : "Inventory Item"}
@@ -873,7 +1252,7 @@ export function MultiUnitInventoryPanel({
                   const it = items.find((x) => x.id === e.target.value);
                   if (it) setMovUnitId(it.baseUnitId);
                 }}
-                className="lg:col-span-2 w-full min-w-0 truncate rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 font-bold text-right"
+                className="sm:col-span-2 w-full min-w-0 truncate rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold text-right"
               >
                 {items.map((it) => (
                   <option key={it.id} value={it.id} title={`${it.nameAr} (${it.sku})`}>

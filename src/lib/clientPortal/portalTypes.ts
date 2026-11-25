@@ -30,6 +30,11 @@ export interface ClientCatalogBoardItemView {
   sectorType?: string;
   categoryGroup?: string;
   saleMode?: string;
+  producerCompany?: string | null;
+  countryOfOrigin?: string | null;
+  productionDate?: string | null;
+  expiryDate?: string | null;
+  taxRate?: number;
   unitCode: string;
   unitLabel: string;
   customUnitLabel: string | null;

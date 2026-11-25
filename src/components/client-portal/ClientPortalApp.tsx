@@ -842,6 +842,7 @@ export function ClientPortalApp({
     setReqLoading(true);
     try {
       const qs = new URLSearchParams();
+      qs.set("sectorType", activeSector);
       if (reqFilterStatus !== "ALL") qs.set("status", reqFilterStatus);
       if (reqFilterFrom) qs.set("fromDate", reqFilterFrom);
       if (reqFilterTo) qs.set("toDate", reqFilterTo);
@@ -867,7 +868,7 @@ export function ClientPortalApp({
     } finally {
       setReqLoading(false);
     }
-  }, [account, reqFilterStatus, reqFilterFrom, reqFilterTo, reqDebouncedQuery, reqIncludeHidden, reqPage, showNotice]);
+  }, [account, activeSector, reqFilterStatus, reqFilterFrom, reqFilterTo, reqDebouncedQuery, reqIncludeHidden, reqPage, showNotice]);
 
   const loadStatement = useCallback(async (manual = false) => {
     if (!account || account.status !== "ACTIVE") return;
@@ -1100,8 +1101,36 @@ export function ClientPortalApp({
   }, []);
 
   const draftStorageKey = account
-    ? `uas_portal_order_draft_v1_${tenantSlug}_${account.id}`
+    ? `uas_portal_order_draft_v1_${tenantSlug}_${account.id}_${activeSector}`
     : null;
+
+  const switchPortalSector = useCallback(
+    (nextSector: "HARVEST" | "COMMERCIAL") => {
+      if (nextSector === activeSector) return;
+      setActiveSector(nextSector);
+      setSubmissionType("catalog_order");
+      setEditingRequestId(null);
+      setConfirmedReceipt(null);
+      setReqError(null);
+      setPickupNotes("");
+      setReqCustomData({});
+      setLines([
+        {
+          rowKey: `row-${Date.now()}`,
+          itemId: "",
+          itemTitle: "",
+          requestedQty: "1",
+          unitCode: nextSector === "COMMERCIAL" ? "OTHER" : "QAT_BUNCH",
+          customUnitLabel: nextSector === "COMMERCIAL" ? "كرتون" : "",
+          unitPrice: "",
+          saleMode: "BULK",
+          notes: "",
+        },
+      ]);
+      setReqPage(1);
+    },
+    [activeSector]
+  );
 
   // Restore saved local draft on active client session mount
   useEffect(() => {
@@ -2137,7 +2166,7 @@ export function ClientPortalApp({
   }
 
   return (
-    <div dir="rtl" className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 pb-24">
+    <div dir="rtl" className="min-h-screen overflow-x-clip bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 pb-8">
       {/* Branded Portal Header */}
       <header
         className="sticky top-0 z-30 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur px-4 py-3 shadow-sm"
@@ -2707,18 +2736,15 @@ export function ClientPortalApp({
               <button
                 type="button"
                 data-testid="portal-sector-tab-harvest"
-                onClick={() => {
-                  setActiveSector("HARVEST");
-                  setSubmissionType("catalog_order");
-                }}
+                onClick={() => switchPortalSector("HARVEST")}
                 className={`p-3.5 rounded-2xl border text-right transition flex items-center justify-between gap-2 ${activeSector === "HARVEST"
                     ? "border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/40 shadow-sm"
                     : "card-surface border-slate-200 dark:border-slate-700 hover:border-emerald-300"
                   }`}
               >
                 <div>
-                  <div className="font-black text-xs text-slate-900 dark:text-white">
-                    1. القطاع الحالي — تجارة المحصول والفرز والزراعة
+                  <div className="font-black text-xs sm:text-sm text-slate-900 dark:text-white">
+                    القطاع الزراعي
                   </div>
                   <div className="text-[11px] text-slate-500 mt-0.5">
                     قوائم الفرز اليومية، علاقيات القات وأخرى، ونقاط الاستلام المباشر
@@ -2732,17 +2758,15 @@ export function ClientPortalApp({
               <button
                 type="button"
                 data-testid="portal-sector-tab-commercial"
-                onClick={() => {
-                  setActiveSector("COMMERCIAL");
-                }}
+                onClick={() => switchPortalSector("COMMERCIAL")}
                 className={`p-3.5 rounded-2xl border text-right transition flex items-center justify-between gap-2 ${activeSector === "COMMERCIAL"
                     ? "border-amber-500 bg-amber-50/80 dark:bg-amber-950/40 shadow-sm"
                     : "card-surface border-slate-200 dark:border-slate-700 hover:border-amber-300"
                   }`}
               >
                 <div>
-                  <div className="font-black text-xs text-slate-900 dark:text-white">
-                    2. القطاع التجاري — تجارة الجملة والتجزئة والسلع
+                  <div className="font-black text-xs sm:text-sm text-slate-900 dark:text-white">
+                    القطاع التجاري
                   </div>
                   <div className="text-[11px] text-slate-500 mt-0.5">
                     البضائع الكاملة والجزئية، المواد الغذائية، غير الغذائية، المحروقات والوقود
@@ -2791,10 +2815,24 @@ export function ClientPortalApp({
                 {[
                   {
                     id: "catalog" as const,
-                    label: `قائمة الأسعار والأصناف${boardItems.length > 0 ? ` (${boardItems.length})` : ""}`,
+                    label: (() => {
+                      const cnt = boardItems.filter((item) =>
+                        activeSector === "COMMERCIAL"
+                          ? (item.sectorType || "HARVEST").toUpperCase() === "COMMERCIAL"
+                          : (item.sectorType || "HARVEST").toUpperCase() !== "COMMERCIAL"
+                      ).length;
+                      return `قائمة الأسعار والأصناف${cnt > 0 ? ` (${cnt})` : ""}`;
+                    })(),
                     Icon: Sparkles,
                   },
-                  { id: "new_request" as const, label: formConfig?.requestHeadingAr || "تسجيل طلب", Icon: Plus },
+                  {
+                    id: "new_request" as const,
+                    label:
+                      formConfig?.sectorForms?.[activeSector]?.headingAr ||
+                      formConfig?.requestHeadingAr ||
+                      "تسجيل طلب",
+                    Icon: Plus,
+                  },
                   { id: "requests" as const, label: "سجل الطلبات ومتابعة الحالة", Icon: ClipboardList },
                   { id: "statement" as const, label: "الفواتير وكشف الحساب", Icon: CreditCard },
                   { id: "payments" as const, label: "المدفوعات والإيصالات", Icon: Wallet },
@@ -2966,9 +3004,14 @@ export function ClientPortalApp({
                       <h2 className="text-base font-black">
                         {editingRequestId
                           ? "تعديل طلب قيد المراجعة"
-                          : formConfig?.requestHeadingAr || "تسجيل طلب"}
+                          : formConfig?.sectorForms?.[activeSector]?.headingAr ||
+                            formConfig?.requestHeadingAr ||
+                            "تسجيل طلب"}
                       </h2>
-                      <p className="text-xs text-slate-500">{formConfig?.requestSubtitleAr}</p>
+                      <p className="text-xs text-slate-500">
+                        {formConfig?.sectorForms?.[activeSector]?.subtitleAr ||
+                          formConfig?.requestSubtitleAr}
+                      </p>
                     </div>
                     {editingRequestId && (
                       <button
@@ -3094,27 +3137,36 @@ export function ClientPortalApp({
                     </div>
                   </div>
 
-                  {(formConfig?.customRequestFields || []).length > 0 && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {formConfig?.customRequestFields.map((cf) => (
-                        <div key={cf.key}>
-                          <label className="block font-bold mb-1">
-                            {cf.labelAr} {cf.required ? "*" : ""}
-                          </label>
-                          <input
-                            type={cf.type === "number" ? "number" : "text"}
-                            required={cf.required}
-                            placeholder={cf.placeholder || cf.labelAr}
-                            value={reqCustomData[cf.key] || ""}
-                            onChange={(e) =>
-                              setReqCustomData((prev) => ({ ...prev, [cf.key]: e.target.value }))
-                            }
-                            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  {(() => {
+                    const mergedCustomFields = [
+                      ...(formConfig?.customRequestFields || []),
+                      ...(formConfig?.sectorForms?.[activeSector]?.customFields || []),
+                    ].filter(
+                      (cf, idx, arr) => arr.findIndex((x) => x.key === cf.key) === idx
+                    );
+                    if (mergedCustomFields.length === 0) return null;
+                    return (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {mergedCustomFields.map((cf) => (
+                          <div key={cf.key}>
+                            <label className="block font-bold mb-1">
+                              {cf.labelAr} {cf.required ? "*" : ""}
+                            </label>
+                            <input
+                              type={cf.type === "number" ? "number" : "text"}
+                              required={cf.required}
+                              placeholder={cf.placeholder || cf.labelAr}
+                              value={reqCustomData[cf.key] || ""}
+                              onChange={(e) =>
+                                setReqCustomData((prev) => ({ ...prev, [cf.key]: e.target.value }))
+                              }
+                              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
 
                   {/* Multi-line Items */}
                   <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
@@ -3572,9 +3624,13 @@ export function ClientPortalApp({
                   </div>
                 </div>
 
-                {requestsList.length === 0 ? (
+                {requestsList.filter((r) =>
+                  activeSector === "COMMERCIAL"
+                    ? r.sectorType === "COMMERCIAL"
+                    : r.sectorType !== "COMMERCIAL"
+                ).length === 0 ? (
                   <div className="p-8 text-center text-slate-500 space-y-3 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700">
-                    <div>لا توجد طلبات مسجلة حالياً ضمن هذه الفلاتر.</div>
+                    <div>لا توجد طلبات مسجلة حالياً في هذا القطاع ضمن هذه الفلاتر.</div>
                     <div className="flex flex-wrap justify-center gap-2">
                       {(reqFilterStatus !== "ALL" || reqFilterFrom || reqFilterTo || reqFilterQuery) && (
                         <button
@@ -3603,6 +3659,11 @@ export function ClientPortalApp({
                   <div className="space-y-3">
                     {requestsList
                       .filter((r) => {
+                        const matchSector =
+                          activeSector === "COMMERCIAL"
+                            ? r.sectorType === "COMMERCIAL"
+                            : r.sectorType !== "COMMERCIAL";
+                        if (!matchSector) return false;
                         if (reqArchiveView === "ACTIVE") return !r.isArchivedByClient;
                         if (reqArchiveView === "ARCHIVED") return Boolean(r.isArchivedByClient);
                         return true;

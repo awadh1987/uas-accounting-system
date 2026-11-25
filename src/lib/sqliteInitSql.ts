@@ -936,11 +936,18 @@ CREATE TABLE "InventoryItem" (
     "nameEn" TEXT NOT NULL,
     "categoryId" TEXT,
     "itemType" TEXT NOT NULL DEFAULT 'STOCKABLE',
+    "sectorType" TEXT NOT NULL DEFAULT 'HARVEST',
     "grade" TEXT,
     "origin" TEXT,
+    "producerCompany" TEXT,
+    "countryOfOrigin" TEXT,
+    "productionDate" TEXT,
+    "expiryDate" TEXT,
     "baseUnitId" TEXT NOT NULL,
     "defaultWarehouseId" TEXT,
     "purchasePrice" DECIMAL NOT NULL DEFAULT 0,
+    "dispatchCost" DECIMAL NOT NULL DEFAULT 0,
+    "taxRate" DECIMAL NOT NULL DEFAULT 0,
     "wholesalePrice" DECIMAL NOT NULL DEFAULT 0,
     "retailPrice" DECIMAL NOT NULL DEFAULT 0,
     "minSellPrice" DECIMAL NOT NULL DEFAULT 0,
@@ -1477,6 +1484,11 @@ CREATE TABLE "PortalCatalogBoardItem" (
     "sectorType" TEXT NOT NULL DEFAULT 'HARVEST',
     "categoryGroup" TEXT NOT NULL DEFAULT 'HARVEST',
     "saleMode" TEXT NOT NULL DEFAULT 'BOTH',
+    "producerCompany" TEXT,
+    "countryOfOrigin" TEXT,
+    "productionDate" TEXT,
+    "expiryDate" TEXT,
+    "taxRate" DECIMAL NOT NULL DEFAULT 0,
     "unitCode" TEXT NOT NULL DEFAULT 'QAT_BUNCH',
     "unitLabel" TEXT NOT NULL DEFAULT 'علاقية قات',
     "customUnitLabel" TEXT,
@@ -1779,6 +1791,9 @@ CREATE UNIQUE INDEX "Warehouse_code_key" ON "Warehouse"("code");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "InventoryItem_sku_key" ON "InventoryItem"("sku");
+
+-- CreateIndex
+CREATE INDEX "InventoryItem_sectorType_isActive_idx" ON "InventoryItem"("sectorType", "isActive");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "ItemUnitConversion_itemId_unitId_key" ON "ItemUnitConversion"("itemId", "unitId");

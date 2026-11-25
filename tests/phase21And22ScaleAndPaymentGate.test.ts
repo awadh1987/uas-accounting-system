@@ -73,6 +73,11 @@ describe("Phase 21 & 22 — Unlimited Scale (1,000+ Tenants × 1,000+ Clients) &
   let adminClientsRoute: typeof import("../src/app/api/portal-admin/clients/route");
   let adminChannelsRoute: typeof import("../src/app/api/portal-admin/payment-channels/route");
   let adminPaymentsRoute: typeof import("../src/app/api/portal-admin/payments/route");
+  let inventoryItemsRoute: typeof import("../src/app/api/inventory/items/route");
+  let inventoryMovementsRoute: typeof import("../src/app/api/inventory/movements/route");
+  let commercialOpsRoute: typeof import("../src/app/api/commercial/ops/route");
+  let catalogBoardLib: typeof import("../src/lib/clientPortal/catalogBoard");
+  let portalConfigLib: typeof import("../src/lib/clientPortal/portalConfig");
 
   let staffCookie = "";
   let treasuryId = "";
@@ -144,6 +149,11 @@ describe("Phase 21 & 22 — Unlimited Scale (1,000+ Tenants × 1,000+ Clients) &
     adminClientsRoute = await import("../src/app/api/portal-admin/clients/route");
     adminChannelsRoute = await import("../src/app/api/portal-admin/payment-channels/route");
     adminPaymentsRoute = await import("../src/app/api/portal-admin/payments/route");
+    inventoryItemsRoute = await import("../src/app/api/inventory/items/route");
+    inventoryMovementsRoute = await import("../src/app/api/inventory/movements/route");
+    commercialOpsRoute = await import("../src/app/api/commercial/ops/route");
+    catalogBoardLib = await import("../src/lib/clientPortal/catalogBoard");
+    portalConfigLib = await import("../src/lib/clientPortal/portalConfig");
 
     await ensureSqliteDatabaseReady();
     await ensure6GenerationCoaHierarchy(defaultPrisma);
@@ -856,5 +866,197 @@ describe("Phase 21 & 22 — Unlimited Scale (1,000+ Tenants × 1,000+ Clients) &
     const adminListData = await adminListRes.json();
     assert.equal(adminListData.payments.length, 1);
     assert.equal(adminListData.payments[0].receiptVoucherNumber, approveData.receiptVoucherNumber);
+  });
+
+  it("Phase 22.2 — enforces clean Sector Titles, Harvest/Commercial isolation, Commercial metadata without cost leakage, sector form config & dd / mm / yyyy + HH:mm movements", async () => {
+    // 1. Verify clean sector titles across AppShell, Portal, CommercialWorkspace, CatalogBoard & AdminPanel
+    const appShellSrc = fs.readFileSync(path.join(process.cwd(), "src/components/UasAppShell.tsx"), "utf8");
+    const portalAppSrc = fs.readFileSync(
+      path.join(process.cwd(), "src/components/client-portal/ClientPortalApp.tsx"),
+      "utf8"
+    );
+    const commercialWsSrc = fs.readFileSync(
+      path.join(process.cwd(), "src/components/CommercialSectorWorkspace.tsx"),
+      "utf8"
+    );
+    assert.ok(appShellSrc.includes("القطاع الزراعي"));
+    assert.ok(appShellSrc.includes("القطاع التجاري"));
+    assert.equal(appShellSrc.includes("1. القطاع الحالي —"), false);
+    assert.equal(appShellSrc.includes("2. القطاع التجاري —"), false);
+    assert.ok(portalAppSrc.includes("القطاع الزراعي"));
+    assert.ok(portalAppSrc.includes("القطاع التجاري"));
+    assert.equal(portalAppSrc.includes("1. القطاع الحالي —"), false);
+    assert.equal(portalAppSrc.includes("2. القطاع التجاري —"), false);
+    assert.ok(commercialWsSrc.includes("العودة إلى القطاع الزراعي"));
+    assert.equal(commercialWsSrc.includes("العودة إلى القطاع الحالي"), false);
+
+    // 2. Verify Bulk Import & Harvest/Commercial isolation with full commercial fields
+    const bulkRes = await inventoryItemsRoute.POST(
+      makeReq("http://localhost/api/inventory/items", {
+        method: "POST",
+        tenantSlug: TEST_SLUG_A,
+        cookie: staffCookie,
+        body: {
+          action: "BULK_IMPORT_ITEMS",
+          sectorType: "COMMERCIAL",
+          rows: [
+            {
+              sku: "COM-RICE-01",
+              nameAr: "أرز بسمتي هندي 10 كجم",
+              producerCompany: "شركة السندباد الغذائية",
+              countryOfOrigin: "الهند",
+              productionDate: "2026-01-15",
+              expiryDate: "2027-06-30",
+              unitLabel: "كيس 10 كجم",
+              categoryLabel: "مواد غذائية",
+              openingQty: 40,
+              purchasePrice: 7200,
+              dispatchCost: 350,
+              taxRate: 5,
+              wholesalePrice: 8900,
+              retailPrice: 9300,
+            },
+          ],
+        },
+      })
+    );
+    assert.equal(bulkRes.status, 201);
+    const bulkData = await bulkRes.json();
+    assert.equal(bulkData.importedCount, 1);
+
+    const harvestOnlyRes = await inventoryItemsRoute.POST(
+      makeReq("http://localhost/api/inventory/items", {
+        method: "POST",
+        tenantSlug: TEST_SLUG_A,
+        cookie: staffCookie,
+        body: {
+          sku: "HARV-LEAF-01",
+          nameAr: "محصول صوطي طازج",
+          sectorType: "HARVEST",
+          openingQty: 25,
+          purchasePrice: 1500,
+          wholesalePrice: 2200,
+        },
+      })
+    );
+    assert.equal(harvestOnlyRes.status, 201);
+
+    const comItemsRes = await inventoryItemsRoute.GET(
+      makeReq("http://localhost/api/inventory/items?sectorType=COMMERCIAL", {
+        tenantSlug: TEST_SLUG_A,
+        cookie: staffCookie,
+      })
+    );
+    assert.equal(comItemsRes.status, 200);
+    const comItemsData = await comItemsRes.json();
+    assert.ok(comItemsData.items.some((i: { sku: string }) => i.sku === "COM-RICE-01"));
+    assert.equal(comItemsData.items.some((i: { sku: string }) => i.sku === "HARV-LEAF-01"), false);
+    const rice = comItemsData.items.find((i: { sku: string }) => i.sku === "COM-RICE-01");
+    assert.equal(rice.producerCompany, "شركة السندباد الغذائية");
+    assert.equal(rice.countryOfOrigin, "الهند");
+    assert.equal(rice.productionDate, "2026-01-15");
+    assert.equal(rice.expiryDate, "2027-06-30");
+    assert.equal(Number(rice.dispatchCost), 350);
+    assert.equal(Number(rice.taxRate), 5);
+
+    const harvItemsRes = await inventoryItemsRoute.GET(
+      makeReq("http://localhost/api/inventory/items?sectorType=HARVEST", {
+        tenantSlug: TEST_SLUG_A,
+        cookie: staffCookie,
+      })
+    );
+    const harvItemsData = await harvItemsRes.json();
+    assert.ok(harvItemsData.items.some((i: { sku: string }) => i.sku === "HARV-LEAF-01"));
+    assert.equal(harvItemsData.items.some((i: { sku: string }) => i.sku === "COM-RICE-01"), false);
+
+    // 3. Inbound & Outbound movements isolation + dd / mm / yyyy — HH:mm timestamps
+    const comMovRes = await inventoryMovementsRoute.GET(
+      makeReq("http://localhost/api/inventory/movements?sectorType=COMMERCIAL", {
+        tenantSlug: TEST_SLUG_A,
+        cookie: staffCookie,
+      })
+    );
+    assert.equal(comMovRes.status, 200);
+    const comMovData = await comMovRes.json();
+    assert.ok(comMovData.movements.length >= 1);
+    assert.ok(
+      comMovData.movements.every(
+        (m: { item?: { sectorType?: string } }) => m.item?.sectorType === "COMMERCIAL"
+      )
+    );
+    assert.match(comMovData.movements[0].createdAtDisplay, /^\d{2} \/ \d{2} \/ \d{4} — \d{2}:\d{2}$/);
+    assert.equal(comMovData.movements[0].direction, "INBOUND");
+    assert.equal(comMovData.movements[0].directionLabelAr, "وارد (+)");
+
+    // Commercial Ops API exposes isolated commercial movements & stockBuckets
+    const opsRes = await commercialOpsRoute.GET(
+      makeReq("http://localhost/api/commercial/ops", {
+        tenantSlug: TEST_SLUG_A,
+        cookie: staffCookie,
+      })
+    );
+    assert.equal(opsRes.status, 200);
+    const opsData = await opsRes.json();
+    assert.ok(Array.isArray(opsData.movements) && opsData.movements.length >= 1);
+    assert.ok(opsData.stockBuckets.some((b: { sku: string }) => b.sku === "COM-RICE-01"));
+    assert.equal(opsData.stockBuckets.some((b: { sku: string }) => b.sku === "HARV-LEAF-01"), false);
+
+    // 4. Client Portal catalog board sanitization strips purchasePrice / dispatchCost
+    await catalogBoardLib.upsertStaffCatalogBoardItem({
+      inventoryItemId: rice.id,
+      sku: rice.sku,
+      titleAr: rice.nameAr,
+      sectorType: "COMMERCIAL",
+      categoryGroup: "FOOD",
+      saleMode: "BOTH",
+      unitCode: "OTHER",
+      unitLabel: "كيس 10 كجم",
+      customUnitLabel: "كيس 10 كجم",
+      unitPrice: 8900,
+      partialUnitLabel: "كيلو",
+      partialUnitPrice: 950,
+      producerCompany: rice.producerCompany,
+      countryOfOrigin: rice.countryOfOrigin,
+      productionDate: rice.productionDate,
+      expiryDate: rice.expiryDate,
+      taxRate: Number(rice.taxRate),
+      isPublished: true,
+      tenantSlug: TEST_SLUG_A,
+      actor: {
+        userId: "staff-test-1",
+        userDisplay: "khalid.cfo",
+        userRole: "ADMIN",
+      },
+    });
+    const clientCatalog = await catalogBoardLib.listPublishedClientCatalogBoard(defaultPrisma);
+    const pubRice = clientCatalog.items.find((x) => x.sku === "COM-RICE-01");
+    assert.ok(pubRice);
+    assert.equal(pubRice.producerCompany, "شركة السندباد الغذائية");
+    assert.equal(pubRice.countryOfOrigin, "الهند");
+    assert.equal(pubRice.expiryDate, "2027-06-30");
+    assert.equal(pubRice.taxRate, 5);
+    assert.equal("purchasePrice" in (pubRice as unknown as Record<string, unknown>), false);
+    assert.equal("dispatchCost" in (pubRice as unknown as Record<string, unknown>), false);
+
+    // 5. Sector request form config preserves separate HARVEST and COMMERCIAL configurations
+    const normCfg = portalConfigLib.normalizeTenantFormConfig({
+      sectorForms: {
+        HARVEST: {
+          headingAr: "نموذج القطاع الزراعي المخصص",
+          subtitleAr: "تفاصيل الفرز",
+          allowCustomPickup: true,
+          customFields: [{ key: "farm_note", labelAr: "ملاحظة المزرعة", type: "text", required: false }],
+        },
+        COMMERCIAL: {
+          headingAr: "نموذج القطاع التجاري المخصص",
+          subtitleAr: "طلبات الجملة والتجزئة",
+          allowCustomPickup: true,
+          customFields: [{ key: "tax_no", labelAr: "الرقم الضريبي", type: "text", required: true }],
+        },
+      },
+    });
+    assert.equal(normCfg.sectorForms?.HARVEST.headingAr, "نموذج القطاع الزراعي المخصص");
+    assert.equal(normCfg.sectorForms?.COMMERCIAL.headingAr, "نموذج القطاع التجاري المخصص");
+    assert.equal(normCfg.sectorForms?.COMMERCIAL.customFields[0]?.labelAr, "الرقم الضريبي");
   });
 });
