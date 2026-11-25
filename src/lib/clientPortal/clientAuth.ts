@@ -20,6 +20,7 @@ export interface ClientPortalSessionPayload {
   slug: string;
   phone: string;
   disp: string;
+  sv: number;
   iat: number;
   exp: number;
 }
@@ -132,6 +133,7 @@ export function issueClientPortalToken(input: {
   tenantSlug?: string | null;
   phone: string;
   displayName: string;
+  sessionVersion?: number;
   ttlMs?: number;
 }): string {
   const now = Date.now();
@@ -148,6 +150,7 @@ export function issueClientPortalToken(input: {
     slug: String(input.tenantSlug || input.tenantId || "default").trim().toLowerCase(),
     phone: String(input.phone).trim(),
     disp: String(input.displayName).trim(),
+    sv: Number.isFinite(input.sessionVersion) && Number(input.sessionVersion) > 0 ? Number(input.sessionVersion) : 1,
     iat: now,
     exp: now + ttl,
   };
@@ -200,12 +203,61 @@ export function verifyClientPortalToken(token: string | null | undefined): Clien
       slug: String(parsed.slug || parsed.tid).trim().toLowerCase(),
       phone: String(parsed.phone || "").trim(),
       disp: String(parsed.disp || "").trim(),
+      sv: typeof parsed.sv === "number" && parsed.sv > 0 ? parsed.sv : 1,
       iat: Number(parsed.iat) || Date.now(),
       exp: parsed.exp,
     };
   } catch {
     return null;
   }
+}
+
+export function hashClientResetCode(clientAccountId: string, rawCode: string): string {
+  return crypto
+    .createHmac("sha256", getClientPortalSecret())
+    .update(`RESET_CODE_V1|${clientAccountId}|${rawCode.trim()}`, "utf8")
+    .digest("hex");
+}
+
+export function verifyClientResetCode(
+  clientAccountId: string,
+  candidateCode: string,
+  storedHash: string
+): boolean {
+  const candidate = String(candidateCode || "").trim();
+  if (!candidate || !storedHash) return false;
+  const computed = hashClientResetCode(clientAccountId, candidate);
+  const a = Buffer.from(computed, "utf8");
+  const b = Buffer.from(storedHash, "utf8");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+const RESET_RATE_BUCKETS = new Map<string, number[]>();
+
+/**
+ * Sliding-window in-memory rate limit guard for client portal password recovery.
+ */
+export function consumeClientResetRateLimit(
+  bucketKey: string,
+  maxAttempts = 6,
+  windowMs = 15 * 60 * 1000
+): boolean {
+  const now = Date.now();
+  const prev = (RESET_RATE_BUCKETS.get(bucketKey) || []).filter((ts) => now - ts < windowMs);
+  if (prev.length >= maxAttempts) {
+    RESET_RATE_BUCKETS.set(bucketKey, prev);
+    return false;
+  }
+  prev.push(now);
+  RESET_RATE_BUCKETS.set(bucketKey, prev);
+  if (RESET_RATE_BUCKETS.size > 5000) {
+    for (const [k, list] of RESET_RATE_BUCKETS.entries()) {
+      if (list.every((ts) => now - ts >= windowMs)) {
+        RESET_RATE_BUCKETS.delete(k);
+      }
+    }
+  }
+  return true;
 }
 
 export function extractClientTokenFromRequest(req?: Request | NextRequest | null): string | null {
@@ -324,6 +376,14 @@ export async function resolveAuthenticatedClient(req?: Request | NextRequest) {
 
   if (account.status === "SUSPENDED") {
     return { ok: false as const, status: 403, error: "تم تعليق هذا الحساب، يرجى التواصل مع الإدارة" };
+  }
+
+  if ((account.sessionVersion ?? 1) !== (payload.sv ?? 1)) {
+    return {
+      ok: false as const,
+      status: 401,
+      error: "تم إنهاء الجلسة بعد تحديث كلمة المرور، يرجى تسجيل الدخول مجدداً",
+    };
   }
 
   return {

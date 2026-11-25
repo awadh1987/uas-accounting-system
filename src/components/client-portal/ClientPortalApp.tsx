@@ -1,15 +1,20 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
 import {
   ArrowRight,
+  Bell,
+  Camera,
+  Check,
   CheckCircle2,
   ClipboardList,
   Clock,
   CreditCard,
+  Edit3,
   FileSpreadsheet,
+  KeyRound,
   LogIn,
   LogOut,
   MapPin,
@@ -17,6 +22,8 @@ import {
   Plus,
   Printer,
   RefreshCw,
+  RotateCcw,
+  ShieldAlert,
   ShieldCheck,
   Trash2,
   User,
@@ -26,6 +33,7 @@ import {
 import { UasDateInput } from "@/components/UasDateInput";
 import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
 import { PhoneContactInput } from "@/components/PhoneContactInput";
+import { SvgAvatar } from "@/components/SvgAvatar";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
 import {
   appendExportSignatureSheet,
@@ -40,7 +48,7 @@ import {
   setActiveClientExportActor,
 } from "@/lib/uiFormatters";
 import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
-import { exportOrShareBinaryFile } from "@/lib/nativeBridge";
+import { exportOrShareBinaryFile, isCapacitorNative } from "@/lib/nativeBridge";
 import { getStoredTenantId, getStoredTenantSlug, resolveApiBaseUrl } from "@/lib/apiClient";
 import type { TenantFormConfig } from "@/lib/clientPortal/portalConfig";
 
@@ -53,6 +61,11 @@ interface ClientAccountView {
   tradeName: string | null;
   phone: string;
   email: string;
+  avatarUrl?: string;
+  avatarColor?: string;
+  avatarChar?: string;
+  mustChangePassword?: boolean;
+  passwordUpdatedAt?: string | null;
   clientType: string;
   customClientType: string | null;
   preferredPickup: string;
@@ -61,6 +74,41 @@ interface ClientAccountView {
   notes: string | null;
   creditLimit: number;
   createdAt: string;
+}
+
+interface ClientStatementSummaryView {
+  creditLimit: number;
+  totalInvoiced: number;
+  totalPaid: number;
+  totalUnpaid: number;
+  creditAvailable: number | null;
+  creditUtilizationPct?: number;
+  openBillsCount?: number;
+  paidBillsCount?: number;
+  currency: string;
+}
+
+interface ClientReceiptView {
+  id: string;
+  voucherNumber: string;
+  date: string;
+  amount: number;
+  currency: string;
+  paymentMethod: string;
+  notes: string;
+}
+
+interface ClientNotificationView {
+  id: string;
+  draftNumber: string;
+  eventType: string;
+  eventLabelAr: string;
+  status: string;
+  statusLabelAr: string;
+  dispatchChannel: string;
+  createdAt: string;
+  sentAt: string | null;
+  previewText: string;
 }
 
 interface CatalogItemOption {
@@ -217,22 +265,31 @@ export function ClientPortalApp({
   const [catalogItems, setCatalogItems] = useState<CatalogItemOption[]>([]);
 
   const [account, setAccount] = useState<ClientAccountView | null>(null);
-  const [authTab, setAuthTab] = useState<"login" | "register">(() => {
+  const [authTab, setAuthTab] = useState<"login" | "register" | "forgot">(() => {
     if (initialAuthTab) return initialAuthTab;
     if (typeof window !== "undefined") {
       const sp = new URLSearchParams(window.location.search);
       if (sp.get("tab") === "register") return "register";
+      if (sp.get("tab") === "forgot") return "forgot";
     }
     return "login";
   });
   const [portalTab, setPortalTab] = useState<"new_request" | "requests" | "statement" | "profile">("new_request");
   const [toast, setToast] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
 
   // Login Form
   const [loginIdentifier, setLoginIdentifier] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
+
+  // Forgot Password Self-Service Flow
+  const [forgotStep, setForgotStep] = useState<"request" | "confirm">("request");
+  const [forgotIdentifier, setForgotIdentifier] = useState("");
+  const [forgotCode, setForgotCode] = useState("");
+  const [forgotNewPassword, setForgotNewPassword] = useState("");
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState("");
 
   // Registration Form
   const [regFullName, setRegFullName] = useState("");
@@ -263,6 +320,7 @@ export function ClientPortalApp({
     },
   ]);
   const [submittingReq, setSubmittingReq] = useState(false);
+  const [editingRequestId, setEditingRequestId] = useState<string | null>(null);
   const [reqError, setReqError] = useState<string | null>(null);
   const [confirmedReceipt, setConfirmedReceipt] = useState<ClientRequestView | null>(null);
 
@@ -275,28 +333,41 @@ export function ClientPortalApp({
   const [reqLoading, setReqLoading] = useState(false);
   const [reqRefreshedAt, setReqRefreshedAt] = useState("");
 
-  const [stmtTab, setStmtTab] = useState<"bills" | "ledger">("bills");
-  const [stmtSummary, setStmtSummary] = useState({
+  const [stmtTab, setStmtTab] = useState<"bills" | "receipts" | "ledger" | "notifications">("bills");
+  const [billStatusFilter, setBillStatusFilter] = useState<"ALL" | "OPEN" | "PAID">("ALL");
+  const [stmtSummary, setStmtSummary] = useState<ClientStatementSummaryView>({
     creditLimit: 0,
     totalInvoiced: 0,
     totalPaid: 0,
     totalUnpaid: 0,
-    creditAvailable: null as number | null,
+    creditAvailable: null,
+    creditUtilizationPct: 0,
+    openBillsCount: 0,
+    paidBillsCount: 0,
     currency: "YER",
   });
   const [billsList, setBillsList] = useState<ClientBillView[]>([]);
+  const [receiptsList, setReceiptsList] = useState<ClientReceiptView[]>([]);
+  const [notificationsList, setNotificationsList] = useState<ClientNotificationView[]>([]);
   const [statementRows, setStatementRows] = useState<StatementRowView[]>([]);
   const [stmtFrom, setStmtFrom] = useState("");
   const [stmtTo, setStmtTo] = useState("");
   const [stmtLoading, setStmtLoading] = useState(false);
   const [stmtRefreshedAt, setStmtRefreshedAt] = useState("");
 
-  // Profile Edit State
+  // Profile Edit State + Avatar + Password Change
   const [profName, setProfName] = useState("");
   const [profTradeName, setProfTradeName] = useState("");
   const [profEmail, setProfEmail] = useState("");
   const [profPickup, setProfPickup] = useState("");
+  const [profAvatarColor, setProfAvatarColor] = useState("#059669");
   const [profSaving, setProfSaving] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [currPassInput, setCurrPassInput] = useState("");
+  const [newPassInput, setNewPassInput] = useState("");
+  const [confirmPassInput, setConfirmPassInput] = useState("");
+  const [changingPass, setChangingPass] = useState(false);
 
   const showNotice = useCallback((msg: string) => {
     setToast(msg);
@@ -368,6 +439,10 @@ export function ClientPortalApp({
         setProfTradeName(data.account.tradeName || "");
         setProfEmail(data.account.email);
         setProfPickup(data.account.preferredPickup || "السوق");
+        setProfAvatarColor(data.account.avatarColor || "#059669");
+        if (data.account.mustChangePassword) {
+          setPortalTab("profile");
+        }
       }
       if (data.summary) setStmtSummary(data.summary);
       if (manual) showNotice("✅ تم تحديث حالة الحساب والرصيد");
@@ -416,15 +491,19 @@ export function ClientPortalApp({
       });
       if (res.ok) {
         const data = (await res.json()) as {
-          summary?: typeof stmtSummary;
+          summary?: ClientStatementSummaryView;
           bills?: ClientBillView[];
+          receipts?: ClientReceiptView[];
           statementRows?: StatementRowView[];
+          notifications?: ClientNotificationView[];
         };
         if (data.summary) setStmtSummary(data.summary);
         setBillsList(data.bills || []);
+        setReceiptsList(data.receipts || []);
         setStatementRows(data.statementRows || []);
+        setNotificationsList(data.notifications || []);
         setStmtRefreshedAt(new Date().toISOString());
-        if (manual) showNotice("✅ تم تحديث الفواتير وكشف الحساب");
+        if (manual) showNotice("✅ تم تحديث الفواتير وسندات القبض وكشف الحساب");
       }
     } finally {
       setStmtLoading(false);
@@ -538,7 +617,13 @@ export function ClientPortalApp({
       setProfTradeName(data.account.tradeName || "");
       setProfEmail(data.account.email);
       setProfPickup(data.account.preferredPickup || "السوق");
-      showNotice(`مرحباً ${data.account.fullName}`);
+      setProfAvatarColor(data.account.avatarColor || "#059669");
+      if (data.account.mustChangePassword) {
+        setPortalTab("profile");
+        showNotice("⚠️ يرجى تحديث كلمة المرور المؤقتة للمتابعة");
+      } else {
+        showNotice(`مرحباً ${data.account.fullName}`);
+      }
     } catch {
       setAuthError("تعذر الاتصال بالخادم، يرجى المحاولة مجدداً");
     } finally {
@@ -583,12 +668,289 @@ export function ClientPortalApp({
       setProfTradeName(data.account.tradeName || "");
       setProfEmail(data.account.email);
       setProfPickup(data.account.preferredPickup || "السوق");
+      setProfAvatarColor(data.account.avatarColor || "#059669");
       showNotice(data.message || "✅ تم تسجيل حسابك بنجاح");
     } catch {
       setAuthError("تعذر الاتصال بالخادم");
     } finally {
       setAuthBusy(false);
     }
+  }
+
+  async function handleForgotRequestSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthNotice(null);
+    setAuthBusy(true);
+    try {
+      const res = await fetch(apiUrl("/api/client-portal/forgot-password"), {
+        method: "POST",
+        headers: resolveClientHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          action: "REQUEST",
+          identifier: forgotIdentifier.trim(),
+        }),
+      });
+      const data = (await res.json()) as { message?: string; error?: string };
+      if (!res.ok) {
+        setAuthError(data.error || "تعذر معالجة طلب استعادة كلمة المرور");
+        return;
+      }
+      setAuthNotice(
+        data.message ||
+        "تم تسجيل طلب استعادة كلمة المرور، يرجى إدخال رمز التحقق فور استلامه من المنشأة."
+      );
+      setForgotStep("confirm");
+    } catch {
+      setAuthError("تعذر الاتصال بالخادم، يرجى المحاولة لاحقاً");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleForgotConfirmSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthNotice(null);
+    if (forgotNewPassword.trim().length < 4) {
+      setAuthError("كلمة المرور الجديدة يجب أن تتكون من 4 خانات على الأقل");
+      return;
+    }
+    if (forgotNewPassword !== forgotConfirmPassword) {
+      setAuthError("تأكيد كلمة المرور الجديدة غير متطابق");
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const res = await fetch(apiUrl("/api/client-portal/forgot-password"), {
+        method: "POST",
+        headers: resolveClientHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          action: "CONFIRM",
+          identifier: forgotIdentifier.trim(),
+          code: forgotCode.trim(),
+          newPassword: forgotNewPassword.trim(),
+        }),
+      });
+      const data = (await res.json()) as { message?: string; error?: string };
+      if (!res.ok) {
+        setAuthError(data.error || "تعذر تأكيد الرمز وتحديث كلمة المرور");
+        return;
+      }
+      setLoginIdentifier(forgotIdentifier.trim());
+      setLoginPassword("");
+      setForgotCode("");
+      setForgotNewPassword("");
+      setForgotConfirmPassword("");
+      setForgotStep("request");
+      setAuthTab("login");
+      setAuthNotice(data.message || "✅ تم تحديث كلمة المرور بنجاح");
+      showNotice("✅ تم تحديث كلمة المرور بنجاح، يمكنك الدخول الآن");
+    } catch {
+      setAuthError("تعذر الاتصال بالخادم");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const allowed = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"];
+    if (file.type && !allowed.includes(file.type.toLowerCase())) {
+      showNotice("صيغة الصورة غير مدعومة (PNG / JPG / WEBP / GIF فقط)");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      showNotice("حجم الصورة الشخصية يجب أن لا يتجاوز 2 ميجابايت");
+      return;
+    }
+    setUploadingAvatar(true);
+    try {
+      let res: Response;
+      if (isCapacitorNative()) {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("Read error"));
+          reader.readAsDataURL(file);
+        });
+        res = await fetch(apiUrl("/api/client-portal/me/avatar"), {
+          method: "POST",
+          credentials: "include",
+          headers: resolveClientHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ dataUrl }),
+        });
+      } else {
+        const form = new FormData();
+        form.append("file", file);
+        res = await fetch(apiUrl("/api/client-portal/me/avatar"), {
+          method: "POST",
+          credentials: "include",
+          headers: resolveClientHeaders(),
+          body: form,
+        });
+      }
+      const data = (await res.json()) as { account?: ClientAccountView; message?: string; error?: string };
+      if (!res.ok || !data.account) {
+        showNotice(data.error || "تعذر رفع الصورة الشخصية");
+        return;
+      }
+      setAccount(data.account);
+      showNotice(data.message || "✅ تم تحديث صورة الملف الشخصي");
+    } catch {
+      showNotice("تعذر رفع الصورة الشخصية");
+    } finally {
+      setUploadingAvatar(false);
+    }
+  }
+
+  async function handleRemoveClientAvatar() {
+    setUploadingAvatar(true);
+    try {
+      const res = await fetch(apiUrl("/api/client-portal/me/avatar"), {
+        method: "DELETE",
+        credentials: "include",
+        headers: resolveClientHeaders(),
+      });
+      const data = (await res.json()) as { account?: ClientAccountView; message?: string; error?: string };
+      if (!res.ok || !data.account) {
+        showNotice(data.error || "تعذر إزالة الصورة");
+        return;
+      }
+      setAccount(data.account);
+      showNotice(data.message || "✅ تمت إزالة الصورة الشخصية");
+    } finally {
+      setUploadingAvatar(false);
+    }
+  }
+
+  async function handleClientPasswordChange(e: React.FormEvent) {
+    e.preventDefault();
+    if (newPassInput.trim().length < 4) {
+      showNotice("كلمة المرور الجديدة يجب أن تكون 4 خانات على الأقل");
+      return;
+    }
+    if (newPassInput !== confirmPassInput) {
+      showNotice("تأكيد كلمة المرور الجديدة غير متطابق");
+      return;
+    }
+    setChangingPass(true);
+    try {
+      const res = await fetch(apiUrl("/api/client-portal/me"), {
+        method: "PATCH",
+        credentials: "include",
+        headers: resolveClientHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          currentPassword: currPassInput,
+          newPassword: newPassInput,
+        }),
+      });
+      const data = (await res.json()) as {
+        account?: ClientAccountView;
+        token?: string;
+        message?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.account) {
+        showNotice(data.error || "تعذر تحديث كلمة المرور");
+        return;
+      }
+      if (data.token) storeClientToken(data.token);
+      setAccount(data.account);
+      setCurrPassInput("");
+      setNewPassInput("");
+      setConfirmPassInput("");
+      showNotice(data.message || "✅ تم تغيير كلمة المرور بنجاح");
+    } finally {
+      setChangingPass(false);
+    }
+  }
+
+  function loadPickupIntoBuilder(pickupLocation: string, pickupType?: string, notes?: string | null) {
+    const matchedOpt = (formConfig?.pickupOptions || []).find(
+      (p) => p.labelAr === pickupLocation || (pickupType && p.type === pickupType && p.type !== "OTHER")
+    );
+    if (matchedOpt && matchedOpt.type !== "OTHER") {
+      setPickupCode(matchedOpt.code);
+      setCustomPickupText("");
+    } else {
+      const otherOpt = (formConfig?.pickupOptions || []).find((p) => p.type === "OTHER");
+      setPickupCode(otherOpt?.code || "OTHER");
+      setCustomPickupText(pickupLocation);
+    }
+    setPickupNotes(notes || "");
+  }
+
+  function handleQuickReorderFromRequest(req: ClientRequestView) {
+    setEditingRequestId(null);
+    setConfirmedReceipt(null);
+    loadPickupIntoBuilder(req.pickupLocation, req.pickupType, req.pickupNotes);
+    const clonedLines: DraftLineRow[] = req.lines.map((l, idx) => {
+      const matchedItem = catalogItems.find(
+        (c) => (l.itemId && c.id === l.itemId) || c.nameAr === l.itemTitle
+      );
+      const itemId = matchedItem ? matchedItem.id : l.itemId || "__CUSTOM__";
+      const liveUnitPrice =
+        resolveLineDefaultUnitPrice(itemId, l.unitCode, catalogItems, formConfig) ||
+        (l.unitPrice > 0 ? String(l.unitPrice) : "");
+      return {
+        rowKey: `reorder-${Date.now()}-${idx}`,
+        itemId,
+        itemTitle: l.itemTitle,
+        requestedQty: String(l.confirmedQty ?? l.requestedQty ?? 1),
+        unitCode: l.unitCode || "QAT_BUNCH",
+        customUnitLabel: l.customUnitLabel || "",
+        unitPrice: liveUnitPrice,
+        notes: l.notes || "",
+      };
+    });
+    if (clonedLines.length > 0) setLines(clonedLines);
+    setPortalTab("new_request");
+    showNotice(`✅ تم نسخ أصناف الطلب (${req.requestNumber}) لإعادة الطلب السريع`);
+  }
+
+  function handleQuickReorderFromBill(bill: ClientBillView) {
+    setEditingRequestId(null);
+    setConfirmedReceipt(null);
+    const clonedLines: DraftLineRow[] = (bill.items || []).map((it, idx) => {
+      const rawTitle = String(it.description || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+      const matchedItem = catalogItems.find((c) => c.nameAr === rawTitle || c.nameEn === rawTitle);
+      return {
+        rowKey: `bill-reorder-${Date.now()}-${idx}`,
+        itemId: matchedItem ? matchedItem.id : "__CUSTOM__",
+        itemTitle: matchedItem?.nameAr || rawTitle || it.description,
+        requestedQty: String(it.quantity || 1),
+        unitCode: "QAT_BUNCH",
+        customUnitLabel: "",
+        unitPrice: it.unitPrice > 0 ? String(it.unitPrice) : "",
+        notes: `إعادة طلب من الفاتورة ${bill.invoiceNumber}`,
+      };
+    });
+    if (clonedLines.length > 0) setLines(clonedLines);
+    setPortalTab("new_request");
+    showNotice(`✅ تم تحميل بنود الفاتورة (${bill.invoiceNumber}) في نموذج الطلب`);
+  }
+
+  function handleStartEditPendingRequest(req: ClientRequestView) {
+    setEditingRequestId(req.id);
+    setConfirmedReceipt(null);
+    loadPickupIntoBuilder(req.pickupLocation, req.pickupType, req.pickupNotes);
+    setLines(
+      req.lines.map((l, idx) => ({
+        rowKey: `edit-${Date.now()}-${idx}`,
+        itemId: l.itemId || "__CUSTOM__",
+        itemTitle: l.itemTitle,
+        requestedQty: String(l.requestedQty),
+        unitCode: l.unitCode || "QAT_BUNCH",
+        customUnitLabel: l.customUnitLabel || "",
+        unitPrice: l.unitPrice > 0 ? String(l.unitPrice) : "",
+        notes: l.notes || "",
+      }))
+    );
+    setPortalTab("new_request");
+    showNotice(`تعديل الطلب (${req.requestNumber}) — متاح قبل بدء مراجعة الإدارة`);
   }
 
   async function handleLogout() {
@@ -633,11 +995,15 @@ export function ClientPortalApp({
 
     setSubmittingReq(true);
     try {
-      const res = await fetch(apiUrl("/api/client-portal/requests"), {
-        method: "POST",
+      const targetUrl = editingRequestId
+        ? apiUrl(`/api/client-portal/requests/${editingRequestId}`)
+        : apiUrl("/api/client-portal/requests");
+      const res = await fetch(targetUrl, {
+        method: editingRequestId ? "PATCH" : "POST",
         credentials: "include",
         headers: resolveClientHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
+          ...(editingRequestId ? { action: "EDIT" } : {}),
           pickupType: activePickupOpt?.type || "MARKET",
           pickupLocation: activePickupOpt?.labelAr || "السوق",
           customPickupLocation: isCustomPickupSelected ? customPickupText.trim() : undefined,
@@ -668,8 +1034,14 @@ export function ClientPortalApp({
         return;
       }
 
+      const wasEditing = Boolean(editingRequestId);
+      setEditingRequestId(null);
       setConfirmedReceipt(data.request);
-      showNotice("✅ تم استلام طلبك وإرساله للإدارة للمراجعة");
+      showNotice(
+        wasEditing
+          ? "✅ تم تحديث الطلب بنجاح قبل المراجعة"
+          : "✅ تم استلام طلبك وإرساله للإدارة للمراجعة"
+      );
       setLines([
         {
           rowKey: `row-${Date.now()}`,
@@ -748,6 +1120,21 @@ export function ClientPortalApp({
     wsStmt["!views"] = [{ rightToLeft: true }];
     appendExportSignatureToWorksheet(wsStmt, Math.max(1, stmtSheetRows.length), sig);
     XLSX.utils.book_append_sheet(wb, wsStmt, "كشف الحساب");
+
+    const receiptRows = receiptsList.map((rc) => ({
+      "رقم السند": rc.voucherNumber,
+      "التاريخ": formatIsoToDmy(rc.date),
+      "المبلغ": rc.amount,
+      "العملة": rc.currency,
+      "البيان": rc.notes,
+    }));
+    const wsReceipts = XLSX.utils.json_to_sheet(
+      receiptRows.length > 0 ? receiptRows : [{ "الحالة": "لا توجد سندات قبض" }]
+    );
+    wsReceipts["!views"] = [{ rightToLeft: true }];
+    appendExportSignatureToWorksheet(wsReceipts, Math.max(1, receiptRows.length), sig);
+    XLSX.utils.book_append_sheet(wb, wsReceipts, "سندات القبض");
+
     appendExportSignatureSheet(wb, sig);
 
     const filename = buildTenantExportFilename({
@@ -906,10 +1293,10 @@ export function ClientPortalApp({
                 onClick={() => {
                   setAuthTab("login");
                   setAuthError(null);
+                  setAuthNotice(null);
                 }}
-                className={`flex-1 py-2 rounded-lg font-black inline-flex items-center justify-center gap-1.5 transition ${
-                  authTab === "login" ? "accent-bg shadow-sm" : "text-slate-600 dark:text-slate-300"
-                }`}
+                className={`flex-1 py-2 rounded-lg font-black inline-flex items-center justify-center gap-1.5 transition ${authTab === "login" ? "accent-bg shadow-sm" : "text-slate-600 dark:text-slate-300"
+                  }`}
               >
                 <LogIn className="w-3.5 h-3.5" />
                 <span>دخول العميل</span>
@@ -919,19 +1306,38 @@ export function ClientPortalApp({
                 onClick={() => {
                   setAuthTab("register");
                   setAuthError(null);
+                  setAuthNotice(null);
                 }}
-                className={`flex-1 py-2 rounded-lg font-black inline-flex items-center justify-center gap-1.5 transition ${
-                  authTab === "register" ? "accent-bg shadow-sm" : "text-slate-600 dark:text-slate-300"
-                }`}
+                className={`flex-1 py-2 rounded-lg font-black inline-flex items-center justify-center gap-1.5 transition ${authTab === "register" ? "accent-bg shadow-sm" : "text-slate-600 dark:text-slate-300"
+                  }`}
               >
                 <UserPlus className="w-3.5 h-3.5" />
-                <span>نموذج تسجيل عميل جديد</span>
+                <span>تسجيل عميل جديد</span>
+              </button>
+              <button
+                type="button"
+                data-testid="portal-auth-tab-forgot"
+                onClick={() => {
+                  setAuthTab("forgot");
+                  setAuthError(null);
+                  setAuthNotice(null);
+                }}
+                className={`flex-1 py-2 rounded-lg font-black inline-flex items-center justify-center gap-1.5 transition ${authTab === "forgot" ? "accent-bg shadow-sm" : "text-slate-600 dark:text-slate-300"
+                  }`}
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>نسيت كلمة المرور</span>
               </button>
             </div>
 
             {authError && (
               <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-xs font-bold">
                 {authError}
+              </div>
+            )}
+            {authNotice && (
+              <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-200 text-xs font-bold">
+                {authNotice}
               </div>
             )}
 
@@ -949,7 +1355,23 @@ export function ClientPortalApp({
                   />
                 </div>
                 <div>
-                  <label className="block font-bold mb-1">كلمة المرور / رمز PIN</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-bold">كلمة المرور / رمز PIN</label>
+                    <button
+                      type="button"
+                      data-testid="portal-forgot-password-link"
+                      onClick={() => {
+                        setForgotIdentifier(loginIdentifier);
+                        setForgotStep("request");
+                        setAuthError(null);
+                        setAuthNotice(null);
+                        setAuthTab("forgot");
+                      }}
+                      className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300 hover:underline"
+                    >
+                      نسيت كلمة المرور؟
+                    </button>
+                  </div>
                   <input
                     type="password"
                     required
@@ -967,6 +1389,111 @@ export function ClientPortalApp({
                   {authBusy ? "جاري الدخول..." : "دخول إلى حساب العميل"}
                 </button>
               </form>
+            ) : authTab === "forgot" ? (
+              <div className="space-y-4 text-xs">
+                <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setForgotStep("request")}
+                    className={`px-3 py-1 rounded-lg font-bold ${forgotStep === "request" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300" : "text-slate-500"
+                      }`}
+                  >
+                    1. طلب رمز الاستعادة
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setForgotStep("confirm")}
+                    className={`px-3 py-1 rounded-lg font-bold ${forgotStep === "confirm" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300" : "text-slate-500"
+                      }`}
+                  >
+                    2. إدخال الرمز وكلمة المرور الجديدة
+                  </button>
+                </div>
+
+                {forgotStep === "request" ? (
+                  <form onSubmit={handleForgotRequestSubmit} className="space-y-3">
+                    <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+                      أدخل رقم الجوال أو البريد الإلكتروني المسجل في بوابة هذه المنشأة لإصدار رمز تحقق صالح لمرة واحدة (تُرسل رسالة واتساب بعد مراجعة الإدارة أو عبر البريد المهيأ).
+                    </p>
+                    <div>
+                      <label className="block font-bold mb-1">رقم الجوال أو البريد الإلكتروني *</label>
+                      <PhoneContactInput
+                        testId="portal-forgot-identifier"
+                        required
+                        value={forgotIdentifier}
+                        onChange={setForgotIdentifier}
+                        placeholder="777123456 أو client@example.com"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={authBusy}
+                      className="w-full py-2.5 rounded-xl accent-bg font-black text-sm shadow-sm disabled:opacity-60"
+                    >
+                      {authBusy ? "جاري الطلب..." : "طلب رمز استعادة كلمة المرور"}
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleForgotConfirmSubmit} className="space-y-3">
+                    <div>
+                      <label className="block font-bold mb-1">رقم الجوال أو البريد الإلكتروني *</label>
+                      <input
+                        type="text"
+                        required
+                        value={forgotIdentifier}
+                        onChange={(e) => setForgotIdentifier(e.target.value)}
+                        placeholder="777123456 أو client@example.com"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold mb-1">رمز التحقق ذو الـ 6 أرقام *</label>
+                      <input
+                        type="text"
+                        required
+                        dir="ltr"
+                        value={forgotCode}
+                        onChange={(e) => setForgotCode(e.target.value)}
+                        placeholder="123456"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono text-center tracking-widest"
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block font-bold mb-1">كلمة المرور الجديدة *</label>
+                        <input
+                          type="password"
+                          required
+                          minLength={4}
+                          value={forgotNewPassword}
+                          onChange={(e) => setForgotNewPassword(e.target.value)}
+                          placeholder="••••••"
+                          className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-bold mb-1">تأكيد كلمة المرور الجديدة *</label>
+                        <input
+                          type="password"
+                          required
+                          minLength={4}
+                          value={forgotConfirmPassword}
+                          onChange={(e) => setForgotConfirmPassword(e.target.value)}
+                          placeholder="••••••"
+                          className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={authBusy}
+                      className="w-full py-2.5 rounded-xl accent-bg font-black text-sm shadow-sm disabled:opacity-60"
+                    >
+                      {authBusy ? "جاري التحديث..." : "تأكيد الرمز وتعيين كلمة المرور الجديدة"}
+                    </button>
+                  </form>
+                )}
+              </div>
             ) : (
               <form onSubmit={handleRegisterSubmit} className="space-y-3 text-xs">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1126,16 +1653,50 @@ export function ClientPortalApp({
           </div>
         ) : (
           <div className="space-y-5">
+            {/* Mandatory Password Update Guard Banner */}
+            {account.mustChangePassword && (
+              <div
+                data-testid="portal-must-change-password-banner"
+                className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 flex flex-wrap items-center justify-between gap-3 text-xs text-amber-900 dark:text-amber-200"
+              >
+                <div className="flex items-start gap-2.5">
+                  <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-black">يلزم تغيير كلمة المرور المؤقتة للمتابعة</div>
+                    <p className="text-[11px] leading-relaxed">
+                      تمت إعادة تعيين كلمة مرور حسابك بواسطة الإدارة أو استخدام كلمة مؤقتة. يرجى تعيين كلمة مرور جديدة من تبويب الملف الشخصي قبل إرسال طلبات جديدة.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPortalTab("profile")}
+                  className="px-3.5 py-1.5 rounded-xl bg-amber-600 text-white font-extrabold shrink-0"
+                >
+                  تغيير كلمة المرور الآن
+                </button>
+              </div>
+            )}
+
             {/* Portal Top Summary + Sub-Tabs */}
             <div className="card-surface rounded-2xl p-4 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs text-slate-500">مرحباً بك في بوابة العملاء</div>
-                  <div className="text-base font-black flex items-center gap-2">
-                    <span>{account.tradeName || account.fullName}</span>
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-extrabold">
-                      حساب مفعل
-                    </span>
+                <div className="flex items-center gap-3">
+                  <SvgAvatar
+                    char={account.avatarChar || account.fullName.trim().charAt(0) || "ع"}
+                    avatarUrl={account.avatarUrl}
+                    color={account.avatarColor || "#059669"}
+                    size={44}
+                    alt={account.tradeName || account.fullName}
+                  />
+                  <div>
+                    <div className="text-xs text-slate-500">مرحباً بك في بوابة العملاء</div>
+                    <div className="text-base font-black flex items-center gap-2 flex-wrap">
+                      <span>{account.tradeName || account.fullName}</span>
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-extrabold">
+                        حساب مفعل
+                      </span>
+                    </div>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2 text-xs">
@@ -1164,11 +1725,10 @@ export function ClientPortalApp({
                       setPortalTab(id);
                       if (id === "new_request") setConfirmedReceipt(null);
                     }}
-                    className={`px-3.5 py-2 rounded-xl font-extrabold inline-flex items-center gap-1.5 transition ${
-                      portalTab === id
-                        ? "accent-bg shadow-sm"
-                        : "border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
-                    }`}
+                    className={`px-3.5 py-2 rounded-xl font-extrabold inline-flex items-center gap-1.5 transition ${portalTab === id
+                      ? "accent-bg shadow-sm"
+                      : "border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                      }`}
                   >
                     <Icon className="w-3.5 h-3.5" />
                     <span>{label}</span>
@@ -1289,9 +1849,24 @@ export function ClientPortalApp({
                 </div>
               ) : (
                 <form onSubmit={handleSubmitGoodsRequest} className="card-surface rounded-2xl p-5 space-y-4 text-xs">
-                  <div>
-                    <h2 className="text-base font-black">{formConfig?.requestHeadingAr || "تسجيل طلب"}</h2>
-                    <p className="text-xs text-slate-500">{formConfig?.requestSubtitleAr}</p>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h2 className="text-base font-black">
+                        {editingRequestId
+                          ? "تعديل طلب قيد المراجعة"
+                          : formConfig?.requestHeadingAr || "تسجيل طلب"}
+                      </h2>
+                      <p className="text-xs text-slate-500">{formConfig?.requestSubtitleAr}</p>
+                    </div>
+                    {editingRequestId && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingRequestId(null)}
+                        className="px-3 py-1 rounded-xl border border-slate-300 dark:border-slate-700 font-bold text-[11px]"
+                      >
+                        إلغاء التعديل (طلب جديد)
+                      </button>
+                    )}
                   </div>
 
                   {reqError && (
@@ -1394,46 +1969,46 @@ export function ClientPortalApp({
                       const rowPriceNum = Math.max(0, Number(row.unitPrice) || 0);
                       const { totalAmount: rowTotal } = computeSaleTotals(rowQtyNum, rowPriceNum, 0);
                       return (
-                      <div
-                        key={row.rowKey}
-                        className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 space-y-2"
-                      >
-                        <div className="flex items-center justify-between flex-wrap gap-2">
-                          <span className="font-bold text-slate-500">الصنف #{idx + 1}</span>
-                          <div className="flex items-center gap-3">
-                            <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300">
-                              {rowPriceNum > 0
-                                ? `الإجمالي (P×Q): ${formatMoney(rowTotal)}`
-                                : "التسعير: تقديري / يُحدد عند المراجعة"}
-                            </span>
-                            {lines.length > 1 && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setLines((prev) => prev.filter((x) => x.rowKey !== row.rowKey))
-                                }
-                                className="text-rose-600 font-bold inline-flex items-center gap-0.5 hover:underline"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                <span>حذف السطر</span>
-                              </button>
-                            )}
+                        <div
+                          key={row.rowKey}
+                          className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 space-y-2"
+                        >
+                          <div className="flex items-center justify-between flex-wrap gap-2">
+                            <span className="font-bold text-slate-500">الصنف #{idx + 1}</span>
+                            <div className="flex items-center gap-3">
+                              <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300">
+                                {rowPriceNum > 0
+                                  ? `الإجمالي (P×Q): ${formatMoney(rowTotal)}`
+                                  : "التسعير: تقديري / يُحدد عند المراجعة"}
+                              </span>
+                              {lines.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setLines((prev) => prev.filter((x) => x.rowKey !== row.rowKey))
+                                  }
+                                  className="text-rose-600 font-bold inline-flex items-center gap-0.5 hover:underline"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>حذف السطر</span>
+                                </button>
+                              )}
+                            </div>
                           </div>
-                        </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-                          <div className="sm:col-span-4 space-y-1.5">
-                            {catalogItems.length > 0 && (
-                              <select
-                                aria-label="اختيار من الأصناف"
-                                value={row.itemId}
-                                onChange={(e) => {
-                                  const nextId = e.target.value;
-                                  const found = catalogItems.find((it) => it.id === nextId);
-                                  setLines((prev) =>
-                                    prev.map((x) =>
-                                      x.rowKey === row.rowKey
-                                        ? {
+                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                            <div className="sm:col-span-4 space-y-1.5">
+                              {catalogItems.length > 0 && (
+                                <select
+                                  aria-label="اختيار من الأصناف"
+                                  value={row.itemId}
+                                  onChange={(e) => {
+                                    const nextId = e.target.value;
+                                    const found = catalogItems.find((it) => it.id === nextId);
+                                    setLines((prev) =>
+                                      prev.map((x) =>
+                                        x.rowKey === row.rowKey
+                                          ? {
                                             ...x,
                                             itemId: nextId,
                                             itemTitle: found ? found.nameAr : nextId === "__CUSTOM__" ? "" : x.itemTitle,
@@ -1442,148 +2017,148 @@ export function ClientPortalApp({
                                                 ? ""
                                                 : resolveLineDefaultUnitPrice(nextId, x.unitCode, catalogItems, formConfig) || x.unitPrice,
                                           }
-                                        : x
+                                          : x
+                                      )
+                                    );
+                                  }}
+                                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold"
+                                >
+                                  <option value="">اختر الصنف أو اكتب أدناه...</option>
+                                  {catalogItems.map((it) => (
+                                    <option key={it.id} value={it.id}>
+                                      {it.nameAr} {it.unitPrice > 0 ? `(${fmtNum(it.unitPrice)} ريال)` : ""}
+                                    </option>
+                                  ))}
+                                  {(formConfig?.allowUnlistedItems ?? true) && (
+                                    <option value="__CUSTOM__">صنف آخر غير مدرج</option>
+                                  )}
+                                </select>
+                              )}
+                              <input
+                                type="text"
+                                required
+                                value={row.itemTitle}
+                                onChange={(e) =>
+                                  setLines((prev) =>
+                                    prev.map((x) =>
+                                      x.rowKey === row.rowKey ? { ...x, itemTitle: e.target.value } : x
                                     )
-                                  );
-                                }}
-                                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold"
-                              >
-                                <option value="">اختر الصنف أو اكتب أدناه...</option>
-                                {catalogItems.map((it) => (
-                                  <option key={it.id} value={it.id}>
-                                    {it.nameAr} {it.unitPrice > 0 ? `(${fmtNum(it.unitPrice)} ريال)` : ""}
-                                  </option>
-                                ))}
-                                {(formConfig?.allowUnlistedItems ?? true) && (
-                                  <option value="__CUSTOM__">صنف آخر غير مدرج</option>
-                                )}
-                              </select>
-                            )}
-                            <input
-                              type="text"
-                              required
-                              value={row.itemTitle}
-                              onChange={(e) =>
-                                setLines((prev) =>
-                                  prev.map((x) =>
-                                    x.rowKey === row.rowKey ? { ...x, itemTitle: e.target.value } : x
                                   )
-                                )
-                              }
-                              placeholder="اسم الصنف (مثال: قات صوطي درجة أولى)"
-                              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
-                            />
-                          </div>
+                                }
+                                placeholder="اسم الصنف (مثال: قات صوطي درجة أولى)"
+                                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-bold"
+                              />
+                            </div>
 
-                          <div className="sm:col-span-2">
-                            <label className="block text-[10px] text-slate-500 mb-1">الكمية *</label>
-                            <input
-                              type="number"
-                              step="any"
-                              min="0.01"
-                              required
-                              value={row.requestedQty}
-                              onChange={(e) =>
-                                setLines((prev) =>
-                                  prev.map((x) =>
-                                    x.rowKey === row.rowKey ? { ...x, requestedQty: e.target.value } : x
+                            <div className="sm:col-span-2">
+                              <label className="block text-[10px] text-slate-500 mb-1">الكمية *</label>
+                              <input
+                                type="number"
+                                step="any"
+                                min="0.01"
+                                required
+                                value={row.requestedQty}
+                                onChange={(e) =>
+                                  setLines((prev) =>
+                                    prev.map((x) =>
+                                      x.rowKey === row.rowKey ? { ...x, requestedQty: e.target.value } : x
+                                    )
                                   )
-                                )
-                              }
-                              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-mono font-bold"
-                            />
-                          </div>
+                                }
+                                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 font-mono font-bold"
+                              />
+                            </div>
 
-                          <div className="sm:col-span-2 space-y-1.5">
-                            <label className="block text-[10px] text-slate-500 mb-1">الوحدة *</label>
-                            <select
-                              value={row.unitCode}
-                              onChange={(e) => {
-                                const nextUnit = e.target.value;
-                                setLines((prev) =>
-                                  prev.map((x) =>
-                                    x.rowKey === row.rowKey
-                                      ? {
+                            <div className="sm:col-span-2 space-y-1.5">
+                              <label className="block text-[10px] text-slate-500 mb-1">الوحدة *</label>
+                              <select
+                                value={row.unitCode}
+                                onChange={(e) => {
+                                  const nextUnit = e.target.value;
+                                  setLines((prev) =>
+                                    prev.map((x) =>
+                                      x.rowKey === row.rowKey
+                                        ? {
                                           ...x,
                                           unitCode: nextUnit,
                                           unitPrice:
                                             resolveLineDefaultUnitPrice(x.itemId, nextUnit, catalogItems, formConfig) ||
                                             x.unitPrice,
                                         }
-                                      : x
-                                  )
-                                );
-                              }}
-                              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold"
-                            >
-                              {(formConfig?.unitOptions || []).map((u) => (
-                                <option key={u.code} value={u.code}>
-                                  {u.labelAr}
-                                </option>
-                              ))}
-                            </select>
-                            {row.unitCode === "OTHER" && (
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300 shrink-0">
-                                  اخرى:
-                                </span>
-                                <input
-                                  type="text"
-                                  required
-                                  value={row.customUnitLabel}
-                                  onChange={(e) =>
-                                    setLines((prev) =>
-                                      prev.map((x) =>
-                                        x.rowKey === row.rowKey
-                                          ? { ...x, customUnitLabel: e.target.value }
-                                          : x
-                                      )
+                                        : x
                                     )
-                                  }
-                                  placeholder="اكتب اسم الوحدة..."
-                                  className="w-full rounded-xl border border-emerald-400 bg-white dark:bg-slate-900 px-2.5 py-1.5"
-                                />
-                              </div>
-                            )}
-                          </div>
+                                  );
+                                }}
+                                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-bold"
+                              >
+                                {(formConfig?.unitOptions || []).map((u) => (
+                                  <option key={u.code} value={u.code}>
+                                    {u.labelAr}
+                                  </option>
+                                ))}
+                              </select>
+                              {row.unitCode === "OTHER" && (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300 shrink-0">
+                                    اخرى:
+                                  </span>
+                                  <input
+                                    type="text"
+                                    required
+                                    value={row.customUnitLabel}
+                                    onChange={(e) =>
+                                      setLines((prev) =>
+                                        prev.map((x) =>
+                                          x.rowKey === row.rowKey
+                                            ? { ...x, customUnitLabel: e.target.value }
+                                            : x
+                                        )
+                                      )
+                                    }
+                                    placeholder="اكتب اسم الوحدة..."
+                                    className="w-full rounded-xl border border-emerald-400 bg-white dark:bg-slate-900 px-2.5 py-1.5"
+                                  />
+                                </div>
+                              )}
+                            </div>
 
-                          <div className="sm:col-span-2">
-                            <label className="block text-[10px] text-slate-500 mb-1">سعر الوحدة (ريال)</label>
-                            <input
-                              type="number"
-                              step="any"
-                              min="0"
-                              value={row.unitPrice}
-                              onChange={(e) =>
-                                setLines((prev) =>
-                                  prev.map((x) =>
-                                    x.rowKey === row.rowKey ? { ...x, unitPrice: e.target.value } : x
+                            <div className="sm:col-span-2">
+                              <label className="block text-[10px] text-slate-500 mb-1">سعر الوحدة (ريال)</label>
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                value={row.unitPrice}
+                                onChange={(e) =>
+                                  setLines((prev) =>
+                                    prev.map((x) =>
+                                      x.rowKey === row.rowKey ? { ...x, unitPrice: e.target.value } : x
+                                    )
                                   )
-                                )
-                              }
-                              placeholder="يُحدد عند المراجعة"
-                              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-mono font-bold"
-                            />
-                          </div>
+                                }
+                                placeholder="يُحدد عند المراجعة"
+                                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 font-mono font-bold"
+                              />
+                            </div>
 
-                          <div className="sm:col-span-2">
-                            <label className="block text-[10px] text-slate-500 mb-1">ملاحظات</label>
-                            <input
-                              type="text"
-                              value={row.notes}
-                              onChange={(e) =>
-                                setLines((prev) =>
-                                  prev.map((x) =>
-                                    x.rowKey === row.rowKey ? { ...x, notes: e.target.value } : x
+                            <div className="sm:col-span-2">
+                              <label className="block text-[10px] text-slate-500 mb-1">ملاحظات</label>
+                              <input
+                                type="text"
+                                value={row.notes}
+                                onChange={(e) =>
+                                  setLines((prev) =>
+                                    prev.map((x) =>
+                                      x.rowKey === row.rowKey ? { ...x, notes: e.target.value } : x
+                                    )
                                   )
-                                )
-                              }
-                              placeholder="اختياري"
-                              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2"
-                            />
+                                }
+                                placeholder="اختياري"
+                                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2"
+                              />
+                            </div>
                           </div>
                         </div>
-                      </div>
                       );
                     })}
                   </div>
@@ -1618,7 +2193,11 @@ export function ClientPortalApp({
                       disabled={submittingReq}
                       className="w-full sm:w-auto px-6 py-2.5 rounded-xl accent-bg font-black text-sm shadow-md disabled:opacity-60"
                     >
-                      {submittingReq ? "جاري إرسال الطلب..." : "إرسال الطلب"}
+                      {submittingReq
+                        ? "جاري الحفظ والإرسال..."
+                        : editingRequestId
+                          ? "حفظ تعديلات الطلب"
+                          : "إرسال الطلب"}
                     </button>
                   </div>
                 </form>
@@ -1682,8 +2261,7 @@ export function ClientPortalApp({
                                   lines: r.lines
                                     .map(
                                       (l) =>
-                                        `${l.itemTitle} (${l.confirmedQty ?? l.requestedQty} ${l.displayUnitLabel}${
-                                          l.unitPrice > 0 ? ` × ${fmtNum(l.unitPrice)}` : ""
+                                        `${l.itemTitle} (${l.confirmedQty ?? l.requestedQty} ${l.displayUnitLabel}${l.unitPrice > 0 ? ` × ${fmtNum(l.unitPrice)}` : ""
                                         })`
                                     )
                                     .join("، "),
@@ -1730,74 +2308,136 @@ export function ClientPortalApp({
                   <div className="p-8 text-center text-slate-500">لا توجد طلبات مسجلة حالياً ضمن هذه الفلاتر.</div>
                 ) : (
                   <div className="space-y-3">
-                    {requestsList.map((r) => (
-                      <div key={r.id} className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono font-black px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
-                              <bdi dir="ltr">{r.requestNumber}</bdi>
-                            </span>
-                            <span className="px-2.5 py-0.5 rounded-full font-extrabold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
-                              {r.statusLabelAr}
-                            </span>
-                            <span className="text-slate-500 inline-flex items-center gap-1">
-                              <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-                              {r.pickupLocation}
-                            </span>
-                            <span className="font-mono text-slate-400">
-                              <bdi dir="ltr">{formatIsoToDmy(r.createdAt.slice(0, 10))}</bdi>
-                            </span>
-                          </div>
-                          <ActionOverflowMenu
-                            size="xs"
-                            align="end"
-                            items={[
-                              {
-                                id: "print",
-                                label: "طباعة الإيصال PDF",
-                                icon: <Printer className="w-3.5 h-3.5" />,
-                                onClick: () => printReceiptSpec(r),
-                              },
-                              {
-                                id: "cancel",
-                                label: "إلغاء الطلب",
-                                icon: <XCircle className="w-3.5 h-3.5" />,
-                                tone: "danger",
-                                hidden: r.status !== "PENDING_REVIEW",
-                                confirmTitle: `إلغاء الطلب (${r.requestNumber})`,
-                                confirmMessage: "هل أنت متأكد من إلغاء هذا الطلب؟",
-                                onClick: () => handleCancelPendingRequest(r.id),
-                              },
-                            ]}
-                          />
-                        </div>
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex flex-wrap gap-2">
-                            {r.lines.map((l) => (
-                              <span
-                                key={l.id}
-                                className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold"
-                              >
-                                {l.itemTitle}: <strong>{fmtNum(l.confirmedQty ?? l.requestedQty)}</strong> {l.displayUnitLabel}
-                                {l.unitPrice > 0 && (
-                                  <span className="text-emerald-700 dark:text-emerald-300 font-mono">
-                                    {" "}× {fmtNum(l.unitPrice)} = {formatMoney(l.lineTotal, r.currency || "YER")}
-                                  </span>
-                                )}
+                    {requestsList.map((r) => {
+                      const stepperStages = [
+                        { key: "PENDING_REVIEW", label: "قيد المراجعة" },
+                        { key: "CONFIRMED", label: "مؤكد" },
+                        { key: "READY_FOR_PICKUP", label: "جاهز للاستلام" },
+                        { key: "COMPLETED", label: "تم الاستلام" },
+                      ];
+                      const activeStageIdx = stepperStages.findIndex((st) => st.key === r.status);
+                      const isTerminalClosed = r.status === "CANCELLED" || r.status === "REJECTED";
+                      return (
+                        <div key={r.id} className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono font-black px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
+                                <bdi dir="ltr">{r.requestNumber}</bdi>
                               </span>
-                            ))}
+                              <span className="px-2.5 py-0.5 rounded-full font-extrabold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+                                {r.statusLabelAr}
+                              </span>
+                              {(r.status === "CONFIRMED" || r.status === "READY_FOR_PICKUP") && (
+                                <span className="px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 font-mono font-bold text-indigo-700 dark:text-indigo-200 text-[11px]">
+                                  كود الاستلام: <bdi dir="ltr">{r.requestNumber}</bdi>
+                                </span>
+                              )}
+                              <span className="text-slate-500 inline-flex items-center gap-1">
+                                <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                                {r.pickupLocation}
+                              </span>
+                              <span className="font-mono text-slate-400">
+                                <bdi dir="ltr">{formatIsoToDmy(r.createdAt.slice(0, 10))}</bdi>
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                data-testid={`portal-reorder-req-${r.id}`}
+                                onClick={() => handleQuickReorderFromRequest(r)}
+                                className="px-2.5 py-1 rounded-xl border border-emerald-400 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 font-bold text-[11px] inline-flex items-center gap-1"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                <span>إعادة طلب سريع</span>
+                              </button>
+                              <ActionOverflowMenu
+                                size="xs"
+                                align="end"
+                                items={[
+                                  {
+                                    id: "reorder",
+                                    label: "إعادة طلب سريع",
+                                    icon: <RotateCcw className="w-3.5 h-3.5" />,
+                                    onClick: () => handleQuickReorderFromRequest(r),
+                                  },
+                                  {
+                                    id: "edit",
+                                    label: "تعديل الطلب (قبل المراجعة)",
+                                    icon: <Edit3 className="w-3.5 h-3.5" />,
+                                    hidden: r.status !== "PENDING_REVIEW",
+                                    onClick: () => handleStartEditPendingRequest(r),
+                                  },
+                                  {
+                                    id: "print",
+                                    label: "طباعة الإيصال PDF",
+                                    icon: <Printer className="w-3.5 h-3.5" />,
+                                    onClick: () => printReceiptSpec(r),
+                                  },
+                                  {
+                                    id: "cancel",
+                                    label: "إلغاء الطلب",
+                                    icon: <XCircle className="w-3.5 h-3.5" />,
+                                    tone: "danger",
+                                    hidden: r.status !== "PENDING_REVIEW",
+                                    confirmTitle: `إلغاء الطلب (${r.requestNumber})`,
+                                    confirmMessage: "هل أنت متأكد من إلغاء هذا الطلب؟",
+                                    onClick: () => handleCancelPendingRequest(r.id),
+                                  },
+                                ]}
+                              />
+                            </div>
                           </div>
-                          <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300">
-                            {(r.totalConfirmed > 0 ? r.totalConfirmed : r.totalEstimated) > 0
-                              ? `الإجمالي: ${formatMoney(
+
+                          {!isTerminalClosed && (
+                            <div className="grid grid-cols-4 gap-1.5 pt-1 text-[10px]">
+                              {stepperStages.map((st, idx) => {
+                                const done = activeStageIdx >= idx;
+                                const isCurrent = activeStageIdx === idx;
+                                return (
+                                  <div
+                                    key={st.key}
+                                    className={`px-2 py-1 rounded-lg border text-center font-bold transition ${isCurrent
+                                      ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
+                                      : done
+                                        ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
+                                        : "bg-slate-50 dark:bg-slate-900 text-slate-400 border-slate-200 dark:border-slate-800"
+                                      }`}
+                                  >
+                                    {idx + 1}. {st.label}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap gap-2">
+                              {r.lines.map((l) => (
+                                <span
+                                  key={l.id}
+                                  className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold"
+                                >
+                                  {l.itemTitle}: <strong>{fmtNum(l.confirmedQty ?? l.requestedQty)}</strong> {l.displayUnitLabel}
+                                  {l.unitPrice > 0 && (
+                                    <span className="text-emerald-700 dark:text-emerald-300 font-mono">
+                                      {" "}× {fmtNum(l.unitPrice)} = {formatMoney(l.lineTotal, r.currency || "YER")}
+                                    </span>
+                                  )}
+                                </span>
+                              ))}
+                            </div>
+                            <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300">
+                              {(r.totalConfirmed > 0 ? r.totalConfirmed : r.totalEstimated) > 0
+                                ? `الإجمالي: ${formatMoney(
                                   r.totalConfirmed > 0 ? r.totalConfirmed : r.totalEstimated,
                                   r.currency || "YER"
                                 )}`
-                              : "التسعير: يُحدد عند المراجعة"}
-                          </span>
+                                : "التسعير: يُحدد عند المراجعة"}
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1819,45 +2459,76 @@ export function ClientPortalApp({
                       {formatMoney(stmtSummary.totalUnpaid)}
                     </div>
                   </div>
-                  <div className="card-surface rounded-2xl p-4">
-                    <div className="text-slate-500 font-bold">الحد الائتماني</div>
-                    <div className="text-lg font-black text-indigo-600 mt-1 tabular-nums">
+                  <div className="card-surface rounded-2xl p-4 space-y-1">
+                    <div className="text-slate-500 font-bold">الحد الائتماني والاستخدام</div>
+                    <div className="text-lg font-black text-indigo-600 tabular-nums">
                       {formatMoney(stmtSummary.creditLimit)}
                     </div>
                     {stmtSummary.creditAvailable !== null && (
-                      <div className="text-[10px] text-slate-400 mt-0.5">
-                        المتاح: {formatMoney(stmtSummary.creditAvailable)}
+                      <div className="text-[10px] text-slate-500">
+                        المتاح: <strong className="text-emerald-700 dark:text-emerald-300">{formatMoney(stmtSummary.creditAvailable)}</strong> ({stmtSummary.creditUtilizationPct ?? 0}%)
+                      </div>
+                    )}
+                    {stmtSummary.creditLimit > 0 && (
+                      <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${(stmtSummary.creditUtilizationPct ?? 0) >= 85
+                            ? "bg-rose-500"
+                            : (stmtSummary.creditUtilizationPct ?? 0) >= 60
+                              ? "bg-amber-500"
+                              : "bg-emerald-500"
+                            }`}
+                          style={{ width: `${Math.min(100, stmtSummary.creditUtilizationPct ?? 0)}%` }}
+                        />
                       </div>
                     )}
                   </div>
                   <div className="card-surface rounded-2xl p-4">
-                    <div className="text-slate-500 font-bold">الرصيد المستحق</div>
+                    <div className="text-slate-500 font-bold">حالة الفواتير</div>
                     <div className="text-lg font-black mt-1 tabular-nums">
-                      {formatMoney(stmtSummary.totalUnpaid)}
+                      {stmtSummary.openBillsCount ?? billsList.filter((b) => b.billStatus !== "PAID").length} مفتوحة /{" "}
+                      <span className="text-emerald-600">
+                        {stmtSummary.paidBillsCount ?? billsList.filter((b) => b.billStatus === "PAID").length} مسددة
+                      </span>
                     </div>
                   </div>
                 </div>
 
                 <div className="card-surface rounded-2xl p-5 space-y-4 text-xs">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="inline-flex rounded-xl border border-slate-200 dark:border-slate-700 p-1 bg-slate-50 dark:bg-slate-900">
+                    <div className="inline-flex flex-wrap rounded-xl border border-slate-200 dark:border-slate-700 p-1 bg-slate-50 dark:bg-slate-900 gap-1">
                       <button
                         type="button"
                         onClick={() => setStmtTab("bills")}
-                        className={`px-3 py-1.5 rounded-lg font-bold ${
-                          stmtTab === "bills" ? "accent-bg" : ""
-                        }`}
+                        className={`px-3 py-1.5 rounded-lg font-bold ${stmtTab === "bills" ? "accent-bg" : ""
+                          }`}
                       >
                         الفواتير ({billsList.length})
                       </button>
                       <button
                         type="button"
+                        onClick={() => setStmtTab("receipts")}
+                        className={`px-3 py-1.5 rounded-lg font-bold ${stmtTab === "receipts" ? "accent-bg" : ""
+                          }`}
+                      >
+                        سندات القبض والدفعات ({receiptsList.length})
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => setStmtTab("ledger")}
-                        className={`px-3 py-1.5 rounded-lg font-bold ${
-                          stmtTab === "ledger" ? "accent-bg" : ""
-                        }`}
+                        className={`px-3 py-1.5 rounded-lg font-bold ${stmtTab === "ledger" ? "accent-bg" : ""
+                          }`}
                       >
                         كشف الحساب التفصيلي ({statementRows.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setStmtTab("notifications")}
+                        className={`px-3 py-1.5 rounded-lg font-bold inline-flex items-center gap-1 ${stmtTab === "notifications" ? "accent-bg" : ""
+                          }`}
+                      >
+                        <Bell className="w-3.5 h-3.5" />
+                        <span>الإشعارات والواتساب ({notificationsList.length})</span>
                       </button>
                     </div>
 
@@ -1939,43 +2610,202 @@ export function ClientPortalApp({
                   </div>
 
                   {stmtTab === "bills" ? (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs text-right border-collapse">
-                        <thead>
-                          <tr className="border-b bg-slate-100/80 dark:bg-slate-800/70">
-                            <th className="p-2.5">رقم الفاتورة</th>
-                            <th className="p-2.5">التاريخ</th>
-                            <th className="p-2.5">الحالة</th>
-                            <th className="p-2.5">الإجمالي</th>
-                            <th className="p-2.5">المدفوع</th>
-                            <th className="p-2.5">غير المسدد</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                          {billsList.map((b) => (
-                            <tr key={b.id}>
-                              <td className="p-2.5 font-mono font-bold"><bdi dir="ltr">{b.invoiceNumber}</bdi></td>
-                              <td className="p-2.5 font-mono"><bdi dir="ltr">{formatIsoToDmy(b.date)}</bdi></td>
-                              <td className="p-2.5">
-                                <span
-                                  className={`px-2 py-0.5 rounded-full font-bold ${
-                                    b.billStatus === "PAID"
-                                      ? "bg-emerald-100 text-emerald-700"
-                                      : b.billStatus === "PARTIALLY_PAID"
-                                      ? "bg-amber-100 text-amber-800"
-                                      : "bg-rose-100 text-rose-700"
-                                  }`}
-                                >
-                                  {b.billStatusAr}
-                                </span>
-                              </td>
-                              <td className="p-2.5 font-bold tabular-nums">{fmtNum(b.totalAmount)}</td>
-                              <td className="p-2.5 text-emerald-600 font-bold tabular-nums">{fmtNum(b.paidAmount)}</td>
-                              <td className="p-2.5 text-rose-600 font-bold tabular-nums">{fmtNum(b.balanceDue)}</td>
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-1.5">
+                        {[
+                          { id: "ALL" as const, label: `الكل (${billsList.length})` },
+                          { id: "OPEN" as const, label: `مفتوحة / جزئية (${billsList.filter((b) => b.billStatus !== "PAID").length})` },
+                          { id: "PAID" as const, label: `مسددة (${billsList.filter((b) => b.billStatus === "PAID").length})` },
+                        ].map((f) => (
+                          <button
+                            key={f.id}
+                            type="button"
+                            onClick={() => setBillStatusFilter(f.id)}
+                            className={`px-2.5 py-1 rounded-lg border font-bold ${billStatusFilter === f.id
+                              ? "border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                              : "border-slate-200 dark:border-slate-700 text-slate-500"
+                              }`}
+                          >
+                            {f.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs text-right border-collapse">
+                          <thead>
+                            <tr className="border-b bg-slate-100/80 dark:bg-slate-800/70">
+                              <th className="p-2.5">رقم الفاتورة</th>
+                              <th className="p-2.5">التاريخ</th>
+                              <th className="p-2.5">الحالة</th>
+                              <th className="p-2.5">الإجمالي</th>
+                              <th className="p-2.5">المدفوع</th>
+                              <th className="p-2.5">غير المسدد</th>
+                              <th className="p-2.5">إجراءات</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                            {billsList
+                              .filter((b) =>
+                                billStatusFilter === "ALL"
+                                  ? true
+                                  : billStatusFilter === "OPEN"
+                                    ? b.billStatus !== "PAID"
+                                    : b.billStatus === "PAID"
+                              )
+                              .map((b) => (
+                                <tr key={b.id}>
+                                  <td className="p-2.5 font-mono font-bold"><bdi dir="ltr">{b.invoiceNumber}</bdi></td>
+                                  <td className="p-2.5 font-mono"><bdi dir="ltr">{formatIsoToDmy(b.date)}</bdi></td>
+                                  <td className="p-2.5">
+                                    <span
+                                      className={`px-2 py-0.5 rounded-full font-bold ${b.billStatus === "PAID"
+                                        ? "bg-emerald-100 text-emerald-700"
+                                        : b.billStatus === "PARTIALLY_PAID"
+                                          ? "bg-amber-100 text-amber-800"
+                                          : "bg-rose-100 text-rose-700"
+                                        }`}
+                                    >
+                                      {b.billStatusAr}
+                                    </span>
+                                  </td>
+                                  <td className="p-2.5 font-bold tabular-nums">{fmtNum(b.totalAmount)}</td>
+                                  <td className="p-2.5 text-emerald-600 font-bold tabular-nums">{fmtNum(b.paidAmount)}</td>
+                                  <td className="p-2.5 text-rose-600 font-bold tabular-nums">{fmtNum(b.balanceDue)}</td>
+                                  <td className="p-2.5">
+                                    <button
+                                      type="button"
+                                      data-testid={`portal-reorder-bill-${b.id}`}
+                                      onClick={() => handleQuickReorderFromBill(b)}
+                                      className="px-2 py-1 rounded-lg border border-emerald-400 text-emerald-700 dark:text-emerald-300 font-bold inline-flex items-center gap-1 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                                    >
+                                      <RotateCcw className="w-3 h-3" />
+                                      <span>إعادة طلب</span>
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : stmtTab === "receipts" ? (
+                    <div className="overflow-x-auto">
+                      {receiptsList.length === 0 ? (
+                        <div className="p-6 text-center text-slate-500">لا توجد سندات قبض مسجلة في هذه الفترة.</div>
+                      ) : (
+                        <table className="w-full text-xs text-right border-collapse">
+                          <thead>
+                            <tr className="border-b bg-slate-100/80 dark:bg-slate-800/70">
+                              <th className="p-2.5">رقم السند</th>
+                              <th className="p-2.5">التاريخ</th>
+                              <th className="p-2.5">الطريقة</th>
+                              <th className="p-2.5">المبلغ المسدد</th>
+                              <th className="p-2.5">البيان</th>
+                              <th className="p-2.5">إيصال PDF</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                            {receiptsList.map((rc) => (
+                              <tr key={rc.id}>
+                                <td className="p-2.5 font-mono font-bold"><bdi dir="ltr">{rc.voucherNumber}</bdi></td>
+                                <td className="p-2.5 font-mono"><bdi dir="ltr">{formatIsoToDmy(rc.date)}</bdi></td>
+                                <td className="p-2.5 font-bold">{rc.paymentMethod}</td>
+                                <td className="p-2.5 font-black text-emerald-600 tabular-nums">{formatMoney(rc.amount, rc.currency)}</td>
+                                <td className="p-2.5">{rc.notes}</td>
+                                <td className="p-2.5">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void printUasDocument({
+                                        titleAr: "إيصال سداد دفعة — بوابة العملاء",
+                                        titleEn: "Payment Receipt Voucher",
+                                        documentNumber: rc.voucherNumber,
+                                        documentDate: rc.date,
+                                        currency: rc.currency || "YER",
+                                        status: "POSTED",
+                                        format: "A4_PORTRAIT",
+                                        letterhead: portalLetterhead,
+                                        printedBy: account.fullName,
+                                        exportedBy: portalExportActor,
+                                        metadata: [
+                                          { labelAr: "العميل", labelEn: "Client", value: account.fullName },
+                                          { labelAr: "الجوال", labelEn: "Phone", value: account.phone },
+                                          { labelAr: "طريقة الدفع", labelEn: "Method", value: rc.paymentMethod },
+                                        ],
+                                        summaryCards: [
+                                          { labelAr: "المبلغ المستلم", labelEn: "Amount Paid", value: formatMoney(rc.amount, rc.currency), tone: "emerald" },
+                                        ],
+                                        tables: [
+                                          {
+                                            headingAr: "تفاصيل السند",
+                                            headingEn: "Voucher Details",
+                                            columns: [
+                                              { key: "ref", labelAr: "رقم السند" },
+                                              { key: "date", labelAr: "التاريخ" },
+                                              { key: "notes", labelAr: "البيان" },
+                                              { key: "amt", labelAr: "المبلغ", numeric: true },
+                                            ],
+                                            rows: [
+                                              {
+                                                ref: rc.voucherNumber,
+                                                date: formatIsoToDmy(rc.date),
+                                                notes: rc.notes || "سداد مستحق",
+                                                amt: formatMoney(rc.amount, rc.currency),
+                                              },
+                                            ],
+                                          },
+                                        ],
+                                      })
+                                    }
+                                    className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 font-bold inline-flex items-center gap-1"
+                                  >
+                                    <Printer className="w-3 h-3" />
+                                    <span>طباعة</span>
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  ) : stmtTab === "notifications" ? (
+                    <div className="space-y-2.5">
+                      {notificationsList.length === 0 ? (
+                        <div className="p-6 text-center text-slate-500">لا توجد إشعارات أو رسائل واتساب مسجلة حتى الآن.</div>
+                      ) : (
+                        notificationsList.map((n) => (
+                          <div
+                            key={n.id}
+                            className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/40 space-y-1"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-mono font-bold px-2 py-0.5 rounded bg-slate-200/70 dark:bg-slate-800">
+                                  <bdi dir="ltr">{n.draftNumber}</bdi>
+                                </span>
+                                <span className="font-extrabold">{n.eventLabelAr}</span>
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${n.status === "APPROVED_SENT" || n.status === "DISPATCHED_LINK"
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : n.status === "PENDING_APPROVAL"
+                                      ? "bg-amber-100 text-amber-800"
+                                      : "bg-slate-200 text-slate-600"
+                                    }`}
+                                >
+                                  {n.statusLabelAr}
+                                </span>
+                              </div>
+                              <span className="font-mono text-[10px] text-slate-400">
+                                <bdi dir="ltr">{formatIsoToDmy(n.createdAt.slice(0, 10))}</bdi>
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                              {n.previewText}
+                            </p>
+                          </div>
+                        ))
+                      )}
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
@@ -2011,101 +2841,240 @@ export function ClientPortalApp({
               </div>
             )}
 
-            {/* TAB 4: PROFILE */}
+            {/* TAB 4: UNIFIED CLIENT PROFILE, AVATAR & PASSWORD MANAGEMENT */}
             {portalTab === "profile" && (
-              <form
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  setProfSaving(true);
-                  try {
-                    const res = await fetch(apiUrl("/api/client-portal/me"), {
-                      method: "PATCH",
-                      credentials: "include",
-                      headers: resolveClientHeaders({ "Content-Type": "application/json" }),
-                      body: JSON.stringify({
-                        fullName: profName,
-                        tradeName: profTradeName,
-                        email: profEmail,
-                        preferredPickup: profPickup,
-                      }),
-                    });
-                    const data = (await res.json()) as {
-                      account?: ClientAccountView;
-                      message?: string;
-                      error?: string;
-                    };
-                    if (!res.ok || !data.account) {
-                      showNotice(data.error || "تعذر حفظ الملف الشخصي");
-                      return;
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 text-xs">
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    setProfSaving(true);
+                    try {
+                      const res = await fetch(apiUrl("/api/client-portal/me"), {
+                        method: "PATCH",
+                        credentials: "include",
+                        headers: resolveClientHeaders({ "Content-Type": "application/json" }),
+                        body: JSON.stringify({
+                          fullName: profName,
+                          tradeName: profTradeName,
+                          email: profEmail,
+                          preferredPickup: profPickup,
+                          avatarColor: profAvatarColor,
+                        }),
+                      });
+                      const data = (await res.json()) as {
+                        account?: ClientAccountView;
+                        message?: string;
+                        error?: string;
+                      };
+                      if (!res.ok || !data.account) {
+                        showNotice(data.error || "تعذر حفظ الملف الشخصي");
+                        return;
+                      }
+                      setAccount(data.account);
+                      showNotice(data.message || "✅ تم حفظ الملف الشخصي");
+                    } finally {
+                      setProfSaving(false);
                     }
-                    setAccount(data.account);
-                    showNotice(data.message || "✅ تم حفظ الملف الشخصي");
-                  } finally {
-                    setProfSaving(false);
-                  }
-                }}
-                className="card-surface rounded-2xl p-5 space-y-3 text-xs max-w-2xl"
-              >
-                <h2 className="text-base font-black">حسابي والملف الشخصي</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-bold mb-1">الاسم الكامل</label>
-                    <input
-                      type="text"
-                      required
-                      value={profName}
-                      onChange={(e) => setProfName(e.target.value)}
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-bold mb-1">الاسم التجاري</label>
-                    <input
-                      type="text"
-                      value={profTradeName}
-                      onChange={(e) => setProfTradeName(e.target.value)}
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-bold mb-1">رقم الجوال (ثابت وموثق)</label>
-                    <input
-                      type="text"
-                      disabled
-                      dir="ltr"
-                      value={account.phone}
-                      className="w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 px-3 py-2 font-mono opacity-75 text-right"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-bold mb-1">البريد الإلكتروني</label>
-                    <input
-                      type="email"
-                      required
-                      dir="ltr"
-                      value={profEmail}
-                      onChange={(e) => setProfEmail(e.target.value)}
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-right"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block font-bold mb-1">موقع الاستلام المفضل</label>
-                  <input
-                    type="text"
-                    value={profPickup}
-                    onChange={(e) => setProfPickup(e.target.value)}
-                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={profSaving}
-                  className="px-5 py-2 rounded-xl accent-bg font-extrabold disabled:opacity-50"
+                  }}
+                  className="card-surface rounded-2xl p-5 space-y-4"
                 >
-                  {profSaving ? "جاري الحفظ..." : "حفظ التعديلات"}
-                </button>
-              </form>
+                  <h2 className="text-base font-black">حسابي والملف الشخصي</h2>
+
+                  {/* Client Avatar Upload + Initials Color Fallback */}
+                  <div className="p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-900/40 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <SvgAvatar
+                          char={account.avatarChar || profName.trim().charAt(0) || "ع"}
+                          avatarUrl={account.avatarUrl}
+                          color={profAvatarColor}
+                          size={52}
+                          alt={profName}
+                        />
+                        <div>
+                          <div className="font-extrabold">صورة الملف الشخصي</div>
+                          <div className="text-[10px] text-slate-400">
+                            PNG / JPG / WEBP / GIF — بحد أقصى 2MB
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          ref={avatarFileInputRef}
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/gif"
+                          onChange={handleAvatarUpload}
+                          className="hidden"
+                          data-testid="portal-avatar-file-input"
+                        />
+                        <button
+                          type="button"
+                          data-testid="portal-avatar-upload-btn"
+                          disabled={uploadingAvatar}
+                          onClick={() => avatarFileInputRef.current?.click()}
+                          className="px-3 py-1.5 rounded-xl accent-bg font-extrabold inline-flex items-center gap-1 disabled:opacity-50"
+                        >
+                          <Camera className="w-3.5 h-3.5" />
+                          <span>{uploadingAvatar ? "جاري الرفع..." : "رفع صورة"}</span>
+                        </button>
+                        {account.avatarUrl && (
+                          <button
+                            type="button"
+                            data-testid="portal-avatar-remove-btn"
+                            disabled={uploadingAvatar}
+                            onClick={() => void handleRemoveClientAvatar()}
+                            className="px-2.5 py-1.5 rounded-xl border border-rose-300 text-rose-600 font-bold inline-flex items-center gap-1 disabled:opacity-50"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>إزالة</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[11px] font-bold text-slate-500">لون الشعار الافتراضي:</span>
+                      {["#059669", "#2563eb", "#7c3aed", "#d97706", "#db2777", "#0f766e"].map((hex) => (
+                        <button
+                          key={hex}
+                          type="button"
+                          onClick={() => setProfAvatarColor(hex)}
+                          className="w-6 h-6 rounded-full border-2 flex items-center justify-center"
+                          style={{
+                            backgroundColor: hex,
+                            borderColor: profAvatarColor === hex ? "#0f172a" : "transparent",
+                          }}
+                        >
+                          {profAvatarColor === hex && <Check className="w-3 h-3 text-white" />}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold mb-1">الاسم الكامل</label>
+                      <input
+                        type="text"
+                        required
+                        value={profName}
+                        onChange={(e) => setProfName(e.target.value)}
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold mb-1">الاسم التجاري</label>
+                      <input
+                        type="text"
+                        value={profTradeName}
+                        onChange={(e) => setProfTradeName(e.target.value)}
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold mb-1">رقم الجوال (ثابت وموثق)</label>
+                      <input
+                        type="text"
+                        disabled
+                        dir="ltr"
+                        value={account.phone}
+                        className="w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 px-3 py-2 font-mono opacity-75 text-right"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold mb-1">البريد الإلكتروني</label>
+                      <input
+                        type="email"
+                        required
+                        dir="ltr"
+                        value={profEmail}
+                        onChange={(e) => setProfEmail(e.target.value)}
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-right"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block font-bold mb-1">موقع الاستلام المفضل (استلام من:)</label>
+                    <input
+                      type="text"
+                      list="portal-pickup-suggestions"
+                      value={profPickup}
+                      onChange={(e) => setProfPickup(e.target.value)}
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                    />
+                    <datalist id="portal-pickup-suggestions">
+                      {(formConfig?.pickupOptions || [])
+                        .filter((p) => p.type !== "OTHER")
+                        .map((p) => (
+                          <option key={p.code} value={p.labelAr} />
+                        ))}
+                    </datalist>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={profSaving}
+                    className="px-5 py-2 rounded-xl accent-bg font-extrabold disabled:opacity-50"
+                  >
+                    {profSaving ? "جاري الحفظ..." : "حفظ بيانات الملف الشخصي"}
+                  </button>
+                </form>
+
+                {/* Password Update Card */}
+                <form
+                  onSubmit={handleClientPasswordChange}
+                  className="card-surface rounded-2xl p-5 space-y-3.5 self-start"
+                >
+                  <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                    <KeyRound className="w-4 h-4 text-indigo-600" />
+                    <h3 className="text-sm font-black">تغيير كلمة المرور والأمان</h3>
+                  </div>
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    تغيير كلمة المرور يؤدي تلقائياً إلى إنهاء جميع الجلسات المفتوحة على الأجهزة الأخرى حفاظاً على أمان حسابك.
+                  </p>
+                  <div>
+                    <label className="block font-bold mb-1">كلمة المرور الحالية / المؤقتة *</label>
+                    <input
+                      type="password"
+                      required
+                      value={currPassInput}
+                      onChange={(e) => setCurrPassInput(e.target.value)}
+                      placeholder="••••••"
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold mb-1">كلمة المرور الجديدة (4 خانات فأكثر) *</label>
+                    <input
+                      type="password"
+                      required
+                      minLength={4}
+                      value={newPassInput}
+                      onChange={(e) => setNewPassInput(e.target.value)}
+                      placeholder="••••••"
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold mb-1">تأكيد كلمة المرور الجديدة *</label>
+                    <input
+                      type="password"
+                      required
+                      minLength={4}
+                      value={confirmPassInput}
+                      onChange={(e) => setConfirmPassInput(e.target.value)}
+                      placeholder="••••••"
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={changingPass}
+                    className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black disabled:opacity-50"
+                  >
+                    {changingPass ? "جاري التحديث..." : "تحديث كلمة المرور الآن"}
+                  </button>
+                </form>
+              </div>
             )}
           </div>
         )}

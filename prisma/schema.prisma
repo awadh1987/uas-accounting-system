@@ -1504,31 +1504,54 @@ model TenantDevice {
 // =============================================================================
 
 model ClientPortalAccount {
-  id               String    @id @default(cuid())
-  customerId       String?
-  fullName         String
-  tradeName        String?
-  phone            String    @unique
-  email            String    @unique
-  passwordHash     String
-  clientType       String    @default("DIRECT_CLIENT") // WHOLESALE | RETAIL | DISTRIBUTOR | DIRECT_CLIENT | OTHER
-  customClientType String?
-  preferredPickup  String    @default("السوق")
-  customFieldsJson String    @default("{}")
-  status           String    @default("PENDING_APPROVAL") // PENDING_APPROVAL | ACTIVE | REJECTED | SUSPENDED
-  notes            String?
-  approvedById     String?
-  approvedByName   String?
-  approvedAt       DateTime?
-  rejectedReason   String?
-  lastLoginAt      DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  customerId         String?
+  fullName           String
+  tradeName          String?
+  phone              String    @unique
+  email              String    @unique
+  passwordHash       String
+  avatarUrl          String?
+  avatarColor        String    @default("#059669")
+  mustChangePassword Boolean   @default(false)
+  passwordUpdatedAt  DateTime?
+  sessionVersion     Int       @default(1)
+  clientType         String    @default("DIRECT_CLIENT") // WHOLESALE | RETAIL | DISTRIBUTOR | DIRECT_CLIENT | OTHER
+  customClientType   String?
+  preferredPickup    String    @default("السوق")
+  customFieldsJson   String    @default("{}")
+  status             String    @default("PENDING_APPROVAL") // PENDING_APPROVAL | ACTIVE | REJECTED | SUSPENDED
+  notes              String?
+  approvedById       String?
+  approvedByName     String?
+  approvedAt         DateTime?
+  rejectedReason     String?
+  lastLoginAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  requests ClientGoodsRequest[]
+  requests    ClientGoodsRequest[]
+  resetTokens ClientPasswordResetToken[]
 
   @@index([status, createdAt])
   @@index([customerId])
+}
+
+model ClientPasswordResetToken {
+  id              String              @id @default(cuid())
+  clientAccountId String
+  clientAccount   ClientPortalAccount @relation(fields: [clientAccountId], references: [id], onDelete: Cascade)
+  codeHash        String
+  initiatedBy     String              @default("SELF") // SELF | STAFF
+  staffUserId     String?
+  staffUserName   String?
+  expiresAt       DateTime
+  usedAt          DateTime?
+  attempts        Int                 @default(0)
+  createdAt       DateTime            @default(now())
+
+  @@index([clientAccountId, createdAt])
+  @@index([expiresAt])
 }
 
 model ClientGoodsRequest {

@@ -608,6 +608,16 @@ async function ensureAdditiveColumns(client: {
         { name: "approvedAt", ddl: 'ALTER TABLE "ClientGoodsRequest" ADD COLUMN "approvedAt" DATETIME' },
       ],
     },
+    {
+      table: "ClientPortalAccount",
+      columns: [
+        { name: "avatarUrl", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "avatarUrl" TEXT' },
+        { name: "avatarColor", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "avatarColor" TEXT NOT NULL DEFAULT \'#059669\'' },
+        { name: "mustChangePassword", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "mustChangePassword" INTEGER NOT NULL DEFAULT 0' },
+        { name: "passwordUpdatedAt", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "passwordUpdatedAt" DATETIME' },
+        { name: "sessionVersion", ddl: 'ALTER TABLE "ClientPortalAccount" ADD COLUMN "sessionVersion" INTEGER NOT NULL DEFAULT 1' },
+      ],
+    },
   ];
 
   const additiveTables = [
@@ -700,6 +710,11 @@ async function ensureAdditiveColumns(client: {
       "phone" TEXT NOT NULL,
       "email" TEXT NOT NULL,
       "passwordHash" TEXT NOT NULL,
+      "avatarUrl" TEXT,
+      "avatarColor" TEXT NOT NULL DEFAULT '#059669',
+      "mustChangePassword" INTEGER NOT NULL DEFAULT 0,
+      "passwordUpdatedAt" DATETIME,
+      "sessionVersion" INTEGER NOT NULL DEFAULT 1,
       "clientType" TEXT NOT NULL DEFAULT 'DIRECT_CLIENT',
       "customClientType" TEXT,
       "preferredPickup" TEXT NOT NULL DEFAULT 'السوق',
@@ -718,6 +733,21 @@ async function ensureAdditiveColumns(client: {
     `CREATE UNIQUE INDEX IF NOT EXISTS "ClientPortalAccount_email_key" ON "ClientPortalAccount"("email")`,
     `CREATE INDEX IF NOT EXISTS "ClientPortalAccount_status_createdAt_idx" ON "ClientPortalAccount"("status", "createdAt")`,
     `CREATE INDEX IF NOT EXISTS "ClientPortalAccount_customerId_idx" ON "ClientPortalAccount"("customerId")`,
+    `CREATE TABLE IF NOT EXISTS "ClientPasswordResetToken" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "clientAccountId" TEXT NOT NULL,
+      "codeHash" TEXT NOT NULL,
+      "initiatedBy" TEXT NOT NULL DEFAULT 'SELF',
+      "staffUserId" TEXT,
+      "staffUserName" TEXT,
+      "expiresAt" DATETIME NOT NULL,
+      "usedAt" DATETIME,
+      "attempts" INTEGER NOT NULL DEFAULT 0,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "ClientPasswordResetToken_clientAccountId_fkey" FOREIGN KEY ("clientAccountId") REFERENCES "ClientPortalAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    )`,
+    `CREATE INDEX IF NOT EXISTS "ClientPasswordResetToken_clientAccountId_createdAt_idx" ON "ClientPasswordResetToken"("clientAccountId", "createdAt")`,
+    `CREATE INDEX IF NOT EXISTS "ClientPasswordResetToken_expiresAt_idx" ON "ClientPasswordResetToken"("expiresAt")`,
     `CREATE TABLE IF NOT EXISTS "ClientGoodsRequest" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "requestNumber" TEXT NOT NULL,

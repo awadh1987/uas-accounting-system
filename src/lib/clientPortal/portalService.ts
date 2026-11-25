@@ -9,8 +9,11 @@ import {
 } from "@/lib/accounting/ledgerService";
 import { emitNotification } from "@/lib/notifications/notificationService";
 import {
+  consumeClientResetRateLimit,
+  hashClientResetCode,
   normalizeClientEmail,
   normalizeClientPhone,
+  verifyClientResetCode,
 } from "@/lib/clientPortal/clientAuth";
 import { getTenantFormConfig } from "@/lib/clientPortal/portalConfig";
 import { createWhatsAppDraftTx } from "@/lib/whatsapp/outboxService";
@@ -34,6 +37,11 @@ export interface ClientSafeAccountView {
   tradeName: string | null;
   phone: string;
   email: string;
+  avatarUrl: string;
+  avatarColor: string;
+  avatarChar: string;
+  mustChangePassword: boolean;
+  passwordUpdatedAt: string | null;
   clientType: string;
   customClientType: string | null;
   preferredPickup: string;
@@ -54,6 +62,10 @@ export function sanitizeClientAccount(
     tradeName: string | null;
     phone: string;
     email: string;
+    avatarUrl?: string | null;
+    avatarColor?: string | null;
+    mustChangePassword?: boolean;
+    passwordUpdatedAt?: Date | null;
     clientType: string;
     customClientType: string | null;
     preferredPickup: string;
@@ -72,6 +84,7 @@ export function sanitizeClientAccount(
   } catch {
     customFields = {};
   }
+  const cleanName = acc.fullName.trim();
   return {
     id: acc.id,
     customerId: acc.customerId,
@@ -79,6 +92,11 @@ export function sanitizeClientAccount(
     tradeName: acc.tradeName,
     phone: acc.phone,
     email: acc.email,
+    avatarUrl: acc.avatarUrl ?? "",
+    avatarColor: acc.avatarColor || "#059669",
+    avatarChar: cleanName.charAt(0) || "ع",
+    mustChangePassword: Boolean(acc.mustChangePassword),
+    passwordUpdatedAt: acc.passwordUpdatedAt ? acc.passwordUpdatedAt.toISOString() : null,
     clientType: acc.clientType,
     customClientType: acc.customClientType,
     preferredPickup: acc.preferredPickup,
@@ -90,6 +108,19 @@ export function sanitizeClientAccount(
     rejectedReason: acc.rejectedReason,
     createdAt: acc.createdAt.toISOString(),
   };
+}
+
+export async function findClientAccountByIdentifier(rawIdentifier: string) {
+  const idRaw = String(rawIdentifier || "").trim();
+  if (!idRaw) return null;
+  if (idRaw.includes("@")) {
+    const emailNorm = normalizeClientEmail(idRaw);
+    if (!emailNorm.valid) return null;
+    return prisma.clientPortalAccount.findUnique({ where: { email: emailNorm.normalized } });
+  }
+  const phoneNorm = normalizeClientPhone(idRaw);
+  if (!phoneNorm.valid) return null;
+  return prisma.clientPortalAccount.findUnique({ where: { phone: phoneNorm.normalized } });
 }
 
 export async function registerClientPortalAccount(params: {
@@ -231,19 +262,7 @@ export async function authenticateClientPortalAccount(params: {
     throw new Error("يرجى إدخال رقم الجوال أو البريد الإلكتروني وكلمة المرور");
   }
 
-  let account = null;
-  if (idRaw.includes("@")) {
-    const emailNorm = normalizeClientEmail(idRaw);
-    if (emailNorm.valid) {
-      account = await prisma.clientPortalAccount.findUnique({ where: { email: emailNorm.normalized } });
-    }
-  } else {
-    const phoneNorm = normalizeClientPhone(idRaw);
-    if (phoneNorm.valid) {
-      account = await prisma.clientPortalAccount.findUnique({ where: { phone: phoneNorm.normalized } });
-    }
-  }
-
+  const account = await findClientAccountByIdentifier(idRaw);
   if (!account || !verifyPassword(password, account.passwordHash)) {
     throw new Error("بيانات الدخول غير صحيحة");
   }
@@ -269,7 +288,10 @@ export async function authenticateClientPortalAccount(params: {
     creditLimit = Number(cust?.creditLimit || 0);
   }
 
-  return sanitizeClientAccount(updated, creditLimit);
+  return {
+    ...sanitizeClientAccount(updated, creditLimit),
+    sessionVersion: updated.sessionVersion ?? 1,
+  };
 }
 
 export async function updateClientPortalProfile(
@@ -279,6 +301,7 @@ export async function updateClientPortalProfile(
     tradeName?: string;
     email?: string;
     preferredPickup?: string;
+    avatarColor?: string;
     customFields?: Record<string, unknown>;
     notes?: string;
     newPassword?: string;
@@ -300,6 +323,7 @@ export async function updateClientPortalProfile(
   }
 
   let nextHash = existing.passwordHash;
+  let passwordChanged = false;
   if (patch.newPassword && patch.newPassword.trim()) {
     if (!patch.currentPassword || !verifyPassword(patch.currentPassword, existing.passwordHash)) {
       throw new Error("كلمة المرور الحالية غير صحيحة");
@@ -308,7 +332,13 @@ export async function updateClientPortalProfile(
       throw new Error("كلمة المرور الجديدة يجب أن تكون 4 أحرف على الأقل");
     }
     nextHash = hashPassword(patch.newPassword.trim());
+    passwordChanged = true;
   }
+
+  const cleanColor =
+    patch.avatarColor && /^#[0-9a-fA-F]{6}$/.test(patch.avatarColor.trim())
+      ? patch.avatarColor.trim()
+      : existing.avatarColor || "#059669";
 
   let mergedCustom: Record<string, unknown> = {};
   try {
@@ -320,6 +350,7 @@ export async function updateClientPortalProfile(
     mergedCustom = { ...mergedCustom, ...patch.customFields };
   }
 
+  const now = new Date();
   const updated = await prisma.clientPortalAccount.update({
     where: { id: existing.id },
     data: {
@@ -330,11 +361,26 @@ export async function updateClientPortalProfile(
         patch.preferredPickup !== undefined
           ? patch.preferredPickup.trim() || existing.preferredPickup
           : existing.preferredPickup,
+      avatarColor: cleanColor,
       customFieldsJson: JSON.stringify(mergedCustom),
       notes: patch.notes !== undefined ? patch.notes.trim() || null : existing.notes,
       passwordHash: nextHash,
+      ...(passwordChanged
+        ? {
+            mustChangePassword: false,
+            passwordUpdatedAt: now,
+            sessionVersion: { increment: 1 },
+          }
+        : {}),
     },
   });
+
+  if (passwordChanged) {
+    await prisma.clientPasswordResetToken.updateMany({
+      where: { clientAccountId: updated.id, usedAt: null },
+      data: { usedAt: now },
+    });
+  }
 
   let creditLimit = 0;
   if (updated.customerId) {
@@ -345,46 +391,28 @@ export async function updateClientPortalProfile(
     creditLimit = Number(cust?.creditLimit || 0);
   }
 
-  return sanitizeClientAccount(updated, creditLimit);
+  return {
+    account: sanitizeClientAccount(updated, creditLimit),
+    passwordChanged,
+    sessionVersion: updated.sessionVersion ?? 1,
+  };
 }
 
-export async function createClientGoodsRequest(params: {
-  clientAccountId: string;
-  pickupType?: string;
-  pickupLocation: string;
-  customPickupLocation?: string;
-  pickupNotes?: string;
-  customData?: Record<string, unknown>;
-  lines: Array<{
-    itemId?: string | null;
-    itemTitle: string;
-    requestedQty: number;
-    unitCode: string;
-    unitLabel: string;
-    customUnitLabel?: string | null;
-    unitPrice?: number | null;
-    notes?: string | null;
-  }>;
-}) {
-  const account = await prisma.clientPortalAccount.findUnique({
-    where: { id: params.clientAccountId },
-  });
-  if (!account) throw new Error("ACCOUNT_NOT_FOUND");
-  if (account.status !== "ACTIVE") {
-    throw new Error("حسابك بانتظار اعتماد إدارة المنشأة قبل إرسال الطلبات");
-  }
+interface RawClientRequestLineInput {
+  itemId?: string | null;
+  itemTitle: string;
+  requestedQty: number;
+  unitCode: string;
+  unitLabel: string;
+  customUnitLabel?: string | null;
+  unitPrice?: number | null;
+  notes?: string | null;
+}
 
-  const pickupTypeRaw = String(params.pickupType || "MARKET").toUpperCase();
-  const isCustomPickup = pickupTypeRaw === "OTHER" || params.pickupLocation.trim() === "أخرى";
-  const resolvedPickupLocation = isCustomPickup
-    ? String(params.customPickupLocation || "").trim()
-    : String(params.pickupLocation || "").trim();
-
-  if (!resolvedPickupLocation) {
-    throw new Error("يرجى تحديد موقع الاستلام (أو كتابة الموقع عند اختيار أخرى)");
-  }
-
-  if (!Array.isArray(params.lines) || params.lines.length === 0) {
+async function prepareValidatedRequestLines(
+  rawLines: RawClientRequestLineInput[]
+) {
+  if (!Array.isArray(rawLines) || rawLines.length === 0) {
     throw new Error("يرجى إضافة صنف واحد على الأقل للطلب");
   }
 
@@ -402,8 +430,8 @@ export async function createClientGoodsRequest(params: {
     notes: string | null;
   }> = [];
 
-  for (let i = 0; i < params.lines.length; i++) {
-    const raw = params.lines[i];
+  for (let i = 0; i < rawLines.length; i++) {
+    const raw = rawLines[i];
     const qty = Number(raw.requestedQty);
     if (!Number.isFinite(qty) || qty <= 0) {
       throw new Error(`الكمية في السطر ${i + 1} يجب أن تكون أكبر من صفر`);
@@ -477,6 +505,41 @@ export async function createClientGoodsRequest(params: {
     });
   }
 
+  return preparedLines;
+}
+
+export async function createClientGoodsRequest(params: {
+  clientAccountId: string;
+  pickupType?: string;
+  pickupLocation: string;
+  customPickupLocation?: string;
+  pickupNotes?: string;
+  customData?: Record<string, unknown>;
+  lines: RawClientRequestLineInput[];
+}) {
+  const account = await prisma.clientPortalAccount.findUnique({
+    where: { id: params.clientAccountId },
+  });
+  if (!account) throw new Error("ACCOUNT_NOT_FOUND");
+  if (account.status !== "ACTIVE") {
+    throw new Error("حسابك بانتظار اعتماد إدارة المنشأة قبل إرسال الطلبات");
+  }
+  if (account.mustChangePassword) {
+    throw new Error("MUST_CHANGE_PASSWORD: يرجى تحديث كلمة المرور المؤقتة من الملف الشخصي أولاً قبل إرسال الطلبات");
+  }
+
+  const pickupTypeRaw = String(params.pickupType || "MARKET").toUpperCase();
+  const isCustomPickup = pickupTypeRaw === "OTHER" || params.pickupLocation.trim() === "أخرى";
+  const resolvedPickupLocation = isCustomPickup
+    ? String(params.customPickupLocation || "").trim()
+    : String(params.pickupLocation || "").trim();
+
+  if (!resolvedPickupLocation) {
+    throw new Error("يرجى تحديد موقع الاستلام (أو كتابة الموقع عند اختيار أخرى)");
+  }
+
+  const preparedLines = await prepareValidatedRequestLines(params.lines);
+
   const totalEstimated = preparedLines.reduce((s, l) => dAdd(s, l.lineTotal, 4), 0);
   const requestNumber = `REQ-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${crypto
     .randomBytes(2)
@@ -546,6 +609,57 @@ export async function createClientGoodsRequest(params: {
   return serializeRequest(created);
 }
 
+export async function updatePendingClientRequest(params: {
+  requestId: string;
+  clientAccountId: string;
+  pickupType?: string;
+  pickupLocation: string;
+  customPickupLocation?: string;
+  pickupNotes?: string;
+  lines: RawClientRequestLineInput[];
+}) {
+  const existing = await prisma.clientGoodsRequest.findUnique({
+    where: { id: params.requestId },
+    include: { lines: { orderBy: { lineOrder: "asc" } } },
+  });
+  if (!existing || existing.clientAccountId !== params.clientAccountId) {
+    throw new Error("NOT_FOUND: الطلب غير موجود أو غير مصرح بالوصول إليه");
+  }
+  if (existing.status !== "PENDING_REVIEW" || existing.linkedSalesRecordId || existing.linkedSaleId) {
+    throw new Error("لا يمكن تعديل الطلب بعد بدء المراجعة أو الاعتماد من الإدارة");
+  }
+
+  const pickupTypeRaw = String(params.pickupType || existing.pickupType || "MARKET").toUpperCase();
+  const isCustomPickup = pickupTypeRaw === "OTHER" || params.pickupLocation.trim() === "أخرى";
+  const resolvedPickupLocation = isCustomPickup
+    ? String(params.customPickupLocation || "").trim()
+    : String(params.pickupLocation || existing.pickupLocation || "").trim();
+
+  if (!resolvedPickupLocation) {
+    throw new Error("يرجى تحديد موقع الاستلام");
+  }
+
+  const preparedLines = await prepareValidatedRequestLines(params.lines);
+  const totalEstimated = preparedLines.reduce((s, l) => dAdd(s, l.lineTotal, 4), 0);
+
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.clientGoodsRequestLine.deleteMany({ where: { requestId: existing.id } });
+    return tx.clientGoodsRequest.update({
+      where: { id: existing.id },
+      data: {
+        pickupType: pickupTypeRaw === "BRANCH" || pickupTypeRaw === "WAREHOUSE" || pickupTypeRaw === "OTHER" ? pickupTypeRaw : "MARKET",
+        pickupLocation: resolvedPickupLocation,
+        pickupNotes: params.pickupNotes !== undefined ? params.pickupNotes.trim() || null : existing.pickupNotes,
+        totalEstimated,
+        lines: { create: preparedLines },
+      },
+      include: { lines: { orderBy: { lineOrder: "asc" } } },
+    });
+  });
+
+  return serializeRequest(updated);
+}
+
 export function serializeRequest(req: {
   id: string;
   requestNumber: string;
@@ -588,6 +702,8 @@ export function serializeRequest(req: {
     tradeName: string | null;
     phone: string;
     email: string;
+    avatarUrl?: string | null;
+    avatarColor?: string | null;
     clientType: string;
     customerId: string | null;
   } | null;
@@ -663,6 +779,9 @@ export function serializeRequest(req: {
         tradeName: req.clientAccount.tradeName,
         phone: req.clientAccount.phone,
         email: req.clientAccount.email,
+        avatarUrl: req.clientAccount.avatarUrl ?? "",
+        avatarColor: req.clientAccount.avatarColor || "#059669",
+        avatarChar: req.clientAccount.fullName.trim().charAt(0) || "ع",
         clientType: req.clientAccount.clientType,
         customerId: req.clientAccount.customerId,
       }
@@ -703,9 +822,13 @@ export async function getClientPortalFinancialSnapshot(params: {
         totalPaid: 0,
         totalUnpaid: 0,
         creditAvailable: null as number | null,
+        creditUtilizationPct: 0,
+        openBillsCount: 0,
+        paidBillsCount: 0,
         currency: "YER",
       },
       bills: [],
+      receipts: [],
       statementRows: [],
     };
   }
@@ -726,6 +849,7 @@ export async function getClientPortalFinancialSnapshot(params: {
     }),
     prisma.receiptVoucher.findMany({
       where: { customerId: params.customerId },
+      include: { treasury: { select: { type: true } } },
       orderBy: { date: "asc" },
     }),
     prisma.saleTransaction.findMany({
@@ -851,6 +975,39 @@ export async function getClientPortalFinancialSnapshot(params: {
       return true;
     });
 
+  const openBillsCount = bills.filter((b) => b.billStatus !== "PAID").length;
+  const paidBillsCount = bills.filter((b) => b.billStatus === "PAID").length;
+  const creditUtilizationPct =
+    creditLimit > 0
+      ? Math.min(100, Math.round((totalUnpaid / creditLimit) * 1000) / 10)
+      : 0;
+
+  const clientReceipts = receipts
+    .map((rc) => {
+      const tType = (rc.treasury?.type || "VAULT").toUpperCase();
+      const paymentMethod =
+        tType === "BANK"
+          ? "تحويل بنكي"
+          : tType === "WALLET"
+          ? "محفظة إلكترونية"
+          : "نقداً";
+      return {
+        id: rc.id,
+        voucherNumber: rc.voucherNumber,
+        date: rc.date.toISOString().slice(0, 10),
+        amount: Number(rc.amount || 0),
+        currency: rc.currency || "YER",
+        paymentMethod,
+        notes: rc.notes || "",
+      };
+    })
+    .filter((row) => {
+      if (params.fromDate && row.date < params.fromDate) return false;
+      if (params.toDate && row.date > params.toDate) return false;
+      return true;
+    })
+    .reverse();
+
   return {
     summary: {
       creditLimit,
@@ -858,9 +1015,13 @@ export async function getClientPortalFinancialSnapshot(params: {
       totalPaid,
       totalUnpaid,
       creditAvailable,
+      creditUtilizationPct,
+      openBillsCount,
+      paidBillsCount,
       currency: "YER",
     },
     bills,
+    receipts: clientReceipts,
     statementRows,
   };
 }
@@ -1563,4 +1724,420 @@ export async function staffProcessGoodsRequest(params: {
   });
 
   return serializeRequest(handoverResult);
+}
+
+const WA_EVENT_LABELS_AR: Record<string, string> = {
+  CLIENT_APPROVED: "اعتماد الحساب",
+  REQUEST_RECEIVED: "استلام طلب",
+  REQUEST_CONFIRMED: "تأكيد طلب",
+  READY_FOR_PICKUP: "جاهز للاستلام",
+  HANDOVER_INVOICE: "فاتورة وتسليم",
+  PAYMENT_RECEIPT: "إيصال دفعة",
+  BALANCE_SUMMARY: "ملخص الرصيد",
+  PASSWORD_RESET: "استعادة كلمة المرور",
+  CUSTOM: "إشعار عام",
+};
+
+const WA_STATUS_LABELS_AR: Record<string, string> = {
+  PENDING_APPROVAL: "بانتظار الاعتماد",
+  DISPATCHED_LINK: "تم الإرسال (واتساب)",
+  APPROVED_SENT: "تم الإرسال",
+  SKIPPED: "متجاهل",
+  FAILED: "تعذر الإرسال",
+};
+
+const NON_ENUMERATING_RESET_MSG =
+  "في حال كانت البيانات مسجلة في هذه المنشأة، تم إنشاء رمز الاستعادة وإدراجه للمراجعة والإرسال عبر قنوات التواصل المعتمدة لدى المنشأة.";
+
+async function dispatchOptionalResetEmailWebhook(params: {
+  tenantSlug: string;
+  email: string;
+  fullName: string;
+  companyName: string;
+  resetCode: string;
+  expiresMinutes: number;
+  portalUrl: string;
+}): Promise<boolean> {
+  const emailWebhookUrl = (process.env.UAS_ALERT_EMAIL_WEBHOOK_URL || "").trim();
+  if (!emailWebhookUrl) return false;
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const token = (process.env.UAS_ALERT_EMAIL_WEBHOOK_TOKEN || "").trim();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(emailWebhookUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        kind: "CLIENT_PASSWORD_RESET",
+        tenantSlug: params.tenantSlug,
+        to: params.email,
+        subject: `رمز استعادة كلمة المرور — ${params.companyName}`,
+        body: `مرحباً ${params.fullName}، رمز التحقق الخاص بك: ${params.resetCode} (صالح لمدة ${params.expiresMinutes} دقيقة) عبر ${params.portalUrl}`,
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function requestClientPasswordReset(params: {
+  identifier: string;
+  tenantSlug: string;
+  tenantId: string;
+  portalUrl: string;
+  ipHint?: string;
+}) {
+  const raw = String(params.identifier || "").trim();
+  if (!raw) {
+    throw new Error("يرجى إدخال رقم الجوال أو البريد الإلكتروني");
+  }
+
+  const normalizedBucket = `${params.tenantId}:${raw.toLowerCase()}:${params.ipHint || "client"}`;
+  if (!consumeClientResetRateLimit(normalizedBucket, 5, 15 * 60 * 1000)) {
+    throw new Error("تم تجاوز الحد المسموح من طلبات الاستعادة، يرجى المحاولة بعد 15 دقيقة");
+  }
+
+  const account = await findClientAccountByIdentifier(raw);
+  if (!account || account.status === "REJECTED" || account.status === "SUSPENDED") {
+    return {
+      ok: true,
+      message: NON_ENUMERATING_RESET_MSG,
+    };
+  }
+
+  const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000);
+  const recentCount = await prisma.clientPasswordResetToken.count({
+    where: {
+      clientAccountId: account.id,
+      createdAt: { gte: fifteenMinAgo },
+    },
+  });
+  if (recentCount >= 5) {
+    return {
+      ok: true,
+      message: NON_ENUMERATING_RESET_MSG,
+    };
+  }
+
+  const resetCode = String(crypto.randomInt(100000, 1000000));
+  const codeHash = hashClientResetCode(account.id, resetCode);
+  const now = new Date();
+  const expiresMinutes = 15;
+  const expiresAt = new Date(now.getTime() + expiresMinutes * 60 * 1000);
+
+  let companyName = "المنشأة";
+  await prisma.$transaction(async (tx) => {
+    await tx.clientPasswordResetToken.updateMany({
+      where: { clientAccountId: account.id, usedAt: null },
+      data: { usedAt: now },
+    });
+
+    await tx.clientPasswordResetToken.create({
+      data: {
+        clientAccountId: account.id,
+        codeHash,
+        initiatedBy: "SELF",
+        expiresAt,
+      },
+    });
+
+    const profile = await tx.enterpriseProfile.findUnique({ where: { id: "default" } }).catch(() => null);
+    companyName = profile?.legalNameAr || "المنشأة";
+
+    await createWhatsAppDraftTx(tx, {
+      eventType: "PASSWORD_RESET",
+      clientAccountId: account.id,
+      customerId: account.customerId,
+      recipientName: account.fullName,
+      recipientPhone: account.phone,
+      variables: {
+        companyName,
+        resetCode,
+        expiresMinutes,
+        portalUrl: params.portalUrl,
+      },
+    });
+
+    await appendAuditLogTx(tx, {
+      userId: null,
+      userDisplay: account.fullName,
+      userRole: "CLIENT_PORTAL",
+      actionType: "CLIENT_PASSWORD_RESET_REQUESTED",
+      entityReference: account.id,
+      details: `[tenant:${params.tenantSlug}] طلب العميل استعادة كلمة المرور (${account.phone})`,
+    });
+  });
+
+  if (account.email) {
+    await dispatchOptionalResetEmailWebhook({
+      tenantSlug: params.tenantSlug,
+      email: account.email,
+      fullName: account.fullName,
+      companyName,
+      resetCode,
+      expiresMinutes,
+      portalUrl: params.portalUrl,
+    });
+  }
+
+  await emitNotification({
+    eventType: "SYSTEM_ALERT",
+    severity: "INFO",
+    titleAr: `طلب استعادة كلمة مرور عميل (${account.fullName})`,
+    titleEn: `Client Password Reset Request (${account.fullName})`,
+    messageAr: `طلب العميل ${account.fullName} رمز استعادة كلمة المرور — مسودة واتساب جاهزة في قائمة الاعتماد والإرسال.`,
+    messageEn: `Client ${account.fullName} requested password reset; WhatsApp draft queued.`,
+    targetTab: "customers",
+    targetEntityType: "ClientPortalAccount",
+    targetEntityId: account.id,
+  }).catch(() => null);
+
+  return {
+    ok: true,
+    message: NON_ENUMERATING_RESET_MSG,
+  };
+}
+
+export async function confirmClientPasswordReset(params: {
+  identifier: string;
+  code: string;
+  newPassword: string;
+  tenantSlug: string;
+}) {
+  const identifier = String(params.identifier || "").trim();
+  const code = String(params.code || "").trim();
+  const newPassword = String(params.newPassword || "").trim();
+
+  if (!identifier || !code) {
+    throw new Error("يرجى إدخال رقم الجوال أو البريد الإلكتروني ورمز التحقق");
+  }
+  if (newPassword.length < 4) {
+    throw new Error("كلمة المرور الجديدة يجب أن تتكون من 4 أحرف/أرقام على الأقل");
+  }
+
+  const account = await findClientAccountByIdentifier(identifier);
+  if (!account || account.status === "REJECTED" || account.status === "SUSPENDED") {
+    throw new Error("رمز التحقق غير صالح أو منتهي الصلاحية");
+  }
+
+  const now = new Date();
+  const token = await prisma.clientPasswordResetToken.findFirst({
+    where: {
+      clientAccountId: account.id,
+      usedAt: null,
+      expiresAt: { gt: now },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (!token) {
+    throw new Error("رمز التحقق غير صالح أو منتهي الصلاحية");
+  }
+
+  if (token.attempts >= 5) {
+    await prisma.clientPasswordResetToken.update({
+      where: { id: token.id },
+      data: { usedAt: now },
+    });
+    throw new Error("تم تجاوز الحد الأقصى لمحاولات التحقق، يرجى طلب رمز جديد");
+  }
+
+  if (!verifyClientResetCode(account.id, code, token.codeHash)) {
+    const nextAttempts = token.attempts + 1;
+    await prisma.clientPasswordResetToken.update({
+      where: { id: token.id },
+      data: {
+        attempts: nextAttempts,
+        ...(nextAttempts >= 5 ? { usedAt: now } : {}),
+      },
+    });
+    throw new Error("رمز التحقق غير صالح أو منتهي الصلاحية");
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.clientPasswordResetToken.updateMany({
+      where: { clientAccountId: account.id, usedAt: null },
+      data: { usedAt: now },
+    });
+
+    const acc = await tx.clientPortalAccount.update({
+      where: { id: account.id },
+      data: {
+        passwordHash: hashPassword(newPassword),
+        mustChangePassword: false,
+        passwordUpdatedAt: now,
+        sessionVersion: { increment: 1 },
+      },
+    });
+
+    await appendAuditLogTx(tx, {
+      userId: null,
+      userDisplay: acc.fullName,
+      userRole: "CLIENT_PORTAL",
+      actionType: "CLIENT_PASSWORD_RESET_COMPLETED",
+      entityReference: acc.id,
+      details: `[tenant:${params.tenantSlug}] أكمل العميل استعادة وتعيين كلمة المرور وإلغاء الجلسات السابقة (${acc.phone})`,
+    });
+
+    return acc;
+  });
+
+  let creditLimit = 0;
+  if (updated.customerId) {
+    const cust = await prisma.customer.findUnique({
+      where: { id: updated.customerId },
+      select: { creditLimit: true },
+    });
+    creditLimit = Number(cust?.creditLimit || 0);
+  }
+
+  return sanitizeClientAccount(updated, creditLimit);
+}
+
+function generateReadableTemporaryPassword(): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let out = "";
+  const bytes = crypto.randomBytes(8);
+  for (let i = 0; i < 8; i++) {
+    out += alphabet[bytes[i] % alphabet.length];
+  }
+  return out;
+}
+
+export async function staffResetClientPassword(params: {
+  clientAccountId: string;
+  customTemporaryPassword?: string;
+  portalUrl: string;
+  tenantSlug: string;
+  actor: { userId?: string | null; userDisplay: string; userRole: string };
+}) {
+  const existing = await prisma.clientPortalAccount.findUnique({
+    where: { id: params.clientAccountId },
+  });
+  if (!existing) throw new Error("CLIENT_ACCOUNT_NOT_FOUND");
+  if (existing.status === "REJECTED") {
+    throw new Error("لا يمكن إعادة تعيين كلمة مرور حساب مرفوض");
+  }
+
+  const customTemp = String(params.customTemporaryPassword || "").trim();
+  if (customTemp && customTemp.length < 4) {
+    throw new Error("كلمة المرور المؤقتة المخصصة يجب أن تكون 4 أحرف/أرقام على الأقل");
+  }
+
+  const temporaryPassword = customTemp || generateReadableTemporaryPassword();
+  const resetCode = String(crypto.randomInt(100000, 1000000));
+  const codeHash = hashClientResetCode(existing.id, resetCode);
+  const now = new Date();
+  const expiresMinutes = 30;
+  const expiresAt = new Date(now.getTime() + expiresMinutes * 60 * 1000);
+
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.clientPasswordResetToken.updateMany({
+      where: { clientAccountId: existing.id, usedAt: null },
+      data: { usedAt: now },
+    });
+
+    await tx.clientPasswordResetToken.create({
+      data: {
+        clientAccountId: existing.id,
+        codeHash,
+        initiatedBy: "STAFF",
+        staffUserId: params.actor.userId ?? null,
+        staffUserName: params.actor.userDisplay,
+        expiresAt,
+      },
+    });
+
+    const acc = await tx.clientPortalAccount.update({
+      where: { id: existing.id },
+      data: {
+        passwordHash: hashPassword(temporaryPassword),
+        mustChangePassword: true,
+        passwordUpdatedAt: now,
+        sessionVersion: { increment: 1 },
+      },
+    });
+
+    const profile = await tx.enterpriseProfile.findUnique({ where: { id: "default" } }).catch(() => null);
+    const companyName = profile?.legalNameAr || "المنشأة";
+
+    await createWhatsAppDraftTx(tx, {
+      eventType: "PASSWORD_RESET",
+      clientAccountId: acc.id,
+      customerId: acc.customerId,
+      recipientName: acc.fullName,
+      recipientPhone: acc.phone,
+      variables: {
+        companyName,
+        resetCode: `${temporaryPassword} (أو رمز الاستعادة: ${resetCode})`,
+        expiresMinutes,
+        portalUrl: params.portalUrl,
+      },
+    });
+
+    await appendAuditLogTx(tx, {
+      userId: params.actor.userId,
+      userDisplay: params.actor.userDisplay,
+      userRole: params.actor.userRole,
+      actionType: "CLIENT_PASSWORD_RESET_BY_STAFF",
+      entityReference: acc.id,
+      details: `[tenant:${params.tenantSlug}] إعادة تعيين كلمة مرور العميل (${acc.fullName} / ${acc.id}) بواسطة ${params.actor.userDisplay} (resetByUserId:${params.actor.userId || "staff"}) في ${now.toISOString()} مع تفعيل التغيير الإلزامي وإلغاء الجلسات السابقة`,
+    });
+
+    let creditLimit = 0;
+    if (acc.customerId) {
+      const cust = await tx.customer.findUnique({
+        where: { id: acc.customerId },
+        select: { creditLimit: true },
+      });
+      creditLimit = Number(cust?.creditLimit || 0);
+    }
+
+    return { acc, creditLimit, companyName };
+  });
+
+  if (result.acc.email) {
+    await dispatchOptionalResetEmailWebhook({
+      tenantSlug: params.tenantSlug,
+      email: result.acc.email,
+      fullName: result.acc.fullName,
+      companyName: result.companyName,
+      resetCode: temporaryPassword,
+      expiresMinutes,
+      portalUrl: params.portalUrl,
+    });
+  }
+
+  return {
+    client: sanitizeClientAccount(result.acc, result.creditLimit),
+    temporaryPassword,
+    resetCode,
+    expiresAt: expiresAt.toISOString(),
+  };
+}
+
+export async function getClientPortalNotifications(clientAccountId: string) {
+  const rows = await prisma.whatsAppOutboxMessage.findMany({
+    where: { clientAccountId },
+    orderBy: [{ createdAt: "desc" }],
+    take: 40,
+  });
+
+  return rows.map((row) => ({
+    id: row.id,
+    draftNumber: row.draftNumber,
+    eventType: row.eventType,
+    eventLabelAr: WA_EVENT_LABELS_AR[row.eventType] || row.eventType,
+    status: row.status,
+    statusLabelAr: WA_STATUS_LABELS_AR[row.status] || row.status,
+    dispatchChannel: row.dispatchChannel,
+    createdAt: row.createdAt.toISOString(),
+    sentAt: row.sentAt ? row.sentAt.toISOString() : null,
+    // Never leak OTP/reset secrets through portal notification list
+    previewText:
+      row.eventType === "PASSWORD_RESET"
+        ? "إشعار استعادة / تحديث كلمة المرور (محتوى الرمز محمي)"
+        : row.finalMessageText.slice(0, 160),
+  }));
 }

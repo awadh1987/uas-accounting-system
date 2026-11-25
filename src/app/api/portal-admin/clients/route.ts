@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
-import { authorizeApiAction, corsOptionsResponse, jsonError } from "@/lib/apiHelpers";
+import { authorizeApiAction, corsOptionsResponse, forbiddenError, jsonError } from "@/lib/apiHelpers";
+import { canApprovePortalClients, canResetPortalClientPassword } from "@/lib/permissions";
 import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
 import { resolveRequestTenantScope } from "@/lib/clientPortal/clientAuth";
 import {
   sanitizeClientAccount,
+  staffResetClientPassword,
   staffReviewClientRegistration,
 } from "@/lib/clientPortal/portalService";
 import { resolveTenantCloudUrl } from "@/lib/serverConnection";
@@ -84,16 +86,54 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     const clientAccountId = String(body.clientAccountId || "").trim();
     const actionRaw = String(body.action || "").trim().toUpperCase();
     const action =
-      actionRaw === "APPROVE" || actionRaw === "REJECT" || actionRaw === "SUSPEND"
+      actionRaw === "APPROVE" ||
+        actionRaw === "REJECT" ||
+        actionRaw === "SUSPEND" ||
+        actionRaw === "RESET_PASSWORD"
         ? actionRaw
         : null;
 
     if (!clientAccountId || !action) {
-      return jsonError("clientAccountId و action (APPROVE / REJECT / SUSPEND) مطلوبان", 400);
+      return jsonError(
+        "clientAccountId و action (APPROVE / REJECT / SUSPEND / RESET_PASSWORD) مطلوبان",
+        400
+      );
     }
 
     const scope = resolveRequestTenantScope(req);
-    const portalUrl = `${resolveTenantCloudUrl(scope.tenantSlug)}?portal=client`;
+    const portalUrl = `${resolveTenantCloudUrl(scope.tenantSlug)}/portal`;
+
+    if (action === "RESET_PASSWORD") {
+      if (!canResetPortalClientPassword(auth.actor.user || auth.actor.userRole)) {
+        return forbiddenError("⛔ ليس لديك صلاحية إعادة تعيين كلمات مرور عملاء البوابة");
+      }
+      const resetResult = await staffResetClientPassword({
+        clientAccountId,
+        customTemporaryPassword: body.temporaryPassword
+          ? String(body.temporaryPassword)
+          : undefined,
+        portalUrl,
+        tenantSlug: scope.tenantSlug,
+        actor: {
+          userId: auth.actor.userId,
+          userDisplay: auth.actor.userDisplay || "مسؤول النظام",
+          userRole: auth.actor.userRole,
+        },
+      });
+
+      return NextResponse.json({
+        success: true,
+        client: resetResult.client,
+        temporaryPassword: resetResult.temporaryPassword,
+        resetCode: resetResult.resetCode,
+        expiresAt: resetResult.expiresAt,
+        message: "✅ تم إنشاء كلمة مرور مؤقتة للعميل وإدراج إشعار واتساب للمراجعة والإرسال",
+      });
+    }
+
+    if (!canApprovePortalClients(auth.actor.user || auth.actor.userRole)) {
+      return forbiddenError("⛔ ليس لديك صلاحية اعتماد أو تعليق حسابات عملاء البوابة");
+    }
 
     const updated = await staffReviewClientRegistration({
       clientAccountId,

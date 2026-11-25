@@ -3,7 +3,10 @@ import { withTenantRoute } from "@/lib/prisma";
 import { corsOptionsResponse, jsonError } from "@/lib/apiHelpers";
 import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
 import { resolveAuthenticatedClient } from "@/lib/clientPortal/clientAuth";
-import { getClientPortalFinancialSnapshot } from "@/lib/clientPortal/portalService";
+import {
+  getClientPortalFinancialSnapshot,
+  getClientPortalNotifications,
+} from "@/lib/clientPortal/portalService";
 
 export const dynamic = "force-dynamic";
 
@@ -30,11 +33,14 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
     const fromDate = (searchParams.get("fromDate") || "").trim() || undefined;
     const toDate = (searchParams.get("toDate") || "").trim() || undefined;
 
-    const snapshot = await getClientPortalFinancialSnapshot({
-      customerId: auth.account.customerId,
-      fromDate,
-      toDate,
-    });
+    const [snapshot, notifications] = await Promise.all([
+      getClientPortalFinancialSnapshot({
+        customerId: auth.account.customerId,
+        fromDate,
+        toDate,
+      }),
+      getClientPortalNotifications(auth.account.id),
+    ]);
 
     return NextResponse.json({
       success: true,
@@ -42,6 +48,7 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
       clientName: auth.account.tradeName || auth.account.fullName,
       phone: auth.account.phone,
       ...snapshot,
+      notifications,
     });
   } catch (err) {
     console.error("GET /api/client-portal/statement error:", err);

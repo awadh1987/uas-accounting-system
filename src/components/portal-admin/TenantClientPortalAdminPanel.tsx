@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  Check,
   CheckCircle2,
   ClipboardCheck,
+  Copy,
+  KeyRound,
   MessageSquare,
   PackageCheck,
   RefreshCw,
@@ -17,6 +20,7 @@ import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
 import { formatIsoToDmy, formatMoney, formatRefreshTimestamp } from "@/lib/uiFormatters";
 import { PhoneContactInput } from "@/components/PhoneContactInput";
+import { SvgAvatar } from "@/components/SvgAvatar";
 import type { TenantFormConfig } from "@/lib/clientPortal/portalConfig";
 import type { TenantWhatsAppSettingsPublic } from "@/lib/whatsapp/outboxService";
 
@@ -27,6 +31,10 @@ interface StaffClientAccount {
   tradeName: string | null;
   phone: string;
   email: string;
+  avatarUrl?: string;
+  avatarColor?: string;
+  avatarChar?: string;
+  mustChangePassword?: boolean;
   clientType: string;
   preferredPickup: string;
   status: string;
@@ -60,6 +68,9 @@ interface StaffRequestItem {
     fullName: string;
     phone: string;
     customerId: string | null;
+    avatarUrl?: string;
+    avatarColor?: string;
+    avatarChar?: string;
   };
   lines: Array<{
     id: string;
@@ -106,13 +117,21 @@ export function TenantClientPortalAdminPanel({
   const [loading, setLoading] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState("");
 
-  // Registrations
+  // Registrations & Client Password Reset
   const [clients, setClients] = useState<StaffClientAccount[]>([]);
   const [availableCustomers, setAvailableCustomers] = useState<
     Array<{ id: string; code: string; nameAr: string; phone: string }>
   >([]);
   const [creditEdits, setCreditEdits] = useState<Record<string, string>>({});
   const [linkCustEdits, setLinkCustEdits] = useState<Record<string, string>>({});
+  const [resetBusyClientId, setResetBusyClientId] = useState<string | null>(null);
+  const [resetResultBanner, setResetResultBanner] = useState<{
+    clientName: string;
+    phone: string;
+    temporaryPassword: string;
+    resetCode: string;
+  } | null>(null);
+  const [copiedResetFlag, setCopiedResetFlag] = useState(false);
 
   // Incoming Requests
   const [requests, setRequests] = useState<StaffRequestItem[]>([]);
@@ -212,6 +231,48 @@ export function TenantClientPortalAdminPanel({
     }
     onToast(data.message || "✅ تم تحديث حالة العميل");
     await Promise.all([loadAll(false), onRefreshState?.()]);
+  }
+
+  async function handleStaffResetClientPassword(client: StaffClientAccount) {
+    if (
+      !confirm(
+        `هل تريد إعادة تعيين كلمة مرور العميل (${client.fullName})؟ سيتم إنهاء جلساته الحالية وإلزامه بتغيير كلمة المرور عند الدخول وتجهيز إشعار واتساب للمراجعة.`
+      )
+    ) {
+      return;
+    }
+    setResetBusyClientId(client.id);
+    try {
+      const res = await fetch("/api/portal-admin/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientAccountId: client.id,
+          action: "RESET_PASSWORD",
+        }),
+      });
+      const data = (await res.json()) as {
+        temporaryPassword?: string;
+        resetCode?: string;
+        message?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.temporaryPassword) {
+        onToast(data.error || "تعذر إعادة تعيين كلمة مرور العميل");
+        return;
+      }
+      setResetResultBanner({
+        clientName: client.fullName,
+        phone: client.phone,
+        temporaryPassword: data.temporaryPassword,
+        resetCode: data.resetCode || "",
+      });
+      setCopiedResetFlag(false);
+      onToast(data.message || "✅ تم إنشاء كلمة مرور مؤقتة وإدراج إشعار واتساب للمراجعة");
+      await loadAll(false);
+    } finally {
+      setResetBusyClientId(null);
+    }
   }
 
   async function handleRequestAction(
@@ -390,6 +451,13 @@ export function TenantClientPortalAdminPanel({
                     <span className="font-mono font-black px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
                       <bdi dir="ltr">{r.requestNumber}</bdi>
                     </span>
+                    <SvgAvatar
+                      char={r.clientAccount?.avatarChar || (r.clientAccount?.fullName || "ع").charAt(0)}
+                      avatarUrl={r.clientAccount?.avatarUrl}
+                      color={r.clientAccount?.avatarColor || "#059669"}
+                      size={24}
+                      alt={r.clientAccount?.fullName || "عميل"}
+                    />
                     <span className="font-extrabold text-sm">{r.clientAccount?.fullName || "عميل"}</span>
                     <bdi dir="ltr" className="font-mono text-slate-500">{r.clientAccount?.phone}</bdi>
                     <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-200 font-bold">
@@ -569,6 +637,60 @@ export function TenantClientPortalAdminPanel({
       {/* SECTION 2: NEW CLIENT REGISTRATIONS */}
       {section === "registrations" && (
         <div className="space-y-3">
+          {resetResultBanner && (
+            <div
+              data-testid="staff-client-reset-banner"
+              className="p-4 rounded-2xl border border-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 space-y-2"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-black text-emerald-800 dark:text-emerald-200 flex items-center gap-1.5">
+                  <KeyRound className="w-4 h-4" />
+                  <span>تمت إعادة تعيين كلمة مرور العميل: {resetResultBanner.clientName}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const text = `كلمة المرور المؤقتة للعميل ${resetResultBanner.clientName}: ${resetResultBanner.temporaryPassword}${
+                        resetResultBanner.resetCode ? ` | رمز الاستعادة: ${resetResultBanner.resetCode}` : ""
+                      }`;
+                      void navigator.clipboard?.writeText(text);
+                      setCopiedResetFlag(true);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-emerald-300 text-[11px] font-bold inline-flex items-center gap-1"
+                  >
+                    {copiedResetFlag ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedResetFlag ? "تم النسخ" : "نسخ البيانات"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSection("whatsapp")}
+                    className="px-3 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-extrabold inline-flex items-center gap-1"
+                  >
+                    <Send className="w-3 h-3" />
+                    <span>مراجعة وإرسال مسودة واتساب</span>
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-4 text-xs">
+                <span>
+                  كلمة المرور المؤقتة:{" "}
+                  <code dir="ltr" className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 font-mono font-black text-emerald-700 dark:text-emerald-300">
+                    {resetResultBanner.temporaryPassword}
+                  </code>
+                </span>
+                {resetResultBanner.resetCode && (
+                  <span>
+                    رمز التحقق (صالح 30 دقيقة):{" "}
+                    <code dir="ltr" className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 font-mono font-black">
+                      {resetResultBanner.resetCode}
+                    </code>
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
           {clients.length === 0 ? (
             <div className="p-6 rounded-2xl bg-slate-50 dark:bg-slate-800/40 text-center text-slate-500">
               لا توجد طلبات تسجيل عملاء عبر البوابة حالياً.
@@ -579,6 +701,14 @@ export function TenantClientPortalAdminPanel({
                 key={c.id}
                 className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 flex flex-wrap items-center justify-between gap-3"
               >
+                <div className="flex items-start gap-3">
+                  <SvgAvatar
+                    char={c.avatarChar || c.fullName.trim().charAt(0) || "ع"}
+                    avatarUrl={c.avatarUrl}
+                    color={c.avatarColor || "#059669"}
+                    size={42}
+                    alt={c.fullName}
+                  />
                 <div className="space-y-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-black text-sm">{c.fullName}</span>
@@ -594,6 +724,11 @@ export function TenantClientPortalAdminPanel({
                     >
                       {c.status}
                     </span>
+                    {c.mustChangePassword && (
+                      <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200 font-bold text-[10px]">
+                        تغيير كلمة المرور مطلوب
+                      </span>
+                    )}
                     {c.linkedAccountCode && (
                       <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-emerald-50 text-emerald-700">
                         COA {c.linkedAccountCode}
@@ -608,6 +743,21 @@ export function TenantClientPortalAdminPanel({
                     <span>الحد الائتماني: {formatMoney(c.creditLimit)}</span>
                   </div>
                 </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                {c.status !== "REJECTED" && (
+                  <button
+                    type="button"
+                    data-testid={`staff-reset-client-${c.id}`}
+                    disabled={resetBusyClientId === c.id}
+                    onClick={() => void handleStaffResetClientPassword(c)}
+                    className="px-2.5 py-1.5 rounded-xl border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 font-bold inline-flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <KeyRound className="w-3.5 h-3.5" />
+                    <span>{resetBusyClientId === c.id ? "جاري التعيين..." : "إعادة تعيين كلمة المرور"}</span>
+                  </button>
+                )}
 
                 {c.status === "PENDING_APPROVAL" && (
                   <div className="flex flex-wrap items-center gap-2">
@@ -653,6 +803,7 @@ export function TenantClientPortalAdminPanel({
                     </button>
                   </div>
                 )}
+                </div>
               </div>
             ))
           )}

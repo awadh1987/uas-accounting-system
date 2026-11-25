@@ -3,7 +3,10 @@ import { prisma, withTenantRoute } from "@/lib/prisma";
 import { corsOptionsResponse, jsonError } from "@/lib/apiHelpers";
 import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
 import { resolveAuthenticatedClient } from "@/lib/clientPortal/clientAuth";
-import { serializeRequest } from "@/lib/clientPortal/portalService";
+import {
+  serializeRequest,
+  updatePendingClientRequest,
+} from "@/lib/clientPortal/portalService";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +24,41 @@ export const PATCH = withTenantRoute(async function PATCH(
     if (!auth.ok) return jsonError(auth.error, auth.status);
 
     const { id } = await context.params;
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+    const action = String(body.action || "CANCEL").trim().toUpperCase();
+
+    if (action === "EDIT") {
+      const rawLines = Array.isArray(body.lines)
+        ? (body.lines as Array<Record<string, unknown>>)
+        : [];
+      const updated = await updatePendingClientRequest({
+        requestId: id,
+        clientAccountId: auth.account.id,
+        pickupType: body.pickupType ? String(body.pickupType) : undefined,
+        pickupLocation: String(body.pickupLocation || ""),
+        customPickupLocation: body.customPickupLocation
+          ? String(body.customPickupLocation)
+          : undefined,
+        pickupNotes: body.pickupNotes !== undefined ? String(body.pickupNotes || "") : undefined,
+        lines: rawLines.map((l) => ({
+          itemId: l.itemId ? String(l.itemId) : null,
+          itemTitle: String(l.itemTitle || ""),
+          requestedQty: Number(l.requestedQty || 0),
+          unitCode: String(l.unitCode || "QAT_BUNCH"),
+          unitLabel: String(l.unitLabel || "علاقية قات"),
+          customUnitLabel: l.customUnitLabel ? String(l.customUnitLabel) : null,
+          unitPrice: l.unitPrice !== undefined ? Number(l.unitPrice) : undefined,
+          notes: l.notes ? String(l.notes) : null,
+        })),
+      });
+
+      return NextResponse.json({
+        success: true,
+        request: updated,
+        message: "✅ تم تحديث الطلب بنجاح قبل المراجعة",
+      });
+    }
+
     const existing = await prisma.clientGoodsRequest.findUnique({
       where: { id },
       include: { lines: { orderBy: { lineOrder: "asc" } } },

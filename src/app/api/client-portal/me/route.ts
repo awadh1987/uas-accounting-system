@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma, withTenantRoute } from "@/lib/prisma";
 import { corsOptionsResponse, jsonError } from "@/lib/apiHelpers";
 import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
-import { resolveAuthenticatedClient } from "@/lib/clientPortal/clientAuth";
+import {
+  attachClientSessionCookie,
+  issueClientPortalToken,
+  resolveAuthenticatedClient,
+} from "@/lib/clientPortal/clientAuth";
 import {
   getClientPortalFinancialSnapshot,
   sanitizeClientAccount,
@@ -41,9 +45,13 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
               totalPaid: 0,
               totalUnpaid: 0,
               creditAvailable: null,
+              creditUtilizationPct: 0,
+              openBillsCount: 0,
+              paidBillsCount: 0,
               currency: "YER",
             },
             bills: [],
+            receipts: [],
             statementRows: [],
           };
 
@@ -72,6 +80,7 @@ export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
       email: body.email ? String(body.email) : undefined,
       preferredPickup:
         body.preferredPickup !== undefined ? String(body.preferredPickup || "") : undefined,
+      avatarColor: body.avatarColor ? String(body.avatarColor) : undefined,
       customFields:
         body.customFields && typeof body.customFields === "object"
           ? (body.customFields as Record<string, unknown>)
@@ -81,9 +90,28 @@ export const PATCH = withTenantRoute(async function PATCH(req: NextRequest) {
       currentPassword: body.currentPassword ? String(body.currentPassword) : undefined,
     });
 
+    if (updated.passwordChanged) {
+      const freshToken = issueClientPortalToken({
+        clientAccountId: updated.account.id,
+        customerId: updated.account.customerId,
+        tenantId: auth.scope.tenantId,
+        tenantSlug: auth.scope.tenantSlug,
+        phone: updated.account.phone,
+        displayName: updated.account.fullName,
+        sessionVersion: updated.sessionVersion,
+      });
+      const res = NextResponse.json({
+        success: true,
+        account: updated.account,
+        token: freshToken,
+        message: "✅ تم تحديث كلمة المرور والملف الشخصي بنجاح",
+      });
+      return attachClientSessionCookie(res, freshToken, req);
+    }
+
     return NextResponse.json({
       success: true,
-      account: updated,
+      account: updated.account,
       message: "✅ تم تحديث الملف الشخصي بنجاح",
     });
   } catch (err: unknown) {

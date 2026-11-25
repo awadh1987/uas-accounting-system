@@ -24,7 +24,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     const identifier = String(body.identifier || body.phone || body.email || "");
     const password = String(body.password || "");
 
-    const account = await authenticateClientPortalAccount({ identifier, password });
+    const { sessionVersion, ...account } = await authenticateClientPortalAccount({ identifier, password });
     const token = issueClientPortalToken({
       clientAccountId: account.id,
       customerId: account.customerId,
@@ -32,6 +32,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       tenantSlug: scope.tenantSlug,
       phone: account.phone,
       displayName: account.fullName,
+      sessionVersion,
     });
 
     const res = NextResponse.json({

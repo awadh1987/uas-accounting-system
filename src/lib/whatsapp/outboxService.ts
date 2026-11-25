@@ -12,6 +12,7 @@ export type WhatsAppEventType =
   | "HANDOVER_INVOICE"
   | "PAYMENT_RECEIPT"
   | "BALANCE_SUMMARY"
+  | "PASSWORD_RESET"
   | "CUSTOM";
 
 export interface TenantWhatsAppSettingsPublic {
@@ -36,6 +37,7 @@ export const DEFAULT_AUTO_DRAFT_EVENTS: Record<WhatsAppEventType, boolean> = {
   HANDOVER_INVOICE: true,
   PAYMENT_RECEIPT: true,
   BALANCE_SUMMARY: true,
+  PASSWORD_RESET: true,
   CUSTOM: true,
 };
 
@@ -54,6 +56,8 @@ export const DEFAULT_WHATSAPP_TEMPLATES: Record<WhatsAppEventType, string> = {
     "مرحباً {{clientName}}،\nتم استلام دفعتكم بسند رقم {{receiptNumber}} بمبلغ {{paidAmount}} {{currency}}.\nالرصيد المتبقي: {{balanceDue}} {{currency}}",
   BALANCE_SUMMARY:
     "مرحباً {{clientName}}،\nملخص رصيدكم لدى {{companyName}}:\nإجمالي الفواتير: {{totalInvoiced}} {{currency}}\nالمدفوع: {{totalPaid}} {{currency}}\nالرصيد المستحق: {{balanceDue}} {{currency}}",
+  PASSWORD_RESET:
+    "مرحباً {{clientName}}،\nبناءً على طلب استعادة كلمة المرور في بوابة عملاء {{companyName}}:\nرمز التحقق / كلمة المرور المؤقتة: {{resetCode}}\nصلاحية الرمز: {{expiresMinutes}} دقيقة.\nيرجى تسجيل الدخول وتحديث كلمة المرور عبر: {{portalUrl}}",
   CUSTOM: "مرحباً {{clientName}}،\n{{customBody}}",
 };
 

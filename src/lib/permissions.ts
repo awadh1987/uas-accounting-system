@@ -659,12 +659,26 @@ export type GranularPermissionCode =
   | "inventory.custom_uom"
   | "records.archive_delete"
   | "treasury.execute_gateway"
+  | "clients:approve"
+  | "clients:reset_password"
   | keyof GranularActionPermissions;
 
 export function hasGranularPermission(
   userOrRole: UasUser | string | null | undefined,
   permission: GranularPermissionCode
 ): boolean {
+  if (!isUserActive(userOrRole)) return false;
+  if (permission === "clients:approve" || permission === "clients:reset_password") {
+    const role = normalizeRole(userOrRole);
+    if (role === "SUPER_ADMIN") return true;
+    if (userOrRole && typeof userOrRole === "object" && userOrRole.useCustomPermissions) {
+      const overrides = resolveCustomOverrides(userOrRole) as unknown as Record<string, unknown>;
+      if (typeof overrides[permission] === "boolean") {
+        return Boolean(overrides[permission]);
+      }
+    }
+    return canEdit(userOrRole, "customers");
+  }
   const map: Record<string, keyof GranularActionPermissions> = {
     "accounting.close_year": "canCloseFiscalYear",
     "accounting.fx_revalue": "canFxRevalue",
@@ -678,6 +692,14 @@ export function hasGranularPermission(
   };
   const key = (map[permission] || permission) as keyof GranularActionPermissions;
   return evaluateActionRight(userOrRole, key, true);
+}
+
+export function canApprovePortalClients(userOrRole: UasUser | string | null | undefined): boolean {
+  return hasGranularPermission(userOrRole, "clients:approve");
+}
+
+export function canResetPortalClientPassword(userOrRole: UasUser | string | null | undefined): boolean {
+  return hasGranularPermission(userOrRole, "clients:reset_password");
 }
 
 export function canAccessProject(user: UasUser | null | undefined, projectId: string): boolean {
