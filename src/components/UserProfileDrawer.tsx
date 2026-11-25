@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
 import { SvgAvatar } from "@/components/SvgAvatar";
+import { PhoneContactInput } from "@/components/PhoneContactInput";
 import { isAndroidLocalIsolatedMode } from "@/lib/apiClient";
 import {
   canApprove,
@@ -588,12 +589,12 @@ function UserProfileDrawerContent({
                 <label className="block font-bold mb-1 text-slate-700 dark:text-slate-300">
                   {isAr ? "رقم الهاتف المحمول" : "Mobile Phone"}
                 </label>
-                <input
-                  type="text"
+                <PhoneContactInput
+                  isAr={isAr}
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={setPhone}
                   placeholder={isAr ? "رقم الهاتف" : "Phone number"}
-                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-mono font-semibold focus:outline-none focus:border-emerald-500"
+                  inputClassName="flex-1 min-w-0 rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-mono font-semibold text-right focus:outline-none focus:border-emerald-500"
                 />
               </div>
 

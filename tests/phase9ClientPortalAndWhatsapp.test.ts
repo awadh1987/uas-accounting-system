@@ -55,6 +55,11 @@ import {
   GET as waOutboxGET,
   POST as waOutboxPOST,
 } from "../src/app/api/whatsapp-outbox/route";
+import {
+  getContactPickerCapability,
+  normalizePickedPhoneNumber,
+  pickPhoneFromDeviceContacts,
+} from "../src/lib/contactsBridge";
 
 const TEST_TAG = `${Math.floor(10000 + Math.random() * 90000)}`;
 const TENANT_A = `p9a-${TEST_TAG}`;
@@ -668,5 +673,114 @@ describe("Phase 9 — External Client Portal, Requests, Accounting Handover & Wh
     assert.equal(overCreditConfirm.status, 400);
     const overCreditData = await overCreditConfirm.json();
     assert.ok(String(overCreditData.error || "").includes("CREDIT_LIMIT_EXCEEDED"));
+  });
+
+  it("normalizes picked contact numbers and supports Capacitor, Web Contacts API, and desktop fallback", async () => {
+    // 1. Arabic/Persian numerals, +967, 00967, leading zero, and international E.164 normalization
+    assert.equal(normalizePickedPhoneNumber("٧٧٧ ١٢٣ ٤٥٦"), "777123456");
+    assert.equal(normalizePickedPhoneNumber("+967 781-234-567"), "781234567");
+    assert.equal(normalizePickedPhoneNumber("00967735001122"), "735001122");
+    assert.equal(normalizePickedPhoneNumber("0711223344"), "711223344");
+    assert.equal(normalizePickedPhoneNumber("+966 50 123 4567"), "+966501234567");
+    assert.equal(normalizePickedPhoneNumber("00971501234567"), "+971501234567");
+    assert.equal(normalizePickedPhoneNumber("777123456", "whatsapp_digits"), "967777123456");
+
+    const origWindowDesc = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const origNavDesc = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+
+    try {
+      // 2. Fallback when neither Capacitor nor navigator.contacts is present
+      Object.defineProperty(globalThis, "window", {
+        configurable: true,
+        writable: true,
+        value: {},
+      });
+      Object.defineProperty(globalThis, "navigator", {
+        configurable: true,
+        writable: true,
+        value: {},
+      });
+      assert.equal(getContactPickerCapability(), "fallback");
+      const fallbackRes = await pickPhoneFromDeviceContacts();
+      assert.equal(fallbackRes.status, "unsupported");
+      assert.equal(fallbackRes.source, "fallback");
+
+      // 3. Browser Contact Picker API (`navigator.contacts.select`)
+      Object.defineProperty(globalThis, "navigator", {
+        configurable: true,
+        writable: true,
+        value: {
+          contacts: {
+            select: async () => [
+              { name: ["علي السقاف"], tel: ["+967 777 888 999", "0777888999", "711000222"] },
+            ],
+          },
+        },
+      });
+      assert.equal(getContactPickerCapability(), "web_contacts");
+      const webRes = await pickPhoneFromDeviceContacts();
+      assert.equal(webRes.status, "picked");
+      assert.equal(webRes.source, "web_contacts");
+      assert.equal(webRes.contact?.phone, "777888999");
+      assert.equal(webRes.choices?.length, 2, "Duplicate +967 / 0-prefix numbers must deduplicate cleanly");
+
+      // 4. Native Capacitor Contacts plugin (permission grant + primary mobile selection)
+      let permRequested = false;
+      Object.defineProperty(globalThis, "window", {
+        configurable: true,
+        writable: true,
+        value: {
+          Capacitor: {
+            isNativePlatform: () => true,
+            Plugins: {
+              Contacts: {
+                checkPermissions: async () => ({ contacts: "prompt" }),
+                requestPermissions: async () => {
+                  permRequested = true;
+                  return { contacts: "granted" };
+                },
+                pickContact: async () => ({
+                  contact: {
+                    name: { display: "خالد الجبري" },
+                    phones: [
+                      { number: "01-445566", isPrimary: false, type: "home" },
+                      { number: "00967 770 112 233", isPrimary: true, type: "mobile" },
+                    ],
+                  },
+                }),
+              },
+            },
+          },
+        },
+      });
+      assert.equal(getContactPickerCapability(), "capacitor");
+      const capRes = await pickPhoneFromDeviceContacts();
+      assert.equal(permRequested, true);
+      assert.equal(capRes.status, "picked");
+      assert.equal(capRes.source, "capacitor");
+      assert.equal(capRes.contact?.name, "خالد الجبري");
+      assert.equal(capRes.contact?.phone, "770112233");
+      assert.equal(capRes.choices?.length, 2);
+
+      // 5. Native permission denial returns clean status
+      (globalThis.window as { Capacitor: { Plugins: { Contacts: Record<string, unknown> } } }).Capacitor.Plugins.Contacts = {
+        checkPermissions: async () => ({ contacts: "denied" }),
+        requestPermissions: async () => ({ contacts: "denied" }),
+        pickContact: async () => ({ contact: null }),
+      };
+      const deniedRes = await pickPhoneFromDeviceContacts();
+      assert.equal(deniedRes.status, "permission_denied");
+    } finally {
+      if (origWindowDesc) {
+        Object.defineProperty(globalThis, "window", origWindowDesc);
+      } else {
+        delete (globalThis as Record<string, unknown>).window;
+      }
+      if (origNavDesc) {
+        Object.defineProperty(globalThis, "navigator", origNavDesc);
+      } else {
+        delete (globalThis as Record<string, unknown>).navigator;
+      }
+    }
   });
 });

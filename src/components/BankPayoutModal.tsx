@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   CheckCircle2,
   Loader2,
@@ -8,6 +8,7 @@ import {
   X,
 } from "lucide-react";
 import { fmtNum } from "@/lib/formulas";
+import { PhoneContactInput } from "@/components/PhoneContactInput";
 import type { UasTreasuryAccount, UasUser } from "@/types/uas";
 
 export interface PayoutInitialData {
@@ -21,13 +22,25 @@ export interface PayoutInitialData {
   notes?: string;
 }
 
+export interface BankPayoutReceipt {
+  sourceVoucherId: string;
+  dispatchNumber: string;
+  externalReferenceId?: string | null;
+  beneficiaryName: string;
+  beneficiaryAccountOrPhone: string;
+  amount: number;
+  feeAmount?: number;
+  currencyCode: string;
+  provider: string;
+}
+
 interface BankPayoutModalProps {
   isOpen: boolean;
   onClose: () => void;
   treasuryAccounts: UasTreasuryAccount[];
   currentUser?: UasUser;
   initialData?: PayoutInitialData | null;
-  onSuccess?: (dispatch: any) => void;
+  onSuccess?: (dispatch: BankPayoutReceipt) => void;
   onToast: (msg: string) => void;
 }
 
@@ -58,15 +71,19 @@ export function BankPayoutModal({
   const [notes, setNotes] = useState("");
 
   const [loading, setLoading] = useState(false);
-  const [receiptResult, setReceiptResult] = useState<any | null>(null);
+  const [receiptResult, setReceiptResult] = useState<BankPayoutReceipt | null>(null);
 
   // Filter active treasuries
-  const activeTreasuries = treasuryAccounts.filter(
-    (t) => t.isActive !== false && !t.archivedAt
+  const activeTreasuries = useMemo(
+    () => treasuryAccounts.filter((t) => t.isActive !== false && !t.archivedAt),
+    [treasuryAccounts]
   );
 
   useEffect(() => {
-    if (isOpen) {
+    if (!isOpen) return;
+    let active = true;
+    Promise.resolve().then(() => {
+      if (!active) return;
       setReceiptResult(null);
       if (initialData) {
         setSelectedTreasuryId(
@@ -85,8 +102,11 @@ export function BankPayoutModal({
         setCurrencyCode("YER");
         setNotes("");
       }
-    }
-  }, [isOpen, initialData]);
+    });
+    return () => {
+      active = false;
+    };
+  }, [isOpen, initialData, activeTreasuries]);
 
   if (!isOpen) return null;
 
@@ -311,13 +331,15 @@ export function BankPayoutModal({
                   <label className="block font-bold mb-1 text-slate-700 dark:text-slate-300">
                     رقم الحساب / المحفظة / الهاتف *
                   </label>
-                  <input
-                    type="text"
+                  <PhoneContactInput
                     required
                     value={beneficiaryAccountOrPhone}
-                    onChange={(e) => setBeneficiaryAccountOrPhone(e.target.value)}
+                    onChange={setBeneficiaryAccountOrPhone}
+                    onContactSelected={(c) => {
+                      if (!beneficiaryName.trim() && c.name) setBeneficiaryName(c.name);
+                    }}
                     placeholder="مثال: 770123456 أو 300123456"
-                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-mono"
+                    inputClassName="flex-1 min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-mono text-right"
                   />
                 </div>
               </div>

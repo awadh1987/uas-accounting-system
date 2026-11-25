@@ -57,7 +57,7 @@ interface LoginViewProps {
   licenseStatus?: LicenseStatusData | null;
   onOpenLicenseModal?: () => void;
   onBackToLanding: () => void;
-  onOpenClientPortal?: () => void;
+  onOpenClientPortal?: (initialAuthTab?: "login" | "register") => void;
   onToggleLang: () => void;
   onLoginSuccess: (user: UasUser, rememberDevice: boolean) => void;
   onToast: (msg: string) => void;
@@ -192,9 +192,9 @@ export function LoginView({
 
       setRecoverySuccess(
         data.message ||
-          (isAr
-            ? "تمت استعادة كلمة مرور مدير النظام بنجاح! يمكنك الآن تسجيل الدخول."
-            : "Admin password successfully reset! You can now sign in.")
+        (isAr
+          ? "تمت استعادة كلمة مرور مدير النظام بنجاح! يمكنك الآن تسجيل الدخول."
+          : "Admin password successfully reset! You can now sign in.")
       );
       if (data.username) {
         setIdentifier(data.username);
@@ -215,6 +215,10 @@ export function LoginView({
     licenseTenantSlug: licenseStatus?.tenant_slug,
     storedTenantId: typeof window !== "undefined" ? getStoredTenantSlug() : null,
   });
+  const isTenantWorkspace = Boolean(
+    (activeWorkspaceSlug && activeWorkspaceSlug !== "default") ||
+    (enterpriseProfile?.tenantSlug && enterpriseProfile.tenantSlug !== "default")
+  );
   const currentOrigin = typeof window !== "undefined" ? window.location.origin : undefined;
   const defaultCloudUrl = resolveTenantCloudUrl(activeWorkspaceSlug, currentOrigin);
   const [detectingLan, setDetectingLan] = useState(false);
@@ -522,11 +526,10 @@ export function LoginView({
               <button
                 type="button"
                 onClick={onOpenLicenseModal}
-                className={`w-full py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition ${
-                  licenseStatus && !licenseStatus.is_valid
-                    ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20"
-                    : "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10"
-                }`}
+                className={`w-full py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition ${licenseStatus && !licenseStatus.is_valid
+                  ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20"
+                  : "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10"
+                  }`}
               >
                 <KeyRound className="w-3.5 h-3.5 shrink-0" />
                 <span>
@@ -653,11 +656,10 @@ export function LoginView({
                     <button
                       type="button"
                       onClick={() => handleApplyServerUrl("")}
-                      className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold transition flex items-center gap-1 ${
-                        !customServerUrl
-                          ? "bg-emerald-600 text-white border-emerald-600"
-                          : "border-slate-300 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-800"
-                      }`}
+                      className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold transition flex items-center gap-1 ${!customServerUrl
+                        ? "bg-emerald-600 text-white border-emerald-600"
+                        : "border-slate-300 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-800"
+                        }`}
                     >
                       <HardDrive className="w-3 h-3" />
                       <span>{isAr ? "افتراضي / محلي" : "Default / Local"}</span>
@@ -666,11 +668,10 @@ export function LoginView({
                     <button
                       type="button"
                       onClick={() => handleApplyServerUrl(defaultCloudUrl)}
-                      className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold transition flex items-center gap-1 ${
-                        customServerUrl === defaultCloudUrl
-                          ? "bg-emerald-600 text-white border-emerald-600"
-                          : "border-slate-300 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-800"
-                      }`}
+                      className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold transition flex items-center gap-1 ${customServerUrl === defaultCloudUrl
+                        ? "bg-emerald-600 text-white border-emerald-600"
+                        : "border-slate-300 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-800"
+                        }`}
                     >
                       <Globe2 className="w-3 h-3" />
                       <span>{defaultCloudUrl.replace(/^https:\/\//, "")} (Cloud)</span>
@@ -748,7 +749,7 @@ export function LoginView({
               {onOpenClientPortal ? (
                 <button
                   type="button"
-                  onClick={onOpenClientPortal}
+                  onClick={() => onOpenClientPortal("login")}
                   className="px-3 py-1.5 rounded-xl border border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 font-extrabold hover:bg-emerald-100 transition"
                 >
                   {isAr ? "دخول / تسجيل بوابة العملاء" : "Open Client Portal"}
@@ -763,33 +764,33 @@ export function LoginView({
               )}
             </div>
 
-            {/* Direct Commercial Downloads: Windows Desktop / LAN + Android Mobile App (Web Portal Only) */}
-            {!isInstalledApp && (
-            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
-              <div className="text-center text-[11px] font-bold text-slate-400">
-                {isAr ? "التحميل المباشر للأنظمة الميدانية والمكتبية:" : "Direct System Downloads:"}
-              </div>
+            {/* Direct Commercial Downloads: Windows Desktop / LAN + Android Mobile App (Root Public Portal Only) */}
+            {!isInstalledApp && !isTenantWorkspace && (
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                <div className="text-center text-[11px] font-bold text-slate-400">
+                  {isAr ? "التحميل المباشر للأنظمة الميدانية والمكتبية:" : "Direct System Downloads:"}
+                </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <a
-                  href="/downloads/UAS-Setup-Win64.exe"
-                  download="UAS-Setup-Win64.exe"
-                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-indigo-500/40 hover:border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 text-xs font-bold transition shadow-xs"
-                >
-                  <Monitor className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                  <span className="truncate">{isAr ? "ويندوز (Desktop / LAN)" : "Windows (Win64 .exe)"}</span>
-                </a>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <a
+                    href="/downloads/UAS-Setup-Win64.exe"
+                    download="UAS-Setup-Win64.exe"
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-indigo-500/40 hover:border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 text-xs font-bold transition shadow-xs"
+                  >
+                    <Monitor className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span className="truncate">{isAr ? "ويندوز (Desktop / LAN)" : "Windows (Win64 .exe)"}</span>
+                  </a>
 
-                <a
-                  href="/downloads/UAS-Mobile-Release-qat.world.apk"
-                  download="UAS-Mobile-Release-qat.world.apk"
-                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-emerald-500/40 hover:border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition shadow-xs"
-                >
-                  <Smartphone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span className="truncate">{isAr ? "تطبيق أندرويد (APK)" : "Android (Mobile APK)"}</span>
-                </a>
+                  <a
+                    href="/downloads/UAS-Mobile-Release-qat.world.apk"
+                    download="UAS-Mobile-Release-qat.world.apk"
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-emerald-500/40 hover:border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition shadow-xs"
+                  >
+                    <Smartphone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span className="truncate">{isAr ? "تطبيق أندرويد (APK)" : "Android (Mobile APK)"}</span>
+                  </a>
+                </div>
               </div>
-            </div>
             )}
           </div>
         </div>

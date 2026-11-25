@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Eye, Lock, Receipt, Users } from "lucide-react";
+import { Eye, Globe, Lock, Receipt, Users } from "lucide-react";
 import { CoaTreeTab } from "@/components/CoaTreeTab";
 import { CommandSearchModal } from "@/components/CommandSearchModal";
 import { FinancialReportsTab } from "@/components/FinancialReportsTab";
@@ -121,6 +121,21 @@ export function UasAppShell() {
   });
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
   const [salesViewMode, setSalesViewMode] = useState<"sales" | "customers">("sales");
+  const [clientPortalInitialTab, setClientPortalInitialTab] = useState<"login" | "register">(() => {
+    if (typeof window !== "undefined") {
+      try {
+        if (new URLSearchParams(window.location.search).get("tab") === "register") {
+          return "register";
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return "login";
+  });
+  const [customersInitialSection, setCustomersInitialSection] = useState<
+    "cards" | "ledger" | "both" | "portal" | "whatsapp"
+  >("cards");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
@@ -1225,7 +1240,10 @@ export function UasAppShell() {
       />
 
       {viewMode === "client_portal" ? (
-        <ClientPortalApp onBackHome={() => setViewMode("landing")} />
+        <ClientPortalApp
+          initialAuthTab={clientPortalInitialTab}
+          onBackHome={() => setViewMode("landing")}
+        />
       ) : viewMode === "landing" ? (
         <LandingPage
           state={state}
@@ -1240,7 +1258,10 @@ export function UasAppShell() {
             setViewMode("erp");
           }}
           onOpenLogin={() => setViewMode("login")}
-          onOpenClientPortal={() => setViewMode("client_portal")}
+          onOpenClientPortal={(tab = "login") => {
+            setClientPortalInitialTab(tab);
+            setViewMode("client_portal");
+          }}
           onToggleLang={() => setLang((prev) => (prev === "ar" ? "en" : "ar"))}
           onSelectProjectCard={(projectId) => {
             if (currentUser) {
@@ -1282,7 +1303,10 @@ export function UasAppShell() {
             setPendingProjectId(null);
             setViewMode("landing");
           }}
-          onOpenClientPortal={() => setViewMode("client_portal")}
+          onOpenClientPortal={(tab = "login") => {
+            setClientPortalInitialTab(tab);
+            setViewMode("client_portal");
+          }}
           onToggleLang={() => setLang((prev) => (prev === "ar" ? "en" : "ar"))}
           licenseStatus={licenseStatus}
           onOpenLicenseModal={() => setLicenseModalOpen(true)}
@@ -1524,12 +1548,23 @@ export function UasAppShell() {
                           data-testid="sales-view-mode-select"
                           aria-label={lang === "ar" ? "عرض المبيعات" : "Sales View Mode"}
                           value={
-                            salesViewMode === "customers" || activeTab === "customers"
+                            activeTab === "customers" && customersInitialSection === "portal"
+                              ? "portal"
+                              : salesViewMode === "customers" || activeTab === "customers"
                               ? "customers"
                               : "sales"
                           }
                           onChange={(e) => {
-                            const next = e.target.value as "sales" | "customers";
+                            const next = e.target.value as "sales" | "customers" | "portal";
+                            if (next === "portal") {
+                              setCustomersInitialSection("portal");
+                              setSalesViewMode("customers");
+                              setActiveTab("customers");
+                              return;
+                            }
+                            if (next === "customers") {
+                              setCustomersInitialSection("cards");
+                            }
                             setSalesViewMode(next);
                             setActiveTab(next);
                           }}
@@ -1540,6 +1575,9 @@ export function UasAppShell() {
                           </option>
                           <option value="customers">
                             {lang === "ar" ? "👥 كشوفات العملاء" : "👥 Client Ledgers"}
+                          </option>
+                          <option value="portal">
+                            {lang === "ar" ? "🌐 إدارة بوابة العملاء والطلبات" : "🌐 Client Portal Admin"}
                           </option>
                         </select>
                       </div>
@@ -1562,17 +1600,35 @@ export function UasAppShell() {
                       <button
                         type="button"
                         onClick={() => {
+                          setCustomersInitialSection("cards");
                           setSalesViewMode("customers");
                           setActiveTab("customers");
                         }}
                         className={`px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
-                          salesViewMode === "customers" || activeTab === "customers"
+                          (salesViewMode === "customers" || activeTab === "customers") &&
+                          customersInitialSection !== "portal"
                             ? "bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 shadow-sm"
                             : "text-slate-500"
                         }`}
                       >
                         <Users className="w-3.5 h-3.5" />
                         <span>{lang === "ar" ? "كشوفات العملاء" : "Client Ledgers"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCustomersInitialSection("portal");
+                          setSalesViewMode("customers");
+                          setActiveTab("customers");
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
+                          activeTab === "customers" && customersInitialSection === "portal"
+                            ? "bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 shadow-sm"
+                            : "text-slate-500"
+                        }`}
+                      >
+                        <Globe className="w-3.5 h-3.5" />
+                        <span>{lang === "ar" ? "بوابة العملاء" : "Client Portal"}</span>
                       </button>
                       </div>
                     </>
@@ -1829,6 +1885,11 @@ export function UasAppShell() {
                     );
                   }}
                   onOpenSaleVoucher={openSaleVoucher}
+                  onOpenClientPortalAdmin={() => {
+                    setCustomersInitialSection("portal");
+                    setSalesViewMode("customers");
+                    setActiveTab("customers");
+                  }}
                   onRefreshState={refreshFromServer}
                   onToast={showToast}
                 />
@@ -1841,6 +1902,7 @@ export function UasAppShell() {
                   allSales={state.sales}
                   currentUser={currentUser}
                   enterpriseProfile={state.enterpriseProfile}
+                  initialSection={customersInitialSection}
                   readOnly={userReadOnly}
                   canEditRecords={canEdit(currentUser, "customers")}
                   onOpenSaleVoucher={openSaleVoucher}

@@ -24,6 +24,7 @@ import { SaveDraftButton } from "@/components/SaveDraftButton";
 import { SelectWithOther } from "@/components/SelectWithOther";
 import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
 import { UasDateInput } from "@/components/UasDateInput";
+import { PhoneContactInput } from "@/components/PhoneContactInput";
 import {
   AccountingDirectionSelector,
   type CustomAccountPayload,
@@ -92,6 +93,7 @@ interface SalesTabProps {
   onEditSale?: (id: string, payload: SalePayload) => Promise<boolean>;
   onDeleteSale: (id: string) => Promise<void>;
   onOpenSaleVoucher: (s: UasSaleTransaction) => void;
+  onOpenClientPortalAdmin?: () => void;
   onRefreshState?: () => Promise<void>;
   onToast: (msg: string) => void;
 }
@@ -120,6 +122,7 @@ export function SalesTab({
   onEditSale,
   onDeleteSale,
   onOpenSaleVoucher,
+  onOpenClientPortalAdmin,
   onRefreshState,
   onToast,
 }: SalesTabProps) {
@@ -881,12 +884,21 @@ export function SalesTab({
               </div>
               <div>
                 <label className="block font-semibold mb-1">رقم هاتف العميل</label>
-                <input
+                <PhoneContactInput
+                  testId="sales-customer-phone"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  type="text"
-                  inputMode="tel"
-                  className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-mono"
+                  onChange={setPhone}
+                  onContactSelected={(c) => {
+                    if (!customer.trim() && c.name) setCustomer(c.name);
+                  }}
+                  fallbackContacts={clientOptions.map((c) => ({
+                    id: c.id,
+                    name: c.nameAr,
+                    phone: c.phone,
+                    subtitle: c.code,
+                  }))}
+                  placeholder="777000000"
+                  inputClassName="flex-1 min-w-0 rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-mono text-right"
                 />
               </div>
             </div>
@@ -933,11 +945,10 @@ export function SalesTab({
 
           {liveStockCheck.hasTrackedBatches && (
             <div
-              className={`rounded-xl border p-2.5 text-[11px] space-y-1.5 ${
-                !liveStockCheck.withinStock && (Number(bundles) || 0) > 0
-                  ? "bg-rose-50 dark:bg-rose-950/30 border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200"
-                  : "bg-emerald-50/70 dark:bg-emerald-950/25 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200"
-              }`}
+              className={`rounded-xl border p-2.5 text-[11px] space-y-1.5 ${!liveStockCheck.withinStock && (Number(bundles) || 0) > 0
+                ? "bg-rose-50 dark:bg-rose-950/30 border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200"
+                : "bg-emerald-50/70 dark:bg-emerald-950/25 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200"
+                }`}
             >
               <div className="font-bold flex items-center justify-between gap-2 flex-wrap">
                 <span>المتاح بمخزون الحصاد لهذه القطفة والدرجة:</span>
@@ -1154,6 +1165,10 @@ export function SalesTab({
                     resetAllFilters();
                     return;
                   }
+                  if (act === "client_portal" && onOpenClientPortalAdmin) {
+                    onOpenClientPortalAdmin();
+                    return;
+                  }
                   if (act === "toggle_test") {
                     setHideTestRecords((prev) => !prev);
                     return;
@@ -1215,6 +1230,9 @@ export function SalesTab({
               >
                 <option value="">⋮ خيارات</option>
                 <option value="export_pdf">تصدير تقرير PDF</option>
+                {onOpenClientPortalAdmin && (
+                  <option value="client_portal">إدارة بوابة العملاء والطلبات</option>
+                )}
                 {onRefreshState && <option value="refresh">تحديث السجل</option>}
                 <option value="toggle_test">
                   {hideTestRecords
@@ -1226,109 +1244,120 @@ export function SalesTab({
             </div>
 
             <div className="hidden md:flex flex-wrap items-center gap-2">
-            {onRefreshState && (
+              {onRefreshState && (
+                <button
+                  type="button"
+                  onClick={() => void handleRefresh()}
+                  disabled={refreshing}
+                  className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+                  title="تحديث سجل المبيعات من الخادم"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+                  <span>تحديث</span>
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => void handleRefresh()}
-                disabled={refreshing}
-                className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
-                title="تحديث سجل المبيعات من الخادم"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
-                <span>تحديث</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() =>
-                void printUasDocument({
-                  titleAr: "تقرير سجل المبيعات والإيرادات اليومية",
-                  titleEn: "Sales Ledger & Daily Revenue Report",
-                  documentNumber: `RPT-SALES-${new Date().toISOString().slice(0, 10)}`,
-                  currency: "YER",
-                  status: "POSTED",
-                  format: "A4_LANDSCAPE",
-                  letterhead: resolveLetterheadFromProfile(enterpriseProfile),
-                  summaryCards: [
-                    { labelAr: "إجمالي المبيعات", labelEn: "Total Sales", value: `${fmtNum(sumTotal)} ريال`, tone: "indigo" },
-                    { labelAr: "التحصيل النقدي", labelEn: "Cash Collected", value: `${fmtNum(sumCredit)} ريال`, tone: "emerald" },
-                    { labelAr: "المتبقي الآجل", labelEn: "Receivable", value: `${fmtNum(sumDebit)} ريال`, tone: "rose" },
-                    { labelAr: "إجمالي الكمية (الوحدات)", labelEn: "Total Quantity", value: `${fmtNum(sumBundles)} (${visibleSales.length})`, tone: "amber" },
-                  ],
-                  tables: [
-                    {
-                      headingAr: "تفاصيل عمليات البيع",
-                      headingEn: "Sales Transactions",
-                      columns: [
-                        { key: "date", labelAr: "التاريخ", labelEn: "Date" },
-                        { key: "voucherNo", labelAr: "رقم السند", labelEn: "Voucher" },
-                        { key: "customer", labelAr: "العميل", labelEn: "Customer" },
-                        { key: "grade", labelAr: "الصنف", labelEn: "Grade" },
-                        { key: "bundles", labelAr: "الكمية / الوحدة", labelEn: "Qty / UoM", numeric: true },
-                        { key: "price", labelAr: "السعر", labelEn: "Price", numeric: true },
-                        { key: "total", labelAr: "الإجمالي", labelEn: "Total", numeric: true },
-                        { key: "credit", labelAr: "المدفوع", labelEn: "Paid", numeric: true },
-                        { key: "debit", labelAr: "المتبقي", labelEn: "Due", numeric: true },
-                      ],
-                      rows: visibleSales.map((s) => ({
-                        date: formatIsoToDmy(s.date.slice(0, 10)),
-                        voucherNo: s.voucherNo || s.sequenceNumber || "—",
-                        customer: s.customer,
-                        grade: s.grade,
-                        bundles: fmtNum(s.bundles),
-                        price: fmtNum(s.price),
-                        total: fmtNum(s.total),
-                        credit: fmtNum(s.credit),
-                        debit: fmtNum(s.debit),
-                      })),
-                      totalsRow: {
-                        date: "الإجمالي",
-                        bundles: fmtNum(sumBundles),
-                        total: fmtNum(sumTotal),
-                        credit: fmtNum(sumCredit),
-                        debit: fmtNum(sumDebit),
+                onClick={() =>
+                  void printUasDocument({
+                    titleAr: "تقرير سجل المبيعات والإيرادات اليومية",
+                    titleEn: "Sales Ledger & Daily Revenue Report",
+                    documentNumber: `RPT-SALES-${new Date().toISOString().slice(0, 10)}`,
+                    currency: "YER",
+                    status: "POSTED",
+                    format: "A4_LANDSCAPE",
+                    letterhead: resolveLetterheadFromProfile(enterpriseProfile),
+                    summaryCards: [
+                      { labelAr: "إجمالي المبيعات", labelEn: "Total Sales", value: `${fmtNum(sumTotal)} ريال`, tone: "indigo" },
+                      { labelAr: "التحصيل النقدي", labelEn: "Cash Collected", value: `${fmtNum(sumCredit)} ريال`, tone: "emerald" },
+                      { labelAr: "المتبقي الآجل", labelEn: "Receivable", value: `${fmtNum(sumDebit)} ريال`, tone: "rose" },
+                      { labelAr: "إجمالي الكمية (الوحدات)", labelEn: "Total Quantity", value: `${fmtNum(sumBundles)} (${visibleSales.length})`, tone: "amber" },
+                    ],
+                    tables: [
+                      {
+                        headingAr: "تفاصيل عمليات البيع",
+                        headingEn: "Sales Transactions",
+                        columns: [
+                          { key: "date", labelAr: "التاريخ", labelEn: "Date" },
+                          { key: "voucherNo", labelAr: "رقم السند", labelEn: "Voucher" },
+                          { key: "customer", labelAr: "العميل", labelEn: "Customer" },
+                          { key: "grade", labelAr: "الصنف", labelEn: "Grade" },
+                          { key: "bundles", labelAr: "الكمية / الوحدة", labelEn: "Qty / UoM", numeric: true },
+                          { key: "price", labelAr: "السعر", labelEn: "Price", numeric: true },
+                          { key: "total", labelAr: "الإجمالي", labelEn: "Total", numeric: true },
+                          { key: "credit", labelAr: "المدفوع", labelEn: "Paid", numeric: true },
+                          { key: "debit", labelAr: "المتبقي", labelEn: "Due", numeric: true },
+                        ],
+                        rows: visibleSales.map((s) => ({
+                          date: formatIsoToDmy(s.date.slice(0, 10)),
+                          voucherNo: s.voucherNo || s.sequenceNumber || "—",
+                          customer: s.customer,
+                          grade: s.grade,
+                          bundles: fmtNum(s.bundles),
+                          price: fmtNum(s.price),
+                          total: fmtNum(s.total),
+                          credit: fmtNum(s.credit),
+                          debit: fmtNum(s.debit),
+                        })),
+                        totalsRow: {
+                          date: "الإجمالي",
+                          bundles: fmtNum(sumBundles),
+                          total: fmtNum(sumTotal),
+                          credit: fmtNum(sumCredit),
+                          debit: fmtNum(sumDebit),
+                        },
                       },
-                    },
-                  ],
-                })
-              }
-              className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold inline-flex items-center gap-1 hover:bg-slate-100 dark:hover:bg-slate-800"
-            >
-              <Printer className="w-3.5 h-3.5" />
-              <span>تقرير PDF</span>
-            </button>
-            <ActionOverflowMenu
-              testId="sales-toolbar-overflow"
-              label="خيارات المبيعات"
-              size="sm"
-              items={[
-                {
-                  id: "toggle-test",
-                  label: hideTestRecords
-                    ? `إظهار السجلات التجريبية (${hiddenTestSalesCount})`
-                    : `إخفاء السجلات التجريبية (${hiddenTestSalesCount})`,
-                  hidden: hiddenTestSalesCount === 0 && !hideTestRecords,
-                  onClick: () => setHideTestRecords((prev) => !prev),
-                },
-                {
-                  id: "reset-filters",
-                  label: "إعادة ضبط الفلاتر",
-                  icon: <RotateCcw className="w-3.5 h-3.5" />,
-                  hidden: !hasActiveFilters,
-                  onClick: resetAllFilters,
-                },
-              ]}
-            />
-            {!readOnly && (
-              <button
-                type="button"
-                onClick={openCreateDrawer}
-                className="px-3.5 py-1.5 rounded-xl accent-bg text-xs font-extrabold inline-flex items-center gap-1.5 shadow-sm"
+                    ],
+                  })
+                }
+                className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold inline-flex items-center gap-1 hover:bg-slate-100 dark:hover:bg-slate-800"
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>عملية بيع جديدة</span>
+                <Printer className="w-3.5 h-3.5" />
+                <span>تقرير PDF</span>
               </button>
-            )}
+              {onOpenClientPortalAdmin && (
+                <button
+                  type="button"
+                  data-testid="sales-open-portal-admin"
+                  onClick={onOpenClientPortalAdmin}
+                  className="px-3 py-1.5 rounded-xl border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold inline-flex items-center gap-1 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition"
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>بوابة العملاء والطلبات</span>
+                </button>
+              )}
+              <ActionOverflowMenu
+                testId="sales-toolbar-overflow"
+                label="خيارات المبيعات"
+                size="sm"
+                items={[
+                  {
+                    id: "toggle-test",
+                    label: hideTestRecords
+                      ? `إظهار السجلات التجريبية (${hiddenTestSalesCount})`
+                      : `إخفاء السجلات التجريبية (${hiddenTestSalesCount})`,
+                    hidden: hiddenTestSalesCount === 0 && !hideTestRecords,
+                    onClick: () => setHideTestRecords((prev) => !prev),
+                  },
+                  {
+                    id: "reset-filters",
+                    label: "إعادة ضبط الفلاتر",
+                    icon: <RotateCcw className="w-3.5 h-3.5" />,
+                    hidden: !hasActiveFilters,
+                    onClick: resetAllFilters,
+                  },
+                ]}
+              />
+              {!readOnly && (
+                <button
+                  type="button"
+                  onClick={openCreateDrawer}
+                  className="px-3.5 py-1.5 rounded-xl accent-bg text-xs font-extrabold inline-flex items-center gap-1.5 shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>عملية بيع جديدة</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1416,15 +1445,15 @@ export function SalesTab({
               hasActiveFilters
                 ? "إعادة ضبط الفلاتر"
                 : !readOnly
-                ? "عملية بيع جديدة"
-                : undefined
+                  ? "عملية بيع جديدة"
+                  : undefined
             }
             onAction={
               hasActiveFilters
                 ? resetAllFilters
                 : !readOnly
-                ? openCreateDrawer
-                : undefined
+                  ? openCreateDrawer
+                  : undefined
             }
           />
         ) : (

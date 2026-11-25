@@ -2,6 +2,7 @@
 
 import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
+import { PhoneContactInput } from "@/components/PhoneContactInput";
 
 import React, { useCallback, useEffect, useState } from "react";
 import {
@@ -1922,12 +1923,24 @@ export function ProcurementTab({
             placeholder="Vendor Name (English - Optional)"
             className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
           />
-          <input
-            value={vPhone}
-            onChange={(e) => setVPhone(e.target.value)}
-            placeholder="رقم الهاتف"
-            className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
-          />
+          <div>
+            <label className="block font-bold mb-1">رقم هاتف المورد</label>
+            <PhoneContactInput
+              value={vPhone}
+              onChange={setVPhone}
+              onContactSelected={(c) => {
+                if (!vNameAr.trim() && c.name) setVNameAr(c.name);
+              }}
+              fallbackContacts={vendors.map((v) => ({
+                id: v.id,
+                name: v.nameAr,
+                phone: v.phone || "",
+                subtitle: v.code,
+              }))}
+              placeholder="رقم الهاتف"
+              inputClassName="flex-1 min-w-0 rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-mono text-right"
+            />
+          </div>
           <input
             value={vTax}
             onChange={(e) => setVTax(e.target.value)}

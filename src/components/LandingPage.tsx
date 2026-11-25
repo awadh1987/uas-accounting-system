@@ -43,7 +43,7 @@ interface LandingPageProps {
   currentUser?: UasUser | null;
   onEnterErp: (tab?: TabId) => void;
   onOpenLogin: () => void;
-  onOpenClientPortal?: () => void;
+  onOpenClientPortal?: (initialAuthTab?: "login" | "register") => void;
   onToggleLang: () => void;
   onSelectProjectCard?: (projectId: string) => void;
 }
@@ -294,7 +294,7 @@ export function LandingPage({
 
           {/* Top Actions: Downloads + Language Switcher + Sign In Button */}
           <div className="flex items-center gap-2">
-            {!isInstalledApp && (
+            {!isInstalledApp && !isTenantBranded && (
               <>
             <a
               href="/downloads/UAS-Setup-Win64.exe"
@@ -339,7 +339,7 @@ export function LandingPage({
             {onOpenClientPortal ? (
               <button
                 type="button"
-                onClick={onOpenClientPortal}
+                onClick={() => onOpenClientPortal("login")}
                 className="px-3.5 py-2 rounded-xl border border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold flex items-center gap-1.5 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition"
               >
                 <Users className="w-3.5 h-3.5" />
@@ -424,7 +424,7 @@ export function LandingPage({
                 </button>
               )}
 
-              {!isInstalledApp && (
+              {!isInstalledApp && !isTenantBranded && (
                 <>
               <a
                 href="/downloads/UAS-Setup-Win64.exe"
@@ -739,8 +739,140 @@ export function LandingPage({
           </section>
         )}
 
-        {/* Visitor Downloads Center (Android APK & Windows Desktop/LAN .exe) */}
-        {!isInstalledApp && (
+        {/* Tenant Client Portal & Self-Registration Card (Replaces APK/.exe downloads on tenant pages) */}
+        {isTenantBranded ? (
+          <section
+            id="tenant-client-portal"
+            data-testid="tenant-client-portal-card"
+            className="max-w-7xl mx-auto px-4 sm:px-8 py-10 border-t border-slate-200/80 dark:border-slate-800 space-y-5"
+          >
+            <div className="card-surface rounded-3xl p-6 sm:p-8 border border-emerald-500/30 bg-gradient-to-br from-emerald-50/60 via-white to-slate-50 dark:from-emerald-950/30 dark:via-slate-900 dark:to-slate-950 shadow-sm space-y-6">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="space-y-2 max-w-2xl">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[11px] font-black">
+                    <Users className="w-3.5 h-3.5 shrink-0" />
+                    <span>
+                      {isAr
+                        ? `بوابة العملاء والطلبات الإلكترونية • ${legalName}`
+                        : `Client Portal & Self-Registration • ${legalName}`}
+                    </span>
+                  </div>
+                  <h3 className="text-xl sm:text-2xl font-black tracking-tight">
+                    {isAr
+                      ? `خدمة عملاء ${legalName} — تسجيل الطلبات وكشوفات الحساب`
+                      : `${legalName} Client Portal — Orders, Receipts & Statements`}
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                    {isAr
+                      ? `بوابة مخصصة لعملاء ${legalName} لتسجيل الدخول ومتابعة طلبات البضاعة وإيصالات الاستلام والفواتير وكشف الحساب المباشر، أو التقديم كعميل جديد لتفعيل حسابك والبدء بتسجيل طلباتك أونلاين.`
+                      : `Dedicated portal for ${legalName} clients to sign in, submit goods requests, track pickups, view invoices & live account statements, or self-register as a new client.`}
+                  </p>
+                </div>
+                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/80 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-mono font-bold text-slate-600 dark:text-slate-300">
+                  <Building2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <bdi dir="ltr">{activeTenantSlug || "default"}</bdi>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                <div className="rounded-2xl p-4 bg-white/80 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-1">
+                  <div className="font-black text-emerald-700 dark:text-emerald-300">
+                    {isAr ? "1. دخول العملاء المسجلين" : "1. Client Sign-In"}
+                  </div>
+                  <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+                    {isAr
+                      ? "سجّل الدخول برقم الجوال أو البريد الإلكتروني لإرسال طلبات الشراء والاستلام، ومتابعة حالة الاعتماد، وطباعة الفواتير."
+                      : "Sign in using your registered mobile or email to submit orders and track receipts & statements."}
+                  </p>
+                </div>
+                <div className="rounded-2xl p-4 bg-white/80 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-1">
+                  <div className="font-black text-indigo-700 dark:text-indigo-300">
+                    {isAr ? "2. تسجيل عميل جديد" : "2. New Client Registration"}
+                  </div>
+                  <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+                    {isAr
+                      ? "عميل جديد؟ أنشئ حسابك مباشرة برقم جوالك من الهاتف أو يدوياً، وبعد مراجعة واعتماد الإدارة يمكنك رفع الطلبات فوراً."
+                      : "New client? Register in seconds with your phone number; once approved by staff, start placing requests."}
+                  </p>
+                </div>
+                <div className="rounded-2xl p-4 bg-white/80 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-1">
+                  <div className="font-black text-slate-700 dark:text-slate-200">
+                    {isAr ? "3. دخول مساحة عمل المنشأة" : "3. Staff Workspace Login"}
+                  </div>
+                  <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+                    {isAr
+                      ? "بوابة الموظفين والمحاسبين ومديري النظام لإدارة المبيعات والمخزون واعتماد طلبات بوابة العملاء."
+                      : "Authenticated staff portal for accounting, inventory, sales, and Client Portal approvals."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 pt-1">
+                {onOpenClientPortal ? (
+                  <>
+                    <button
+                      type="button"
+                      data-testid="tenant-portal-login-cta"
+                      onClick={() => onOpenClientPortal("login")}
+                      className="min-h-[44px] px-5 py-2.5 rounded-2xl accent-bg text-xs sm:text-sm font-black inline-flex items-center gap-2 shadow-sm hover:opacity-95 transition"
+                    >
+                      <Users className="w-4 h-4" />
+                      <span>{isAr ? "دخول بوابة العملاء" : "Client Portal Sign In"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="tenant-portal-register-cta"
+                      onClick={() => onOpenClientPortal("register")}
+                      className="min-h-[44px] px-5 py-2.5 rounded-2xl border border-emerald-500/50 bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 text-xs sm:text-sm font-black inline-flex items-center gap-2 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                      <span>{isAr ? "تسجيل عميل جديد" : "New Client Registration"}</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <Link
+                      href="/portal"
+                      data-testid="tenant-portal-login-cta"
+                      className="min-h-[44px] px-5 py-2.5 rounded-2xl accent-bg text-xs sm:text-sm font-black inline-flex items-center gap-2 shadow-sm hover:opacity-95 transition"
+                    >
+                      <Users className="w-4 h-4" />
+                      <span>{isAr ? "دخول بوابة العملاء" : "Client Portal Sign In"}</span>
+                    </Link>
+                    <Link
+                      href="/portal?tab=register"
+                      data-testid="tenant-portal-register-cta"
+                      className="min-h-[44px] px-5 py-2.5 rounded-2xl border border-emerald-500/50 bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 text-xs sm:text-sm font-black inline-flex items-center gap-2 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                      <span>{isAr ? "تسجيل عميل جديد" : "New Client Registration"}</span>
+                    </Link>
+                  </>
+                )}
+
+                <button
+                  type="button"
+                  data-testid="tenant-staff-login-cta"
+                  onClick={currentUser ? () => onEnterErp("dashboard") : onOpenLogin}
+                  className="min-h-[44px] px-5 py-2.5 rounded-2xl border border-slate-300 dark:border-slate-700 bg-white/90 dark:bg-slate-900 text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                >
+                  <ShieldCheck className="w-4 h-4 text-slate-600 dark:text-slate-300" />
+                  <span>
+                    {currentUser
+                      ? isAr
+                        ? "فتح مساحة العمل"
+                        : "Open Staff Workspace"
+                      : isAr
+                      ? "دخول مساحة العمل"
+                      : "Staff Workspace Sign In"}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </section>
+        ) : (
+        /* Visitor Downloads Center (Android APK & Windows Desktop/LAN .exe — Root Distribution Only) */
+        !isInstalledApp && (
           <section
             id="downloads-center"
             data-testid="public-downloads-section"
@@ -880,6 +1012,7 @@ export function LandingPage({
               })}
             </div>
           </section>
+        )
         )}
 
         {/* Corporate Information Section */}

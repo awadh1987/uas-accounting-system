@@ -37,6 +37,7 @@ import {
   AlertTriangle,
   Archive,
   FileText,
+  MessageSquare,
   RotateCcw,
   Trash2,
 } from "lucide-react";
@@ -75,6 +76,8 @@ import { AccountingSettingsPanel } from "@/components/AccountingSettingsPanel";
 import { ApprovalRulesMatrixPanel } from "@/components/ApprovalRulesMatrixPanel";
 import { TenantAdminConfigPanel } from "@/components/TenantAdminConfigPanel";
 import { TenantDevicesPanel } from "@/components/TenantDevicesPanel";
+import { TenantClientPortalAdminPanel } from "@/components/portal-admin/TenantClientPortalAdminPanel";
+import { PhoneContactInput } from "@/components/PhoneContactInput";
 import { isPlatformAdminSurfaceEnabled } from "@/lib/buildTarget";
 import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
 
@@ -104,6 +107,7 @@ import {
   ROLE_DEFAULT_PERMISSIONS,
   ROLE_DEFINITIONS,
   canApprove,
+  canEdit,
   canLockPeriod,
   canPostLedger,
   getAccessibleGroups,
@@ -393,6 +397,7 @@ export function SystemTab({
     | "users"
     | "accounting"
     | "tenant-config"
+    | "client-portal"
     | "devices"
     | "security"
     | "superadmin-licenses"
@@ -409,6 +414,7 @@ export function SystemTab({
       | "users"
       | "accounting"
       | "tenant-config"
+      | "client-portal"
       | "devices"
       | "security"
       | "superadmin-licenses"
@@ -417,6 +423,7 @@ export function SystemTab({
       s === "users" ||
       s === "accounting" ||
       s === "tenant-config" ||
+      s === "client-portal" ||
       s === "devices" ||
       s === "security" ||
       ((s === "superadmin-licenses" || s === "control-panel") && isPlatformSuperadmin);
@@ -459,6 +466,7 @@ export function SystemTab({
       | "users"
       | "accounting"
       | "tenant-config"
+      | "client-portal"
       | "devices"
       | "security"
       | "superadmin-licenses"
@@ -1646,6 +1654,9 @@ export function SystemTab({
             <option value="tenant-config">
               {isAr ? "إعدادات مساحة المنشأة (Tenant Config)" : "Tenant Admin Config"}
             </option>
+            <option value="client-portal">
+              {isAr ? "بوابة العملاء وإعدادات واتساب" : "Client Portal & WhatsApp Settings"}
+            </option>
             <option value="devices">
               {isAr ? "أجهزة المنشأة والمزامنة (Devices)" : "Tenant Devices Control"}
             </option>
@@ -1710,6 +1721,18 @@ export function SystemTab({
           >
             <Globe className="w-4 h-4" />
             <span>{isAr ? "إعدادات مساحة المنشأة (Tenant Config)" : "Tenant Admin Config"}</span>
+          </button>
+          <button
+            type="button"
+            data-testid="system-subtab-client-portal"
+            onClick={() => handleSelectSubTab("client-portal")}
+            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition ${activeSubTab === "client-portal"
+              ? "accent-bg shadow-sm"
+              : "card-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+              }`}
+          >
+            <MessageSquare className="w-4 h-4" />
+            <span>{isAr ? "بوابة العملاء وإعدادات واتساب" : "Client Portal & WhatsApp"}</span>
           </button>
           <button
             type="button"
@@ -1792,6 +1815,24 @@ export function SystemTab({
           currentUser={currentUser}
           readOnly={readOnly || (!canManageUsers && !canManageCms)}
           onRefreshState={onRefreshState}
+          onToast={onToast}
+        />
+      )}
+
+      {activeSubTab === "client-portal" && (
+        <TenantClientPortalAdminPanel
+          initialSection="settings"
+          canManageSettings={Boolean(
+            !readOnly &&
+              (canManageUsers ||
+                canManageCms ||
+                canEdit(currentUser, "system") ||
+                currentUser.role === "SUPER_ADMIN" ||
+                currentUser.role === "CHIEF_ACCOUNTANT")
+          )}
+          onRefreshState={async () => {
+            await onRefreshState?.();
+          }}
           onToast={onToast}
         />
       )}
@@ -3811,24 +3852,25 @@ export function SystemTab({
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200 dark:border-slate-700">
             <div>
               <label className="block font-bold mb-1">{isAr ? "هاتف التواصل العام" : "Contact Phone"}</label>
-              <input
-                type="text"
+              <PhoneContactInput
+                isAr={isAr}
                 value={cmsDraft.contactPhone ?? ""}
                 disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, contactPhone: e.target.value }))}
+                onChange={(val) => updateCmsDraft((p) => ({ ...p, contactPhone: val }))}
                 placeholder="+967 1 000 000"
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                inputClassName="flex-1 min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono text-right"
               />
             </div>
             <div>
               <label className="block font-bold mb-1">{isAr ? "رقم واتساب التواصل" : "WhatsApp Number"}</label>
-              <input
-                type="text"
+              <PhoneContactInput
+                isAr={isAr}
+                format="whatsapp_digits"
                 value={cmsDraft.contactWhatsApp ?? ""}
                 disabled={readOnly || !canManageCms}
-                onChange={(e) => updateCmsDraft((p) => ({ ...p, contactWhatsApp: e.target.value }))}
+                onChange={(val) => updateCmsDraft((p) => ({ ...p, contactWhatsApp: val }))}
                 placeholder="967770000000"
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                inputClassName="flex-1 min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono text-right"
               />
             </div>
             <div>

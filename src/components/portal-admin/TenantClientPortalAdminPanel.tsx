@@ -16,6 +16,7 @@ import {
 import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
 import { formatIsoToDmy, formatMoney, formatRefreshTimestamp } from "@/lib/uiFormatters";
+import { PhoneContactInput } from "@/components/PhoneContactInput";
 import type { TenantFormConfig } from "@/lib/clientPortal/portalConfig";
 import type { TenantWhatsAppSettingsPublic } from "@/lib/whatsapp/outboxService";
 
@@ -932,15 +933,21 @@ export function TenantClientPortalAdminPanel({
                   </div>
                 </>
               )}
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <div>
                   <label className="block font-bold mb-1">رقم المرسل</label>
-                  <input
-                    type="text"
-                    dir="ltr"
+                  <PhoneContactInput
+                    format="whatsapp_digits"
                     value={waSettings.senderPhone}
-                    onChange={(e) => setWaSettings({ ...waSettings, senderPhone: e.target.value })}
-                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-right font-mono"
+                    onChange={(val) => setWaSettings({ ...waSettings, senderPhone: val })}
+                    fallbackContacts={clients.map((c) => ({
+                      id: c.id,
+                      name: c.fullName,
+                      phone: c.phone,
+                      subtitle: c.linkedCustomerCode || c.preferredPickup,
+                    }))}
+                    placeholder="967770000000"
+                    inputClassName="flex-1 min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-right font-mono"
                   />
                 </div>
                 <div>

@@ -1,12 +1,13 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { BookOpen, Plus, Store, UserPlus, X } from "lucide-react";
 import type { UasUser } from "@/types/uas";
 import { SelectWithOther } from "@/components/SelectWithOther";
 import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
+import { PhoneContactInput } from "@/components/PhoneContactInput";
 
 export type MasterCreateMode = "vendor" | "customer" | "coa";
 
@@ -161,10 +162,22 @@ export function QuickMasterCreateModal({
     };
   }, [open, mode, defaultParentCode]);
 
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  const resetAndClose = useCallback(() => {
+    setNameAr("");
+    setNameEn("");
+    setPhone("");
+    setEmail("");
+    setTaxReg("");
+    setAddress("");
+    setCoaCode("");
+    onClose();
+  }, [onClose]);
+
+  const mounted = useSyncExternalStore(
+    () => () => { },
+    () => true,
+    () => false
+  );
 
   // Trap Escape in capture phase to close ONLY this nested subform modal without triggering parent drawers
   useEffect(() => {
@@ -179,7 +192,7 @@ export function QuickMasterCreateModal({
     };
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [open]);
+  }, [open, resetAndClose]);
 
   function handleParentChange(newPid: string) {
     setParentId(newPid);
@@ -190,10 +203,10 @@ export function QuickMasterCreateModal({
 
   const actor = currentUser
     ? {
-        userId: currentUser.id,
-        userDisplay: currentUser.name,
-        userRole: currentUser.role,
-      }
+      userId: currentUser.id,
+      userDisplay: currentUser.name,
+      userRole: currentUser.role,
+    }
     : undefined;
 
   async function handleSubmit(e: React.FormEvent) {
@@ -283,17 +296,6 @@ export function QuickMasterCreateModal({
     } finally {
       setSubmitting(false);
     }
-  }
-
-  function resetAndClose() {
-    setNameAr("");
-    setNameEn("");
-    setPhone("");
-    setEmail("");
-    setTaxReg("");
-    setAddress("");
-    setCoaCode("");
-    onClose();
   }
 
   const titleMap: Record<MasterCreateMode, string> = {
@@ -412,11 +414,10 @@ export function QuickMasterCreateModal({
                         مسار النسب الشجري (Lineage Chain):
                       </span>
                       <span
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          isPostingLeaf
-                            ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300"
-                            : "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
-                        }`}
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isPostingLeaf
+                          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300"
+                          : "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                          }`}
                       >
                         الهدف: الجيل {targetLevel} • {isPostingLeaf ? "حساب ترحيل (Posting Leaf)" : "حساب تجميعي (Summary Header)"}
                       </span>
@@ -453,8 +454,8 @@ export function QuickMasterCreateModal({
                   mode === "vendor"
                     ? "مثال: مؤسسة الإمداد الزراعي"
                     : mode === "customer"
-                    ? "مثال: عميل تجاري جديد"
-                    : "مثال: مصروف صيانة مضخة"
+                      ? "مثال: عميل تجاري جديد"
+                      : "مثال: مصروف صيانة مضخة"
                 }
                 className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
               />
@@ -487,13 +488,14 @@ export function QuickMasterCreateModal({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold mb-1">رقم الهاتف *</label>
-                  <input
-                    type="text"
-                    inputMode="tel"
+                  <PhoneContactInput
                     value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
+                    onChange={setPhone}
+                    onContactSelected={(c) => {
+                      if (!nameAr.trim() && c.name) setNameAr(c.name);
+                    }}
                     placeholder="777000000"
-                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                    inputClassName="flex-1 min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono text-right"
                   />
                 </div>
                 {mode === "vendor" ? (

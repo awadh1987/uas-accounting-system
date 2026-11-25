@@ -239,4 +239,52 @@ describe("Phase 8 — ERP UI Polish, Dates, Test Hygiene, PDF RTL Shaping & Over
     assert.ok(csvStr.includes("uas-ye"));
     assert.ok(!csvStr.includes("/var/www"));
   });
+
+  it("hides APK/EXE installers on tenant landing/login, exposes Client Portal Admin in workspaces, and wires PhoneContactInput everywhere", () => {
+    const landingSrc = fs.readFileSync(path.join(REPO_ROOT, "src/components/LandingPage.tsx"), "utf8");
+    assert.ok(landingSrc.includes("!isInstalledApp && !isTenantBranded"));
+    assert.ok(landingSrc.includes('data-testid="tenant-client-portal-card"'));
+    assert.ok(landingSrc.includes("دخول بوابة العملاء"));
+    assert.ok(landingSrc.includes("تسجيل عميل جديد"));
+    assert.ok(landingSrc.includes("دخول مساحة العمل"));
+
+    const loginSrc = fs.readFileSync(path.join(REPO_ROOT, "src/components/LoginView.tsx"), "utf8");
+    assert.ok(loginSrc.includes("!isInstalledApp && !isTenantWorkspace"));
+
+    const systemSrc = fs.readFileSync(path.join(REPO_ROOT, "src/components/tabs/SystemTab.tsx"), "utf8");
+    assert.ok(systemSrc.includes("TenantClientPortalAdminPanel"));
+    assert.ok(systemSrc.includes('activeSubTab === "client-portal"'));
+    assert.ok(systemSrc.includes("/downloads/UAS-Mobile-Release-qat.world.apk"));
+
+    const customersSrc = fs.readFileSync(path.join(REPO_ROOT, "src/components/tabs/CustomersTab.tsx"), "utf8");
+    assert.ok(customersSrc.includes("TenantClientPortalAdminPanel"));
+    assert.ok(customersSrc.includes('canEdit(currentUser, "system")'));
+
+    const salesSrc = fs.readFileSync(path.join(REPO_ROOT, "src/components/tabs/SalesTab.tsx"), "utf8");
+    assert.ok(salesSrc.includes('data-testid="sales-open-portal-admin"'));
+
+    const phoneWiredFiles = [
+      "src/components/client-portal/ClientPortalApp.tsx",
+      "src/components/tabs/SalesTab.tsx",
+      "src/components/tabs/CustomersTab.tsx",
+      "src/components/ProcurementTab.tsx",
+      "src/components/QuickMasterCreateModal.tsx",
+      "src/components/tabs/WorkersTab.tsx",
+      "src/components/BankPayoutModal.tsx",
+      "src/components/UserProfileDrawer.tsx",
+      "src/components/portal-admin/TenantClientPortalAdminPanel.tsx",
+      "src/components/TenantAdminConfigPanel.tsx",
+      "src/components/tabs/SystemTab.tsx",
+    ];
+    for (const rel of phoneWiredFiles) {
+      const content = fs.readFileSync(path.join(REPO_ROOT, rel), "utf8");
+      assert.ok(content.includes("PhoneContactInput"), `${rel} must use PhoneContactInput`);
+    }
+
+    const manifestXml = fs.readFileSync(
+      path.join(REPO_ROOT, "android/app/src/main/AndroidManifest.xml"),
+      "utf8"
+    );
+    assert.ok(manifestXml.includes("android.permission.READ_CONTACTS"));
+  });
 });

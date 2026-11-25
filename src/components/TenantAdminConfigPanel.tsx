@@ -19,6 +19,7 @@ import {
   DEFAULT_TAGLINE_EN,
   resolveEffectiveBrandInfo,
 } from "@/lib/branding";
+import { PhoneContactInput } from "@/components/PhoneContactInput";
 import type { UasTenantAdminConfig, UasUser } from "@/types/uas";
 
 interface TenantAdminConfigPanelProps {
@@ -480,25 +481,28 @@ export function TenantAdminConfigPanel({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block font-bold mb-1">{isAr ? "هاتف التواصل" : "Contact Phone"}</label>
-              <input
-                type="text"
+              <PhoneContactInput
+                isAr={isAr}
                 value={config.contactPhone}
-                onChange={(e) => setConfig({ ...config, contactPhone: e.target.value })}
+                onChange={(val) => setConfig({ ...config, contactPhone: val })}
                 disabled={readOnly}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                placeholder="+967 770 000 000"
+                inputClassName="flex-1 min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono text-right"
               />
             </div>
             <div>
               <label className="block font-bold mb-1">{isAr ? "واتساب الدعم" : "WhatsApp"}</label>
-              <input
-                type="text"
+              <PhoneContactInput
+                isAr={isAr}
+                format="whatsapp_digits"
                 value={config.contactWhatsApp}
-                onChange={(e) => setConfig({ ...config, contactWhatsApp: e.target.value })}
+                onChange={(val) => setConfig({ ...config, contactWhatsApp: val })}
                 disabled={readOnly}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"
+                placeholder="967770000000"
+                inputClassName="flex-1 min-w-0 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 font-mono text-right"
               />
             </div>
           </div>

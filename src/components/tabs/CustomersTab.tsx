@@ -30,7 +30,9 @@ import { QuickMasterCreateModal } from "@/components/QuickMasterCreateModal";
 import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
 import { SlideOverDrawer } from "@/components/SlideOverDrawer";
+import { PhoneContactInput } from "@/components/PhoneContactInput";
 import { TenantClientPortalAdminPanel } from "@/components/portal-admin/TenantClientPortalAdminPanel";
+import { canEdit } from "@/lib/permissions";
 import type { UasEnterpriseProfile, UasProject, UasSaleTransaction, UasUser } from "@/types/uas";
 
 interface CustomerMasterItem {
@@ -60,6 +62,7 @@ interface CustomersTabProps {
   allSales: UasSaleTransaction[];
   currentUser?: UasUser;
   enterpriseProfile?: UasEnterpriseProfile | null;
+  initialSection?: "cards" | "ledger" | "both" | "portal" | "whatsapp";
   readOnly?: boolean;
   canEditRecords?: boolean;
   onOpenSaleVoucher: (s: UasSaleTransaction) => void;
@@ -214,6 +217,7 @@ export function CustomersTab({
   allSales,
   currentUser,
   enterpriseProfile,
+  initialSection = "cards",
   readOnly = false,
   canEditRecords = true,
   onOpenSaleVoucher,
@@ -228,7 +232,17 @@ export function CustomersTab({
   const [hideTestRecords, setHideTestRecords] = useState(false);
   const [viewSection, setViewSection] = useState<
     "cards" | "ledger" | "both" | "portal" | "whatsapp"
-  >("cards");
+  >(initialSection);
+
+  useEffect(() => {
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) setViewSection(initialSection);
+    });
+    return () => {
+      active = false;
+    };
+  }, [initialSection]);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState("");
   const [includeSaleDetails, setIncludeSaleDetails] = useState(true);
@@ -447,14 +461,23 @@ export function CustomersTab({
               className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
             />
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <div>
               <label className="block font-bold mb-1">رقم الهاتف</label>
-              <input
-                type="text"
+              <PhoneContactInput
                 value={editPhone}
-                onChange={(e) => setEditPhone(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+                onChange={setEditPhone}
+                onContactSelected={(c) => {
+                  if (!editNameAr.trim() && c.name) setEditNameAr(c.name);
+                }}
+                fallbackContacts={customers.map((c) => ({
+                  id: c.id,
+                  name: c.nameAr || c.name,
+                  phone: c.phone,
+                  subtitle: c.code,
+                }))}
+                placeholder="777000000"
+                inputClassName="flex-1 min-w-0 rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-mono text-right"
               />
             </div>
             <div>
@@ -891,7 +914,11 @@ export function CustomersTab({
             <TenantClientPortalAdminPanel
               key={viewSection}
               initialSection={viewSection === "whatsapp" ? "whatsapp" : "requests"}
-              canManageSettings={currentUser?.role === "SUPER_ADMIN" || currentUser?.role === "CHIEF_ACCOUNTANT"}
+              canManageSettings={Boolean(
+                canEdit(currentUser, "system") ||
+                  currentUser?.role === "SUPER_ADMIN" ||
+                  currentUser?.role === "CHIEF_ACCOUNTANT"
+              )}
               onRefreshState={onRefreshState}
               onToast={(m) => onToast?.(m)}
             />

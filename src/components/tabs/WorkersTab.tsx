@@ -32,12 +32,14 @@ import {
 import { SelectWithOther } from "@/components/SelectWithOther";
 import { CostCenterSelector } from "@/components/CostCenterSelector";
 import { SaveDraftButton } from "@/components/SaveDraftButton";
+import { PhoneContactInput } from "@/components/PhoneContactInput";
 
 type WorkerPayload = {
   projectId: string;
   subProjectId?: string | null;
   harvest: string;
   name: string;
+  phone?: string;
   dailyWage: number;
   days: number;
   credit: number;
@@ -107,6 +109,7 @@ export function WorkersTab({
   const [harvest, setHarvest] = useState(activeProj?.harvests[0] || "");
   const [subProjectId, setSubProjectId] = useState<string>("");
   const [name, setName] = useState("");
+  const [workerPhone, setWorkerPhone] = useState("");
   const [dailyWage, setDailyWage] = useState("");
   const [days, setDays] = useState("");
   const [credit, setCredit] = useState("");
@@ -160,6 +163,7 @@ export function WorkersTab({
     setSubProjectId("");
     setHarvest(defProj?.harvests[0] || "");
     setName("");
+    setWorkerPhone("");
     setDailyWage("");
     setDays("");
     setCredit("");
@@ -175,6 +179,8 @@ export function WorkersTab({
     setSubProjectId(w.subProjectId || "");
     setHarvest(w.harvest);
     setName(w.name);
+    const matchedMaster = masterWorkers.find((m) => m.name === w.name);
+    setWorkerPhone(matchedMaster?.phone || "");
     setDailyWage(String(w.dailyWage));
     setDays(String(w.days));
     setCredit(String(w.credit));
@@ -215,6 +221,7 @@ export function WorkersTab({
       subProjectId: subProjectId || undefined,
       harvest: harv,
       name: name.trim(),
+      phone: workerPhone.trim() || undefined,
       dailyWage: Number(dailyWage) || 0,
       days: Number(days) || 1,
       credit: Number(credit) || 0,
@@ -232,6 +239,7 @@ export function WorkersTab({
     if (ok) {
       setEditingId(null);
       setName("");
+      setWorkerPhone("");
       setNotes("");
       setCostCenterId("");
       setDrawerOpen(false);
@@ -411,6 +419,25 @@ export function WorkersTab({
               type="text"
               placeholder="مثال: بلال / معاذ / فواز"
               className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2"
+            />
+          </div>
+          <div>
+            <label className="block font-semibold mb-1">رقم هاتف العامل (اختياري)</label>
+            <PhoneContactInput
+              value={workerPhone}
+              onChange={setWorkerPhone}
+              onContactSelected={(c) => {
+                if (!name.trim() && c.name) setName(c.name);
+              }}
+              fallbackContacts={masterWorkers
+                .filter((m) => Boolean(m.phone))
+                .map((m) => ({
+                  id: m.id,
+                  name: m.name,
+                  phone: m.phone || "",
+                }))}
+              placeholder="777000000"
+              inputClassName="flex-1 min-w-0 rounded-xl border border-slate-300 bg-transparent px-3 py-2 font-mono text-right"
             />
           </div>
           <div className="grid grid-cols-2 gap-2">

@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { UasDateInput } from "@/components/UasDateInput";
 import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
+import { PhoneContactInput } from "@/components/PhoneContactInput";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
 import {
   appendExportSignatureSheet,
@@ -201,8 +202,10 @@ function apiUrl(path: string): string {
 
 export function ClientPortalApp({
   onBackHome,
+  initialAuthTab,
 }: {
   onBackHome?: () => void;
+  initialAuthTab?: "login" | "register";
 }) {
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [tenantNameAr, setTenantNameAr] = useState("بوابة العملاء");
@@ -214,7 +217,14 @@ export function ClientPortalApp({
   const [catalogItems, setCatalogItems] = useState<CatalogItemOption[]>([]);
 
   const [account, setAccount] = useState<ClientAccountView | null>(null);
-  const [authTab, setAuthTab] = useState<"login" | "register">("login");
+  const [authTab, setAuthTab] = useState<"login" | "register">(() => {
+    if (initialAuthTab) return initialAuthTab;
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get("tab") === "register") return "register";
+    }
+    return "login";
+  });
   const [portalTab, setPortalTab] = useState<"new_request" | "requests" | "statement" | "profile">("new_request");
   const [toast, setToast] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -420,6 +430,17 @@ export function ClientPortalApp({
       setStmtLoading(false);
     }
   }, [account, stmtFrom, stmtTo, showNotice]);
+
+  useEffect(() => {
+    if (!initialAuthTab) return;
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) setAuthTab(initialAuthTab);
+    });
+    return () => {
+      active = false;
+    };
+  }, [initialAuthTab]);
 
   useEffect(() => {
     let active = true;
@@ -975,14 +996,15 @@ export function ClientPortalApp({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block font-bold mb-1">رقم الجوال * (يمني أو دولي)</label>
-                    <input
-                      type="tel"
+                    <PhoneContactInput
+                      testId="portal-reg-phone"
                       required
-                      dir="ltr"
                       value={regPhone}
-                      onChange={(e) => setRegPhone(e.target.value)}
+                      onChange={setRegPhone}
+                      onContactSelected={(c) => {
+                        if (!regFullName.trim() && c.name) setRegFullName(c.name);
+                      }}
                       placeholder="777123456"
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-right font-mono"
                     />
                   </div>
                   <div>
