@@ -22,7 +22,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
     const scope = resolveRequestTenantScope(req);
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
 
-    const portalUrl = `${resolveTenantCloudUrl(scope.tenantSlug)}?portal=client`;
+    const portalUrl = `${resolveTenantCloudUrl(scope.tenantSlug)}/portal`;
 
     const account = await registerClientPortalAccount({
       fullName: String(body.fullName || ""),

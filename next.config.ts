@@ -23,24 +23,6 @@ const nextConfig: NextConfig = {
         async headers() {
           return [
             {
-              source: "/api/:path*",
-              headers: [
-                {
-                  key: "Access-Control-Allow-Origin",
-                  value: "*",
-                },
-                {
-                  key: "Access-Control-Allow-Methods",
-                  value: "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-                },
-                {
-                  key: "Access-Control-Allow-Headers",
-                  value:
-                    "Content-Type, Authorization, X-Requested-With, x-uas-seat-token, x-uas-device-name, x-uas-device-id, x-uas-platform, x-uas-app-version, x-uas-os-version, x-uas-user-id, x-uas-role, x-uas-user-display, x-uas-tenant-id, x-tenant-id, x-uas-company-id, x-uas-session-tenant, x-uas-client-token, x-idempotency-key",
-                },
-              ],
-            },
-            {
               source: "/downloads/:path*.apk",
               headers: [
                 {

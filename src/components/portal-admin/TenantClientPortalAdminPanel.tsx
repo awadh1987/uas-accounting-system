@@ -93,6 +93,7 @@ interface StaffRequestItem {
   returnedToClientAt?: string | null;
   returnedByName?: string | null;
   clientResponseStatus?: string | null;
+  clientResponseStatusLabelAr?: string | null;
   clientResponseNote?: string | null;
   clientRespondedAt?: string | null;
   createdAt: string;
@@ -171,6 +172,7 @@ export function TenantClientPortalAdminPanel({
   const [linePriceEdits, setLinePriceEdits] = useState<Record<string, string>>({});
   const [addedLinesByReq, setAddedLinesByReq] = useState<Record<string, StaffRequestLineItem[]>>({});
   const [removedLineIds, setRemovedLineIds] = useState<Record<string, boolean>>({});
+  const [postHandoverEditIds, setPostHandoverEditIds] = useState<Record<string, boolean>>({});
   const [reqPickupLocationEdits, setReqPickupLocationEdits] = useState<Record<string, string>>({});
   const [reqCustomPickupEdits, setReqCustomPickupEdits] = useState<Record<string, string>>({});
   const [reqPickupNotesEdits, setReqPickupNotesEdits] = useState<Record<string, string>>({});
@@ -417,6 +419,9 @@ export function TenantClientPortalAdminPanel({
       return;
     }
     setAddedLinesByReq((prev) => ({ ...prev, [reqItem.id]: [] }));
+    if (reqItem.status === "COMPLETED" && action === "AMEND") {
+      setPostHandoverEditIds((prev) => ({ ...prev, [reqItem.id]: false }));
+    }
     onToast(data.message || "✅ تم تحديث الطلب بنجاح");
     await Promise.all([loadAll(false), onRefreshState?.()]);
   }
@@ -589,8 +594,11 @@ export function TenantClientPortalAdminPanel({
                   : Number(r.creditPaidPlanned || 0);
               const { debitReceivable: liveDebit } = computeSaleTotals(liveOrderTotal, 1, livePaid);
               const activeSalesLink = r.linkedSalesRecordId || r.linkedSaleId || r.linkedDraftId;
+              const isPostHandoverEditing = Boolean(postHandoverEditIds[r.id]);
               const isLockedTerminal =
-                r.status === "COMPLETED" || r.status === "REJECTED" || r.status === "CANCELLED";
+                r.status === "REJECTED" ||
+                r.status === "CANCELLED" ||
+                (r.status === "COMPLETED" && !isPostHandoverEditing);
               const currentPickupChoice =
                 reqPickupLocationEdits[r.id] !== undefined
                   ? reqPickupLocationEdits[r.id]
@@ -627,6 +635,14 @@ export function TenantClientPortalAdminPanel({
                       >
                         {r.statusLabelAr}
                       </span>
+                      {r.clientResponseStatus === "PENDING_STAFF_APPROVAL" && (
+                        <span
+                          data-testid={`staff-awaiting-approval-${r.id}`}
+                          className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200 text-[10px] font-black"
+                        >
+                          بانتظار اعتماد الموظف
+                        </span>
+                      )}
                       {r.revisionNumber && r.revisionNumber > 1 && (
                         <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-[10px] font-bold">
                           مراجعة #{r.revisionNumber}
@@ -651,6 +667,21 @@ export function TenantClientPortalAdminPanel({
                       <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300">
                         الإجمالي: {formatMoney(liveOrderTotal)}
                       </span>
+                      {r.status === "COMPLETED" && (
+                        <button
+                          type="button"
+                          data-testid={`staff-toggle-post-amend-${r.id}`}
+                          onClick={() =>
+                            setPostHandoverEditIds((prev) => ({ ...prev, [r.id]: !prev[r.id] }))
+                          }
+                          className={`px-2.5 py-1 rounded-xl border text-[11px] font-bold ${isPostHandoverEditing
+                            ? "border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
+                            : "border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                            }`}
+                        >
+                          {isPostHandoverEditing ? "إلغاء تعديل التسليم" : "تعديل ما بعد التسليم"}
+                        </button>
+                      )}
                       {!isLockedTerminal && (
                         <ActionOverflowMenu
                           size="xs"
@@ -687,6 +718,7 @@ export function TenantClientPortalAdminPanel({
                               icon: <XCircle className="w-3.5 h-3.5" />,
                               tone: "danger",
                               dividerBefore: true,
+                              hidden: r.status === "COMPLETED",
                               confirmTitle: `رفض الطلب (${r.requestNumber})`,
                               confirmMessage: "هل تريد رفض هذا الطلب نهائياً؟",
                               onClick: () => handleRequestAction(r, "REJECT"),
@@ -696,6 +728,7 @@ export function TenantClientPortalAdminPanel({
                               label: "إلغاء الطلب",
                               icon: <Trash2 className="w-3.5 h-3.5" />,
                               tone: "danger",
+                              hidden: r.status === "COMPLETED",
                               confirmTitle: `إلغاء الطلب (${r.requestNumber})`,
                               confirmMessage: "هل تريد إلغاء هذا الطلب؟",
                               onClick: () => handleRequestAction(r, "CANCEL"),
@@ -990,42 +1023,65 @@ export function TenantClientPortalAdminPanel({
                         </div>
 
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <button
-                            type="button"
-                            data-testid={`staff-return-client-${r.id}`}
-                            onClick={() => void handleRequestAction(r, "RETURN_TO_CLIENT")}
-                            className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold inline-flex items-center gap-1"
-                          >
-                            <CornerUpLeft className="w-3.5 h-3.5" />
-                            <span>إعادة للعميل للموافقة</span>
-                          </button>
-                          {(r.status === "PENDING_REVIEW" || r.status === "RETURNED_TO_CLIENT") && (
+                          {r.status === "COMPLETED" ? (
                             <button
                               type="button"
-                              onClick={() => void handleRequestAction(r, "CONFIRM")}
-                              className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white font-bold inline-flex items-center gap-1"
+                              data-testid={`staff-save-post-amend-${r.id}`}
+                              onClick={() => void handleRequestAction(r, "AMEND")}
+                              className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold inline-flex items-center gap-1"
                             >
-                              <ClipboardCheck className="w-3.5 h-3.5" />
-                              <span>اعتماد وفتح أمر بيع</span>
+                              <Save className="w-3.5 h-3.5" />
+                              <span>حفظ تعديل الفاتورة والمبيعات (دون تكرار)</span>
                             </button>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                data-testid={`staff-save-amend-${r.id}`}
+                                onClick={() => void handleRequestAction(r, "AMEND")}
+                                className="px-3 py-1.5 rounded-xl border border-indigo-400 text-indigo-700 dark:text-indigo-300 font-bold inline-flex items-center gap-1"
+                              >
+                                <Save className="w-3.5 h-3.5" />
+                                <span>حفظ التعديل</span>
+                              </button>
+                              <button
+                                type="button"
+                                data-testid={`staff-return-client-${r.id}`}
+                                onClick={() => void handleRequestAction(r, "RETURN_TO_CLIENT")}
+                                className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold inline-flex items-center gap-1"
+                              >
+                                <CornerUpLeft className="w-3.5 h-3.5" />
+                                <span>إعادة للعميل للموافقة</span>
+                              </button>
+                              {(r.status === "PENDING_REVIEW" || r.status === "RETURNED_TO_CLIENT" || r.status === "CONFIRMED") && (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleRequestAction(r, "CONFIRM")}
+                                  className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white font-bold inline-flex items-center gap-1"
+                                >
+                                  <ClipboardCheck className="w-3.5 h-3.5" />
+                                  <span>{r.linkedSalesRecordId ? "حفظ وتحديث أمر البيع" : "اعتماد وفتح أمر بيع"}</span>
+                                </button>
+                              )}
+                              {(r.status === "PENDING_REVIEW" || r.status === "CONFIRMED") && (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleRequestAction(r, "MARK_READY")}
+                                  className="px-3 py-1.5 rounded-xl border border-amber-500 text-amber-700 dark:text-amber-300 font-bold"
+                                >
+                                  جاهز للاستلام
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => void handleRequestAction(r, "HANDOVER")}
+                                className="px-3 py-1.5 rounded-xl accent-bg font-extrabold inline-flex items-center gap-1"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>إتمام التسليم (تم الاستلام + فاتورة)</span>
+                              </button>
+                            </>
                           )}
-                          {(r.status === "PENDING_REVIEW" || r.status === "CONFIRMED") && (
-                            <button
-                              type="button"
-                              onClick={() => void handleRequestAction(r, "MARK_READY")}
-                              className="px-3 py-1.5 rounded-xl border border-amber-500 text-amber-700 dark:text-amber-300 font-bold"
-                            >
-                              جاهز للاستلام
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => void handleRequestAction(r, "HANDOVER")}
-                            className="px-3 py-1.5 rounded-xl accent-bg font-extrabold inline-flex items-center gap-1"
-                          >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>إتمام التسليم (تم الاستلام + فاتورة)</span>
-                          </button>
                         </div>
                       </div>
                     </div>

@@ -8,6 +8,7 @@ import {
   serializeRequest,
   updatePendingClientRequest,
 } from "@/lib/clientPortal/portalService";
+import { resolveTenantCloudUrl } from "@/lib/serverConnection";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,8 @@ export const PATCH = withTenantRoute(async function PATCH(
       const updated = await updatePendingClientRequest({
         requestId: id,
         clientAccountId: auth.account.id,
+        tenantSlug: auth.scope.tenantSlug,
+        portalUrl: `${resolveTenantCloudUrl(auth.scope.tenantSlug)}/portal`,
         pickupType: body.pickupType ? String(body.pickupType) : undefined,
         pickupLocation: String(body.pickupLocation || ""),
         customPickupLocation: body.customPickupLocation
@@ -42,6 +45,7 @@ export const PATCH = withTenantRoute(async function PATCH(
           : undefined,
         pickupNotes: body.pickupNotes !== undefined ? String(body.pickupNotes || "") : undefined,
         lines: rawLines.map((l) => ({
+          id: l.id ? String(l.id) : undefined,
           itemId: l.itemId ? String(l.itemId) : null,
           itemTitle: String(l.itemTitle || ""),
           requestedQty: Number(l.requestedQty || 0),
@@ -56,7 +60,7 @@ export const PATCH = withTenantRoute(async function PATCH(
       return NextResponse.json({
         success: true,
         request: updated,
-        message: "✅ تم تحديث الطلب بنجاح قبل المراجعة",
+        message: "✅ تم تحديث الطلب وإدراجه بانتظار اعتماد الموظف",
       });
     }
 

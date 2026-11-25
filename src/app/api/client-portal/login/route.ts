@@ -49,7 +49,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
   }
 });
 
-export const DELETE = withTenantRoute(async function DELETE() {
+export const DELETE = withTenantRoute(async function DELETE(req: NextRequest) {
   const res = NextResponse.json({ success: true });
-  return clearClientSessionCookie(res);
+  return clearClientSessionCookie(res, req);
 });

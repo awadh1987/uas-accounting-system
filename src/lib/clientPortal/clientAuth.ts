@@ -305,12 +305,21 @@ export function attachClientSessionCookie(
   return res;
 }
 
-export function clearClientSessionCookie(res: NextResponse): NextResponse {
+export function clearClientSessionCookie(
+  res: NextResponse,
+  req?: Request | NextRequest
+): NextResponse {
+  const host = req?.headers.get("host") || "";
+  const isHttps =
+    (req?.headers.get("x-forwarded-proto") || "").includes("https") ||
+    process.env.NODE_ENV === "production";
+
   res.cookies.set(CLIENT_PORTAL_COOKIE_NAME, "", {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
     maxAge: 0,
+    secure: isHttps && !host.startsWith("localhost") && !host.startsWith("127.0.0.1"),
   });
   return res;
 }

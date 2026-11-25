@@ -9,7 +9,9 @@ import {
   BarChart3,
   Building2,
   CheckCircle2,
+  ClipboardList,
   Coins,
+  CreditCard,
   Download,
   Globe2,
   Layers,
@@ -18,11 +20,14 @@ import {
   MessageCircle,
   Monitor,
   Phone,
+  Plus,
   QrCode,
   Search,
   ShieldCheck,
   Smartphone,
+  Sparkles,
   TrendingUp,
+  UserPlus,
   Users,
 } from "lucide-react";
 import { DualLogoBadge } from "@/components/DualLogoBadge";
@@ -37,13 +42,23 @@ import { openExternalOrWhatsApp } from "@/lib/nativeBridge";
 import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
 import type { LanguageCode, TabId, UasBootstrapState, UasUser } from "@/types/uas";
 
+export type ClientPortalEntrySection =
+  | "catalog"
+  | "new_request"
+  | "requests"
+  | "statement"
+  | "profile";
+
 interface LandingPageProps {
   state: UasBootstrapState;
   lang: LanguageCode;
   currentUser?: UasUser | null;
   onEnterErp: (tab?: TabId) => void;
   onOpenLogin: () => void;
-  onOpenClientPortal?: (initialAuthTab?: "login" | "register") => void;
+  onOpenClientPortal?: (
+    initialAuthTab?: "login" | "register",
+    initialSection?: ClientPortalEntrySection
+  ) => void;
   onToggleLang: () => void;
   onSelectProjectCard?: (projectId: string) => void;
 }
@@ -336,48 +351,45 @@ export function LandingPage({
               <span>{isAr ? "English" : "العربية"}</span>
             </button>
 
-            {onOpenClientPortal ? (
-              <button
-                type="button"
-                onClick={() => onOpenClientPortal("login")}
-                className="px-3.5 py-2 rounded-xl border border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold flex items-center gap-1.5 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition"
-              >
-                <Users className="w-3.5 h-3.5" />
-                <span>{isAr ? "بوابة العملاء" : "Client Portal"}</span>
-              </button>
-            ) : (
-              <Link
-                href="/portal"
-                className="px-3.5 py-2 rounded-xl border border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold flex items-center gap-1.5 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition"
-              >
-                <Users className="w-3.5 h-3.5" />
-                <span>{isAr ? "بوابة العملاء" : "Client Portal"}</span>
-              </Link>
-            )}
+            {!isTenantBranded && (
+              <>
+                {onOpenClientPortal ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenClientPortal("login", "new_request")}
+                    className="px-3.5 py-2 rounded-xl border border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold flex items-center gap-1.5 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition"
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    <span>{isAr ? "بوابة العملاء" : "Client Portal"}</span>
+                  </button>
+                ) : (
+                  <Link
+                    href="/portal"
+                    className="px-3.5 py-2 rounded-xl border border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold flex items-center gap-1.5 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition"
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    <span>{isAr ? "بوابة العملاء" : "Client Portal"}</span>
+                  </Link>
+                )}
 
-            <button
-              type="button"
-              onClick={currentUser ? () => onEnterErp("dashboard") : onOpenLogin}
-              className="px-4 py-2 rounded-xl accent-bg text-xs font-extrabold shadow-sm flex items-center gap-2 hover:opacity-95 transition"
-            >
-              <Lock className="w-3.5 h-3.5" />
-              <span>
-                {currentUser
-                  ? isAr
-                    ? `دخول مساحة العمل (${currentUser.name})`
-                    : `Enter Workspace (${currentUser.name})`
-                  : isAr
-                  ? "تسجيل الدخول"
-                  : "Sign In"}
-              </span>
-            </button>
+                <button
+                  type="button"
+                  data-testid="root-login-cta"
+                  onClick={currentUser ? () => onEnterErp("dashboard") : onOpenLogin}
+                  className="px-4 py-2 rounded-xl accent-bg text-xs font-extrabold shadow-sm flex items-center gap-2 hover:opacity-95 transition"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>{isAr ? "دخول" : "Sign In"}</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
       </header>
 
       <main className="flex-1">
         {/* Focused Hero Section */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-8 py-12 sm:py-16 grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
+        <section className="max-w-7xl mx-auto px-4 sm:px-8 py-10 sm:py-14 grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
           <div className={`${profile?.showPublicVerify !== false ? "lg:col-span-7" : "lg:col-span-12 max-w-4xl"} space-y-6`}>
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full accent-badge text-xs font-black">
               <ShieldCheck className="w-4 h-4" />
@@ -408,44 +420,27 @@ export function LandingPage({
               </div>
             )}
 
-            <div className="pt-2 flex flex-wrap gap-3">
-              {currentUser && (
-                <button
-                  type="button"
-                  onClick={() => onEnterErp("dashboard")}
-                  className="px-6 py-3.5 rounded-2xl accent-bg text-sm font-black shadow-lg hover:shadow-xl flex items-center gap-2.5 transition"
+            {!isInstalledApp && !isTenantBranded && (
+              <div className="pt-2 flex flex-wrap gap-3">
+                <a
+                  href="/downloads/UAS-Setup-Win64.exe"
+                  download="UAS-Setup-Win64.exe"
+                  className="px-5 py-3.5 rounded-2xl border border-indigo-500/40 bg-indigo-50/50 dark:bg-indigo-950/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 text-sm font-bold shadow-xs flex items-center gap-2 text-indigo-700 dark:text-indigo-300 transition"
                 >
-                  <ArrowIcon className="w-4 h-4" />
-                  <span>
-                    {isAr
-                      ? "الانتقال إلى لوحة العمليات"
-                      : "Go to ERP Workspace"}
-                  </span>
-                </button>
-              )}
+                  <Monitor className="w-4 h-4 text-indigo-600" />
+                  <span>{isAr ? "تحميل نسخة ويندوز (Desktop / LAN)" : "Download Windows Setup"}</span>
+                </a>
 
-              {!isInstalledApp && !isTenantBranded && (
-                <>
-              <a
-                href="/downloads/UAS-Setup-Win64.exe"
-                download="UAS-Setup-Win64.exe"
-                className="px-5 py-3.5 rounded-2xl border border-indigo-500/40 bg-indigo-50/50 dark:bg-indigo-950/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 text-sm font-bold shadow-xs flex items-center gap-2 text-indigo-700 dark:text-indigo-300 transition"
-              >
-                <Monitor className="w-4 h-4 text-indigo-600" />
-                <span>{isAr ? "تحميل نسخة ويندوز (Desktop / LAN)" : "Download Windows Setup"}</span>
-              </a>
-
-              <a
-                href="/downloads/UAS-Mobile-Release-qat.world.apk"
-                download="UAS-Mobile-Release-qat.world.apk"
-                className="px-5 py-3.5 rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-bold shadow-xs flex items-center gap-2 text-slate-800 dark:text-slate-200 transition"
-              >
-                <Download className="w-4 h-4 text-emerald-600" />
-                <span>{isAr ? "تحميل تطبيق Android APK الميداني" : "Download Android APK"}</span>
-              </a>
-                </>
-              )}
-            </div>
+                <a
+                  href="/downloads/UAS-Mobile-Release-qat.world.apk"
+                  download="UAS-Mobile-Release-qat.world.apk"
+                  className="px-5 py-3.5 rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-bold shadow-xs flex items-center gap-2 text-slate-800 dark:text-slate-200 transition"
+                >
+                  <Download className="w-4 h-4 text-emerald-600" />
+                  <span>{isAr ? "تحميل تطبيق Android APK الميداني" : "Download Android APK"}</span>
+                </a>
+              </div>
+            )}
           </div>
 
           {/* Clean Public Voucher QR Verification Box */}
@@ -540,6 +535,202 @@ export function LandingPage({
             </div>
           )}
         </section>
+
+        {/* Prominent Tenant Client Portal Card Above Feature/KPI/Portfolio Sections */}
+        {isTenantBranded && (
+          <section
+            id="tenant-client-portal"
+            data-testid="tenant-client-portal-card"
+            className="max-w-7xl mx-auto px-4 sm:px-8 pb-10 space-y-5"
+          >
+            {(() => {
+              const isHostSub =
+                typeof window !== "undefined" &&
+                Boolean(extractSubdomainSlugFromHost(window.location.host));
+              const slugQuery =
+                !isHostSub && activeTenantSlug && activeTenantSlug !== "default"
+                  ? `slug=${encodeURIComponent(activeTenantSlug)}`
+                  : "";
+              const buildPortalHref = (paramsStr?: string) => {
+                const parts = [paramsStr, slugQuery].filter(Boolean);
+                return parts.length > 0 ? `/portal?${parts.join("&")}` : "/portal";
+              };
+              const directoryBtnClass =
+                "min-h-[44px] px-4 py-2.5 rounded-2xl border border-emerald-500/40 bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-200 text-xs font-extrabold inline-flex items-center justify-center gap-2 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition shadow-xs";
+              return (
+                <div className="card-surface rounded-3xl p-6 sm:p-8 border border-emerald-500/35 bg-gradient-to-br from-emerald-50/70 via-white to-slate-50 dark:from-emerald-950/35 dark:via-slate-900 dark:to-slate-950 shadow-md space-y-6">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="space-y-2 max-w-2xl">
+                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[11px] font-black">
+                        <Users className="w-3.5 h-3.5 shrink-0" />
+                        <span>
+                          {isAr
+                            ? `بوابة العملاء والخدمات الإلكترونية • ${legalName}`
+                            : `Client Portal & Service Directory • ${legalName}`}
+                        </span>
+                      </div>
+                      <h3 className="text-xl sm:text-2xl font-black tracking-tight">
+                        {isAr
+                          ? `بوابة عملاء ${legalName} — الأسعار والطلبات وكشف الحساب`
+                          : `${legalName} Client Portal — Catalog, Orders & Statements`}
+                      </h3>
+                      <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                        {isAr
+                          ? `منصة متكاملة لعملاء ${legalName} لتسجيل الدخول أو إنشاء حساب عميل جديد، واستعراض الأسعار والفرز المنشورة، وتسجيل طلبات الاستلام ومتابعتها، ومراجعة الفواتير وكشف الحساب.`
+                          : `Dedicated portal for ${legalName} clients to sign in, self-register, browse published pricing & grades, submit and track goods requests, and review invoices & statements.`}
+                      </p>
+                    </div>
+                    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/80 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-mono font-bold text-slate-600 dark:text-slate-300">
+                      <Building2 className="w-3.5 h-3.5 text-emerald-600" />
+                      <bdi dir="ltr">{activeTenantSlug || "default"}</bdi>
+                    </div>
+                  </div>
+
+                  {/* Full Action Directory inside Client Portal Card */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+                    {onOpenClientPortal ? (
+                      <>
+                        <button
+                          type="button"
+                          data-testid="tenant-portal-login-cta"
+                          onClick={() => onOpenClientPortal("login", "new_request")}
+                          className="min-h-[46px] px-4 py-2.5 rounded-2xl accent-bg text-xs sm:text-sm font-black inline-flex items-center justify-center gap-2 shadow-sm hover:opacity-95 transition"
+                        >
+                          <Users className="w-4 h-4 shrink-0" />
+                          <span>{isAr ? "دخول بوابة العملاء" : "Client Portal Sign In"}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          data-testid="tenant-portal-register-cta"
+                          onClick={() => onOpenClientPortal("register", "new_request")}
+                          className={directoryBtnClass}
+                        >
+                          <UserPlus className="w-4 h-4 shrink-0 text-emerald-600" />
+                          <span>{isAr ? "تسجيل عميل جديد" : "New Client Registration"}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          data-testid="tenant-portal-catalog-cta"
+                          onClick={() => onOpenClientPortal("login", "catalog")}
+                          className={directoryBtnClass}
+                        >
+                          <Sparkles className="w-4 h-4 shrink-0 text-amber-600" />
+                          <span>{isAr ? "الأسعار والفرز" : "Catalog & Pricing"}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          data-testid="tenant-portal-request-cta"
+                          onClick={() => onOpenClientPortal("login", "new_request")}
+                          className={directoryBtnClass}
+                        >
+                          <Plus className="w-4 h-4 shrink-0 text-emerald-600" />
+                          <span>{isAr ? "تسجيل طلب" : "New Goods Request"}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          data-testid="tenant-portal-tracking-cta"
+                          onClick={() => onOpenClientPortal("login", "requests")}
+                          className={directoryBtnClass}
+                        >
+                          <ClipboardList className="w-4 h-4 shrink-0 text-indigo-600" />
+                          <span>{isAr ? "متابعة الطلبات" : "Track Orders"}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          data-testid="tenant-portal-statement-cta"
+                          onClick={() => onOpenClientPortal("login", "statement")}
+                          className={directoryBtnClass}
+                        >
+                          <CreditCard className="w-4 h-4 shrink-0 text-cyan-600" />
+                          <span>{isAr ? "الفواتير وكشف الحساب" : "Invoices & Statement"}</span>
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <Link
+                          href={buildPortalHref()}
+                          data-testid="tenant-portal-login-cta"
+                          className="min-h-[46px] px-4 py-2.5 rounded-2xl accent-bg text-xs sm:text-sm font-black inline-flex items-center justify-center gap-2 shadow-sm hover:opacity-95 transition"
+                        >
+                          <Users className="w-4 h-4 shrink-0" />
+                          <span>{isAr ? "دخول بوابة العملاء" : "Client Portal Sign In"}</span>
+                        </Link>
+
+                        <Link
+                          href={buildPortalHref("tab=register")}
+                          data-testid="tenant-portal-register-cta"
+                          className={directoryBtnClass}
+                        >
+                          <UserPlus className="w-4 h-4 shrink-0 text-emerald-600" />
+                          <span>{isAr ? "تسجيل عميل جديد" : "New Client Registration"}</span>
+                        </Link>
+
+                        <Link
+                          href={buildPortalHref("section=catalog")}
+                          data-testid="tenant-portal-catalog-cta"
+                          className={directoryBtnClass}
+                        >
+                          <Sparkles className="w-4 h-4 shrink-0 text-amber-600" />
+                          <span>{isAr ? "الأسعار والفرز" : "Catalog & Pricing"}</span>
+                        </Link>
+
+                        <Link
+                          href={buildPortalHref("section=new_request")}
+                          data-testid="tenant-portal-request-cta"
+                          className={directoryBtnClass}
+                        >
+                          <Plus className="w-4 h-4 shrink-0 text-emerald-600" />
+                          <span>{isAr ? "تسجيل طلب" : "New Goods Request"}</span>
+                        </Link>
+
+                        <Link
+                          href={buildPortalHref("section=requests")}
+                          data-testid="tenant-portal-tracking-cta"
+                          className={directoryBtnClass}
+                        >
+                          <ClipboardList className="w-4 h-4 shrink-0 text-indigo-600" />
+                          <span>{isAr ? "متابعة الطلبات" : "Track Orders"}</span>
+                        </Link>
+
+                        <Link
+                          href={buildPortalHref("section=statement")}
+                          data-testid="tenant-portal-statement-cta"
+                          className={directoryBtnClass}
+                        >
+                          <CreditCard className="w-4 h-4 shrink-0 text-cyan-600" />
+                          <span>{isAr ? "الفواتير وكشف الحساب" : "Invoices & Statement"}</span>
+                        </Link>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Single Clean Workspace Login Entry */}
+                  <div className="pt-3 border-t border-emerald-200/70 dark:border-emerald-900/50 flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-xs text-slate-600 dark:text-slate-300 font-semibold">
+                      {isAr
+                        ? `منطقة دخول فريق العمل في ${legalName}`
+                        : `${legalName} Workspace Portal Access`}
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="tenant-staff-login-cta"
+                      onClick={currentUser ? () => onEnterErp("dashboard") : onOpenLogin}
+                      className="min-h-[44px] px-6 py-2.5 rounded-2xl border border-slate-300 dark:border-slate-700 bg-slate-900 text-white dark:bg-white dark:text-slate-900 text-xs sm:text-sm font-black inline-flex items-center gap-2 hover:opacity-90 transition shadow-sm"
+                    >
+                      <Lock className="w-4 h-4 shrink-0" />
+                      <span>{isAr ? "دخول" : "Sign In"}</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+          </section>
+        )}
 
         {/* Feature Pillars Grid (Global SaaS Standard) */}
         <section className="max-w-7xl mx-auto px-4 sm:px-8 py-8 sm:py-12 border-t border-slate-200/80 dark:border-slate-800">
@@ -739,140 +930,8 @@ export function LandingPage({
           </section>
         )}
 
-        {/* Tenant Client Portal & Self-Registration Card (Replaces APK/.exe downloads on tenant pages) */}
-        {isTenantBranded ? (
-          <section
-            id="tenant-client-portal"
-            data-testid="tenant-client-portal-card"
-            className="max-w-7xl mx-auto px-4 sm:px-8 py-10 border-t border-slate-200/80 dark:border-slate-800 space-y-5"
-          >
-            <div className="card-surface rounded-3xl p-6 sm:p-8 border border-emerald-500/30 bg-gradient-to-br from-emerald-50/60 via-white to-slate-50 dark:from-emerald-950/30 dark:via-slate-900 dark:to-slate-950 shadow-sm space-y-6">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="space-y-2 max-w-2xl">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[11px] font-black">
-                    <Users className="w-3.5 h-3.5 shrink-0" />
-                    <span>
-                      {isAr
-                        ? `بوابة العملاء والطلبات الإلكترونية • ${legalName}`
-                        : `Client Portal & Self-Registration • ${legalName}`}
-                    </span>
-                  </div>
-                  <h3 className="text-xl sm:text-2xl font-black tracking-tight">
-                    {isAr
-                      ? `خدمة عملاء ${legalName} — تسجيل الطلبات وكشوفات الحساب`
-                      : `${legalName} Client Portal — Orders, Receipts & Statements`}
-                  </h3>
-                  <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-                    {isAr
-                      ? `بوابة مخصصة لعملاء ${legalName} لتسجيل الدخول ومتابعة طلبات البضاعة وإيصالات الاستلام والفواتير وكشف الحساب المباشر، أو التقديم كعميل جديد لتفعيل حسابك والبدء بتسجيل طلباتك أونلاين.`
-                      : `Dedicated portal for ${legalName} clients to sign in, submit goods requests, track pickups, view invoices & live account statements, or self-register as a new client.`}
-                  </p>
-                </div>
-                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/80 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-mono font-bold text-slate-600 dark:text-slate-300">
-                  <Building2 className="w-3.5 h-3.5 text-emerald-600" />
-                  <bdi dir="ltr">{activeTenantSlug || "default"}</bdi>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                <div className="rounded-2xl p-4 bg-white/80 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-1">
-                  <div className="font-black text-emerald-700 dark:text-emerald-300">
-                    {isAr ? "1. دخول العملاء المسجلين" : "1. Client Sign-In"}
-                  </div>
-                  <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
-                    {isAr
-                      ? "سجّل الدخول برقم الجوال أو البريد الإلكتروني لإرسال طلبات الشراء والاستلام، ومتابعة حالة الاعتماد، وطباعة الفواتير."
-                      : "Sign in using your registered mobile or email to submit orders and track receipts & statements."}
-                  </p>
-                </div>
-                <div className="rounded-2xl p-4 bg-white/80 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-1">
-                  <div className="font-black text-indigo-700 dark:text-indigo-300">
-                    {isAr ? "2. تسجيل عميل جديد" : "2. New Client Registration"}
-                  </div>
-                  <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
-                    {isAr
-                      ? "عميل جديد؟ أنشئ حسابك مباشرة برقم جوالك من الهاتف أو يدوياً، وبعد مراجعة واعتماد الإدارة يمكنك رفع الطلبات فوراً."
-                      : "New client? Register in seconds with your phone number; once approved by staff, start placing requests."}
-                  </p>
-                </div>
-                <div className="rounded-2xl p-4 bg-white/80 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-1">
-                  <div className="font-black text-slate-700 dark:text-slate-200">
-                    {isAr ? "3. دخول مساحة عمل المنشأة" : "3. Staff Workspace Login"}
-                  </div>
-                  <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
-                    {isAr
-                      ? "بوابة الموظفين والمحاسبين ومديري النظام لإدارة المبيعات والمخزون واعتماد طلبات بوابة العملاء."
-                      : "Authenticated staff portal for accounting, inventory, sales, and Client Portal approvals."}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3 pt-1">
-                {onOpenClientPortal ? (
-                  <>
-                    <button
-                      type="button"
-                      data-testid="tenant-portal-login-cta"
-                      onClick={() => onOpenClientPortal("login")}
-                      className="min-h-[44px] px-5 py-2.5 rounded-2xl accent-bg text-xs sm:text-sm font-black inline-flex items-center gap-2 shadow-sm hover:opacity-95 transition"
-                    >
-                      <Users className="w-4 h-4" />
-                      <span>{isAr ? "دخول بوابة العملاء" : "Client Portal Sign In"}</span>
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="tenant-portal-register-cta"
-                      onClick={() => onOpenClientPortal("register")}
-                      className="min-h-[44px] px-5 py-2.5 rounded-2xl border border-emerald-500/50 bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 text-xs sm:text-sm font-black inline-flex items-center gap-2 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition"
-                    >
-                      <ArrowLeft className="w-4 h-4" />
-                      <span>{isAr ? "تسجيل عميل جديد" : "New Client Registration"}</span>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <Link
-                      href="/portal"
-                      data-testid="tenant-portal-login-cta"
-                      className="min-h-[44px] px-5 py-2.5 rounded-2xl accent-bg text-xs sm:text-sm font-black inline-flex items-center gap-2 shadow-sm hover:opacity-95 transition"
-                    >
-                      <Users className="w-4 h-4" />
-                      <span>{isAr ? "دخول بوابة العملاء" : "Client Portal Sign In"}</span>
-                    </Link>
-                    <Link
-                      href="/portal?tab=register"
-                      data-testid="tenant-portal-register-cta"
-                      className="min-h-[44px] px-5 py-2.5 rounded-2xl border border-emerald-500/50 bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 text-xs sm:text-sm font-black inline-flex items-center gap-2 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition"
-                    >
-                      <ArrowLeft className="w-4 h-4" />
-                      <span>{isAr ? "تسجيل عميل جديد" : "New Client Registration"}</span>
-                    </Link>
-                  </>
-                )}
-
-                <button
-                  type="button"
-                  data-testid="tenant-staff-login-cta"
-                  onClick={currentUser ? () => onEnterErp("dashboard") : onOpenLogin}
-                  className="min-h-[44px] px-5 py-2.5 rounded-2xl border border-slate-300 dark:border-slate-700 bg-white/90 dark:bg-slate-900 text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
-                >
-                  <ShieldCheck className="w-4 h-4 text-slate-600 dark:text-slate-300" />
-                  <span>
-                    {currentUser
-                      ? isAr
-                        ? "فتح مساحة العمل"
-                        : "Open Staff Workspace"
-                      : isAr
-                      ? "دخول مساحة العمل"
-                      : "Staff Workspace Sign In"}
-                  </span>
-                </button>
-              </div>
-            </div>
-          </section>
-        ) : (
-        /* Visitor Downloads Center (Android APK & Windows Desktop/LAN .exe — Root Distribution Only) */
-        !isInstalledApp && (
+        {/* Visitor Downloads Center (Android APK & Windows Desktop/LAN .exe — Root Distribution Only) */}
+        {!isTenantBranded && !isInstalledApp && (
           <section
             id="downloads-center"
             data-testid="public-downloads-section"
@@ -1012,7 +1071,6 @@ export function LandingPage({
               })}
             </div>
           </section>
-        )
         )}
 
         {/* Corporate Information Section */}

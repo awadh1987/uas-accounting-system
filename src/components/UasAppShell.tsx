@@ -133,6 +133,31 @@ export function UasAppShell() {
     }
     return "login";
   });
+  const [clientPortalInitialSection, setClientPortalInitialSection] = useState<
+    "catalog" | "new_request" | "requests" | "statement" | "profile"
+  >(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const sec = (
+          new URLSearchParams(window.location.search).get("section") ||
+          new URLSearchParams(window.location.search).get("portalTab") ||
+          ""
+        ).trim();
+        if (
+          sec === "catalog" ||
+          sec === "new_request" ||
+          sec === "requests" ||
+          sec === "statement" ||
+          sec === "profile"
+        ) {
+          return sec;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return "new_request";
+  });
   const [customersInitialSection, setCustomersInitialSection] = useState<
     "cards" | "ledger" | "both" | "portal" | "whatsapp"
   >("cards");
@@ -319,13 +344,17 @@ export function UasAppShell() {
   // Initial database bootstrap + restore session, user & tab across refreshes
   useEffect(() => {
     installGlobalApiFetchInterceptor();
-    if (typeof window !== "undefined") {
-      const hostSlug = extractSubdomainSlugFromHost(window.location.host);
-      if (hostSlug) {
-        setStoredTenantId(hostSlug);
-      }
-    }
     const isClientApp = isInstalledClientApp();
+    if (typeof window !== "undefined" && !isClientApp) {
+      const hostSlug = extractSubdomainSlugFromHost(window.location.host);
+      let querySlug = "";
+      try {
+        querySlug = (new URLSearchParams(window.location.search).get("slug") || "").trim().toLowerCase();
+      } catch {
+        querySlug = "";
+      }
+      setStoredTenantId(hostSlug || (querySlug && querySlug !== "default" ? querySlug : "default"));
+    }
     void Promise.resolve().then(() => checkLicensingStatus());
     let active = true;
     (async () => {
@@ -1242,6 +1271,7 @@ export function UasAppShell() {
       {viewMode === "client_portal" ? (
         <ClientPortalApp
           initialAuthTab={clientPortalInitialTab}
+          initialPortalSection={clientPortalInitialSection}
           onBackHomeAction={() => setViewMode("landing")}
         />
       ) : viewMode === "landing" ? (
@@ -1258,8 +1288,9 @@ export function UasAppShell() {
             setViewMode("erp");
           }}
           onOpenLogin={() => setViewMode("login")}
-          onOpenClientPortal={(tab = "login") => {
+          onOpenClientPortal={(tab = "login", section = "new_request") => {
             setClientPortalInitialTab(tab);
+            setClientPortalInitialSection(section);
             setViewMode("client_portal");
           }}
           onToggleLang={() => setLang((prev) => (prev === "ar" ? "en" : "ar"))}
@@ -1305,6 +1336,7 @@ export function UasAppShell() {
           }}
           onOpenClientPortal={(tab = "login") => {
             setClientPortalInitialTab(tab);
+            setClientPortalInitialSection("new_request");
             setViewMode("client_portal");
           }}
           onToggleLang={() => setLang((prev) => (prev === "ar" ? "en" : "ar"))}

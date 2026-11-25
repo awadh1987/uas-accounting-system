@@ -193,13 +193,13 @@ export function LoginView({
       setRecoverySuccess(
         data.message ||
         (isAr
-          ? "تمت استعادة كلمة مرور مدير النظام بنجاح! يمكنك الآن تسجيل الدخول."
-          : "Admin password successfully reset! You can now sign in.")
+          ? "تمت استعادة كلمة مرور الحساب بنجاح! يمكنك الآن تسجيل الدخول."
+          : "Account password successfully reset! You can now sign in.")
       );
       if (data.username) {
         setIdentifier(data.username);
       }
-      onToast(isAr ? "تم إعادة تعيين كلمة مرور مدير النظام بنجاح" : "Admin password recovered successfully");
+      onToast(isAr ? "تم إعادة تعيين كلمة مرور الحساب بنجاح" : "Account password recovered successfully");
     } catch (err) {
       setRecoveryError((err as Error).message);
     } finally {
@@ -608,7 +608,7 @@ export function LoginView({
                   }}
                   className="font-bold text-emerald-600 dark:text-emerald-400 hover:underline transition"
                 >
-                  {isAr ? "نسيت كلمة مرور مدير النظام؟" : "Forgot Admin Password?"}
+                  {isAr ? "نسيت كلمة المرور / استعادة الحساب؟" : "Forgot / Recover Account?"}
                 </button>
               </div>
 
@@ -622,7 +622,7 @@ export function LoginView({
                 ) : (
                   <>
                     <KeyRound className="w-4 h-4" />
-                    <span>{isAr ? "تسجيل الدخول" : "Sign In"}</span>
+                    <span>{isAr ? "دخول" : "Sign In"}</span>
                   </>
                 )}
               </button>
@@ -834,7 +834,7 @@ export function LoginView({
                 </div>
                 <div>
                   <h3 className="font-extrabold text-sm text-slate-900 dark:text-slate-100">
-                    {isAr ? "استعادة كلمة مرور مدير النظام العام" : "SUPER_ADMIN Password Recovery"}
+                    {isAr ? "استعادة الوصول للحساب الرئيسي للمنشأة" : "Workspace Primary Account Recovery"}
                   </h3>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
                     {isAr
@@ -877,8 +877,8 @@ export function LoginView({
               <form onSubmit={handleRecoverAdminPassword} className="space-y-3.5">
                 <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 text-[11px] leading-relaxed">
                   {isAr
-                    ? "لضمان أعلى معايير الأمان المالي، يتطلب إعادة تعيين كلمة مرور مدير النظام تقديم إثبات تشفيري بملكية ترخيص المنشأة (ملف license.uas أو رمز UASKEY) مع إدخال اسم المنشأة المعتمد."
-                    : "To maintain enterprise accounting security, resetting the SUPER_ADMIN password requires cryptographic proof of license ownership (license.uas or UASKEY token) matching the company name."}
+                    ? "لضمان أعلى معايير الأمان المالي، يتطلب إعادة تعيين كلمة مرور الحساب الرئيسي للمنشأة تقديم إثبات تشفيري بملكية ترخيص المنشأة (ملف license.uas أو رمز UASKEY) مع إدخال اسم المنشأة المعتمد."
+                    : "To maintain enterprise accounting security, resetting the primary workspace account password requires cryptographic proof of license ownership (license.uas or UASKEY token) matching the company name."}
                 </div>
 
                 {recoveryError && (

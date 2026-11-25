@@ -15,6 +15,7 @@ export const dynamic = "force-dynamic";
 export const GET = withTenantRoute(async function GET() {
   try {
     const receipts = await prisma.receiptVoucher.findMany({
+      where: { documentStatus: { not: "VOIDED" } },
       include: {
         customer: { select: { id: true, code: true, nameAr: true, phone: true } },
         invoice: { select: { id: true, invoiceNumber: true, totalAmount: true, balanceDue: true } },

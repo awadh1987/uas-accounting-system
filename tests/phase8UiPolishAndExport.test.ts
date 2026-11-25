@@ -240,13 +240,24 @@ describe("Phase 8 — ERP UI Polish, Dates, Test Hygiene, PDF RTL Shaping & Over
     assert.ok(!csvStr.includes("/var/www"));
   });
 
-  it("hides APK/EXE installers on tenant landing/login, exposes Client Portal Admin in workspaces, and wires PhoneContactInput everywhere", () => {
+  it("hides APK/EXE installers on tenant landing/login, places Client Portal card above feature sections with full directory and single دخول login, and wires PhoneContactInput everywhere", () => {
     const landingSrc = fs.readFileSync(path.join(REPO_ROOT, "src/components/LandingPage.tsx"), "utf8");
     assert.ok(landingSrc.includes("!isInstalledApp && !isTenantBranded"));
     assert.ok(landingSrc.includes('data-testid="tenant-client-portal-card"'));
     assert.ok(landingSrc.includes("دخول بوابة العملاء"));
     assert.ok(landingSrc.includes("تسجيل عميل جديد"));
-    assert.ok(landingSrc.includes("دخول مساحة العمل"));
+    assert.ok(landingSrc.includes("الأسعار والفرز"));
+    assert.ok(landingSrc.includes("تسجيل طلب"));
+    assert.ok(landingSrc.includes("متابعة الطلبات"));
+    assert.ok(landingSrc.includes("الفواتير وكشف الحساب"));
+    assert.ok(landingSrc.includes('data-testid="tenant-staff-login-cta"'));
+    assert.ok(landingSrc.includes("دخول"));
+    assert.ok(!landingSrc.includes("مدير النظام العام"));
+    assert.ok(!landingSrc.includes("SUPER_ADMIN"));
+    assert.ok(
+      landingSrc.indexOf('data-testid="tenant-client-portal-card"') <
+        landingSrc.indexOf("ركائز النظام المحاسبي الموحد")
+    );
 
     const loginSrc = fs.readFileSync(path.join(REPO_ROOT, "src/components/LoginView.tsx"), "utf8");
     assert.ok(loginSrc.includes("!isInstalledApp && !isTenantWorkspace"));

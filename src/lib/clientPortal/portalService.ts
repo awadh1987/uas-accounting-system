@@ -1,11 +1,14 @@
 import crypto from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { appendAuditLogTx, hashPassword, verifyPassword } from "@/lib/serverBootstrap";
+import { appendAuditLogTx, hashPassword, isHarvestLockedTx, verifyPassword } from "@/lib/serverBootstrap";
+import { mapProjectIdToSalesRevenueCode } from "@/lib/accounting/coaCatalog";
 import {
   ensureCustomerWithAccountTx,
   postCustomerReceipt,
+  postJournalEntry,
   postSalesInvoice,
+  reverseJournalEntry,
 } from "@/lib/accounting/ledgerService";
 import { emitNotification } from "@/lib/notifications/notificationService";
 import {
@@ -19,7 +22,8 @@ import { getTenantFormConfig } from "@/lib/clientPortal/portalConfig";
 import { createWhatsAppDraftTx } from "@/lib/whatsapp/outboxService";
 import { ensure6GenerationCoaHierarchy } from "@/lib/accountingCoreEngine";
 import { computeSaleTotals } from "@/lib/formulas";
-import { dAdd, round4Decimal as round4 } from "@/lib/decimalMath";
+import { dAdd, dDiv, dMul, dSub, round4Decimal as round4 } from "@/lib/decimalMath";
+import { resolveTenantCloudUrl } from "@/lib/serverConnection";
 import type {
   AmendmentDiffEntry,
   RequestAmendmentSnapshot,
@@ -35,6 +39,15 @@ export const REQUEST_STATUS_LABELS_AR: Record<string, string> = {
   COMPLETED: "تم الاستلام",
   CANCELLED: "ملغى",
   REJECTED: "مرفوض",
+};
+
+export const CLIENT_RESPONSE_STATUS_LABELS_AR: Record<string, string> = {
+  PENDING_STAFF_APPROVAL: "بانتظار اعتماد الموظف",
+  PENDING_CLIENT_APPROVAL: "معاد للعميل للموافقة",
+  CLIENT_APPROVED: "وافق العميل على التعديلات",
+  CLIENT_DECLINED: "طلب العميل إعادة المراجعة",
+  STAFF_APPROVED: "معتمد من الموظف",
+  STAFF_AMENDED_POST_HANDOVER: "معدل مع تحديث الفاتورة والمبيعات",
 };
 
 export interface ClientSafeAccountView {
@@ -235,7 +248,7 @@ export async function registerClientPortalAccount(params: {
         recipientPhone: phoneCheck.normalized,
         variables: {
           companyName: profile?.legalNameAr || "المنشأة",
-          portalUrl: params.portalUrl || "https://qat.world",
+          portalUrl: params.portalUrl || `${resolveTenantCloudUrl(profile?.tenantSlug)}/portal`,
         },
       });
     }
@@ -406,6 +419,7 @@ export async function updateClientPortalProfile(
 }
 
 interface RawClientRequestLineInput {
+  id?: string | null;
   itemId?: string | null;
   itemTitle: string;
   requestedQty: number;
@@ -417,7 +431,8 @@ interface RawClientRequestLineInput {
 }
 
 async function prepareValidatedRequestLines(
-  rawLines: RawClientRequestLineInput[]
+  rawLines: RawClientRequestLineInput[],
+  opts?: { allowProposedPrice?: boolean; allowedLineIds?: Set<string> }
 ) {
   if (!Array.isArray(rawLines) || rawLines.length === 0) {
     throw new Error("يرجى إضافة صنف واحد على الأقل للطلب");
@@ -425,10 +440,12 @@ async function prepareValidatedRequestLines(
 
   const formCfg = await getTenantFormConfig();
   const preparedLines: Array<{
+    existingId?: string;
     lineOrder: number;
     itemId: string | null;
     itemTitle: string;
     requestedQty: number;
+    confirmedQty?: number | null;
     unitCode: string;
     unitLabel: string;
     customUnitLabel: string | null;
@@ -455,6 +472,17 @@ async function prepareValidatedRequestLines(
     let itemTitle = String(raw.itemTitle || "").trim();
     let unitPrice = 0;
     let itemId: string | null = raw.itemId ? String(raw.itemId).trim() : null;
+
+    const rawPricePresent =
+      raw.unitPrice !== undefined &&
+      raw.unitPrice !== null &&
+      String(raw.unitPrice).trim() !== "";
+    if (rawPricePresent) {
+      const checkPrice = Number(raw.unitPrice);
+      if (!Number.isFinite(checkPrice) || checkPrice < 0) {
+        throw new Error(`سعر الوحدة في السطر ${i + 1} يجب أن يكون رقماً موجباً أو صفراً`);
+      }
+    }
 
     if (itemId) {
       const catItem = await prisma.inventoryItem.findUnique({
@@ -488,13 +516,17 @@ async function prepareValidatedRequestLines(
       }
     }
 
-    if (unitPrice <= 0 && unitOption?.defaultUnitPrice && Number(unitOption.defaultUnitPrice) > 0) {
-      unitPrice = round4(Number(unitOption.defaultUnitPrice));
-    }
-    if (unitPrice <= 0 && raw.unitPrice !== undefined && raw.unitPrice !== null) {
-      const candidatePrice = Number(raw.unitPrice);
-      if (Number.isFinite(candidatePrice) && candidatePrice > 0) {
-        unitPrice = round4(candidatePrice);
+    if (opts?.allowProposedPrice && rawPricePresent && Number(raw.unitPrice) > 0) {
+      unitPrice = round4(Number(raw.unitPrice));
+    } else {
+      if (unitPrice <= 0 && unitOption?.defaultUnitPrice && Number(unitOption.defaultUnitPrice) > 0) {
+        unitPrice = round4(Number(unitOption.defaultUnitPrice));
+      }
+      if (unitPrice <= 0 && raw.unitPrice !== undefined && raw.unitPrice !== null) {
+        const candidatePrice = Number(raw.unitPrice);
+        if (Number.isFinite(candidatePrice) && candidatePrice > 0) {
+          unitPrice = round4(candidatePrice);
+        }
       }
     }
 
@@ -506,8 +538,11 @@ async function prepareValidatedRequestLines(
       ? customUnitLabel || "أخرى"
       : String(raw.unitLabel || unitOption?.labelAr || "علاقية قات").trim();
     const { totalAmount: lineTotal } = computeSaleTotals(qty, unitPrice, 0);
+    const validExistingId =
+      raw.id && opts?.allowedLineIds?.has(String(raw.id)) ? String(raw.id) : undefined;
 
     preparedLines.push({
+      ...(validExistingId ? { existingId: validExistingId } : {}),
       lineOrder: i + 1,
       itemId,
       itemTitle,
@@ -576,7 +611,20 @@ export async function createClientGoodsRequest(params: {
         totalEstimated,
         totalConfirmed: 0,
         currency: "YER",
-        lines: { create: preparedLines },
+        lines: {
+          create: preparedLines.map((l) => ({
+            lineOrder: l.lineOrder,
+            itemId: l.itemId,
+            itemTitle: l.itemTitle,
+            requestedQty: l.requestedQty,
+            unitCode: l.unitCode,
+            unitLabel: l.unitLabel,
+            customUnitLabel: l.customUnitLabel,
+            unitPrice: l.unitPrice,
+            lineTotal: l.lineTotal,
+            notes: l.notes,
+          })),
+        },
       },
       include: { lines: { orderBy: { lineOrder: "asc" } } },
     });
@@ -628,6 +676,8 @@ export async function createClientGoodsRequest(params: {
 export async function updatePendingClientRequest(params: {
   requestId: string;
   clientAccountId: string;
+  tenantSlug?: string;
+  portalUrl?: string;
   pickupType?: string;
   pickupLocation: string;
   customPickupLocation?: string;
@@ -636,19 +686,25 @@ export async function updatePendingClientRequest(params: {
 }) {
   const existing = await prisma.clientGoodsRequest.findUnique({
     where: { id: params.requestId },
-    include: { lines: { orderBy: { lineOrder: "asc" } } },
+    include: {
+      clientAccount: true,
+      lines: { orderBy: { lineOrder: "asc" } },
+    },
   });
   if (!existing || existing.clientAccountId !== params.clientAccountId) {
     throw new Error("NOT_FOUND: الطلب غير موجود أو غير مصرح بالوصول إليه");
   }
+  const editableStatus =
+    existing.status === "PENDING_REVIEW" || existing.status === "RETURNED_TO_CLIENT";
   if (
-    existing.status !== "PENDING_REVIEW" ||
+    !editableStatus ||
     existing.reserveStock ||
     existing.linkedSalesRecordId ||
     existing.linkedSaleId ||
+    existing.linkedInvoiceId ||
     existing.linkedDraftId
   ) {
-    throw new Error("لا يمكن تعديل الطلب بعد بدء المراجعة أو حجز المخزون أو الاعتماد من الإدارة");
+    throw new Error("لا يمكن تعديل الطلب بعد حجز المخزون أو الاعتماد والربط بالمبيعات من الإدارة");
   }
 
   const pickupTypeRaw = String(params.pickupType || existing.pickupType || "MARKET").toUpperCase();
@@ -661,23 +717,157 @@ export async function updatePendingClientRequest(params: {
     throw new Error("يرجى تحديد موقع الاستلام");
   }
 
-  const preparedLines = await prepareValidatedRequestLines(params.lines);
-  const totalEstimated = preparedLines.reduce((s, l) => dAdd(s, l.lineTotal, 4), 0);
+  const allowedLineIds = new Set(existing.lines.map((l) => l.id));
+  const preparedLines = await prepareValidatedRequestLines(params.lines, {
+    allowProposedPrice: true,
+    allowedLineIds,
+  });
+  const totalEstimated = round4(preparedLines.reduce((s, l) => dAdd(s, l.lineTotal, 4), 0));
+  const nextPickupType =
+    pickupTypeRaw === "BRANCH" || pickupTypeRaw === "WAREHOUSE" || pickupTypeRaw === "OTHER"
+      ? pickupTypeRaw
+      : "MARKET";
+  const nextPickupNotes =
+    params.pickupNotes !== undefined ? params.pickupNotes.trim() || null : existing.pickupNotes;
+
+  const beforeBaseTotal =
+    Number(existing.totalConfirmed || 0) > 0
+      ? Number(existing.totalConfirmed || 0)
+      : Number(existing.totalEstimated || 0);
+  const beforeSnap = buildRequestSnapshotFromValues({
+    pickupType: existing.pickupType,
+    pickupLocation: existing.pickupLocation,
+    pickupNotes: existing.pickupNotes,
+    creditPaidPlanned: Number(existing.creditPaidPlanned || 0),
+    debitPlanned: Number(existing.debitPlanned || 0),
+    totalAmount: beforeBaseTotal,
+    lines: existing.lines.map((l) => ({
+      id: l.id,
+      itemTitle: l.itemTitle,
+      qty:
+        l.confirmedQty !== null && l.confirmedQty !== undefined
+          ? Number(l.confirmedQty)
+          : Number(l.requestedQty),
+      unitCode: l.unitCode,
+      unitLabel: l.unitLabel,
+      customUnitLabel: l.customUnitLabel,
+      unitPrice: Number(l.unitPrice || 0),
+      lineTotal: Number(l.lineTotal || 0),
+    })),
+  });
+
+  const afterSnap = buildRequestSnapshotFromValues({
+    pickupType: nextPickupType,
+    pickupLocation: resolvedPickupLocation,
+    pickupNotes: nextPickupNotes,
+    creditPaidPlanned: Number(existing.creditPaidPlanned || 0),
+    debitPlanned: Number(existing.debitPlanned || 0),
+    totalAmount: totalEstimated,
+    lines: preparedLines.map((l, idx) => ({
+      id: l.existingId || `client-new-${idx + 1}`,
+      itemTitle: l.itemTitle,
+      qty: l.requestedQty,
+      unitCode: l.unitCode,
+      unitLabel: l.unitLabel,
+      customUnitLabel: l.customUnitLabel,
+      unitPrice: l.unitPrice,
+      lineTotal: l.lineTotal,
+    })),
+  });
+
+  const amendmentDiffs = computeRequestAmendmentDiff(beforeSnap, afterSnap);
+  const tenantSlugLabel = (params.tenantSlug || "default").trim() || "default";
+  const now = new Date();
 
   const updated = await prisma.$transaction(async (tx) => {
     await tx.clientGoodsRequestLine.deleteMany({ where: { requestId: existing.id } });
-    return tx.clientGoodsRequest.update({
+    await tx.clientGoodsRequestLine.createMany({
+      data: preparedLines.map((l) => ({
+        ...(l.existingId ? { id: l.existingId } : {}),
+        requestId: existing.id,
+        lineOrder: l.lineOrder,
+        itemId: l.itemId,
+        itemTitle: l.itemTitle,
+        requestedQty: l.requestedQty,
+        confirmedQty: null,
+        unitCode: l.unitCode,
+        unitLabel: l.unitLabel,
+        customUnitLabel: l.customUnitLabel,
+        unitPrice: l.unitPrice,
+        lineTotal: l.lineTotal,
+        notes: l.notes,
+      })),
+    });
+
+    const saved = await tx.clientGoodsRequest.update({
       where: { id: existing.id },
       data: {
-        pickupType: pickupTypeRaw === "BRANCH" || pickupTypeRaw === "WAREHOUSE" || pickupTypeRaw === "OTHER" ? pickupTypeRaw : "MARKET",
+        status: "PENDING_REVIEW",
+        pickupType: nextPickupType,
         pickupLocation: resolvedPickupLocation,
-        pickupNotes: params.pickupNotes !== undefined ? params.pickupNotes.trim() || null : existing.pickupNotes,
+        pickupNotes: nextPickupNotes,
         totalEstimated,
-        lines: { create: preparedLines },
+        totalConfirmed: 0,
+        ...(amendmentDiffs.length > 0
+          ? {
+            amendmentDiffJson: JSON.stringify(amendmentDiffs),
+            beforeSnapshotJson: JSON.stringify(beforeSnap),
+            afterSnapshotJson: JSON.stringify(afterSnap),
+            revisionNumber: { increment: 1 },
+            clientResponseStatus: "PENDING_STAFF_APPROVAL",
+            clientResponseNote: "قام العميل بتعديل تفاصيل الطلب — بانتظار اعتماد الموظف",
+            clientRespondedAt: now,
+          }
+          : {}),
       },
       include: { lines: { orderBy: { lineOrder: "asc" } } },
     });
+
+    if (amendmentDiffs.length > 0) {
+      const profile = await tx.enterpriseProfile.findUnique({ where: { id: "default" } }).catch(() => null);
+      await createWhatsAppDraftTx(tx, {
+        eventType: "CLIENT_ORDER_EDITED",
+        clientAccountId: existing.clientAccountId,
+        customerId: existing.customerId,
+        requestId: saved.id,
+        recipientName: existing.clientAccount.fullName,
+        recipientPhone: existing.clientAccount.phone,
+        variables: {
+          companyName: profile?.legalNameAr || "المنشأة",
+          requestNumber: saved.requestNumber,
+          pickupLocation: saved.pickupLocation,
+          totalAmount: totalEstimated.toLocaleString("en-US"),
+          currency: saved.currency || "YER",
+          portalUrl: params.portalUrl || `${resolveTenantCloudUrl(tenantSlugLabel)}/portal`,
+        },
+      });
+
+      await appendAuditLogTx(tx, {
+        userId: null,
+        userDisplay: existing.clientAccount.fullName,
+        userRole: "CLIENT_PORTAL",
+        actionType: "CLIENT_REQUEST_EDITED_BY_CLIENT",
+        entityReference: saved.requestNumber,
+        details: `[tenant:${tenantSlugLabel}] تعديل العميل (${existing.clientAccount.fullName}) على الطلب ${saved.requestNumber} (${amendmentDiffs.length} تغييرات) — بانتظار اعتماد الموظف | الإجمالي المحدث: ${totalEstimated}`,
+      });
+    }
+
+    return saved;
   });
+
+  if (amendmentDiffs.length > 0) {
+    await emitNotification({
+      eventType: "SYSTEM_ALERT",
+      severity: "WARNING",
+      titleAr: `تعديل عميل بانتظار اعتماد الموظف (${updated.requestNumber})`,
+      titleEn: `Client Order Edited — Awaiting Staff Approval (${updated.requestNumber})`,
+      messageAr: `عدّل العميل ${existing.clientAccount.fullName} الطلب ${updated.requestNumber} (${amendmentDiffs.length} تغييرات) وهو بانتظار المراجعة والاعتماد.`,
+      messageEn: `Client ${existing.clientAccount.fullName} edited request ${updated.requestNumber}; pending staff approval.`,
+      targetTab: "customers",
+      targetEntityType: "ClientGoodsRequest",
+      targetEntityId: updated.id,
+    }).catch(() => null);
+  }
 
   return serializeRequest(updated);
 }
@@ -836,6 +1026,9 @@ export function serializeRequest(req: {
     returnedByUserId: req.returnedByUserId ?? null,
     returnedByName: req.returnedByName ?? null,
     clientResponseStatus: req.clientResponseStatus ?? null,
+    clientResponseStatusLabelAr: req.clientResponseStatus
+      ? CLIENT_RESPONSE_STATUS_LABELS_AR[req.clientResponseStatus] || req.clientResponseStatus
+      : null,
     clientResponseNote: req.clientResponseNote ?? null,
     clientRespondedAt: req.clientRespondedAt ? req.clientRespondedAt.toISOString() : null,
     createdAt: req.createdAt.toISOString(),
@@ -916,7 +1109,7 @@ export async function getClientPortalFinancialSnapshot(params: {
       orderBy: { date: "desc" },
     }),
     prisma.receiptVoucher.findMany({
-      where: { customerId: params.customerId },
+      where: { customerId: params.customerId, documentStatus: { not: "VOIDED" } },
       include: {
         treasury: { select: { type: true } },
         invoice: { select: { id: true, invoiceNumber: true } },
@@ -1178,7 +1371,7 @@ export async function staffReviewClientRegistration(params: {
         recipientPhone: acc.phone,
         variables: {
           companyName: profile?.legalNameAr || "المنشأة",
-          portalUrl: params.portalUrl || "https://qat.world",
+          portalUrl: params.portalUrl || `${resolveTenantCloudUrl(profile?.tenantSlug)}/portal`,
         },
       });
 
@@ -1837,11 +2030,535 @@ export async function staffProcessGoodsRequest(params: {
     },
   });
   if (!reqRecord) throw new Error("REQUEST_NOT_FOUND");
-  if (reqRecord.status === "COMPLETED" || reqRecord.linkedSaleId || reqRecord.linkedInvoiceId) {
-    throw new Error("REQUEST_ALREADY_COMPLETED");
-  }
 
   const tenantSlugLabel = (params.tenantSlug || "default").trim() || "default";
+
+  if (reqRecord.status === "COMPLETED" || reqRecord.linkedSaleId || reqRecord.linkedInvoiceId) {
+    if (params.action !== "AMEND") {
+      throw new Error("REQUEST_ALREADY_COMPLETED");
+    }
+
+    const beforeTotalPost =
+      Number(reqRecord.totalConfirmed || 0) > 0
+        ? Number(reqRecord.totalConfirmed || 0)
+        : Number(reqRecord.totalEstimated || 0);
+    const oldPaid = Math.max(0, Number(reqRecord.creditPaidPlanned || 0));
+    const oldDebit = Math.max(0, Number(reqRecord.debitPlanned || 0));
+    const beforeSnapPost = buildRequestSnapshotFromValues({
+      pickupType: reqRecord.pickupType,
+      pickupLocation: reqRecord.pickupLocation,
+      pickupNotes: reqRecord.pickupNotes,
+      creditPaidPlanned: oldPaid,
+      debitPlanned: oldDebit,
+      totalAmount: beforeTotalPost,
+      lines: reqRecord.lines.map((l) => ({
+        id: l.id,
+        itemTitle: l.itemTitle,
+        qty:
+          l.confirmedQty !== null && l.confirmedQty !== undefined
+            ? Number(l.confirmedQty)
+            : Number(l.requestedQty),
+        unitCode: l.unitCode,
+        unitLabel: l.unitLabel,
+        customUnitLabel: l.customUnitLabel,
+        unitPrice: Number(l.unitPrice || 0),
+        lineTotal: Number(l.lineTotal || 0),
+      })),
+    });
+
+    const resolvedPost = await resolveUpdatedRequestLinesAndPickup({
+      reqRecord,
+      pickupType: params.pickupType,
+      pickupLocation: params.pickupLocation,
+      customPickupLocation: params.customPickupLocation,
+      pickupNotes: params.pickupNotes,
+      lines: params.lines,
+    });
+    const nextTotal = resolvedPost.totalConfirmed;
+    if (nextTotal <= 0) {
+      throw new Error("يرجى تحديد كمية وأسعار مؤكدة أكبر من الصفر عند تعديل الطلب المسلم");
+    }
+    const nextPaid = Math.max(
+      0,
+      Number(params.immediatePaidAmount !== undefined ? params.immediatePaidAmount : oldPaid)
+    );
+    if (nextPaid > nextTotal + 0.01) {
+      throw new Error("المبلغ المقبوض يتجاوز الإجمالي المعدل للفاتورة");
+    }
+    const { debitReceivable: nextDebit } = computeSaleTotals(nextTotal, 1, nextPaid);
+    const afterSnapPost = buildRequestSnapshotFromValues({
+      pickupType: resolvedPost.pickupType,
+      pickupLocation: resolvedPost.pickupLocation,
+      pickupNotes: resolvedPost.pickupNotes,
+      creditPaidPlanned: nextPaid,
+      debitPlanned: nextDebit,
+      totalAmount: nextTotal,
+      lines: resolvedPost.resolvedLines.map((l, idx) => ({
+        id: l.existingId || `post-new-${idx + 1}`,
+        itemTitle: l.itemTitle,
+        qty: l.confirmedQty,
+        unitCode: l.unitCode,
+        unitLabel: l.unitLabel,
+        customUnitLabel: l.customUnitLabel,
+        unitPrice: l.unitPrice,
+        lineTotal: l.lineTotal,
+      })),
+    });
+    const postDiffs = computeRequestAmendmentDiff(beforeSnapPost, afterSnapPost);
+    const projectChanged = Boolean(params.projectId && params.projectId !== reqRecord.projectId);
+    const notesChanged =
+      params.staffNotes !== undefined && (params.staffNotes.trim() || null) !== reqRecord.staffNotes;
+
+    if (postDiffs.length === 0 && !projectChanged && !notesChanged) {
+      return { ...serializeRequest(reqRecord), idempotentReplay: true };
+    }
+
+    const postResult = await prisma.$transaction(async (tx) => {
+      const freshReq = await tx.clientGoodsRequest.findUniqueOrThrow({
+        where: { id: reqRecord.id },
+        include: { clientAccount: true, lines: { orderBy: { lineOrder: "asc" } } },
+      });
+
+      const targetProjectId = params.projectId || freshReq.projectId;
+      const targetProject =
+        (targetProjectId
+          ? await tx.project.findUnique({ where: { id: targetProjectId } })
+          : null) || (await tx.project.findFirst({ orderBy: { createdAt: "asc" } }));
+      if (!targetProject) {
+        throw new Error("لا يوجد مشروع فعال مرتبط بتعديل هذه الفاتورة");
+      }
+      const targetSubProjectId =
+        params.subProjectId !== undefined ? params.subProjectId : freshReq.subProjectId;
+      const targetHarvestName =
+        params.harvestName || freshReq.harvestName || "مبيعات بوابة العملاء";
+
+      if (await isHarvestLockedTx(tx, targetProject.id, targetHarvestName)) {
+        throw new Error("HARVEST_LOCKED");
+      }
+
+      const customerId = freshReq.customerId || freshReq.clientAccount.customerId;
+      if (!customerId) {
+        throw new Error("لا يوجد حساب عميل محاسبي مرتبط بهذا الطلب");
+      }
+      const customer = await tx.customer.findUniqueOrThrow({
+        where: { id: customerId },
+        include: { account: true },
+      });
+
+      const netDebitDelta = Math.max(0, round4(nextDebit - oldDebit));
+      if (netDebitDelta > 0.01) {
+        await assertCustomerCreditAvailableTx(
+          tx,
+          customer.id,
+          netDebitDelta,
+          params.overrideCreditLimit
+        );
+      }
+
+      await tx.clientGoodsRequestLine.deleteMany({ where: { requestId: freshReq.id } });
+      await tx.clientGoodsRequestLine.createMany({
+        data: resolvedPost.resolvedLines.map((l, idx) => ({
+          ...(l.existingId ? { id: l.existingId } : {}),
+          requestId: freshReq.id,
+          lineOrder: idx + 1,
+          itemId: l.itemId,
+          itemTitle: l.itemTitle,
+          requestedQty: l.requestedQty,
+          confirmedQty: l.confirmedQty,
+          unitCode: l.unitCode,
+          unitLabel: l.unitLabel,
+          customUnitLabel: l.customUnitLabel,
+          unitPrice: l.unitPrice,
+          lineTotal: l.lineTotal,
+          notes: l.notes,
+        })),
+      });
+
+      const now = new Date();
+      const nextRev = Number(freshReq.revisionNumber || 1) + 1;
+      const totalBundles = resolvedPost.resolvedLines.reduce(
+        (s, l) => s + Math.max(0, Math.round(l.confirmedQty)),
+        0
+      );
+      const firstGrade =
+        resolvedPost.resolvedLines.map((l) => l.itemTitle).slice(0, 2).join(" / ") || "طلب عميل";
+
+      let invoiceNumberLabel = freshReq.requestNumber;
+      let invoiceJournalId: string | null = null;
+      let nextLinkedReceiptId: string | null = freshReq.linkedReceiptId;
+      let receiptVoucherNoLabel = freshReq.requestNumber;
+
+      if (freshReq.linkedInvoiceId) {
+        const inv = await tx.salesInvoice.findUnique({
+          where: { id: freshReq.linkedInvoiceId },
+          include: { harvestCycle: true },
+        });
+        if (inv && inv.status !== "VOIDED") {
+          if (inv.harvestCycle?.isLocked) throw new Error("HARVEST_LOCKED");
+          invoiceNumberLabel = inv.invoiceNumber;
+          receiptVoucherNoLabel = inv.invoiceNumber;
+          invoiceJournalId = inv.journalEntryId;
+
+          const invTotalChanged =
+            Math.abs(nextTotal - Number(inv.totalAmount || 0)) > 0.005 ||
+            targetProject.id !== inv.projectId ||
+            targetSubProjectId !== inv.subProjectId;
+
+          await tx.salesInvoiceItem.deleteMany({ where: { invoiceId: inv.id } });
+          await tx.salesInvoiceItem.createMany({
+            data: resolvedPost.resolvedLines
+              .filter((l) => l.confirmedQty > 0)
+              .map((l) => ({
+                invoiceId: inv.id,
+                itemId: l.itemId,
+                description: `${l.itemTitle} (${resolveDisplayUnitLabel(
+                  l.unitCode,
+                  l.unitLabel,
+                  l.customUnitLabel
+                )})`,
+                quantity: l.confirmedQty,
+                unitPrice: l.unitPrice,
+                netAmount: l.lineTotal,
+                taxAmount: 0,
+                whtAmount: 0,
+                totalAmount: l.lineTotal,
+                costOfGoodsSold: 0,
+              })),
+          });
+
+          if (invTotalChanged) {
+            if (inv.journalEntryId) {
+              const oldInvJe = await tx.journalEntry.findUnique({
+                where: { id: inv.journalEntryId },
+                select: { status: true, isReversed: true },
+              });
+              if (oldInvJe && oldInvJe.status !== "VOIDED" && !oldInvJe.isReversed) {
+                await reverseJournalEntry({
+                  tx,
+                  journalEntryId: inv.journalEntryId,
+                  createdById: params.actor.userId ?? undefined,
+                  reason: `تعديل فاتورة طلب البوابة ${freshReq.requestNumber}`,
+                });
+              }
+            }
+
+            const newInvJe = await postJournalEntry({
+              tx,
+              date: inv.date,
+              costCenterId: inv.costCenterId ?? customer.costCenterId ?? null,
+              reference: `${inv.invoiceNumber}-REV-${nextRev}`,
+              narrationAr: `قيد معدل لفاتورة ${inv.invoiceNumber} (طلب البوابة ${freshReq.requestNumber}) - ${customer.nameAr}`,
+              narrationEn: `Amended Sales Invoice ${inv.invoiceNumber} - ${customer.nameEn || customer.nameAr}`,
+              sourceType: "SALES_INVOICE",
+              sourceId: inv.id,
+              projectId: targetProject.id,
+              subProjectId: targetSubProjectId,
+              createdById: params.actor.userId ?? undefined,
+              status: "POSTED",
+              skipApprovalCheck: true,
+              lines: [
+                {
+                  accountId: customer.accountId,
+                  debit: nextTotal,
+                  currency: inv.currency || "YER",
+                  exchangeRate: Number(inv.exchangeRate || 1),
+                  memo: `ذمة مدينة معدلة - ${customer.nameAr}`,
+                  projectId: targetProject.id,
+                  subProjectId: targetSubProjectId,
+                  harvestCycleId: inv.harvestCycleId,
+                },
+                {
+                  accountCode: inv.revenueAccountCode || mapProjectIdToSalesRevenueCode(targetProject.id),
+                  credit: nextTotal,
+                  currency: inv.currency || "YER",
+                  exchangeRate: Number(inv.exchangeRate || 1),
+                  memo: `إيراد مبيعات معدل (${inv.invoiceNumber})`,
+                  projectId: targetProject.id,
+                  subProjectId: targetSubProjectId,
+                  harvestCycleId: inv.harvestCycleId,
+                },
+              ],
+            });
+            invoiceJournalId = newInvJe.id;
+          }
+
+          const paidDelta = Math.abs(nextPaid - oldPaid);
+          const existingReceipt = freshReq.linkedReceiptId
+            ? await tx.receiptVoucher.findUnique({
+                where: { id: freshReq.linkedReceiptId },
+                include: { treasury: true },
+              })
+            : null;
+
+          if (paidDelta > 0.005) {
+            if (existingReceipt && existingReceipt.documentStatus !== "VOIDED") {
+              if (existingReceipt.journalEntryId) {
+                const oldRcpJe = await tx.journalEntry.findUnique({
+                  where: { id: existingReceipt.journalEntryId },
+                  select: { status: true, isReversed: true },
+                });
+                if (oldRcpJe && oldRcpJe.status !== "VOIDED" && !oldRcpJe.isReversed) {
+                  await reverseJournalEntry({
+                    tx,
+                    journalEntryId: existingReceipt.journalEntryId,
+                    createdById: params.actor.userId ?? undefined,
+                    reason: `تعديل سند قبض طلب البوابة ${freshReq.requestNumber}`,
+                  });
+                }
+              }
+
+              const oldTrRateRow = await tx.currencyRate.findUnique({
+                where: { currencyCode: existingReceipt.treasury.currency },
+              });
+              const oldTrRate =
+                existingReceipt.treasury.currency === "YER"
+                  ? 1
+                  : Number(oldTrRateRow?.rateToYER) ||
+                    (existingReceipt.treasury.currency === "SAR" ? 425 : 1620);
+              const oldBaseAmt = Number(existingReceipt.amount || 0);
+              await tx.treasuryAccount.update({
+                where: { id: existingReceipt.treasuryId },
+                data: {
+                  balance: dSub(existingReceipt.treasury.balance, dDiv(oldBaseAmt, oldTrRate, 4), 4),
+                  balanceYER: dSub(existingReceipt.treasury.balanceYER, oldBaseAmt, 4),
+                },
+              });
+
+              if (nextPaid > 0.005) {
+                const targetTreasury =
+                  (params.treasuryId
+                    ? await tx.treasuryAccount.findUnique({ where: { id: params.treasuryId } })
+                    : null) ||
+                  (await tx.treasuryAccount.findUnique({ where: { id: existingReceipt.treasuryId } })) ||
+                  (await tx.treasuryAccount.findFirst({ orderBy: { code: "asc" } }));
+                if (!targetTreasury) throw new Error("يرجى اختيار خزينة لتحديث الدفعة النقدية");
+
+                const nextTrRateRow = await tx.currencyRate.findUnique({
+                  where: { currencyCode: targetTreasury.currency },
+                });
+                const nextTrRate =
+                  targetTreasury.currency === "YER"
+                    ? 1
+                    : Number(nextTrRateRow?.rateToYER) ||
+                      (targetTreasury.currency === "SAR" ? 425 : 1620);
+
+                await tx.treasuryAccount.update({
+                  where: { id: targetTreasury.id },
+                  data: {
+                    balance: dAdd(targetTreasury.balance, dDiv(nextPaid, nextTrRate, 4), 4),
+                    balanceYER: dAdd(targetTreasury.balanceYER, nextPaid, 4),
+                  },
+                });
+
+                const newRcpJe = await postJournalEntry({
+                  tx,
+                  date: existingReceipt.date,
+                  reference: `${existingReceipt.voucherNumber}-REV-${nextRev}`,
+                  narrationAr: `سند قبض معدل ${existingReceipt.voucherNumber} - ${customer.nameAr}`,
+                  narrationEn: `Amended Receipt ${existingReceipt.voucherNumber}`,
+                  sourceType: "CUSTOMER_RECEIPT",
+                  sourceId: existingReceipt.id,
+                  projectId: targetProject.id,
+                  subProjectId: targetSubProjectId,
+                  createdById: params.actor.userId ?? undefined,
+                  status: "POSTED",
+                  skipApprovalCheck: true,
+                  lines: [
+                    {
+                      accountId: targetTreasury.accountId,
+                      debit: nextPaid,
+                      currency: "YER",
+                      exchangeRate: 1,
+                      memo: `توريد معدل إلى ${targetTreasury.nameAr}`,
+                      projectId: targetProject.id,
+                      subProjectId: targetSubProjectId,
+                    },
+                    {
+                      accountId: customer.accountId,
+                      credit: nextPaid,
+                      currency: "YER",
+                      exchangeRate: 1,
+                      memo: `تحصيل معدل لطلب ${freshReq.requestNumber}`,
+                      projectId: targetProject.id,
+                      subProjectId: targetSubProjectId,
+                    },
+                  ],
+                });
+
+                await tx.receiptVoucher.update({
+                  where: { id: existingReceipt.id },
+                  data: {
+                    treasuryId: targetTreasury.id,
+                    subProjectId: targetSubProjectId,
+                    amount: nextPaid,
+                    foreignAmount: nextPaid,
+                    baseAmount: nextPaid,
+                    journalEntryId: newRcpJe.id,
+                    revisionNumber: { increment: 1 },
+                    notes: `تحصيل معدل عند تعديل طلب البوابة ${freshReq.requestNumber}`,
+                  },
+                });
+                receiptVoucherNoLabel = existingReceipt.voucherNumber;
+                nextLinkedReceiptId = existingReceipt.id;
+              } else {
+                await tx.receiptVoucher.update({
+                  where: { id: existingReceipt.id },
+                  data: {
+                    documentStatus: "VOIDED",
+                    amount: 0,
+                    foreignAmount: 0,
+                    baseAmount: 0,
+                    revisionNumber: { increment: 1 },
+                    notes: `ملغى بعد تعديل مقبوض طلب البوابة ${freshReq.requestNumber}`,
+                  },
+                });
+                nextLinkedReceiptId = null;
+              }
+            } else if (nextPaid > 0.005) {
+              // Ensure invoice balances reset cleanly before postCustomerReceipt increments paidAmount
+              await tx.salesInvoice.update({
+                where: { id: inv.id },
+                data: {
+                  paidAmount: 0,
+                  balanceDue: nextTotal,
+                  status: "POSTED",
+                },
+              });
+              const treasury =
+                (params.treasuryId
+                  ? await tx.treasuryAccount.findUnique({ where: { id: params.treasuryId } })
+                  : null) || (await tx.treasuryAccount.findFirst({ orderBy: { code: "asc" } }));
+              if (!treasury) throw new Error("يرجى اختيار خزينة لتحصيل الدفعة النقدية");
+
+              const newRec = await postCustomerReceipt({
+                tx,
+                customerId: customer.id,
+                invoiceId: inv.id,
+                projectId: targetProject.id,
+                subProjectId: targetSubProjectId,
+                treasuryId: treasury.id,
+                amount: nextPaid,
+                notes: `تحصيل مضاف بعد تعديل طلب البوابة ${freshReq.requestNumber}`,
+                createdById: params.actor.userId ?? undefined,
+              });
+              nextLinkedReceiptId = newRec.receipt.id;
+              receiptVoucherNoLabel = newRec.receipt.voucherNumber;
+            }
+          }
+
+          const nextInvStatus =
+            nextDebit <= 0.005 ? "PAID" : nextPaid > 0.005 ? "PARTIALLY_PAID" : "POSTED";
+          await tx.salesInvoice.update({
+            where: { id: inv.id },
+            data: {
+              projectId: targetProject.id,
+              subProjectId: targetSubProjectId,
+              subTotal: nextTotal,
+              totalAmount: nextTotal,
+              paidAmount: nextPaid,
+              balanceDue: nextDebit,
+              foreignAmount: nextTotal,
+              baseAmount: dMul(nextTotal, Number(inv.exchangeRate || 1), 4),
+              status: nextInvStatus,
+              revisionNumber: nextRev,
+              journalEntryId: invoiceJournalId,
+              notes: `طلب بوابة عميل معدل ${freshReq.requestNumber} (استلام من: ${resolvedPost.pickupLocation})`,
+            },
+          });
+        }
+      }
+
+      if (freshReq.linkedSaleId) {
+        const existingSale = await tx.saleTransaction.findUnique({
+          where: { id: freshReq.linkedSaleId },
+        });
+        if (existingSale) {
+          await tx.saleTransaction.update({
+            where: { id: existingSale.id },
+            data: {
+              projectId: targetProject.id,
+              subProjectId: targetSubProjectId,
+              harvestName: targetHarvestName,
+              productGrade: firstGrade,
+              bundlesCount: Math.max(1, totalBundles),
+              unitPrice: totalBundles > 0 ? round4(nextTotal / totalBundles) : nextTotal,
+              totalAmount: nextTotal,
+              creditPaid: nextPaid,
+              debitReceivable: nextDebit,
+              receiptVoucherNo: receiptVoucherNoLabel,
+              sequenceNumber: invoiceNumberLabel,
+              notes: `تسليم معدل لطلب عميل ${freshReq.requestNumber} — استلام من: ${resolvedPost.pickupLocation}`,
+              journalEntryId: invoiceJournalId ?? existingSale.journalEntryId,
+            },
+          });
+        }
+      }
+
+      const savedPostReq = await tx.clientGoodsRequest.update({
+        where: { id: freshReq.id },
+        data: {
+          status: "COMPLETED",
+          pickupType: resolvedPost.pickupType,
+          pickupLocation: resolvedPost.pickupLocation,
+          pickupNotes: resolvedPost.pickupNotes,
+          totalConfirmed: nextTotal,
+          creditPaidPlanned: nextPaid,
+          debitPlanned: nextDebit,
+          projectId: targetProject.id,
+          subProjectId: targetSubProjectId,
+          harvestName: targetHarvestName,
+          linkedReceiptId: nextLinkedReceiptId,
+          staffNotes:
+            params.staffNotes !== undefined ? params.staffNotes.trim() || null : freshReq.staffNotes,
+          reviewerRemarks:
+            params.reviewerRemarks !== undefined
+              ? params.reviewerRemarks.trim() || freshReq.reviewerRemarks
+              : freshReq.reviewerRemarks,
+          amendmentDiffJson: JSON.stringify(postDiffs),
+          beforeSnapshotJson: JSON.stringify(beforeSnapPost),
+          afterSnapshotJson: JSON.stringify(afterSnapPost),
+          revisionNumber: nextRev,
+          clientResponseStatus: "STAFF_AMENDED_POST_HANDOVER",
+          reviewedById: params.actor.userId ?? null,
+          reviewedByName: params.actor.userDisplay,
+          reviewedAt: now,
+        },
+        include: { clientAccount: true, lines: { orderBy: { lineOrder: "asc" } } },
+      });
+
+      const profile = await tx.enterpriseProfile.findUnique({ where: { id: "default" } }).catch(() => null);
+      await createWhatsAppDraftTx(tx, {
+        eventType: "HANDOVER_INVOICE",
+        clientAccountId: savedPostReq.clientAccountId,
+        customerId: savedPostReq.customerId,
+        requestId: savedPostReq.id,
+        recipientName: savedPostReq.clientAccount.fullName,
+        recipientPhone: savedPostReq.clientAccount.phone,
+        variables: {
+          companyName: profile?.legalNameAr || "المنشأة",
+          requestNumber: savedPostReq.requestNumber,
+          invoiceNumber: invoiceNumberLabel,
+          totalAmount: nextTotal.toLocaleString("en-US"),
+          paidAmount: nextPaid.toLocaleString("en-US"),
+          balanceDue: nextDebit.toLocaleString("en-US"),
+          currency: savedPostReq.currency || "YER",
+        },
+      });
+
+      await appendAuditLogTx(tx, {
+        userId: params.actor.userId,
+        userDisplay: params.actor.userDisplay,
+        userRole: params.actor.userRole,
+        actionType: "CLIENT_REQUEST_POST_HANDOVER_AMENDED",
+        entityReference: savedPostReq.requestNumber,
+        details: `[tenant:${tenantSlugLabel}] تعديل طلب مسلّم ${savedPostReq.requestNumber} مع مزامنة الفاتورة (${invoiceNumberLabel}) والمبيعات (${freshReq.linkedSaleId || "—"}) دون تكرار | الإجمالي: ${nextTotal} (مدفوع: ${nextPaid}، آجل: ${nextDebit}) | (${postDiffs.length} تغييرات)`,
+      });
+
+      return savedPostReq;
+    });
+
+    return { ...serializeRequest(postResult), idempotentReplay: false };
+  }
 
   if (params.action === "REJECT" || params.action === "CANCEL") {
     const nextStatus = params.action === "REJECT" ? "REJECTED" : "CANCELLED";
@@ -2042,7 +2759,7 @@ export async function staffProcessGoodsRequest(params: {
             reviewerRemarks: cleanRemarks,
             totalAmount: totalConfirmed.toLocaleString("en-US"),
             currency: saved.currency || "YER",
-            portalUrl: params.portalUrl || "https://qat.world/portal",
+            portalUrl: params.portalUrl || `${resolveTenantCloudUrl(tenantSlugLabel)}/portal`,
           },
         });
       }
@@ -2095,7 +2812,19 @@ export async function staffProcessGoodsRequest(params: {
       const existingSalesRecordId =
         freshReq.linkedSalesRecordId || freshReq.linkedSaleId || freshReq.linkedDraftId;
 
-      if (params.action === "CONFIRM" && existingSalesRecordId && freshReq.status === "CONFIRMED") {
+      const noStaffParamChange =
+        amendmentDiffs.length === 0 &&
+        (params.projectId === undefined || params.projectId === freshReq.projectId) &&
+        (params.reserveStock === undefined || Boolean(params.reserveStock) === Boolean(freshReq.reserveStock)) &&
+        (params.immediatePaidAmount === undefined ||
+          Math.abs(Number(params.immediatePaidAmount) - Number(freshReq.creditPaidPlanned || 0)) <= 0.005);
+
+      if (
+        params.action === "CONFIRM" &&
+        existingSalesRecordId &&
+        freshReq.status === "CONFIRMED" &&
+        noStaffParamChange
+      ) {
         return { rec: freshReq, idempotentReplay: true };
       }
 
@@ -2160,7 +2889,11 @@ export async function staffProcessGoodsRequest(params: {
               amendmentDiffJson: JSON.stringify(amendmentDiffs),
               beforeSnapshotJson: JSON.stringify(beforeSnap),
               afterSnapshotJson: JSON.stringify(afterSnapPreview),
+              revisionNumber: { increment: 1 },
             }
+            : {}),
+          ...(freshReq.clientResponseStatus === "PENDING_STAFF_APPROVAL"
+            ? { clientResponseStatus: "STAFF_APPROVED" }
             : {}),
           approvedByUserId: freshReq.approvedByUserId ?? params.actor.userId ?? null,
           approvedByName: freshReq.approvedByName ?? params.actor.userDisplay,
@@ -2371,6 +3104,9 @@ export async function staffProcessGoodsRequest(params: {
       where: { id: freshReq.id },
       data: {
         status: "COMPLETED",
+        pickupType: resolvedPatch.pickupType,
+        pickupLocation: resolvedPatch.pickupLocation,
+        pickupNotes: resolvedPatch.pickupNotes,
         customerId: customer.id,
         totalConfirmed: effectiveTotal,
         creditPaidPlanned: paidImmediate,
@@ -2382,6 +3118,9 @@ export async function staffProcessGoodsRequest(params: {
         linkedSaleId: saleTx.id,
         linkedSalesRecordId: saleTx.id,
         linkedReceiptId,
+        ...(freshReq.clientResponseStatus === "PENDING_STAFF_APPROVAL"
+          ? { clientResponseStatus: "STAFF_APPROVED" }
+          : {}),
         approvedByUserId: freshReq.approvedByUserId ?? params.actor.userId ?? null,
         approvedByName: freshReq.approvedByName ?? params.actor.userDisplay,
         approvedAt: freshReq.approvedAt ?? now,
@@ -2584,6 +3323,7 @@ export async function clientRespondToAmendedRequest(params: {
 const WA_EVENT_LABELS_AR: Record<string, string> = {
   CLIENT_APPROVED: "اعتماد الحساب",
   REQUEST_RECEIVED: "استلام طلب",
+  CLIENT_ORDER_EDITED: "تعديل طلب عميل (بانتظار الاعتماد)",
   REQUEST_RETURNED_FOR_APPROVAL: "معاد للعميل للموافقة",
   REQUEST_CONFIRMED: "تأكيد طلب",
   READY_FOR_PICKUP: "جاهز للاستلام",

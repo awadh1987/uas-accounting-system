@@ -93,7 +93,12 @@ export function extractTenantResolutionFromRequest(
       };
     }
 
-    // 2. Explicit header (Desktop / Mobile / API / LAN clients)
+    // 2. Explicit x-uas-tenant-id / alias header (Desktop / Mobile / API / LAN clients).
+    // Note: if an unauthenticated request carries a stale "default" header alongside an explicit
+    // ?slug= query parameter (e.g. root web deep link /portal?slug=aljabri), allow the query
+    // parameter to resolve the tenant; whenever a verified session exists or no query override is
+    // present, the explicit header always takes Priority 2 precedence so cross-tenant spoofing fails closed.
+    const verifiedSession = extractSessionTokenFromRequest(req);
     const headerTenant =
       headers.get("x-uas-tenant-id") ||
       headers.get("x-tenant-id") ||
@@ -101,16 +106,31 @@ export function extractTenantResolutionFromRequest(
       headers.get("x-uas-company") ||
       headers.get("x-uas-resolved-tenant");
     if (headerTenant) {
-      const slugCheck = validateTenantSlug(headerTenant);
-      return {
-        tenantId: normalizeTenantId(headerTenant),
-        slug: slugCheck.valid ? slugCheck.normalized : null,
-        source: "header",
-      };
+      let hasExplicitQuerySlug = false;
+      if (normalizeTenantId(headerTenant) === "default" && !verifiedSession.payload?.tid) {
+        try {
+          const u = new URL(req.url, "http://localhost");
+          hasExplicitQuerySlug = Boolean(
+            u.searchParams.get("slug") ||
+              u.searchParams.get("tenantId") ||
+              u.searchParams.get("tenant") ||
+              u.searchParams.get("company")
+          );
+        } catch {
+          hasExplicitQuerySlug = false;
+        }
+      }
+      if (!hasExplicitQuerySlug) {
+        const slugCheck = validateTenantSlug(headerTenant);
+        return {
+          tenantId: normalizeTenantId(headerTenant),
+          slug: slugCheck.valid ? slugCheck.normalized : null,
+          source: "header",
+        };
+      }
     }
 
     // 3. Authenticated session/token tenant binding
-    const verifiedSession = extractSessionTokenFromRequest(req);
     if (verifiedSession.payload?.tid && verifiedSession.payload.tid !== "default") {
       const slugCheck = validateTenantSlug(verifiedSession.payload.tid);
       return {

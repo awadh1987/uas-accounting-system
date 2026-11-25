@@ -48,7 +48,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         success: true,
         message: "✅ تم تحديث كلمة المرور بنجاح، يمكنك الآن تسجيل الدخول بكلمتك الجديدة",
       });
-      return clearClientSessionCookie(res);
+      return clearClientSessionCookie(res, req);
     }
 
     const portalUrl = `${resolveTenantCloudUrl(scope.tenantSlug)}/portal`;

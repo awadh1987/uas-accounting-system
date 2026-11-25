@@ -7,6 +7,7 @@ import {
   serializeRequest,
   staffProcessGoodsRequest,
 } from "@/lib/clientPortal/portalService";
+import { resolveTenantCloudUrl } from "@/lib/serverConnection";
 
 export const dynamic = "force-dynamic";
 
@@ -120,7 +121,7 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       : undefined;
 
     const scope = resolveRequestTenantScope(req);
-    const portalOrigin = req.nextUrl?.origin || "https://qat.world";
+    const portalOrigin = resolveTenantCloudUrl(scope.tenantSlug);
     const result = await staffProcessGoodsRequest({
       requestId,
       action,

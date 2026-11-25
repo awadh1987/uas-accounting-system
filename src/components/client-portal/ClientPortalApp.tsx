@@ -70,10 +70,76 @@ import {
 } from "@/lib/uiFormatters";
 import { printUasDocument } from "@/lib/print/uasDocumentPrinter";
 import { exportOrShareBinaryFile, isCapacitorNative } from "@/lib/nativeBridge";
-import { getStoredTenantId, getStoredTenantSlug, resolveApiBaseUrl } from "@/lib/apiClient";
+import { isInstalledClientApp } from "@/lib/runtimePlatform";
+import { extractSubdomainSlugFromHost } from "@/lib/tenant/tenantSlug";
+import {
+  getStoredTenantId,
+  getStoredTenantSlug,
+  resolveApiBaseUrl,
+  setStoredTenantId,
+} from "@/lib/apiClient";
 import type { TenantFormConfig } from "@/lib/clientPortal/portalConfig";
 
 const CLIENT_TOKEN_STORAGE_KEY = "uas_client_portal_token_v1";
+
+type PortalSectionTab = "catalog" | "new_request" | "requests" | "statement" | "profile";
+
+function resolvePortalTenantEnv(): { slug: string | null; explicitWebScope: boolean } {
+  if (typeof window === "undefined") {
+    return { slug: null, explicitWebScope: false };
+  }
+  const hostSlug = extractSubdomainSlugFromHost(window.location.host);
+  if (hostSlug) {
+    return { slug: hostSlug, explicitWebScope: true };
+  }
+  try {
+    const sp = new URLSearchParams(window.location.search);
+    const qSlug = (sp.get("slug") || sp.get("tenant") || "").trim().toLowerCase();
+    if (qSlug && qSlug !== "default" && /^[a-z0-9-]+$/.test(qSlug)) {
+      return { slug: qSlug, explicitWebScope: true };
+    }
+  } catch {
+    // ignore URL parse error
+  }
+  if (!isInstalledClientApp()) {
+    return { slug: null, explicitWebScope: true };
+  }
+  const storedSlug = getStoredTenantSlug();
+  return {
+    slug: storedSlug || null,
+    explicitWebScope: false,
+  };
+}
+
+function normalizeScopeKey(raw?: string | null): string {
+  return String(raw || "default")
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, "_");
+}
+
+function decodeClientTokenTenant(token: string): { tid: string; slug: string } | null {
+  try {
+    const dotIdx = token.indexOf(".");
+    if (dotIdx <= 0) return null;
+    const b64 = token.slice(0, dotIdx).replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    const json = decodeURIComponent(escape(window.atob(padded)));
+    const parsed = JSON.parse(json) as { tid?: string; slug?: string };
+    return {
+      tid: normalizeScopeKey(parsed.tid || parsed.slug || "default"),
+      slug: String(parsed.slug || parsed.tid || "default").trim().toLowerCase(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getClientTokenStorageKey(): string {
+  const env = resolvePortalTenantEnv();
+  const keySlug = (env.slug || "default").trim().toLowerCase();
+  return `${CLIENT_TOKEN_STORAGE_KEY}::${keySlug}`;
+}
 
 interface ClientAccountView {
   id: string;
@@ -176,6 +242,7 @@ interface ClientRequestView {
   totalConfirmed: number;
   currency: string;
   linkedInvoiceId: string | null;
+  linkedSaleId?: string | null;
   linkedSalesRecordId?: string | null;
   reviewerRemarks?: string | null;
   amendmentDiff?: AmendmentDiffEntry[];
@@ -185,6 +252,7 @@ interface ClientRequestView {
   returnedToClientAt?: string | null;
   returnedByName?: string | null;
   clientResponseStatus?: string | null;
+  clientResponseStatusLabelAr?: string | null;
   clientResponseNote?: string | null;
   clientRespondedAt?: string | null;
   createdAt: string;
@@ -220,6 +288,7 @@ interface StatementRowView {
 
 interface DraftLineRow {
   rowKey: string;
+  lineId?: string;
   itemId: string;
   itemTitle: string;
   requestedQty: string;
@@ -252,7 +321,19 @@ function resolveLineDefaultUnitPrice(
 function getClientToken(): string {
   if (typeof window === "undefined") return "";
   try {
-    return window.localStorage.getItem(CLIENT_TOKEN_STORAGE_KEY) || "";
+    const env = resolvePortalTenantEnv();
+    const expectedKey = normalizeScopeKey(env.slug || (env.explicitWebScope ? "default" : getStoredTenantId()));
+    const scopedKey = getClientTokenStorageKey();
+    const token =
+      window.localStorage.getItem(scopedKey) ||
+      window.localStorage.getItem(CLIENT_TOKEN_STORAGE_KEY) ||
+      "";
+    if (!token) return "";
+    const meta = decodeClientTokenTenant(token);
+    if (meta && meta.tid !== expectedKey) {
+      return "";
+    }
+    return token;
   } catch {
     return "";
   }
@@ -261,10 +342,20 @@ function getClientToken(): string {
 function storeClientToken(token: string) {
   if (typeof window === "undefined") return;
   try {
+    const scopedKey = getClientTokenStorageKey();
     if (token) {
-      window.localStorage.setItem(CLIENT_TOKEN_STORAGE_KEY, token);
+      window.localStorage.setItem(scopedKey, token);
     } else {
-      window.localStorage.removeItem(CLIENT_TOKEN_STORAGE_KEY);
+      window.localStorage.removeItem(scopedKey);
+      const legacyTok = window.localStorage.getItem(CLIENT_TOKEN_STORAGE_KEY);
+      if (legacyTok) {
+        const env = resolvePortalTenantEnv();
+        const expectedKey = normalizeScopeKey(env.slug || "default");
+        const meta = decodeClientTokenTenant(legacyTok);
+        if (!meta || meta.tid === expectedKey) {
+          window.localStorage.removeItem(CLIENT_TOKEN_STORAGE_KEY);
+        }
+      }
     }
   } catch {
     // Non-fatal
@@ -275,8 +366,13 @@ function resolveClientHeaders(extra?: Record<string, string>): Record<string, st
   const headers: Record<string, string> = { ...(extra || {}) };
   const token = getClientToken();
   if (token) headers["x-uas-client-token"] = token;
-  const tid = getStoredTenantId() || getStoredTenantSlug();
-  if (tid) headers["x-uas-tenant-id"] = tid;
+  const env = resolvePortalTenantEnv();
+  if (env.slug) {
+    headers["x-uas-tenant-id"] = env.slug;
+  } else if (!env.explicitWebScope) {
+    const tid = getStoredTenantId() || getStoredTenantSlug();
+    if (tid && tid !== "default") headers["x-uas-tenant-id"] = tid;
+  }
   return headers;
 }
 
@@ -288,9 +384,11 @@ function apiUrl(path: string): string {
 export function ClientPortalApp({
   onBackHomeAction,
   initialAuthTab,
+  initialPortalSection,
 }: {
   onBackHomeAction?: () => void;
-  initialAuthTab?: "login" | "register";
+  initialAuthTab?: "login" | "register" | "forgot";
+  initialPortalSection?: PortalSectionTab;
 }) {
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [tenantNameAr, setTenantNameAr] = useState("بوابة العملاء");
@@ -314,9 +412,40 @@ export function ClientPortalApp({
     }
     return "login";
   });
-  const [portalTab, setPortalTab] = useState<
-    "catalog" | "new_request" | "requests" | "statement" | "profile"
-  >("new_request");
+  const [portalTab, setPortalTab] = useState<PortalSectionTab>(() => {
+    if (initialPortalSection) return initialPortalSection;
+    if (typeof window !== "undefined") {
+      try {
+        const sp = new URLSearchParams(window.location.search);
+        const sec = (sp.get("section") || sp.get("portalTab") || "").trim();
+        if (
+          sec === "catalog" ||
+          sec === "new_request" ||
+          sec === "requests" ||
+          sec === "statement" ||
+          sec === "profile"
+        ) {
+          return sec;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return "new_request";
+  });
+  const [guestSection, setGuestSection] = useState<"auth" | "catalog">(() => {
+    if (initialPortalSection === "catalog") return "catalog";
+    if (typeof window !== "undefined") {
+      try {
+        const sp = new URLSearchParams(window.location.search);
+        const sec = (sp.get("section") || sp.get("portalTab") || "").trim();
+        if (sec === "catalog") return "catalog";
+      } catch {
+        // ignore
+      }
+    }
+    return "auth";
+  });
   const [toast, setToast] = useState<string | null>(null);
   const [showBulkImportModal, setShowBulkImportModal] = useState(false);
   const [showQuickRepeat, setShowQuickRepeat] = useState(false);
@@ -599,9 +728,26 @@ export function ClientPortalApp({
   }, [initialAuthTab]);
 
   useEffect(() => {
+    if (!initialPortalSection) return;
     let active = true;
     Promise.resolve().then(() => {
       if (!active) return;
+      setPortalTab(initialPortalSection);
+      setGuestSection(initialPortalSection === "catalog" ? "catalog" : "auth");
+    });
+    return () => {
+      active = false;
+    };
+  }, [initialPortalSection]);
+
+  useEffect(() => {
+    let active = true;
+    Promise.resolve().then(() => {
+      if (!active) return;
+      if (typeof window !== "undefined" && !isInstalledClientApp()) {
+        const env = resolvePortalTenantEnv();
+        setStoredTenantId(env.slug || "default");
+      }
       void loadConfig();
       void syncProfile(false);
     });
@@ -682,7 +828,7 @@ export function ClientPortalApp({
           savedAt?: string;
         };
         if (Array.isArray(saved.lines) && saved.lines.some((l) => l.itemTitle?.trim())) {
-          setLines(saved.lines);
+          setLines((prev) => (prev.some((p) => p.itemTitle.trim() !== "") ? prev : saved.lines!));
           if (saved.pickupCode) setPickupCode(saved.pickupCode);
           if (saved.customPickupText !== undefined) setCustomPickupText(saved.customPickupText);
           if (saved.pickupNotes !== undefined) setPickupNotes(saved.pickupNotes);
@@ -1132,9 +1278,10 @@ export function ClientPortalApp({
     setLines(
       req.lines.map((l, idx) => ({
         rowKey: `edit-${Date.now()}-${idx}`,
+        lineId: l.id,
         itemId: l.itemId || "__CUSTOM__",
         itemTitle: l.itemTitle,
-        requestedQty: String(l.requestedQty),
+        requestedQty: String(l.confirmedQty ?? l.requestedQty),
         unitCode: l.unitCode || "QAT_BUNCH",
         customUnitLabel: l.customUnitLabel || "",
         unitPrice: l.unitPrice > 0 ? String(l.unitPrice) : "",
@@ -1142,7 +1289,7 @@ export function ClientPortalApp({
       }))
     );
     setPortalTab("new_request");
-    showNotice(`تعديل الطلب (${req.requestNumber}) — متاح قبل بدء مراجعة الإدارة`);
+    showNotice(`تعديل الطلب (${req.requestNumber}) — أي تعديل سيُرسل للموظف للاعتماد`);
   }
 
   async function handleLogout() {
@@ -1205,6 +1352,7 @@ export function ClientPortalApp({
             const uOpt = formConfig?.unitOptions.find((u) => u.code === l.unitCode);
             const pNum = Number(l.unitPrice);
             return {
+              ...(editingRequestId && l.lineId ? { id: l.lineId } : {}),
               itemId: l.itemId && l.itemId !== "__CUSTOM__" ? l.itemId : null,
               itemTitle: l.itemTitle.trim(),
               requestedQty: Number(l.requestedQty),
@@ -1239,7 +1387,7 @@ export function ClientPortalApp({
       setDraftSavedLocalAt(null);
       showNotice(
         wasEditing
-          ? "✅ تم تحديث الطلب بنجاح قبل المراجعة"
+          ? "✅ تم تحديث الطلب — بانتظار اعتماد الموظف"
           : "✅ تم استلام طلبك وإرساله للإدارة للمراجعة"
       );
       setLines([
@@ -1700,7 +1848,14 @@ export function ClientPortalApp({
               </button>
             ) : (
               <Link
-                href="/"
+                href={
+                  typeof window !== "undefined" &&
+                  !extractSubdomainSlugFromHost(window.location.host) &&
+                  tenantSlug &&
+                  tenantSlug !== "default"
+                    ? `/?slug=${encodeURIComponent(tenantSlug)}`
+                    : "/"
+                }
                 className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold inline-flex items-center gap-1"
               >
                 <ArrowRight className="w-3.5 h-3.5" />
@@ -1723,7 +1878,67 @@ export function ClientPortalApp({
             جاري تحميل إعدادات بوابة المنشأة...
           </div>
         ) : !account ? (
-          <div className="max-w-xl mx-auto card-surface rounded-2xl p-5 sm:p-6 space-y-5 shadow-md">
+          <div className="space-y-4">
+            <div className="max-w-xl mx-auto flex rounded-xl border border-slate-200 dark:border-slate-700 p-1 bg-white dark:bg-slate-900 text-xs shadow-xs">
+              <button
+                type="button"
+                data-testid="portal-guest-tab-auth"
+                onClick={() => setGuestSection("auth")}
+                className={`flex-1 py-2 rounded-lg font-black inline-flex items-center justify-center gap-1.5 transition ${guestSection === "auth" ? "accent-bg shadow-sm" : "text-slate-600 dark:text-slate-300"
+                  }`}
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                <span>دخول / تسجيل العميل</span>
+              </button>
+              <button
+                type="button"
+                data-testid="portal-guest-tab-catalog"
+                onClick={() => setGuestSection("catalog")}
+                className={`flex-1 py-2 rounded-lg font-black inline-flex items-center justify-center gap-1.5 transition ${guestSection === "catalog" ? "accent-bg shadow-sm" : "text-slate-600 dark:text-slate-300"
+                  }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>الأسعار والفرز المنشورة{boardItems.length > 0 ? ` (${boardItems.length})` : ""}</span>
+              </button>
+            </div>
+
+            {guestSection === "catalog" ? (
+              <div className="space-y-4">
+                <div className="p-3.5 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="font-bold text-emerald-900 dark:text-emerald-200">
+                    يمكنك استعراض قائمة الأسعار والفرز المنشورة من {tenantNameAr}، ثم تسجيل الدخول لإرسال طلبك مباشرة.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGuestSection("auth");
+                      setAuthTab("login");
+                    }}
+                    className="px-3.5 py-1.5 rounded-xl accent-bg font-black"
+                  >
+                    دخول لإرسال الطلب
+                  </button>
+                </div>
+                <ClientCatalogPricingBoard
+                  boardItems={boardItems}
+                  boardStats={boardStats}
+                  draftLines={lines}
+                  loading={boardLoading}
+                  onRefresh={() => void refreshCatalogBoard()}
+                  onAddToOrder={(item, qty) => {
+                    handleAddCatalogItemToOrder(item, qty);
+                    setGuestSection("auth");
+                    setAuthTab("login");
+                    showNotice("✅ تم تجهيز الصنف في طلبك — سجّل الدخول لإتمام الإرسال");
+                  }}
+                  onGoToOrder={() => {
+                    setGuestSection("auth");
+                    setAuthTab("login");
+                  }}
+                />
+              </div>
+            ) : (
+              <div className="max-w-xl mx-auto card-surface rounded-2xl p-5 sm:p-6 space-y-5 shadow-md">
             <div className="flex rounded-xl border border-slate-200 dark:border-slate-700 p-1 bg-slate-100 dark:bg-slate-800/60 text-xs">
               <button
                 type="button"
@@ -2067,6 +2282,8 @@ export function ClientPortalApp({
                   {authBusy ? "جاري التسجيل..." : "إرسال طلب التسجيل"}
                 </button>
               </form>
+            )}
+              </div>
             )}
           </div>
         ) : account.status === "PENDING_APPROVAL" ? (
@@ -2876,9 +3093,17 @@ export function ClientPortalApp({
                       const activeStageIdx = stepperStages.findIndex((st) => st.key === r.status);
                       const isTerminalClosed = r.status === "CANCELLED" || r.status === "REJECTED";
                       const canClientModifyPending =
+                        (r.status === "PENDING_REVIEW" || r.status === "RETURNED_TO_CLIENT") &&
+                        !r.reserveStock &&
+                        !r.linkedSalesRecordId &&
+                        !r.linkedSaleId &&
+                        !r.linkedInvoiceId;
+                      const canClientCancelPending =
                         r.status === "PENDING_REVIEW" &&
                         !r.reserveStock &&
-                        !r.linkedSalesRecordId;
+                        !r.linkedSalesRecordId &&
+                        !r.linkedSaleId &&
+                        !r.linkedInvoiceId;
                       return (
                         <div key={r.id} className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2894,6 +3119,14 @@ export function ClientPortalApp({
                               >
                                 {r.statusLabelAr}
                               </span>
+                              {r.clientResponseStatus === "PENDING_STAFF_APPROVAL" && (
+                                <span
+                                  data-testid={`portal-pending-staff-badge-${r.id}`}
+                                  className="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200 text-[10px] font-black"
+                                >
+                                  بانتظار اعتماد الموظف
+                                </span>
+                              )}
                               {(r.status === "CONFIRMED" || r.status === "READY_FOR_PICKUP") && (
                                 <span className="px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 font-mono font-bold text-indigo-700 dark:text-indigo-200 text-[11px]">
                                   كود الاستلام: <bdi dir="ltr">{r.pickupPassCode || r.requestNumber}</bdi>
@@ -2908,6 +3141,17 @@ export function ClientPortalApp({
                               </span>
                             </div>
                             <div className="flex items-center gap-1.5">
+                              {canClientModifyPending && (
+                                <button
+                                  type="button"
+                                  data-testid={`portal-edit-req-${r.id}`}
+                                  onClick={() => handleStartEditPendingRequest(r)}
+                                  className="px-2.5 py-1 rounded-xl border border-indigo-400 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 font-bold text-[11px] inline-flex items-center gap-1"
+                                >
+                                  <Edit3 className="w-3 h-3" />
+                                  <span>تعديل الطلب</span>
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 data-testid={`portal-reorder-req-${r.id}`}
@@ -2929,7 +3173,7 @@ export function ClientPortalApp({
                                   },
                                   {
                                     id: "edit",
-                                    label: "تعديل الطلب (قبل المراجعة)",
+                                    label: "تعديل الطلب",
                                     icon: <Edit3 className="w-3.5 h-3.5" />,
                                     hidden: !canClientModifyPending,
                                     onClick: () => handleStartEditPendingRequest(r),
@@ -2945,7 +3189,7 @@ export function ClientPortalApp({
                                     label: "إلغاء الطلب",
                                     icon: <XCircle className="w-3.5 h-3.5" />,
                                     tone: "danger",
-                                    hidden: !canClientModifyPending,
+                                    hidden: !canClientCancelPending,
                                     confirmTitle: `إلغاء الطلب (${r.requestNumber})`,
                                     confirmMessage: "هل أنت متأكد من إلغاء هذا الطلب؟",
                                     onClick: () => handleCancelPendingRequest(r.id),
@@ -3005,7 +3249,27 @@ export function ClientPortalApp({
                             </div>
                           )}
 
-                          {/* Phase 13 Return to Client for Approval Banner (Remarks + Before/After Diff + Approve/Decline) */}
+                          {/* Phase 13 Return to Client for Approval Banner + Client Pending Diff Summary */}
+                          {r.status !== "RETURNED_TO_CLIENT" &&
+                            r.amendmentDiff &&
+                            r.amendmentDiff.length > 0 && (
+                              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 space-y-2 text-[11px]">
+                                <div className="font-bold text-slate-700 dark:text-slate-200">
+                                  ملخص التعديلات المسجلة ({r.revisionNumber ? `مراجعة #${r.revisionNumber}` : "محدث"}):
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                  {r.amendmentDiff.map((diff, i) => (
+                                    <div key={`${diff.field}-${i}`} className="px-2 py-1 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                                      <span className="font-bold">{diff.labelAr}: </span>
+                                      <span className="text-rose-600 line-through mx-1">{diff.before}</span>
+                                      <span>←</span>
+                                      <strong className="text-emerald-700 dark:text-emerald-300 mx-1">{diff.after}</strong>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
                           {r.status === "RETURNED_TO_CLIENT" && (
                             <div
                               data-testid={`portal-amendment-review-${r.id}`}

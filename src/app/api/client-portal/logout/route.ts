@@ -9,7 +9,7 @@ export async function OPTIONS(req: NextRequest) {
   return corsOptionsResponse(req);
 }
 
-export const POST = withTenantRoute(async function POST() {
+export const POST = withTenantRoute(async function POST(req: NextRequest) {
   const res = NextResponse.json({ success: true });
-  return clearClientSessionCookie(res);
+  return clearClientSessionCookie(res, req);
 });
