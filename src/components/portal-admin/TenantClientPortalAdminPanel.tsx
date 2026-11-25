@@ -2144,8 +2144,8 @@ export function TenantClientPortalAdminPanel({
                                   e.target.value === "number"
                                     ? "number"
                                     : e.target.value === "select"
-                                    ? "select"
-                                    : "text";
+                                      ? "select"
+                                      : "text";
                                 const nextFields = currentSec.customFields.map((f, i) =>
                                   i === cfIdx ? { ...f, type: nextType } : f
                                 );

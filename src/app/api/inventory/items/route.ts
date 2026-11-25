@@ -400,14 +400,14 @@ async function upsertItem(req: NextRequest) {
 
       const item = body.id
         ? await tx.inventoryItem.update({
-            where: { id: String(body.id) },
-            data: itemData,
-          })
+          where: { id: String(body.id) },
+          data: itemData,
+        })
         : await tx.inventoryItem.upsert({
-            where: { sku },
-            update: itemData,
-            create: itemData,
-          });
+          where: { sku },
+          update: itemData,
+          create: itemData,
+        });
 
       // 5. Save Multi-Unit Conversion Matrix (auto-creating custom UOMs when unitId === "OTHER")
       if (Array.isArray(body.conversions)) {

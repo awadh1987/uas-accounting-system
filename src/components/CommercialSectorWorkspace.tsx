@@ -417,11 +417,10 @@ export function CommercialSectorWorkspace({
             key={id}
             type="button"
             onClick={() => setSubTab(id)}
-            className={`px-3.5 py-2 rounded-xl font-extrabold inline-flex items-center gap-1.5 transition ${
-              subTab === id
-                ? "accent-bg shadow-sm"
-                : "card-surface border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
-            }`}
+            className={`px-3.5 py-2 rounded-xl font-extrabold inline-flex items-center gap-1.5 transition ${subTab === id
+              ? "accent-bg shadow-sm"
+              : "card-surface border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+              }`}
           >
             <Icon className="w-3.5 h-3.5" />
             <span>{label}</span>
@@ -871,11 +870,10 @@ export function CommercialSectorWorkspace({
                           <td className="p-2 font-mono whitespace-nowrap"><bdi dir="ltr">{ts}</bdi></td>
                           <td className="p-2 whitespace-nowrap">
                             <span
-                              className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] ${
-                                isIn
-                                  ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
-                                  : "bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300"
-                              }`}
+                              className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] ${isIn
+                                ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
+                                : "bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300"
+                                }`}
                             >
                               {m.directionLabelAr || (isIn ? "وارد (+)" : "صادر (-)")} • {m.movementType}
                             </span>
@@ -986,11 +984,10 @@ export function CommercialSectorWorkspace({
                       key={st}
                       type="button"
                       onClick={() => void handleUpdateTripStatus(d.id, st)}
-                      className={`px-2.5 py-1.5 rounded-xl font-bold ${
-                        d.tripStatus === st
-                          ? "accent-bg"
-                          : "border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
-                      }`}
+                      className={`px-2.5 py-1.5 rounded-xl font-bold ${d.tripStatus === st
+                        ? "accent-bg"
+                        : "border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        }`}
                     >
                       {TRIP_STATUS_LABELS[st]}
                     </button>

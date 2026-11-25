@@ -188,8 +188,8 @@ export function PortalCatalogBoardAdminSection({
       it.remainingQty !== null && it.remainingQty !== undefined
         ? String(it.remainingQty)
         : it.publishedQty !== null && it.publishedQty !== undefined
-        ? String(it.publishedQty)
-        : ""
+          ? String(it.publishedQty)
+          : ""
     );
     setAvailabilityStatus(it.availabilityStatus);
     setPickupLocation(it.pickupLocation || "");
@@ -816,22 +816,20 @@ export function PortalCatalogBoardAdminSection({
                       {it.gradeLabel}
                     </span>
                     <span
-                      className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] ${
-                        it.availabilityStatus === "AVAILABLE"
-                          ? "bg-emerald-100 text-emerald-700"
-                          : it.availabilityStatus === "LIMITED"
+                      className={`px-2 py-0.5 rounded-full font-extrabold text-[10px] ${it.availabilityStatus === "AVAILABLE"
+                        ? "bg-emerald-100 text-emerald-700"
+                        : it.availabilityStatus === "LIMITED"
                           ? "bg-amber-100 text-amber-800"
                           : "bg-rose-100 text-rose-700"
-                      }`}
+                        }`}
                     >
                       {it.availabilityLabelAr}
                     </span>
                     <span
-                      className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
-                        it.isPublished
-                          ? "bg-emerald-600 text-white"
-                          : "bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
-                      }`}
+                      className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${it.isPublished
+                        ? "bg-emerald-600 text-white"
+                        : "bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                        }`}
                     >
                       {it.isPublished ? "منشور للعملاء" : "مسودة داخلية"}
                     </span>
@@ -866,11 +864,10 @@ export function PortalCatalogBoardAdminSection({
                     onClick={() =>
                       void handleBatchAction(it.isPublished ? "UNPUBLISH" : "PUBLISH", [it.id])
                     }
-                    className={`px-3 py-1.5 rounded-xl font-bold inline-flex items-center gap-1 ${
-                      it.isPublished
-                        ? "border border-slate-300 dark:border-slate-700"
-                        : "accent-bg"
-                    }`}
+                    className={`px-3 py-1.5 rounded-xl font-bold inline-flex items-center gap-1 ${it.isPublished
+                      ? "border border-slate-300 dark:border-slate-700"
+                      : "accent-bg"
+                      }`}
                   >
                     {it.isPublished ? (
                       <>

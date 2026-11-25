@@ -122,9 +122,11 @@ table tbody tr:hover {
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
 .no-scrollbar {
   -ms-overflow-style: none;
 }
+
 @supports (scrollbar-width: none) {
   .no-scrollbar {
     scrollbar-width: none;
@@ -168,6 +170,7 @@ table tbody tr:hover {
 
 /* Phase 16: GPU-friendly Pointer-Reactive Light (hover devices & motion-safe only) */
 @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+
   .card-surface,
   .uas-light-card,
   .uas-light-btn,
@@ -190,21 +193,19 @@ table tbody tr:hover {
     border-radius: inherit;
     pointer-events: none;
     z-index: 0;
-    background: radial-gradient(
-      240px circle at var(--uas-ptr-x, 50%) var(--uas-ptr-y, 50%),
-      var(--light-sheen, rgba(16, 185, 129, 0.14)),
-      transparent 68%
-    );
+    background: radial-gradient(240px circle at var(--uas-ptr-x, 50%) var(--uas-ptr-y, 50%),
+        var(--light-sheen, rgba(16, 185, 129, 0.14)),
+        transparent 68%);
     opacity: 0.85;
     transform: translateZ(0);
     transition: opacity 0.18s ease;
   }
 
-  .card-surface > *,
-  .uas-light-card > *,
-  .uas-light-btn > *,
-  .uas-light-tab > *,
-  button.accent-bg > * {
+  .card-surface>*,
+  .uas-light-card>*,
+  .uas-light-btn>*,
+  .uas-light-tab>*,
+  button.accent-bg>* {
     position: relative;
     z-index: 1;
   }
@@ -214,23 +215,20 @@ table tbody tr:hover {
     position: absolute;
     inset: 0;
     pointer-events: none;
-    background: radial-gradient(
-      180px circle at var(--uas-ptr-x, 50%) 50%,
-      var(--light-border, rgba(16, 185, 129, 0.5)),
-      transparent 70%
-    );
+    background: radial-gradient(180px circle at var(--uas-ptr-x, 50%) 50%,
+        var(--light-border, rgba(16, 185, 129, 0.5)),
+        transparent 70%);
   }
 
   .uas-light-heading[data-uas-lit="1"] {
-    background-image: radial-gradient(
-      220px circle at var(--uas-ptr-x, 50%) var(--uas-ptr-y, 50%),
-      var(--light-sheen, rgba(16, 185, 129, 0.1)),
-      transparent 70%
-    );
+    background-image: radial-gradient(220px circle at var(--uas-ptr-x, 50%) var(--uas-ptr-y, 50%),
+        var(--light-sheen, rgba(16, 185, 129, 0.1)),
+        transparent 70%);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   .card-surface::after,
   .uas-light-card::after,
   .uas-light-btn::after,
@@ -266,11 +264,13 @@ body.mobile-simulator-active #erpAppFrame {
 }
 
 @media (max-width: 640px) {
+
   table th,
   table td {
     padding: 0.45rem 0.4rem !important;
     font-size: 0.7rem !important;
   }
+
   button,
   select,
   input {
@@ -282,6 +282,7 @@ body.mobile-simulator-active #erpAppFrame {
   .no-print {
     display: none !important;
   }
+
   .card-surface::after,
   .uas-light-card::after,
   .uas-light-btn::after,
@@ -291,18 +292,22 @@ body.mobile-simulator-active #erpAppFrame {
   [data-uas-light]::after {
     display: none !important;
   }
+
   body {
     background: #fff !important;
     color: #000 !important;
     padding-bottom: 0 !important;
   }
+
   .card-surface {
     border: 1px solid #ccc !important;
     box-shadow: none !important;
   }
+
   body.uas-printing-voucher-modal #erpAppFrame {
     display: none !important;
   }
+
   body.uas-printing-voucher-modal .uas-voucher-modal-backdrop {
     position: static !important;
     background: transparent !important;
@@ -310,6 +315,7 @@ body.mobile-simulator-active #erpAppFrame {
     backdrop-filter: none !important;
     padding: 0 !important;
   }
+
   body.uas-printing-voucher-modal .uas-voucher-modal-card {
     max-height: none !important;
     overflow: visible !important;
