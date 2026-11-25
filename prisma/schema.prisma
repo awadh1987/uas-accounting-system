@@ -1560,7 +1560,7 @@ model ClientGoodsRequest {
   clientAccountId     String
   clientAccount       ClientPortalAccount   @relation(fields: [clientAccountId], references: [id], onDelete: Cascade)
   customerId          String?
-  status              String                @default("PENDING_REVIEW") // PENDING_REVIEW | CONFIRMED | READY_FOR_PICKUP | COMPLETED | CANCELLED | REJECTED
+  status              String                @default("PENDING_REVIEW") // PENDING_REVIEW | RETURNED_TO_CLIENT | CONFIRMED | READY_FOR_PICKUP | COMPLETED | CANCELLED | REJECTED
   pickupType          String                @default("MARKET") // MARKET | BRANCH | WAREHOUSE | OTHER
   pickupLocation      String                @default("السوق")
   pickupNotes         String?
@@ -1591,6 +1591,17 @@ model ClientGoodsRequest {
   handedOverByName    String?
   handedOverAt        DateTime?
   staffNotes          String?
+  reviewerRemarks     String?
+  amendmentDiffJson   String                @default("[]")
+  beforeSnapshotJson  String?
+  afterSnapshotJson   String?
+  revisionNumber      Int                   @default(1)
+  returnedToClientAt  DateTime?
+  returnedByUserId    String?
+  returnedByName      String?
+  clientResponseStatus String?
+  clientResponseNote  String?
+  clientRespondedAt   DateTime?
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
 
@@ -1662,6 +1673,39 @@ model TenantIntegrationSetting {
   isActive             Boolean  @default(true)
   updatedById          String?
   updatedAt            DateTime @updatedAt
+}
+
+model PortalCatalogBoardItem {
+  id                 String    @id @default(cuid())
+  inventoryItemId    String?
+  sku                String?
+  titleAr            String
+  titleEn            String?
+  gradeLabel         String    @default("درجة أولى")
+  categoryLabel      String    @default("أصناف عامة")
+  unitCode           String    @default("QAT_BUNCH")
+  unitLabel          String    @default("علاقية قات")
+  customUnitLabel    String?
+  unitPrice          Decimal   @default(0)
+  currency           String    @default("YER")
+  availabilityStatus String    @default("AVAILABLE") // AVAILABLE | LIMITED | UNAVAILABLE
+  pickupLocation     String?
+  freshnessLabel     String    @default("قائمة أسعار اليوم")
+  effectiveDate      String?
+  validityNote       String?
+  displayOrder       Int       @default(1)
+  isPublished        Boolean   @default(false)
+  publishedAt        DateTime?
+  publishedById      String?
+  publishedByName    String?
+  notes              String?
+  createdById        String?
+  createdByName      String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([isPublished, displayOrder])
+  @@index([gradeLabel, availabilityStatus])
 }
 
 

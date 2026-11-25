@@ -11,9 +11,12 @@ import {
   CheckCircle2,
   ClipboardList,
   Clock,
+  CornerUpLeft,
   CreditCard,
+  Download,
   Edit3,
   FileSpreadsheet,
+  History,
   KeyRound,
   LogIn,
   LogOut,
@@ -25,15 +28,33 @@ import {
   RotateCcw,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
   Trash2,
   User,
   UserPlus,
+  WifiOff,
   XCircle,
 } from "lucide-react";
 import { UasDateInput } from "@/components/UasDateInput";
 import { ActionOverflowMenu } from "@/components/ActionOverflowMenu";
 import { PhoneContactInput } from "@/components/PhoneContactInput";
 import { SvgAvatar } from "@/components/SvgAvatar";
+import {
+  BulkItemImportModal,
+  QuickRepeatBasketPanel,
+} from "@/components/client-portal/BulkImportAndRepeatModal";
+import { ClientCatalogPricingBoard } from "@/components/client-portal/ClientCatalogPricingBoard";
+import {
+  buildQuickRepeatBasket,
+  type ParsedBulkRequestRow,
+  type QuickRepeatBasketItem,
+} from "@/lib/clientPortal/bulkRequestParser";
+import type {
+  AmendmentDiffEntry,
+  ClientCatalogBoardItemView,
+  ClientCatalogBoardStats,
+  RequestAmendmentSnapshot,
+} from "@/lib/clientPortal/portalTypes";
 import { computeSaleTotals, fmtNum } from "@/lib/formulas";
 import {
   appendExportSignatureSheet,
@@ -95,6 +116,9 @@ interface ClientReceiptView {
   amount: number;
   currency: string;
   paymentMethod: string;
+  appliedInvoiceId?: string | null;
+  appliedInvoiceNumber?: string | null;
+  applicationSummary?: string;
   notes: string;
 }
 
@@ -141,15 +165,28 @@ interface ClientRequestLineView {
 interface ClientRequestView {
   id: string;
   requestNumber: string;
+  pickupPassCode?: string;
   status: string;
   statusLabelAr: string;
   pickupType: string;
   pickupLocation: string;
   pickupNotes: string | null;
+  reserveStock?: boolean;
   totalEstimated: number;
   totalConfirmed: number;
   currency: string;
   linkedInvoiceId: string | null;
+  linkedSalesRecordId?: string | null;
+  reviewerRemarks?: string | null;
+  amendmentDiff?: AmendmentDiffEntry[];
+  beforeSnapshot?: RequestAmendmentSnapshot | null;
+  afterSnapshot?: RequestAmendmentSnapshot | null;
+  revisionNumber?: number;
+  returnedToClientAt?: string | null;
+  returnedByName?: string | null;
+  clientResponseStatus?: string | null;
+  clientResponseNote?: string | null;
+  clientRespondedAt?: string | null;
   createdAt: string;
   lines: ClientRequestLineView[];
 }
@@ -263,6 +300,9 @@ export function ClientPortalApp({
   const [contactPhone, setContactPhone] = useState("");
   const [formConfig, setFormConfig] = useState<TenantFormConfig | null>(null);
   const [catalogItems, setCatalogItems] = useState<CatalogItemOption[]>([]);
+  const [boardItems, setBoardItems] = useState<ClientCatalogBoardItemView[]>([]);
+  const [boardStats, setBoardStats] = useState<ClientCatalogBoardStats | null>(null);
+  const [boardLoading, setBoardLoading] = useState(false);
 
   const [account, setAccount] = useState<ClientAccountView | null>(null);
   const [authTab, setAuthTab] = useState<"login" | "register" | "forgot">(() => {
@@ -274,8 +314,16 @@ export function ClientPortalApp({
     }
     return "login";
   });
-  const [portalTab, setPortalTab] = useState<"new_request" | "requests" | "statement" | "profile">("new_request");
+  const [portalTab, setPortalTab] = useState<
+    "catalog" | "new_request" | "requests" | "statement" | "profile"
+  >("new_request");
   const [toast, setToast] = useState<string | null>(null);
+  const [showBulkImportModal, setShowBulkImportModal] = useState(false);
+  const [showQuickRepeat, setShowQuickRepeat] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
+  const [draftSavedLocalAt, setDraftSavedLocalAt] = useState<string | null>(null);
+  const [amendReplyNotes, setAmendReplyNotes] = useState<Record<string, string>>({});
+  const [respondingReqId, setRespondingReqId] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
@@ -389,6 +437,8 @@ export function ClientPortalApp({
           effectiveLogoUrl?: string;
           contactPhone?: string;
           formConfig?: TenantFormConfig;
+          boardItems?: ClientCatalogBoardItemView[];
+          boardStats?: ClientCatalogBoardStats;
           items?: CatalogItemOption[];
         };
         if (data.tenantNameAr) setTenantNameAr(data.tenantNameAr);
@@ -404,6 +454,12 @@ export function ClientPortalApp({
             setRegPreferredPickup(firstPickup.labelAr);
           }
         }
+        if (Array.isArray(data.boardItems)) {
+          setBoardItems(data.boardItems);
+        }
+        if (data.boardStats) {
+          setBoardStats(data.boardStats);
+        }
         if (Array.isArray(data.items)) {
           setCatalogItems(data.items);
         }
@@ -414,6 +470,27 @@ export function ClientPortalApp({
       setLoadingConfig(false);
     }
   }, []);
+
+  const refreshCatalogBoard = useCallback(async () => {
+    setBoardLoading(true);
+    try {
+      const res = await fetch(apiUrl("/api/client-portal/catalog"), {
+        cache: "no-store",
+        headers: resolveClientHeaders(),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as {
+          items?: ClientCatalogBoardItemView[];
+          stats?: ClientCatalogBoardStats;
+        };
+        if (Array.isArray(data.items)) setBoardItems(data.items);
+        if (data.stats) setBoardStats(data.stats);
+        showNotice("✅ تم تحديث قائمة الأسعار والأصناف المنشورة");
+      }
+    } finally {
+      setBoardLoading(false);
+    }
+  }, [showNotice]);
 
   const syncProfile = useCallback(async (manual = false) => {
     try {
@@ -554,6 +631,121 @@ export function ClientPortalApp({
       active = false;
     };
   }, [account, portalTab, loadStatement]);
+
+  // Pre-load recent requests/bills on login so Quick-Repeat Basket & KPIs are ready immediately
+  useEffect(() => {
+    if (account?.status !== "ACTIVE") return;
+    let active = true;
+    Promise.resolve().then(() => {
+      if (!active) return;
+      if (requestsList.length === 0) void loadRequests(false);
+      if (billsList.length === 0) void loadStatement(false);
+    });
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account?.id, account?.status]);
+
+  // Network offline/online awareness for mobile / low-connectivity draft resilience
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const syncOnline = () => setIsOffline(!window.navigator.onLine);
+    syncOnline();
+    window.addEventListener("online", syncOnline);
+    window.addEventListener("offline", syncOnline);
+    return () => {
+      window.removeEventListener("online", syncOnline);
+      window.removeEventListener("offline", syncOnline);
+    };
+  }, []);
+
+  const draftStorageKey = account
+    ? `uas_portal_order_draft_v1_${tenantSlug}_${account.id}`
+    : null;
+
+  // Restore saved local draft on active client session mount
+  useEffect(() => {
+    if (!draftStorageKey || typeof window === "undefined") return;
+    let active = true;
+    Promise.resolve().then(() => {
+      if (!active) return;
+      try {
+        const raw = window.localStorage.getItem(draftStorageKey);
+        if (!raw) return;
+        const saved = JSON.parse(raw) as {
+          pickupCode?: string;
+          customPickupText?: string;
+          pickupNotes?: string;
+          reqCustomData?: Record<string, string>;
+          lines?: DraftLineRow[];
+          savedAt?: string;
+        };
+        if (Array.isArray(saved.lines) && saved.lines.some((l) => l.itemTitle?.trim())) {
+          setLines(saved.lines);
+          if (saved.pickupCode) setPickupCode(saved.pickupCode);
+          if (saved.customPickupText !== undefined) setCustomPickupText(saved.customPickupText);
+          if (saved.pickupNotes !== undefined) setPickupNotes(saved.pickupNotes);
+          if (saved.reqCustomData) setReqCustomData(saved.reqCustomData);
+          setDraftSavedLocalAt(saved.savedAt || new Date().toISOString());
+        }
+      } catch {
+        /* ignore corrupt storage */
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [draftStorageKey]);
+
+  // Auto-persist active order draft locally for mobile / intermittent network safety
+  useEffect(() => {
+    if (!draftStorageKey || editingRequestId || typeof window === "undefined") return;
+    let active = true;
+    const hasMeaningfulContent =
+      lines.some((l) => l.itemTitle.trim() !== "") || pickupNotes.trim() !== "";
+    try {
+      if (!hasMeaningfulContent) {
+        window.localStorage.removeItem(draftStorageKey);
+        Promise.resolve().then(() => {
+          if (active) setDraftSavedLocalAt(null);
+        });
+      } else {
+        const savedAt = new Date().toISOString();
+        window.localStorage.setItem(
+          draftStorageKey,
+          JSON.stringify({
+            pickupCode,
+            customPickupText,
+            pickupNotes,
+            reqCustomData,
+            lines,
+            savedAt,
+          })
+        );
+        Promise.resolve().then(() => {
+          if (active) setDraftSavedLocalAt(savedAt);
+        });
+      }
+    } catch {
+      /* ignore quota errors */
+    }
+    return () => {
+      active = false;
+    };
+  }, [draftStorageKey, editingRequestId, pickupCode, customPickupText, pickupNotes, reqCustomData, lines]);
+
+  const quickRepeatItems = useMemo(
+    () =>
+      buildQuickRepeatBasket({
+        requests: requestsList,
+        bills: billsList,
+        boardItems,
+        catalogItems,
+        formConfig,
+      }),
+    [requestsList, billsList, boardItems, catalogItems, formConfig]
+  );
 
   const portalLetterhead = useMemo(
     () => ({
@@ -1037,6 +1229,14 @@ export function ClientPortalApp({
       const wasEditing = Boolean(editingRequestId);
       setEditingRequestId(null);
       setConfirmedReceipt(data.request);
+      if (draftStorageKey && typeof window !== "undefined") {
+        try {
+          window.localStorage.removeItem(draftStorageKey);
+        } catch {
+          /* ignore */
+        }
+      }
+      setDraftSavedLocalAt(null);
       showNotice(
         wasEditing
           ? "✅ تم تحديث الطلب بنجاح قبل المراجعة"
@@ -1056,10 +1256,180 @@ export function ClientPortalApp({
       ]);
       setPickupNotes("");
       setCustomPickupText("");
+      void loadRequests(false);
     } catch {
-      setReqError("حدث خطأ أثناء إرسال الطلب");
+      setReqError("تعذر الاتصال بالخادم — تم حفظ مسودة طلبك محلياً بأمان ويمكنك إعادة المحاولة.");
     } finally {
       setSubmittingReq(false);
+    }
+  }
+
+  function clearLocalSavedDraft() {
+    setEditingRequestId(null);
+    setLines([
+      {
+        rowKey: `row-${Date.now()}`,
+        itemId: "",
+        itemTitle: "",
+        requestedQty: "1",
+        unitCode: "QAT_BUNCH",
+        customUnitLabel: "",
+        unitPrice: "",
+        notes: "",
+      },
+    ]);
+    setPickupNotes("");
+    setCustomPickupText("");
+    if (draftStorageKey && typeof window !== "undefined") {
+      try {
+        window.localStorage.removeItem(draftStorageKey);
+      } catch {
+        /* ignore */
+      }
+    }
+    setDraftSavedLocalAt(null);
+    showNotice("تم تفريغ مسودة الطلب الحالية");
+  }
+
+  function handleAddCatalogItemToOrder(item: ClientCatalogBoardItemView, qty: number) {
+    setConfirmedReceipt(null);
+    setEditingRequestId(null);
+    if (item.pickupLocation) {
+      loadPickupIntoBuilder(item.pickupLocation, undefined, pickupNotes);
+    }
+    const targetItemId = item.inventoryItemId || item.id;
+    setLines((prev) => {
+      const cleaned = prev.filter((x) => x.itemTitle.trim() !== "");
+      const existingIdx = cleaned.findIndex(
+        (x) =>
+          x.itemTitle.trim() === item.titleAr.trim() &&
+          x.unitCode === item.unitCode &&
+          x.customUnitLabel.trim() === (item.customUnitLabel || "").trim()
+      );
+      if (existingIdx >= 0) {
+        return cleaned.map((x, idx) =>
+          idx === existingIdx
+            ? {
+              ...x,
+              requestedQty: String((Number(x.requestedQty) || 0) + qty),
+              unitPrice: item.unitPrice > 0 ? String(item.unitPrice) : x.unitPrice,
+            }
+            : x
+        );
+      }
+      return [
+        ...cleaned,
+        {
+          rowKey: `board-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          itemId: targetItemId,
+          itemTitle: item.titleAr,
+          requestedQty: String(qty),
+          unitCode: item.unitCode || "QAT_BUNCH",
+          customUnitLabel: item.customUnitLabel || "",
+          unitPrice: item.unitPrice > 0 ? String(item.unitPrice) : "",
+          notes: item.gradeLabel ? `الفرز: ${item.gradeLabel}` : "",
+        },
+      ];
+    });
+    showNotice(`✅ تم إضافة (${item.titleAr} × ${qty}) إلى تسجيل طلب`);
+  }
+
+  function handleApplyBulkRows(parsedRows: ParsedBulkRequestRow[], mode: "merge" | "replace") {
+    const mapped: DraftLineRow[] = parsedRows.map((r, idx) => ({
+      rowKey: `bulk-${Date.now()}-${idx}`,
+      itemId: r.itemId || "__CUSTOM__",
+      itemTitle: r.itemTitle,
+      requestedQty: String(r.requestedQty),
+      unitCode: r.unitCode || "QAT_BUNCH",
+      customUnitLabel: r.customUnitLabel || "",
+      unitPrice: r.unitPrice > 0 ? String(r.unitPrice) : "",
+      notes: r.notes || "",
+    }));
+    setLines((prev) => {
+      if (mode === "replace") return mapped;
+      const nonEmptyPrev = prev.filter((x) => x.itemTitle.trim() !== "");
+      return [...nonEmptyPrev, ...mapped];
+    });
+    const warnRows = parsedRows.filter(
+      (r) => r.needsPriceConfirmation || r.needsCustomUnitConfirmation
+    ).length;
+    showNotice(
+      warnRows > 0
+        ? `✅ تم إدراج ${mapped.length} صنفاً — يرجى مراجعة ${warnRows} سطر لتأكيد السعر أو الوحدة المخصصة`
+        : `✅ تم استيراد ${mapped.length} صنفاً إلى الطلب بنجاح`
+    );
+  }
+
+  function handleAddQuickRepeatOne(it: QuickRepeatBasketItem) {
+    setLines((prev) => {
+      const cleaned = prev.filter((x) => x.itemTitle.trim() !== "");
+      return [
+        ...cleaned,
+        {
+          rowKey: `repeat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          itemId: it.itemId || "__CUSTOM__",
+          itemTitle: it.itemTitle,
+          requestedQty: String(it.lastQty || 1),
+          unitCode: it.unitCode || "QAT_BUNCH",
+          customUnitLabel: it.customUnitLabel || "",
+          unitPrice: it.unitPrice > 0 ? String(it.unitPrice) : "",
+          notes: "من سلة الأصناف المتكررة",
+        },
+      ];
+    });
+    showNotice(`✅ تم إضافة (${it.itemTitle}) من سلة الأصناف المتكررة`);
+  }
+
+  function handleAddQuickRepeatAll(basket: QuickRepeatBasketItem[]) {
+    if (basket.length === 0) return;
+    const mapped: DraftLineRow[] = basket.map((it, idx) => ({
+      rowKey: `repeat-all-${Date.now()}-${idx}`,
+      itemId: it.itemId || "__CUSTOM__",
+      itemTitle: it.itemTitle,
+      requestedQty: String(it.lastQty || 1),
+      unitCode: it.unitCode || "QAT_BUNCH",
+      customUnitLabel: it.customUnitLabel || "",
+      unitPrice: it.unitPrice > 0 ? String(it.unitPrice) : "",
+      notes: "سلة الأصناف المتكررة",
+    }));
+    setLines((prev) => {
+      const cleaned = prev.filter((x) => x.itemTitle.trim() !== "");
+      return [...cleaned, ...mapped];
+    });
+    showNotice(`✅ تم تعبئة ${mapped.length} أصناف متكررة في نموذج الطلب`);
+  }
+
+  async function handleRespondToAmendment(
+    reqId: string,
+    decision: "APPROVE_AMENDMENTS" | "DECLINE_AMENDMENTS"
+  ) {
+    setRespondingReqId(reqId);
+    try {
+      const res = await fetch(apiUrl(`/api/client-portal/requests/${reqId}`), {
+        method: "PATCH",
+        credentials: "include",
+        headers: resolveClientHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          action: decision,
+          clientResponseNote: amendReplyNotes[reqId] || undefined,
+        }),
+      });
+      const data = (await res.json()) as { error?: string; message?: string };
+      if (!res.ok) {
+        showNotice(data.error || "تعذر إرسال قرار العميل على التعديلات");
+        return;
+      }
+      showNotice(
+        data.message ||
+        (decision === "APPROVE_AMENDMENTS"
+          ? "✅ تم اعتماد التعديلات وتأكيد الطلب بنجاح"
+          : "↩️ تم إعادة الطلب للمراجعة بناءً على ملاحظاتك")
+      );
+      await loadRequests(false);
+    } catch {
+      showNotice("تعذر الاتصال بالخادم — يرجى المحاولة مرة أخرى");
+    } finally {
+      setRespondingReqId(null);
     }
   }
 
@@ -1098,7 +1468,7 @@ export function ClientPortalApp({
       "الإجمالي": b.totalAmount,
       "المدفوع": b.paidAmount,
       "المتبقي": b.balanceDue,
-      "العملة": b.currency,
+      "العملة": b.currency === "YER" ? "ريال (YER)" : b.currency,
     }));
     const wsBills = XLSX.utils.json_to_sheet(billRows.length > 0 ? billRows : [{ "الحالة": "لا توجد فواتير" }]);
     wsBills["!views"] = [{ rightToLeft: true }];
@@ -1113,6 +1483,7 @@ export function ClientPortalApp({
       "مدين (عليه)": r.debit,
       "دائن (له)": r.credit,
       "الرصيد التراكمي": r.runningBalance,
+      "العملة": r.currency === "YER" ? "ريال (YER)" : r.currency,
     }));
     const wsStmt = XLSX.utils.json_to_sheet(
       stmtSheetRows.length > 0 ? stmtSheetRows : [{ "الحالة": "لا توجد حركات" }]
@@ -1124,8 +1495,10 @@ export function ClientPortalApp({
     const receiptRows = receiptsList.map((rc) => ({
       "رقم السند": rc.voucherNumber,
       "التاريخ": formatIsoToDmy(rc.date),
+      "الطريقة": rc.paymentMethod,
+      "التوجيه / الفاتورة": rc.applicationSummary || rc.appliedInvoiceNumber || "دفعة على الحساب",
       "المبلغ": rc.amount,
-      "العملة": rc.currency,
+      "العملة": rc.currency === "YER" ? "ريال (YER)" : rc.currency,
       "البيان": rc.notes,
     }));
     const wsReceipts = XLSX.utils.json_to_sheet(
@@ -1152,6 +1525,70 @@ export function ClientPortalApp({
       if (!res.ok) XLSX.writeFile(wb, filename);
     });
     showNotice("✅ تم تصدير كشف الحساب إلى Excel");
+  }
+
+  function handleExportStatementCsv() {
+    const sig = resolveExportSignature({
+      actor: portalExportActor,
+      tenantSlug,
+      tenantName: tenantNameAr,
+    });
+    const csvCell = (val: unknown) => `"${String(val ?? "").replace(/"/g, '""')}"`;
+    const headers = [
+      "التاريخ",
+      "المرجع",
+      "النوع",
+      "البيان",
+      "مدين (ريال / YER)",
+      "دائن (ريال / YER)",
+      "الرصيد التراكمي",
+      "العملة",
+    ];
+    const bodyRows = statementRows.map((r) =>
+      [
+        formatIsoToDmy(r.date),
+        r.reference,
+        r.typeAr,
+        r.description,
+        r.debit,
+        r.credit,
+        r.runningBalance,
+        r.currency === "YER" ? "ريال (YER)" : r.currency,
+      ]
+        .map(csvCell)
+        .join(",")
+    );
+    const sigFooter = [
+      "",
+      [csvCell("توقيع المُصدِر / Export Signature")].join(","),
+      [csvCell("Username"), csvCell(sig.username), csvCell("Display Name"), csvCell(sig.displayName)].join(","),
+      [csvCell("Title"), csvCell(`${sig.titleAr} (${sig.titleEn})`), csvCell("Workspace"), csvCell(`${sig.tenantName} (${sig.tenantSlug})`)].join(","),
+      [csvCell("Exported At"), csvCell(sig.exportedAtDisplay)].join(","),
+    ];
+    const csvContent = "\uFEFF" + [headers.map(csvCell).join(","), ...bodyRows, ...sigFooter].join("\r\n");
+    const filename = buildTenantExportFilename({
+      tenantSlug,
+      module: "ClientStatement",
+      ext: "csv",
+    });
+    const bytes = new TextEncoder().encode(csvContent);
+    void exportOrShareBinaryFile({
+      filename,
+      mimeType: "text/csv;charset=utf-8",
+      data: bytes,
+      title: filename,
+    }).then((res) => {
+      if (!res.ok && typeof window !== "undefined") {
+        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    });
+    showNotice("✅ تم تصدير كشف الحساب بصيغة CSV");
   }
 
   function printReceiptSpec(req: ClientRequestView) {
@@ -1713,6 +2150,11 @@ export function ClientPortalApp({
 
               <div className="flex flex-wrap gap-1.5 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs">
                 {[
+                  {
+                    id: "catalog" as const,
+                    label: `قائمة الأسعار والأصناف${boardItems.length > 0 ? ` (${boardItems.length})` : ""}`,
+                    Icon: Sparkles,
+                  },
                   { id: "new_request" as const, label: formConfig?.requestHeadingAr || "تسجيل طلب", Icon: Plus },
                   { id: "requests" as const, label: "سجل الطلبات ومتابعة الحالة", Icon: ClipboardList },
                   { id: "statement" as const, label: "الفواتير وكشف الحساب", Icon: CreditCard },
@@ -1721,6 +2163,7 @@ export function ClientPortalApp({
                   <button
                     key={id}
                     type="button"
+                    data-testid={`portal-nav-${id}`}
                     onClick={() => {
                       setPortalTab(id);
                       if (id === "new_request") setConfirmedReceipt(null);
@@ -1736,6 +2179,22 @@ export function ClientPortalApp({
                 ))}
               </div>
             </div>
+
+            {/* TAB 0: TENANT-PUBLISHED INVENTORY, GRADING & PRICING BOARD */}
+            {portalTab === "catalog" && (
+              <ClientCatalogPricingBoard
+                boardItems={boardItems}
+                boardStats={boardStats}
+                draftLines={lines}
+                loading={boardLoading}
+                onRefresh={() => void refreshCatalogBoard()}
+                onAddToOrder={handleAddCatalogItemToOrder}
+                onGoToOrder={() => {
+                  setConfirmedReceipt(null);
+                  setPortalTab("new_request");
+                }}
+              />
+            )}
 
             {/* TAB 1: NEW REQUEST / PICKUP ORDER */}
             {portalTab === "new_request" && (
@@ -1870,8 +2329,39 @@ export function ClientPortalApp({
                   </div>
 
                   {reqError && (
-                    <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 font-bold">
-                      {reqError}
+                    <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 font-bold flex flex-wrap items-center justify-between gap-2">
+                      <span>{reqError}</span>
+                      <button
+                        type="submit"
+                        className="px-3 py-1 rounded-lg bg-rose-600 text-white font-extrabold text-[11px]"
+                      >
+                        إعادة المحاولة الآن
+                      </button>
+                    </div>
+                  )}
+
+                  {(isOffline || draftSavedLocalAt) && !editingRequestId && (
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                      <div className="flex items-center gap-2 font-bold">
+                        {isOffline && (
+                          <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300">
+                            <WifiOff className="w-3.5 h-3.5" />
+                            <span>وضع عدم الاتصال / ضعف الشبكة: مسودتك محفوظة بأمان محلياً</span>
+                          </span>
+                        )}
+                        {!isOffline && draftSavedLocalAt && (
+                          <span className="text-emerald-700 dark:text-emerald-300">
+                            ✓ تم حفظ مسودة الطلب محلياً تلقائياً ({formatRefreshTimestamp(draftSavedLocalAt)})
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={clearLocalSavedDraft}
+                        className="text-slate-500 hover:text-rose-600 font-bold hover:underline"
+                      >
+                        تفريغ المسودة
+                      </button>
                     </div>
                   )}
 
@@ -1936,33 +2426,64 @@ export function ClientPortalApp({
 
                   {/* Multi-line Items */}
                   <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-black text-slate-700 dark:text-slate-200">
                         أصناف الطلب ({lines.length})
                       </span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setLines((prev) => [
-                            ...prev,
-                            {
-                              rowKey: `row-${Date.now()}-${prev.length}`,
-                              itemId: "",
-                              itemTitle: "",
-                              requestedQty: "1",
-                              unitCode: "QAT_BUNCH",
-                              customUnitLabel: "",
-                              unitPrice: resolveLineDefaultUnitPrice("", "QAT_BUNCH", catalogItems, formConfig),
-                              notes: "",
-                            },
-                          ])
-                        }
-                        className="px-3 py-1.5 rounded-xl border border-emerald-500 text-emerald-700 dark:text-emerald-300 font-extrabold inline-flex items-center gap-1 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>+ إضافة صنف</span>
-                      </button>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          data-testid="portal-open-bulk-import-btn"
+                          onClick={() => setShowBulkImportModal(true)}
+                          className="px-3 py-1.5 rounded-xl border border-indigo-400 text-indigo-700 dark:text-indigo-300 font-extrabold inline-flex items-center gap-1 hover:bg-indigo-50 dark:hover:bg-indigo-950/30"
+                        >
+                          <FileSpreadsheet className="w-3.5 h-3.5" />
+                          <span>استيراد أصناف بالجملة</span>
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="portal-toggle-quick-repeat-btn"
+                          onClick={() => setShowQuickRepeat((prev) => !prev)}
+                          className={`px-3 py-1.5 rounded-xl border font-extrabold inline-flex items-center gap-1 ${showQuickRepeat
+                            ? "border-indigo-600 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-800 dark:text-indigo-200"
+                            : "border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800"
+                            }`}
+                        >
+                          <History className="w-3.5 h-3.5" />
+                          <span>سلة الأصناف المتكررة ({quickRepeatItems.length})</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setLines((prev) => [
+                              ...prev,
+                              {
+                                rowKey: `row-${Date.now()}-${prev.length}`,
+                                itemId: "",
+                                itemTitle: "",
+                                requestedQty: "1",
+                                unitCode: "QAT_BUNCH",
+                                customUnitLabel: "",
+                                unitPrice: resolveLineDefaultUnitPrice("", "QAT_BUNCH", catalogItems, formConfig),
+                                notes: "",
+                              },
+                            ])
+                          }
+                          className="px-3 py-1.5 rounded-xl border border-emerald-500 text-emerald-700 dark:text-emerald-300 font-extrabold inline-flex items-center gap-1 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>+ إضافة صنف</span>
+                        </button>
+                      </div>
                     </div>
+
+                    {showQuickRepeat && (
+                      <QuickRepeatBasketPanel
+                        items={quickRepeatItems}
+                        onAddOne={handleAddQuickRepeatOne}
+                        onAddAll={handleAddQuickRepeatAll}
+                      />
+                    )}
 
                     {lines.map((row, idx) => {
                       const rowQtyNum = Math.max(0, Number(row.requestedQty) || 0);
@@ -2204,6 +2725,16 @@ export function ClientPortalApp({
               )
             )}
 
+            <BulkItemImportModal
+              open={showBulkImportModal}
+              onClose={() => setShowBulkImportModal(false)}
+              tenantSlug={tenantSlug}
+              boardItems={boardItems}
+              catalogItems={catalogItems}
+              formConfig={formConfig}
+              onApplyRows={handleApplyBulkRows}
+            />
+
             {/* TAB 2: REQUEST HISTORY & LIVE STATUS */}
             {portalTab === "requests" && (
               <div className="card-surface rounded-2xl p-5 space-y-4 text-xs">
@@ -2288,6 +2819,7 @@ export function ClientPortalApp({
                   >
                     <option value="ALL">جميع الحالات</option>
                     <option value="PENDING_REVIEW">قيد المراجعة</option>
+                    <option value="RETURNED_TO_CLIENT">معاد للموافقة</option>
                     <option value="CONFIRMED">مؤكد</option>
                     <option value="READY_FOR_PICKUP">جاهز للاستلام</option>
                     <option value="COMPLETED">تم الاستلام</option>
@@ -2305,18 +2837,48 @@ export function ClientPortalApp({
                 </div>
 
                 {requestsList.length === 0 ? (
-                  <div className="p-8 text-center text-slate-500">لا توجد طلبات مسجلة حالياً ضمن هذه الفلاتر.</div>
+                  <div className="p-8 text-center text-slate-500 space-y-3 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700">
+                    <div>لا توجد طلبات مسجلة حالياً ضمن هذه الفلاتر.</div>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {(reqFilterStatus !== "ALL" || reqFilterFrom || reqFilterTo || reqFilterQuery) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReqFilterStatus("ALL");
+                            setReqFilterFrom("");
+                            setReqFilterTo("");
+                            setReqFilterQuery("");
+                          }}
+                          className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 font-bold"
+                        >
+                          إعادة ضبط الفلاتر
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setPortalTab("new_request")}
+                        className="px-4 py-1.5 rounded-xl accent-bg font-extrabold"
+                      >
+                        + تسجيل طلب جديد
+                      </button>
+                    </div>
+                  </div>
                 ) : (
                   <div className="space-y-3">
                     {requestsList.map((r) => {
                       const stepperStages = [
                         { key: "PENDING_REVIEW", label: "قيد المراجعة" },
+                        { key: "RETURNED_TO_CLIENT", label: "معاد للموافقة" },
                         { key: "CONFIRMED", label: "مؤكد" },
                         { key: "READY_FOR_PICKUP", label: "جاهز للاستلام" },
                         { key: "COMPLETED", label: "تم الاستلام" },
                       ];
                       const activeStageIdx = stepperStages.findIndex((st) => st.key === r.status);
                       const isTerminalClosed = r.status === "CANCELLED" || r.status === "REJECTED";
+                      const canClientModifyPending =
+                        r.status === "PENDING_REVIEW" &&
+                        !r.reserveStock &&
+                        !r.linkedSalesRecordId;
                       return (
                         <div key={r.id} className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2324,12 +2886,17 @@ export function ClientPortalApp({
                               <span className="font-mono font-black px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
                                 <bdi dir="ltr">{r.requestNumber}</bdi>
                               </span>
-                              <span className="px-2.5 py-0.5 rounded-full font-extrabold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+                              <span
+                                className={`px-2.5 py-0.5 rounded-full font-extrabold ${r.status === "RETURNED_TO_CLIENT"
+                                  ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200"
+                                  : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+                                  }`}
+                              >
                                 {r.statusLabelAr}
                               </span>
                               {(r.status === "CONFIRMED" || r.status === "READY_FOR_PICKUP") && (
                                 <span className="px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 font-mono font-bold text-indigo-700 dark:text-indigo-200 text-[11px]">
-                                  كود الاستلام: <bdi dir="ltr">{r.requestNumber}</bdi>
+                                  كود الاستلام: <bdi dir="ltr">{r.pickupPassCode || r.requestNumber}</bdi>
                                 </span>
                               )}
                               <span className="text-slate-500 inline-flex items-center gap-1">
@@ -2364,12 +2931,12 @@ export function ClientPortalApp({
                                     id: "edit",
                                     label: "تعديل الطلب (قبل المراجعة)",
                                     icon: <Edit3 className="w-3.5 h-3.5" />,
-                                    hidden: r.status !== "PENDING_REVIEW",
+                                    hidden: !canClientModifyPending,
                                     onClick: () => handleStartEditPendingRequest(r),
                                   },
                                   {
                                     id: "print",
-                                    label: "طباعة الإيصال PDF",
+                                    label: "طباعة الإيصال / بطاقة الاستلام PDF",
                                     icon: <Printer className="w-3.5 h-3.5" />,
                                     onClick: () => printReceiptSpec(r),
                                   },
@@ -2378,7 +2945,7 @@ export function ClientPortalApp({
                                     label: "إلغاء الطلب",
                                     icon: <XCircle className="w-3.5 h-3.5" />,
                                     tone: "danger",
-                                    hidden: r.status !== "PENDING_REVIEW",
+                                    hidden: !canClientModifyPending,
                                     confirmTitle: `إلغاء الطلب (${r.requestNumber})`,
                                     confirmMessage: "هل أنت متأكد من إلغاء هذا الطلب؟",
                                     onClick: () => handleCancelPendingRequest(r.id),
@@ -2389,7 +2956,7 @@ export function ClientPortalApp({
                           </div>
 
                           {!isTerminalClosed && (
-                            <div className="grid grid-cols-4 gap-1.5 pt-1 text-[10px]">
+                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 pt-1 text-[10px]">
                               {stepperStages.map((st, idx) => {
                                 const done = activeStageIdx >= idx;
                                 const isCurrent = activeStageIdx === idx;
@@ -2397,7 +2964,9 @@ export function ClientPortalApp({
                                   <div
                                     key={st.key}
                                     className={`px-2 py-1 rounded-lg border text-center font-bold transition ${isCurrent
-                                      ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
+                                      ? st.key === "RETURNED_TO_CLIENT"
+                                        ? "bg-amber-500 text-white border-amber-500 shadow-xs"
+                                        : "bg-emerald-600 text-white border-emerald-600 shadow-xs"
                                       : done
                                         ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
                                         : "bg-slate-50 dark:bg-slate-900 text-slate-400 border-slate-200 dark:border-slate-800"
@@ -2407,6 +2976,115 @@ export function ClientPortalApp({
                                   </div>
                                 );
                               })}
+                            </div>
+                          )}
+
+                          {/* Phase 14 Pickup Pass Card */}
+                          {(r.status === "CONFIRMED" || r.status === "READY_FOR_PICKUP") && (
+                            <div
+                              data-testid={`portal-pickup-pass-${r.id}`}
+                              className="p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex flex-wrap items-center justify-between gap-2 text-[11px]"
+                            >
+                              <div className="space-y-0.5">
+                                <div className="font-black text-emerald-800 dark:text-emerald-200">
+                                  بطاقة الاستلام — رمز الاستلام: <bdi dir="ltr" className="font-mono">{r.pickupPassCode || r.requestNumber}</bdi>
+                                </div>
+                                <div className="text-slate-600 dark:text-slate-300">
+                                  استلام من: <strong>{r.pickupLocation}</strong>
+                                  {r.pickupNotes ? ` • التعليمات: ${r.pickupNotes}` : ""}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => printReceiptSpec(r)}
+                                className="px-3 py-1 rounded-xl bg-white dark:bg-slate-900 border border-emerald-400 text-emerald-700 dark:text-emerald-300 font-bold inline-flex items-center gap-1"
+                              >
+                                <Printer className="w-3 h-3" />
+                                <span>طباعة بطاقة الاستلام</span>
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Phase 13 Return to Client for Approval Banner (Remarks + Before/After Diff + Approve/Decline) */}
+                          {r.status === "RETURNED_TO_CLIENT" && (
+                            <div
+                              data-testid={`portal-amendment-review-${r.id}`}
+                              className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 space-y-3 text-xs"
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="font-black text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                                  <CornerUpLeft className="w-4 h-4 text-amber-600" />
+                                  <span>تم تعديل الطلب وإعادته لموافقتك</span>
+                                </div>
+                                {r.returnedByName && (
+                                  <span className="text-[11px] text-amber-800 dark:text-amber-300">
+                                    بواسطة: {r.returnedByName}
+                                    {r.returnedToClientAt ? ` • ${formatIsoToDmy(r.returnedToClientAt.slice(0, 10))}` : ""}
+                                  </span>
+                                )}
+                              </div>
+
+                              {r.reviewerRemarks && (
+                                <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/60 border border-amber-200 dark:border-amber-800">
+                                  <span className="font-bold text-amber-900 dark:text-amber-200">ملاحظات المراجع: </span>
+                                  <span>{r.reviewerRemarks}</span>
+                                </div>
+                              )}
+
+                              {r.amendmentDiff && r.amendmentDiff.length > 0 && (
+                                <div className="overflow-x-auto rounded-xl border border-amber-200 dark:border-amber-800 bg-white dark:bg-slate-900">
+                                  <table className="w-full text-[11px] text-right border-collapse">
+                                    <thead>
+                                      <tr className="bg-amber-100/70 dark:bg-amber-950/60 border-b border-amber-200 dark:border-amber-800">
+                                        <th className="p-2">البند المعدل</th>
+                                        <th className="p-2">قبل التعديل</th>
+                                        <th className="p-2">بعد التعديل</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-amber-100 dark:divide-amber-900/40">
+                                      {r.amendmentDiff.map((diff, i) => (
+                                        <tr key={`${diff.field}-${i}`}>
+                                          <td className="p-2 font-bold">{diff.labelAr}</td>
+                                          <td className="p-2 text-rose-600 line-through">{diff.before}</td>
+                                          <td className="p-2 text-emerald-700 dark:text-emerald-300 font-bold">{diff.after}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+
+                              <div className="flex flex-wrap items-center gap-2 pt-1">
+                                <input
+                                  type="text"
+                                  value={amendReplyNotes[r.id] || ""}
+                                  onChange={(e) =>
+                                    setAmendReplyNotes((prev) => ({ ...prev, [r.id]: e.target.value }))
+                                  }
+                                  placeholder="ملاحظة اختيارية (أو سبب طلب التعديل عند الرفض)..."
+                                  className="flex-1 min-w-[200px] rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 px-3 py-1.5"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={respondingReqId === r.id}
+                                  data-testid={`portal-approve-amend-${r.id}`}
+                                  onClick={() => void handleRespondToAmendment(r.id, "APPROVE_AMENDMENTS")}
+                                  className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold inline-flex items-center gap-1 disabled:opacity-50"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>اعتماد التعديلات</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={respondingReqId === r.id}
+                                  data-testid={`portal-decline-amend-${r.id}`}
+                                  onClick={() => void handleRespondToAmendment(r.id, "DECLINE_AMENDMENTS")}
+                                  className="px-3 py-1.5 rounded-xl border border-rose-400 text-rose-700 dark:text-rose-300 font-bold inline-flex items-center gap-1 disabled:opacity-50"
+                                >
+                                  <CornerUpLeft className="w-3.5 h-3.5" />
+                                  <span>رفض / طلب تعديل</span>
+                                </button>
+                              </div>
                             </div>
                           )}
 
@@ -2559,6 +3237,14 @@ export function ClientPortalApp({
                       </button>
                       <button
                         type="button"
+                        onClick={handleExportStatementCsv}
+                        className="px-3 py-1.5 rounded-xl border border-indigo-400 text-indigo-700 dark:text-indigo-300 font-bold inline-flex items-center gap-1"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>CSV</span>
+                      </button>
+                      <button
+                        type="button"
                         onClick={() =>
                           void printUasDocument({
                             titleAr: "كشف حساب العميل والفواتير",
@@ -2699,6 +3385,7 @@ export function ClientPortalApp({
                               <th className="p-2.5">رقم السند</th>
                               <th className="p-2.5">التاريخ</th>
                               <th className="p-2.5">الطريقة</th>
+                              <th className="p-2.5">التطبيق على الفاتورة / الرصيد</th>
                               <th className="p-2.5">المبلغ المسدد</th>
                               <th className="p-2.5">البيان</th>
                               <th className="p-2.5">إيصال PDF</th>
@@ -2710,6 +3397,9 @@ export function ClientPortalApp({
                                 <td className="p-2.5 font-mono font-bold"><bdi dir="ltr">{rc.voucherNumber}</bdi></td>
                                 <td className="p-2.5 font-mono"><bdi dir="ltr">{formatIsoToDmy(rc.date)}</bdi></td>
                                 <td className="p-2.5 font-bold">{rc.paymentMethod}</td>
+                                <td className="p-2.5 font-semibold text-indigo-700 dark:text-indigo-300">
+                                  {rc.applicationSummary || rc.appliedInvoiceNumber || "دفعة مقيدة في الحساب"}
+                                </td>
                                 <td className="p-2.5 font-black text-emerald-600 tabular-nums">{formatMoney(rc.amount, rc.currency)}</td>
                                 <td className="p-2.5">{rc.notes}</td>
                                 <td className="p-2.5">
@@ -2772,7 +3462,16 @@ export function ClientPortalApp({
                   ) : stmtTab === "notifications" ? (
                     <div className="space-y-2.5">
                       {notificationsList.length === 0 ? (
-                        <div className="p-6 text-center text-slate-500">لا توجد إشعارات أو رسائل واتساب مسجلة حتى الآن.</div>
+                        <div className="p-6 text-center text-slate-500 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 space-y-2">
+                          <div>لا توجد إشعارات أو رسائل واتساب مسجلة حتى الآن.</div>
+                          <button
+                            type="button"
+                            onClick={() => void loadStatement(true)}
+                            className="px-3 py-1 rounded-xl border border-slate-300 dark:border-slate-700 font-bold"
+                          >
+                            تحديث الإشعارات
+                          </button>
+                        </div>
                       ) : (
                         notificationsList.map((n) => (
                           <div
@@ -2809,6 +3508,23 @@ export function ClientPortalApp({
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
+                      {statementRows.length === 0 ? (
+                        <div className="p-6 text-center text-slate-500 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 space-y-2">
+                          <div>لا توجد حركات مالية ضمن الفترة المحددة.</div>
+                          {(stmtFrom || stmtTo) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setStmtFrom("");
+                                setStmtTo("");
+                              }}
+                              className="px-3 py-1 rounded-xl border border-slate-300 dark:border-slate-700 font-bold"
+                            >
+                              إزالة فلتر التاريخ
+                            </button>
+                          )}
+                        </div>
+                      ) : (
                       <table className="w-full text-xs text-right border-collapse">
                         <thead>
                           <tr className="border-b bg-slate-100/80 dark:bg-slate-800/70">
@@ -2835,6 +3551,7 @@ export function ClientPortalApp({
                           ))}
                         </tbody>
                       </table>
+                      )}
                     </div>
                   )}
                 </div>

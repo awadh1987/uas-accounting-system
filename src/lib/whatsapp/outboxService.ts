@@ -7,6 +7,7 @@ import { appendAuditLogTx } from "@/lib/serverBootstrap";
 export type WhatsAppEventType =
   | "CLIENT_APPROVED"
   | "REQUEST_RECEIVED"
+  | "REQUEST_RETURNED_FOR_APPROVAL"
   | "REQUEST_CONFIRMED"
   | "READY_FOR_PICKUP"
   | "HANDOVER_INVOICE"
@@ -32,6 +33,7 @@ export const WHATSAPP_SETTING_ID = "whatsapp";
 export const DEFAULT_AUTO_DRAFT_EVENTS: Record<WhatsAppEventType, boolean> = {
   CLIENT_APPROVED: true,
   REQUEST_RECEIVED: true,
+  REQUEST_RETURNED_FOR_APPROVAL: true,
   REQUEST_CONFIRMED: true,
   READY_FOR_PICKUP: true,
   HANDOVER_INVOICE: true,
@@ -46,6 +48,8 @@ export const DEFAULT_WHATSAPP_TEMPLATES: Record<WhatsAppEventType, string> = {
     "مرحباً {{clientName}}،\nتم تفعيل حسابكم في بوابة عملاء {{companyName}} بنجاح.\nيمكنكم الآن تسجيل طلبات الاستلام ومتابعة الفواتير وكشف الحساب عبر: {{portalUrl}}",
   REQUEST_RECEIVED:
     "مرحباً {{clientName}}،\nتم استلام طلبكم رقم {{requestNumber}} بنجاح.\nموقع الاستلام: {{pickupLocation}}\nالتفاصيل:\n{{linesSummary}}\nالحالة الحالية: قيد المراجعة.",
+  REQUEST_RETURNED_FOR_APPROVAL:
+    "مرحباً {{clientName}}،\nتمت مراجعة وتعديل طلبكم رقم {{requestNumber}} في {{companyName}} وإعادته لاعتمادكم.\nملاحظات المراجع: {{reviewerRemarks}}\nالإجمالي المحدث: {{totalAmount}} {{currency}}\nيرجى الدخول إلى بوابة العملاء لمراجعة التعديلات واعتمادها عبر: {{portalUrl}}",
   REQUEST_CONFIRMED:
     "مرحباً {{clientName}}،\nتم تأكيد طلبكم رقم {{requestNumber}} من {{companyName}}.\nموقع الاستلام: {{pickupLocation}}\nالإجمالي التقديري: {{totalAmount}} {{currency}}",
   READY_FOR_PICKUP:

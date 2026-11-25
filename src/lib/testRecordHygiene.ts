@@ -49,6 +49,13 @@ const CANDIDATE_KEYS = [
   "description",
   "notes",
   "grade",
+  "gradeLabel",
+  "requestNumber",
+  "draftNumber",
+  "fullName",
+  "recipientName",
+  "titleAr",
+  "phone",
 ] as const;
 
 export function isSyntheticTestRecord(record: unknown): boolean {
@@ -61,7 +68,10 @@ export function isSyntheticTestRecord(record: unknown): boolean {
     }
   }
 
-  // Also check nested vendor/customer/item summaries when attached
+  // Also check nested vendor/customer/client/item summaries when attached
+  const nestedClientAccount = obj.clientAccount as Record<string, unknown> | undefined;
+  if (nestedClientAccount && isSyntheticTestRecord(nestedClientAccount)) return true;
+
   const nestedCustomer = obj.customerObj as Record<string, unknown> | undefined;
   if (nestedCustomer && isSyntheticTestRecord(nestedCustomer)) return true;
 

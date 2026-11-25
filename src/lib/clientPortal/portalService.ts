@@ -20,9 +20,16 @@ import { createWhatsAppDraftTx } from "@/lib/whatsapp/outboxService";
 import { ensure6GenerationCoaHierarchy } from "@/lib/accountingCoreEngine";
 import { computeSaleTotals } from "@/lib/formulas";
 import { dAdd, round4Decimal as round4 } from "@/lib/decimalMath";
+import type {
+  AmendmentDiffEntry,
+  RequestAmendmentSnapshot,
+} from "@/lib/clientPortal/portalTypes";
+
+export type { AmendmentDiffEntry, RequestAmendmentSnapshot };
 
 export const REQUEST_STATUS_LABELS_AR: Record<string, string> = {
   PENDING_REVIEW: "قيد المراجعة",
+  RETURNED_TO_CLIENT: "معاد للموافقة",
   CONFIRMED: "مؤكد",
   READY_FOR_PICKUP: "جاهز للاستلام",
   COMPLETED: "تم الاستلام",
@@ -367,10 +374,10 @@ export async function updateClientPortalProfile(
       passwordHash: nextHash,
       ...(passwordChanged
         ? {
-            mustChangePassword: false,
-            passwordUpdatedAt: now,
-            sessionVersion: { increment: 1 },
-          }
+          mustChangePassword: false,
+          passwordUpdatedAt: now,
+          sessionVersion: { increment: 1 },
+        }
         : {}),
     },
   });
@@ -468,7 +475,16 @@ async function prepareValidatedRequestLines(
           unitPrice = round4(basePrice * Number(conv.factorToBase));
         }
       } else {
-        itemId = null;
+        const boardItem = await prisma.portalCatalogBoardItem
+          .findFirst({ where: { id: itemId, isPublished: true } })
+          .catch(() => null);
+        if (boardItem) {
+          itemTitle = itemTitle || boardItem.titleAr;
+          unitPrice = Math.max(0, Number(boardItem.unitPrice || 0));
+          itemId = boardItem.inventoryItemId || null;
+        } else {
+          itemId = null;
+        }
       }
     }
 
@@ -625,8 +641,14 @@ export async function updatePendingClientRequest(params: {
   if (!existing || existing.clientAccountId !== params.clientAccountId) {
     throw new Error("NOT_FOUND: الطلب غير موجود أو غير مصرح بالوصول إليه");
   }
-  if (existing.status !== "PENDING_REVIEW" || existing.linkedSalesRecordId || existing.linkedSaleId) {
-    throw new Error("لا يمكن تعديل الطلب بعد بدء المراجعة أو الاعتماد من الإدارة");
+  if (
+    existing.status !== "PENDING_REVIEW" ||
+    existing.reserveStock ||
+    existing.linkedSalesRecordId ||
+    existing.linkedSaleId ||
+    existing.linkedDraftId
+  ) {
+    throw new Error("لا يمكن تعديل الطلب بعد بدء المراجعة أو حجز المخزون أو الاعتماد من الإدارة");
   }
 
   const pickupTypeRaw = String(params.pickupType || existing.pickupType || "MARKET").toUpperCase();
@@ -694,6 +716,17 @@ export function serializeRequest(req: {
   handedOverByName: string | null;
   handedOverAt: Date | null;
   staffNotes: string | null;
+  reviewerRemarks?: string | null;
+  amendmentDiffJson?: string;
+  beforeSnapshotJson?: string | null;
+  afterSnapshotJson?: string | null;
+  revisionNumber?: number;
+  returnedToClientAt?: Date | null;
+  returnedByUserId?: string | null;
+  returnedByName?: string | null;
+  clientResponseStatus?: string | null;
+  clientResponseNote?: string | null;
+  clientRespondedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
   clientAccount?: {
@@ -734,10 +767,34 @@ export function serializeRequest(req: {
   } catch {
     reservedSummary = [];
   }
+  let amendmentDiff: AmendmentDiffEntry[] = [];
+  let beforeSnapshot: RequestAmendmentSnapshot | null = null;
+  let afterSnapshot: RequestAmendmentSnapshot | null = null;
+  try {
+    const parsedDiff = JSON.parse(req.amendmentDiffJson || "[]");
+    if (Array.isArray(parsedDiff)) amendmentDiff = parsedDiff as AmendmentDiffEntry[];
+  } catch {
+    amendmentDiff = [];
+  }
+  try {
+    if (req.beforeSnapshotJson) {
+      beforeSnapshot = JSON.parse(req.beforeSnapshotJson) as RequestAmendmentSnapshot;
+    }
+  } catch {
+    beforeSnapshot = null;
+  }
+  try {
+    if (req.afterSnapshotJson) {
+      afterSnapshot = JSON.parse(req.afterSnapshotJson) as RequestAmendmentSnapshot;
+    }
+  } catch {
+    afterSnapshot = null;
+  }
 
   return {
     id: req.id,
     requestNumber: req.requestNumber,
+    pickupPassCode: req.requestNumber,
     clientAccountId: req.clientAccountId,
     customerId: req.customerId,
     status: req.status,
@@ -770,6 +827,17 @@ export function serializeRequest(req: {
     handedOverByName: req.handedOverByName,
     handedOverAt: req.handedOverAt ? req.handedOverAt.toISOString() : null,
     staffNotes: req.staffNotes,
+    reviewerRemarks: req.reviewerRemarks ?? null,
+    amendmentDiff,
+    beforeSnapshot,
+    afterSnapshot,
+    revisionNumber: Number(req.revisionNumber || 1),
+    returnedToClientAt: req.returnedToClientAt ? req.returnedToClientAt.toISOString() : null,
+    returnedByUserId: req.returnedByUserId ?? null,
+    returnedByName: req.returnedByName ?? null,
+    clientResponseStatus: req.clientResponseStatus ?? null,
+    clientResponseNote: req.clientResponseNote ?? null,
+    clientRespondedAt: req.clientRespondedAt ? req.clientRespondedAt.toISOString() : null,
     createdAt: req.createdAt.toISOString(),
     updatedAt: req.updatedAt.toISOString(),
     clientAccount: req.clientAccount
@@ -849,7 +917,10 @@ export async function getClientPortalFinancialSnapshot(params: {
     }),
     prisma.receiptVoucher.findMany({
       where: { customerId: params.customerId },
-      include: { treasury: { select: { type: true } } },
+      include: {
+        treasury: { select: { type: true } },
+        invoice: { select: { id: true, invoiceNumber: true } },
+      },
       orderBy: { date: "asc" },
     }),
     prisma.saleTransaction.findMany({
@@ -886,8 +957,8 @@ export async function getClientPortalFinancialSnapshot(params: {
       billStatus === "PAID"
         ? "مسددة"
         : billStatus === "PARTIALLY_PAID"
-          ? "مدفوعة جزئياً"
-          : "غير مسددة";
+          ? "جزئية"
+          : "مستحقة";
 
     return {
       id: inv.id,
@@ -989,8 +1060,8 @@ export async function getClientPortalFinancialSnapshot(params: {
         tType === "BANK"
           ? "تحويل بنكي"
           : tType === "WALLET"
-          ? "محفظة إلكترونية"
-          : "نقداً";
+            ? "محفظة إلكترونية"
+            : "نقداً";
       return {
         id: rc.id,
         voucherNumber: rc.voucherNumber,
@@ -998,6 +1069,11 @@ export async function getClientPortalFinancialSnapshot(params: {
         amount: Number(rc.amount || 0),
         currency: rc.currency || "YER",
         paymentMethod,
+        appliedInvoiceId: rc.invoiceId || null,
+        appliedInvoiceNumber: rc.invoice?.invoiceNumber || null,
+        applicationSummary: rc.invoice?.invoiceNumber
+          ? `سداد على الفاتورة ${rc.invoice.invoiceNumber}`
+          : "دفعة مقيدة في رصيد الحساب",
         notes: rc.notes || "",
       };
     })
@@ -1190,10 +1266,542 @@ async function assertCustomerCreditAvailableTx(
   }
 }
 
+function resolveDisplayUnitLabel(
+  unitCode: string,
+  unitLabel: string,
+  customUnitLabel?: string | null
+): string {
+  if (unitCode === "OTHER" && customUnitLabel?.trim()) {
+    return customUnitLabel.trim();
+  }
+  return unitLabel || "علاقية قات";
+}
+
+function buildRequestSnapshotFromValues(input: {
+  pickupType: string;
+  pickupLocation: string;
+  pickupNotes: string | null;
+  creditPaidPlanned: number;
+  debitPlanned: number;
+  totalAmount: number;
+  lines: Array<{
+    id: string;
+    itemTitle: string;
+    qty: number;
+    unitCode: string;
+    unitLabel: string;
+    customUnitLabel: string | null;
+    unitPrice: number;
+    lineTotal: number;
+  }>;
+}): RequestAmendmentSnapshot {
+  return {
+    pickupType: input.pickupType,
+    pickupLocation: input.pickupLocation,
+    pickupNotes: input.pickupNotes,
+    creditPaidPlanned: round4(Number(input.creditPaidPlanned || 0)),
+    debitPlanned: round4(Number(input.debitPlanned || 0)),
+    totalAmount: round4(Number(input.totalAmount || 0)),
+    lines: input.lines.map((l) => ({
+      id: l.id,
+      itemTitle: l.itemTitle,
+      qty: round4(Number(l.qty || 0)),
+      unitCode: l.unitCode,
+      unitLabel: l.unitLabel,
+      customUnitLabel: l.customUnitLabel,
+      displayUnitLabel: resolveDisplayUnitLabel(l.unitCode, l.unitLabel, l.customUnitLabel),
+      unitPrice: round4(Number(l.unitPrice || 0)),
+      lineTotal: round4(Number(l.lineTotal || 0)),
+    })),
+  };
+}
+
+export function computeRequestAmendmentDiff(
+  beforeSnap: RequestAmendmentSnapshot,
+  afterSnap: RequestAmendmentSnapshot
+): AmendmentDiffEntry[] {
+  const diffs: AmendmentDiffEntry[] = [];
+
+  if (beforeSnap.pickupLocation !== afterSnap.pickupLocation) {
+    diffs.push({
+      field: "pickupLocation",
+      labelAr: "موقع الاستلام (استلام من:)",
+      before: beforeSnap.pickupLocation,
+      after: afterSnap.pickupLocation,
+    });
+  }
+  if ((beforeSnap.pickupNotes || "") !== (afterSnap.pickupNotes || "")) {
+    diffs.push({
+      field: "pickupNotes",
+      labelAr: "ملاحظات الاستلام",
+      before: beforeSnap.pickupNotes || "—",
+      after: afterSnap.pickupNotes || "—",
+    });
+  }
+
+  const afterById = new Map(afterSnap.lines.map((l) => [l.id, l]));
+  const matchedAfterIds = new Set<string>();
+
+  for (const bLine of beforeSnap.lines) {
+    const aLine = afterById.get(bLine.id);
+    if (!aLine) {
+      diffs.push({
+        field: `line_removed_${bLine.id}`,
+        labelAr: `حذف صنف: ${bLine.itemTitle}`,
+        before: `${bLine.qty} ${bLine.displayUnitLabel} × ${bLine.unitPrice.toLocaleString("en-US")} = ${bLine.lineTotal.toLocaleString("en-US")}`,
+        after: "تمت الإزالة",
+      });
+      continue;
+    }
+    matchedAfterIds.add(aLine.id);
+    const changed =
+      bLine.itemTitle !== aLine.itemTitle ||
+      Math.abs(bLine.qty - aLine.qty) > 0.0001 ||
+      bLine.displayUnitLabel !== aLine.displayUnitLabel ||
+      Math.abs(bLine.unitPrice - aLine.unitPrice) > 0.0001;
+    if (changed) {
+      diffs.push({
+        field: `line_modified_${bLine.id}`,
+        labelAr: `تعديل الصنف (${aLine.itemTitle})`,
+        before: `${bLine.itemTitle}: ${bLine.qty} ${bLine.displayUnitLabel} × ${bLine.unitPrice.toLocaleString("en-US")} = ${bLine.lineTotal.toLocaleString("en-US")}`,
+        after: `${aLine.itemTitle}: ${aLine.qty} ${aLine.displayUnitLabel} × ${aLine.unitPrice.toLocaleString("en-US")} = ${aLine.lineTotal.toLocaleString("en-US")}`,
+      });
+    }
+  }
+
+  for (const aLine of afterSnap.lines) {
+    if (matchedAfterIds.has(aLine.id)) continue;
+    diffs.push({
+      field: `line_added_${aLine.id}`,
+      labelAr: `إضافة صنف: ${aLine.itemTitle}`,
+      before: "غير موجود",
+      after: `${aLine.qty} ${aLine.displayUnitLabel} × ${aLine.unitPrice.toLocaleString("en-US")} = ${aLine.lineTotal.toLocaleString("en-US")}`,
+    });
+  }
+
+  if (
+    Math.abs(beforeSnap.creditPaidPlanned - afterSnap.creditPaidPlanned) > 0.01 ||
+    Math.abs(beforeSnap.debitPlanned - afterSnap.debitPlanned) > 0.01
+  ) {
+    diffs.push({
+      field: "paymentTerms",
+      labelAr: "شروط الدفع (مدفوع / آجل)",
+      before: `مدفوع: ${beforeSnap.creditPaidPlanned.toLocaleString("en-US")} | آجل: ${beforeSnap.debitPlanned.toLocaleString("en-US")}`,
+      after: `مدفوع: ${afterSnap.creditPaidPlanned.toLocaleString("en-US")} | آجل: ${afterSnap.debitPlanned.toLocaleString("en-US")}`,
+    });
+  }
+
+  if (Math.abs(beforeSnap.totalAmount - afterSnap.totalAmount) > 0.01) {
+    diffs.push({
+      field: "totalAmount",
+      labelAr: "الإجمالي الكلي (= P × Q)",
+      before: beforeSnap.totalAmount.toLocaleString("en-US"),
+      after: afterSnap.totalAmount.toLocaleString("en-US"),
+    });
+  }
+
+  return diffs;
+}
+
+interface ResolvedStaffLineItem {
+  existingId?: string;
+  itemId: string | null;
+  itemTitle: string;
+  requestedQty: number;
+  confirmedQty: number;
+  unitCode: string;
+  unitLabel: string;
+  customUnitLabel: string | null;
+  unitPrice: number;
+  lineTotal: number;
+  notes: string | null;
+}
+
+async function resolveUpdatedRequestLinesAndPickup(params: {
+  reqRecord: {
+    pickupType: string;
+    pickupLocation: string;
+    pickupNotes: string | null;
+    lines: Array<{
+      id: string;
+      lineOrder: number;
+      itemId: string | null;
+      itemTitle: string;
+      requestedQty: unknown;
+      confirmedQty: unknown;
+      unitCode: string;
+      unitLabel: string;
+      customUnitLabel: string | null;
+      unitPrice: unknown;
+      lineTotal: unknown;
+      notes: string | null;
+    }>;
+  };
+  pickupType?: string;
+  pickupLocation?: string;
+  customPickupLocation?: string;
+  pickupNotes?: string | null;
+  lines?: Array<{
+    id?: string;
+    itemId?: string | null;
+    itemTitle?: string;
+    confirmedQty?: number;
+    unitCode?: string;
+    unitLabel?: string;
+    customUnitLabel?: string | null;
+    unitPrice?: number;
+    notes?: string | null;
+    remove?: boolean;
+  }>;
+}): Promise<{
+  pickupType: string;
+  pickupLocation: string;
+  pickupNotes: string | null;
+  resolvedLines: ResolvedStaffLineItem[];
+  totalConfirmed: number;
+}> {
+  const formCfg = await getTenantFormConfig();
+  const nextPickupTypeRaw = String(params.pickupType || params.reqRecord.pickupType || "MARKET")
+    .trim()
+    .toUpperCase();
+  const nextPickupType =
+    nextPickupTypeRaw === "BRANCH" || nextPickupTypeRaw === "WAREHOUSE" || nextPickupTypeRaw === "OTHER"
+      ? nextPickupTypeRaw
+      : "MARKET";
+
+  const rawLoc =
+    params.pickupLocation !== undefined ? params.pickupLocation : params.reqRecord.pickupLocation;
+  const isOtherLoc = nextPickupType === "OTHER" || String(rawLoc || "").trim() === "أخرى";
+  const pickupLocation = isOtherLoc
+    ? String(params.customPickupLocation || rawLoc || "").trim()
+    : String(rawLoc || "").trim();
+  if (!pickupLocation) {
+    throw new Error("يرجى تحديد موقع الاستلام (أو كتابة الموقع المخصص)");
+  }
+
+  const pickupNotes =
+    params.pickupNotes !== undefined
+      ? params.pickupNotes?.trim() || null
+      : params.reqRecord.pickupNotes;
+
+  const resolvedLines: ResolvedStaffLineItem[] = [];
+  const patches = params.lines || [];
+  const patchById = new Map(patches.filter((p) => p.id).map((p) => [String(p.id), p]));
+
+  for (const existingLine of params.reqRecord.lines) {
+    const patch = patchById.get(existingLine.id);
+    if (patch?.remove) continue;
+
+    const unitCode = String(patch?.unitCode || existingLine.unitCode || "QAT_BUNCH")
+      .trim()
+      .toUpperCase();
+    const isOtherUnit = unitCode === "OTHER";
+    const customUnitLabel = isOtherUnit
+      ? String(patch?.customUnitLabel ?? existingLine.customUnitLabel ?? "").trim() || null
+      : null;
+    if (isOtherUnit && !customUnitLabel) {
+      throw new Error(`يرجى كتابة اسم الوحدة المخصصة للصنف (${existingLine.itemTitle})`);
+    }
+    const unitOption = formCfg.unitOptions.find((u) => u.code === unitCode);
+    const unitLabel = isOtherUnit
+      ? customUnitLabel || "أخرى"
+      : String(patch?.unitLabel || unitOption?.labelAr || existingLine.unitLabel || "علاقية قات").trim();
+
+    const itemTitle = String(patch?.itemTitle ?? existingLine.itemTitle ?? "").trim();
+    if (!itemTitle) throw new Error("اسم الصنف مطلوب في جميع السطور");
+
+    const cQty =
+      patch?.confirmedQty !== undefined
+        ? Math.max(0, Number(patch.confirmedQty))
+        : existingLine.confirmedQty !== null && existingLine.confirmedQty !== undefined
+          ? Math.max(0, Number(existingLine.confirmedQty))
+          : Math.max(0, Number(existingLine.requestedQty));
+    const uPrice =
+      patch?.unitPrice !== undefined
+        ? Math.max(0, Number(patch.unitPrice))
+        : Math.max(0, Number(existingLine.unitPrice));
+    const { totalAmount: lTotal } = computeSaleTotals(cQty, uPrice, 0);
+
+    resolvedLines.push({
+      existingId: existingLine.id,
+      itemId: patch?.itemId !== undefined ? patch.itemId : existingLine.itemId,
+      itemTitle,
+      requestedQty: Math.max(0, Number(existingLine.requestedQty)),
+      confirmedQty: cQty,
+      unitCode,
+      unitLabel,
+      customUnitLabel,
+      unitPrice: uPrice,
+      lineTotal: lTotal,
+      notes: patch?.notes !== undefined ? patch.notes?.trim() || null : existingLine.notes,
+    });
+  }
+
+  // Handle newly added lines from staff amendment UI
+  const existingIdSet = new Set(params.reqRecord.lines.map((l) => l.id));
+  for (const patch of patches) {
+    if (patch.remove) continue;
+    if (patch.id && existingIdSet.has(patch.id)) continue;
+    const itemTitle = String(patch.itemTitle || "").trim();
+    if (!itemTitle) continue;
+    const cQty = Math.max(0, Number(patch.confirmedQty ?? 1));
+    if (cQty <= 0) throw new Error(`الكمية للصنف المضاف (${itemTitle}) يجب أن تكون أكبر من صفر`);
+    const unitCode = String(patch.unitCode || "QAT_BUNCH").trim().toUpperCase();
+    const isOtherUnit = unitCode === "OTHER";
+    const customUnitLabel = isOtherUnit ? String(patch.customUnitLabel || "").trim() || null : null;
+    if (isOtherUnit && !customUnitLabel) {
+      throw new Error(`يرجى كتابة اسم الوحدة المخصصة للصنف (${itemTitle})`);
+    }
+    const unitOption = formCfg.unitOptions.find((u) => u.code === unitCode);
+    const unitLabel = isOtherUnit
+      ? customUnitLabel || "أخرى"
+      : String(patch.unitLabel || unitOption?.labelAr || "علاقية قات").trim();
+    const uPrice = Math.max(0, Number(patch.unitPrice || 0));
+    const { totalAmount: lTotal } = computeSaleTotals(cQty, uPrice, 0);
+
+    resolvedLines.push({
+      itemId: patch.itemId ? String(patch.itemId) : null,
+      itemTitle,
+      requestedQty: cQty,
+      confirmedQty: cQty,
+      unitCode,
+      unitLabel,
+      customUnitLabel,
+      unitPrice: uPrice,
+      lineTotal: lTotal,
+      notes: patch.notes?.trim() || null,
+    });
+  }
+
+  if (resolvedLines.length === 0) {
+    throw new Error("يجب أن يحتوي الطلب على صنف واحد على الأقل");
+  }
+
+  const totalConfirmed = round4(
+    resolvedLines.reduce((s, l) => dAdd(s, l.lineTotal, 4), 0)
+  );
+
+  return {
+    pickupType: nextPickupType,
+    pickupLocation,
+    pickupNotes,
+    resolvedLines,
+    totalConfirmed,
+  };
+}
+
+async function initiateOrUpdateLinkedSalesDraftTx(
+  tx: Prisma.TransactionClient,
+  params: {
+    freshReq: {
+      id: string;
+      requestNumber: string;
+      clientAccountId: string;
+      customerId: string | null;
+      projectId: string | null;
+      subProjectId: string | null;
+      harvestName: string | null;
+      pickupLocation: string;
+      currency: string;
+      linkedSalesRecordId: string | null;
+      linkedSaleId: string | null;
+      linkedDraftId: string | null;
+      creditPaidPlanned: unknown;
+      clientAccount: {
+        customerId: string | null;
+        fullName: string;
+        tradeName: string | null;
+        phone: string;
+      };
+      lines: Array<{
+        id: string;
+        itemId: string | null;
+        itemTitle: string;
+        requestedQty: unknown;
+        confirmedQty: unknown;
+        unitCode: string;
+        unitLabel: string;
+        customUnitLabel: string | null;
+        unitPrice: unknown;
+        lineTotal: unknown;
+      }>;
+    };
+    projectId?: string;
+    subProjectId?: string | null;
+    harvestName?: string;
+    treasuryId?: string | null;
+    immediatePaidAmount?: number;
+    overrideCreditLimit?: boolean;
+    actor: { userId?: string | null; userDisplay: string };
+  }
+) {
+  await ensure6GenerationCoaHierarchy(tx);
+
+  let customerId = params.freshReq.customerId || params.freshReq.clientAccount.customerId;
+  if (!customerId) {
+    const cust = await ensureCustomerWithAccountTx(tx, {
+      name: params.freshReq.clientAccount.tradeName || params.freshReq.clientAccount.fullName,
+      phone: params.freshReq.clientAccount.phone,
+    });
+    customerId = cust.id;
+    await tx.clientPortalAccount.update({
+      where: { id: params.freshReq.clientAccountId },
+      data: { customerId: cust.id },
+    });
+  }
+
+  const customer = await tx.customer.findUniqueOrThrow({
+    where: { id: customerId },
+    include: {
+      account: { select: { code: true, nameAr: true } },
+      glAccount: { select: { code: true, nameAr: true } },
+    },
+  });
+  const targetProject =
+    (params.projectId
+      ? await tx.project.findUnique({ where: { id: params.projectId } })
+      : params.freshReq.projectId
+        ? await tx.project.findUnique({ where: { id: params.freshReq.projectId } })
+        : null) || (await tx.project.findFirst({ orderBy: { createdAt: "asc" } }));
+
+  const effectiveLines = params.freshReq.lines.map((l) => {
+    const cQty =
+      l.confirmedQty !== null && l.confirmedQty !== undefined
+        ? Math.max(0, Number(l.confirmedQty))
+        : Math.max(0, Number(l.requestedQty));
+    const uPrice = Math.max(0, Number(l.unitPrice || 0));
+    const lTotal = computeSaleTotals(cQty, uPrice, 0).totalAmount;
+    return { ...l, cQty, uPrice, lTotal };
+  });
+
+  const totalConfirmed = round4(
+    effectiveLines.reduce((s, l) => dAdd(s, l.lTotal, 4), 0)
+  );
+  const plannedCreditPaid = Math.min(
+    totalConfirmed,
+    Math.max(
+      0,
+      Number(
+        params.immediatePaidAmount !== undefined
+          ? params.immediatePaidAmount
+          : params.freshReq.creditPaidPlanned || 0
+      )
+    )
+  );
+  const { debitReceivable: plannedDebit } = computeSaleTotals(
+    totalConfirmed,
+    1,
+    plannedCreditPaid
+  );
+
+  await assertCustomerCreditAvailableTx(
+    tx,
+    customer.id,
+    plannedDebit,
+    params.overrideCreditLimit
+  );
+
+  const totalQty = effectiveLines.reduce((s, l) => s + l.cQty, 0);
+  const effectiveUnitPrice =
+    totalQty > 0 ? round4(totalConfirmed / totalQty) : round4(effectiveLines[0]?.uPrice || 0);
+  const firstGrade =
+    effectiveLines.map((l) => l.itemTitle).slice(0, 2).join(" / ") || "طلب بوابة عميل";
+  const coaCode = customer.glAccount?.code || customer.account.code;
+  const draftPayload = {
+    portalRequestId: params.freshReq.id,
+    requestNumber: params.freshReq.requestNumber,
+    clientAccountId: params.freshReq.clientAccountId,
+    customerId: customer.id,
+    customer: customer.nameAr,
+    customerCode: customer.code,
+    customerAccountCode: coaCode,
+    phone: customer.phone || params.freshReq.clientAccount.phone,
+    projectId: targetProject?.id || params.freshReq.projectId || "",
+    subProjectId: params.subProjectId ?? params.freshReq.subProjectId ?? null,
+    harvest: params.harvestName || params.freshReq.harvestName || "مبيعات بوابة العملاء",
+    pickupLocation: params.freshReq.pickupLocation,
+    grade: firstGrade,
+    bundles: Math.max(1, Math.round(totalQty)),
+    price: effectiveUnitPrice,
+    amount: totalConfirmed,
+    totalAmount: totalConfirmed,
+    credit: plannedCreditPaid,
+    debitReceivable: plannedDebit,
+    treasuryAccountId: params.treasuryId || null,
+    date: new Date().toISOString().slice(0, 10),
+    notes: `أمر بيع معتمد من بوابة العملاء (${params.freshReq.requestNumber}) — استلام من: ${params.freshReq.pickupLocation}`,
+    lines: effectiveLines.map((l) => ({
+      id: l.id,
+      itemId: l.itemId,
+      itemTitle: l.itemTitle,
+      qty: l.cQty,
+      unitLabel: resolveDisplayUnitLabel(l.unitCode, l.unitLabel, l.customUnitLabel),
+      unitPrice: l.uPrice,
+      lineTotal: l.lTotal,
+    })),
+  };
+
+  const existingSalesRecordId =
+    params.freshReq.linkedSalesRecordId ||
+    params.freshReq.linkedSaleId ||
+    params.freshReq.linkedDraftId;
+  let linkedDraftId = existingSalesRecordId || params.freshReq.linkedDraftId || null;
+
+  if (!linkedDraftId) {
+    const draftNumber = await nextSalesDraftNumberTx(tx);
+    const createdDraft = await tx.workspaceDraft.create({
+      data: {
+        draftNumber,
+        module: "SALES",
+        formType: "SALES_INVOICE",
+        entityId: params.freshReq.id,
+        titleAr: `أمر بيع بوابة عميل ${params.freshReq.requestNumber} — ${customer.nameAr}`,
+        titleEn: `Portal Sales Order ${params.freshReq.requestNumber} — ${customer.nameEn || customer.nameAr}`,
+        payloadJson: JSON.stringify(draftPayload),
+        totalAmount: totalConfirmed,
+        currencyCode: params.freshReq.currency || "YER",
+        visibility: "SHARED_WORKSPACE",
+        status: "ACTIVE_DRAFT",
+        createdById: params.actor.userId || "u1",
+        createdByName: params.actor.userDisplay,
+        updatedById: params.actor.userId || "u1",
+        updatedByName: params.actor.userDisplay,
+      },
+    });
+    linkedDraftId = createdDraft.id;
+  } else if (params.freshReq.linkedDraftId) {
+    const existingDraft = await tx.workspaceDraft.findUnique({
+      where: { id: params.freshReq.linkedDraftId },
+      select: { id: true, status: true },
+    });
+    if (existingDraft && existingDraft.status === "ACTIVE_DRAFT") {
+      await tx.workspaceDraft.update({
+        where: { id: existingDraft.id },
+        data: {
+          payloadJson: JSON.stringify(draftPayload),
+          totalAmount: totalConfirmed,
+          updatedById: params.actor.userId || "u1",
+          updatedByName: params.actor.userDisplay,
+        },
+      });
+    }
+  }
+
+  return {
+    customer,
+    targetProject,
+    linkedDraftId,
+    totalConfirmed,
+    plannedCreditPaid,
+    plannedDebit,
+  };
+}
+
 export async function staffProcessGoodsRequest(params: {
   requestId: string;
-  action: "CONFIRM" | "MARK_READY" | "HANDOVER" | "REJECT" | "CANCEL";
+  action: "CONFIRM" | "MARK_READY" | "HANDOVER" | "AMEND" | "RETURN_TO_CLIENT" | "REJECT" | "CANCEL";
   tenantSlug?: string;
+  portalUrl?: string;
   projectId?: string;
   subProjectId?: string | null;
   harvestName?: string;
@@ -1202,10 +1810,22 @@ export async function staffProcessGoodsRequest(params: {
   reserveStock?: boolean;
   overrideCreditLimit?: boolean;
   staffNotes?: string;
+  reviewerRemarks?: string;
+  pickupType?: string;
+  pickupLocation?: string;
+  customPickupLocation?: string;
+  pickupNotes?: string | null;
   lines?: Array<{
-    id: string;
+    id?: string;
+    itemId?: string | null;
+    itemTitle?: string;
     confirmedQty?: number;
+    unitCode?: string;
+    unitLabel?: string;
+    customUnitLabel?: string | null;
     unitPrice?: number;
+    notes?: string | null;
+    remove?: boolean;
   }>;
   actor: { userId?: string | null; userDisplay: string; userRole: string };
 }) {
@@ -1250,31 +1870,203 @@ export async function staffProcessGoodsRequest(params: {
     return { ...serializeRequest(updated), idempotentReplay: false };
   }
 
-  // Compute confirmed line totals (P x Q) matching internal UAS sales formula
-  const linePatchMap = new Map(
-    (params.lines || []).map((lp) => [lp.id, lp])
-  );
-  const updatedLinesData = reqRecord.lines.map((line) => {
-    const patch = linePatchMap.get(line.id);
-    const cQty =
-      patch?.confirmedQty !== undefined
-        ? Math.max(0, Number(patch.confirmedQty))
-        : line.confirmedQty !== null && line.confirmedQty !== undefined
-          ? Math.max(0, Number(line.confirmedQty))
-          : Math.max(0, Number(line.requestedQty));
-    const uPrice =
-      patch?.unitPrice !== undefined ? Math.max(0, Number(patch.unitPrice)) : Math.max(0, Number(line.unitPrice));
-    const { totalAmount: lTotal } = computeSaleTotals(cQty, uPrice, 0);
-    return {
-      ...line,
-      confirmedQty: cQty,
-      unitPrice: uPrice,
-      lineTotal: lTotal,
-    };
+  // Capture Before snapshot prior to applying staff modifications
+  const beforeBaseTotal =
+    Number(reqRecord.totalConfirmed || 0) > 0
+      ? Number(reqRecord.totalConfirmed || 0)
+      : Number(reqRecord.totalEstimated || 0);
+  const beforeSnap = buildRequestSnapshotFromValues({
+    pickupType: reqRecord.pickupType,
+    pickupLocation: reqRecord.pickupLocation,
+    pickupNotes: reqRecord.pickupNotes,
+    creditPaidPlanned: Number(reqRecord.creditPaidPlanned || 0),
+    debitPlanned: Number(reqRecord.debitPlanned || 0),
+    totalAmount: beforeBaseTotal,
+    lines: reqRecord.lines.map((l) => ({
+      id: l.id,
+      itemTitle: l.itemTitle,
+      qty:
+        l.confirmedQty !== null && l.confirmedQty !== undefined
+          ? Number(l.confirmedQty)
+          : Number(l.requestedQty),
+      unitCode: l.unitCode,
+      unitLabel: l.unitLabel,
+      customUnitLabel: l.customUnitLabel,
+      unitPrice: Number(l.unitPrice || 0),
+      lineTotal: Number(l.lineTotal || 0),
+    })),
   });
-  const totalConfirmed = round4(
-    updatedLinesData.reduce((s, l) => dAdd(s, l.lineTotal, 4), 0)
+
+  const resolvedPatch = await resolveUpdatedRequestLinesAndPickup({
+    reqRecord,
+    pickupType: params.pickupType,
+    pickupLocation: params.pickupLocation,
+    customPickupLocation: params.customPickupLocation,
+    pickupNotes: params.pickupNotes,
+    lines: params.lines,
+  });
+
+  const totalConfirmed = resolvedPatch.totalConfirmed;
+  const plannedCreditPaidPreview = Math.min(
+    totalConfirmed,
+    Math.max(
+      0,
+      Number(
+        params.immediatePaidAmount !== undefined
+          ? params.immediatePaidAmount
+          : reqRecord.creditPaidPlanned || 0
+      )
+    )
   );
+  const { debitReceivable: plannedDebitPreview } = computeSaleTotals(
+    totalConfirmed,
+    1,
+    plannedCreditPaidPreview
+  );
+
+  const afterSnapPreview = buildRequestSnapshotFromValues({
+    pickupType: resolvedPatch.pickupType,
+    pickupLocation: resolvedPatch.pickupLocation,
+    pickupNotes: resolvedPatch.pickupNotes,
+    creditPaidPlanned: plannedCreditPaidPreview,
+    debitPlanned: plannedDebitPreview,
+    totalAmount: totalConfirmed,
+    lines: resolvedPatch.resolvedLines.map((l, idx) => ({
+      id: l.existingId || `new-${idx + 1}`,
+      itemTitle: l.itemTitle,
+      qty: l.confirmedQty,
+      unitCode: l.unitCode,
+      unitLabel: l.unitLabel,
+      customUnitLabel: l.customUnitLabel,
+      unitPrice: l.unitPrice,
+      lineTotal: l.lineTotal,
+    })),
+  });
+  const amendmentDiffs = computeRequestAmendmentDiff(beforeSnap, afterSnapPreview);
+
+  if (params.action === "RETURN_TO_CLIENT" || params.action === "AMEND") {
+    const cleanRemarks = params.reviewerRemarks !== undefined
+      ? params.reviewerRemarks.trim()
+      : params.staffNotes?.trim() || "";
+    if (params.action === "RETURN_TO_CLIENT" && !cleanRemarks) {
+      throw new Error("يرجى كتابة ملاحظات المراجع للعميل قبل إعادة الطلب للموافقة");
+    }
+
+    const updatedRec = await prisma.$transaction(async (tx) => {
+      const freshReq = await tx.clientGoodsRequest.findUniqueOrThrow({
+        where: { id: reqRecord.id },
+        include: { clientAccount: true, lines: { orderBy: { lineOrder: "asc" } } },
+      });
+
+      await tx.clientGoodsRequestLine.deleteMany({ where: { requestId: freshReq.id } });
+      await tx.clientGoodsRequestLine.createMany({
+        data: resolvedPatch.resolvedLines.map((l, idx) => ({
+          ...(l.existingId ? { id: l.existingId } : {}),
+          requestId: freshReq.id,
+          lineOrder: idx + 1,
+          itemId: l.itemId,
+          itemTitle: l.itemTitle,
+          requestedQty: l.requestedQty,
+          confirmedQty: l.confirmedQty,
+          unitCode: l.unitCode,
+          unitLabel: l.unitLabel,
+          customUnitLabel: l.customUnitLabel,
+          unitPrice: l.unitPrice,
+          lineTotal: l.lineTotal,
+          notes: l.notes,
+        })),
+      });
+
+      const now = new Date();
+      const nextStatus =
+        params.action === "RETURN_TO_CLIENT" ? "RETURNED_TO_CLIENT" : freshReq.status;
+
+      const saved = await tx.clientGoodsRequest.update({
+        where: { id: freshReq.id },
+        data: {
+          status: nextStatus,
+          pickupType: resolvedPatch.pickupType,
+          pickupLocation: resolvedPatch.pickupLocation,
+          pickupNotes: resolvedPatch.pickupNotes,
+          totalConfirmed,
+          creditPaidPlanned: plannedCreditPaidPreview,
+          debitPlanned: plannedDebitPreview,
+          staffNotes: params.staffNotes !== undefined ? params.staffNotes.trim() || null : freshReq.staffNotes,
+          reviewerRemarks: cleanRemarks || freshReq.reviewerRemarks,
+          amendmentDiffJson: JSON.stringify(amendmentDiffs),
+          beforeSnapshotJson: JSON.stringify(beforeSnap),
+          afterSnapshotJson: JSON.stringify(afterSnapPreview),
+          revisionNumber: { increment: 1 },
+          reviewedById: params.actor.userId ?? null,
+          reviewedByName: params.actor.userDisplay,
+          reviewedAt: now,
+          ...(params.action === "RETURN_TO_CLIENT"
+            ? {
+              returnedToClientAt: now,
+              returnedByUserId: params.actor.userId ?? null,
+              returnedByName: params.actor.userDisplay,
+              clientResponseStatus: "PENDING_CLIENT_APPROVAL",
+              clientResponseNote: null,
+              clientRespondedAt: null,
+            }
+            : {}),
+        },
+        include: { clientAccount: true, lines: { orderBy: { lineOrder: "asc" } } },
+      });
+
+      if (freshReq.linkedDraftId) {
+        await initiateOrUpdateLinkedSalesDraftTx(tx, {
+          freshReq: saved,
+          projectId: params.projectId,
+          subProjectId: params.subProjectId,
+          harvestName: params.harvestName,
+          treasuryId: params.treasuryId,
+          immediatePaidAmount: plannedCreditPaidPreview,
+          overrideCreditLimit: params.overrideCreditLimit,
+          actor: params.actor,
+        });
+      }
+
+      if (params.action === "RETURN_TO_CLIENT") {
+        const profile = await tx.enterpriseProfile.findUnique({ where: { id: "default" } }).catch(() => null);
+        await createWhatsAppDraftTx(tx, {
+          eventType: "REQUEST_RETURNED_FOR_APPROVAL",
+          clientAccountId: saved.clientAccountId,
+          customerId: saved.customerId,
+          requestId: saved.id,
+          recipientName: saved.clientAccount.fullName,
+          recipientPhone: saved.clientAccount.phone,
+          variables: {
+            companyName: profile?.legalNameAr || "المنشأة",
+            requestNumber: saved.requestNumber,
+            reviewerRemarks: cleanRemarks,
+            totalAmount: totalConfirmed.toLocaleString("en-US"),
+            currency: saved.currency || "YER",
+            portalUrl: params.portalUrl || "https://qat.world/portal",
+          },
+        });
+      }
+
+      await appendAuditLogTx(tx, {
+        userId: params.actor.userId,
+        userDisplay: params.actor.userDisplay,
+        userRole: params.actor.userRole,
+        actionType:
+          params.action === "RETURN_TO_CLIENT"
+            ? "CLIENT_REQUEST_RETURNED_TO_CLIENT"
+            : "CLIENT_REQUEST_AMENDED",
+        entityReference: saved.requestNumber,
+        details: `[tenant:${tenantSlugLabel}] ${params.action === "RETURN_TO_CLIENT"
+          ? `إعادة طلب ${saved.requestNumber} للعميل للموافقة`
+          : `تعديل بيانات طلب ${saved.requestNumber}`
+          } (${amendmentDiffs.length} تغييرات) | ملاحظات: ${cleanRemarks || "—"} | الإجمالي: ${totalConfirmed}`,
+      });
+
+      return saved;
+    });
+
+    return { ...serializeRequest(updatedRec), idempotentReplay: false };
+  }
 
   if (params.action === "CONFIRM" || params.action === "MARK_READY") {
     const nextStatus = params.action === "MARK_READY" ? "READY_FOR_PICKUP" : "CONFIRMED";
@@ -1282,7 +2074,7 @@ export async function staffProcessGoodsRequest(params: {
     const reservedSummary: Array<{ itemId: string; itemTitle: string; qty: number }> = [];
 
     if (reserveStock) {
-      for (const l of updatedLinesData) {
+      for (const l of resolvedPatch.resolvedLines) {
         if (!l.itemId || l.confirmedQty <= 0) continue;
         const balances = await prisma.stockBalance.findMany({ where: { itemId: l.itemId } });
         const totalAvail = balances.reduce((s, b) => s + Number(b.qtyOnHandBase || 0), 0);
@@ -1296,7 +2088,6 @@ export async function staffProcessGoodsRequest(params: {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      // Idempotency guard: check existing linkedSalesRecordId / linkedDraftId before creating anything new
       const freshReq = await tx.clientGoodsRequest.findUniqueOrThrow({
         where: { id: reqRecord.id },
         include: { clientAccount: true, lines: { orderBy: { lineOrder: "asc" } } },
@@ -1308,168 +2099,69 @@ export async function staffProcessGoodsRequest(params: {
         return { rec: freshReq, idempotentReplay: true };
       }
 
-      await ensure6GenerationCoaHierarchy(tx);
-
-      let customerId = freshReq.customerId || freshReq.clientAccount.customerId;
-      if (!customerId) {
-        const cust = await ensureCustomerWithAccountTx(tx, {
-          name: freshReq.clientAccount.tradeName || freshReq.clientAccount.fullName,
-          phone: freshReq.clientAccount.phone,
-        });
-        customerId = cust.id;
-        await tx.clientPortalAccount.update({
-          where: { id: freshReq.clientAccountId },
-          data: { customerId: cust.id },
-        });
-      }
-
-      const customer = await tx.customer.findUniqueOrThrow({
-        where: { id: customerId },
-        include: {
-          account: { select: { code: true, nameAr: true } },
-          glAccount: { select: { code: true, nameAr: true } },
-        },
-      });
-      const targetProject =
-        (params.projectId
-          ? await tx.project.findUnique({ where: { id: params.projectId } })
-          : freshReq.projectId
-            ? await tx.project.findUnique({ where: { id: freshReq.projectId } })
-            : null) || (await tx.project.findFirst({ orderBy: { createdAt: "asc" } }));
-
-      const plannedCreditPaid = Math.min(
-        totalConfirmed,
-        Math.max(
-          0,
-          Number(
-            params.immediatePaidAmount !== undefined
-              ? params.immediatePaidAmount
-              : freshReq.creditPaidPlanned || 0
-          )
-        )
-      );
-      const { debitReceivable: plannedDebit } = computeSaleTotals(
-        totalConfirmed,
-        1,
-        plannedCreditPaid
-      );
-
-      await assertCustomerCreditAvailableTx(
-        tx,
-        customer.id,
-        plannedDebit,
-        params.overrideCreditLimit
-      );
-
-      for (const l of updatedLinesData) {
-        await tx.clientGoodsRequestLine.update({
-          where: { id: l.id },
-          data: {
-            confirmedQty: l.confirmedQty,
-            unitPrice: l.unitPrice,
-            lineTotal: l.lineTotal,
-          },
-        });
-      }
-
-      const totalQty = updatedLinesData.reduce((s, l) => s + l.confirmedQty, 0);
-      const effectiveUnitPrice =
-        totalQty > 0 ? round4(totalConfirmed / totalQty) : round4(updatedLinesData[0]?.unitPrice || 0);
-      const firstGrade =
-        updatedLinesData.map((l) => l.itemTitle).slice(0, 2).join(" / ") || "طلب بوابة عميل";
-      const coaCode = customer.glAccount?.code || customer.account.code;
-      const draftPayload = {
-        portalRequestId: freshReq.id,
-        requestNumber: freshReq.requestNumber,
-        clientAccountId: freshReq.clientAccountId,
-        customerId: customer.id,
-        customer: customer.nameAr,
-        customerCode: customer.code,
-        customerAccountCode: coaCode,
-        phone: customer.phone || freshReq.clientAccount.phone,
-        projectId: targetProject?.id || freshReq.projectId || "",
-        subProjectId: params.subProjectId ?? freshReq.subProjectId ?? null,
-        harvest: params.harvestName || freshReq.harvestName || "مبيعات بوابة العملاء",
-        pickupLocation: freshReq.pickupLocation,
-        grade: firstGrade,
-        bundles: Math.max(1, Math.round(totalQty)),
-        price: effectiveUnitPrice,
-        amount: totalConfirmed,
-        totalAmount: totalConfirmed,
-        credit: plannedCreditPaid,
-        debitReceivable: plannedDebit,
-        treasuryAccountId: params.treasuryId || null,
-        date: new Date().toISOString().slice(0, 10),
-        notes: `أمر بيع معتمد من بوابة العملاء (${freshReq.requestNumber}) — استلام من: ${freshReq.pickupLocation}`,
-        lines: updatedLinesData.map((l) => ({
-          id: l.id,
+      await tx.clientGoodsRequestLine.deleteMany({ where: { requestId: freshReq.id } });
+      await tx.clientGoodsRequestLine.createMany({
+        data: resolvedPatch.resolvedLines.map((l, idx) => ({
+          ...(l.existingId ? { id: l.existingId } : {}),
+          requestId: freshReq.id,
+          lineOrder: idx + 1,
           itemId: l.itemId,
           itemTitle: l.itemTitle,
-          qty: l.confirmedQty,
-          unitLabel: l.unitCode === "OTHER" && l.customUnitLabel ? l.customUnitLabel : l.unitLabel,
+          requestedQty: l.requestedQty,
+          confirmedQty: l.confirmedQty,
+          unitCode: l.unitCode,
+          unitLabel: l.unitLabel,
+          customUnitLabel: l.customUnitLabel,
           unitPrice: l.unitPrice,
           lineTotal: l.lineTotal,
+          notes: l.notes,
         })),
-      };
+      });
 
-      let linkedDraftId = existingSalesRecordId || freshReq.linkedDraftId || null;
-      if (!linkedDraftId) {
-        const draftNumber = await nextSalesDraftNumberTx(tx);
-        const createdDraft = await tx.workspaceDraft.create({
-          data: {
-            draftNumber,
-            module: "SALES",
-            formType: "SALES_INVOICE",
-            entityId: freshReq.id,
-            titleAr: `أمر بيع بوابة عميل ${freshReq.requestNumber} — ${customer.nameAr}`,
-            titleEn: `Portal Sales Order ${freshReq.requestNumber} — ${customer.nameEn || customer.nameAr}`,
-            payloadJson: JSON.stringify(draftPayload),
-            totalAmount: totalConfirmed,
-            currencyCode: freshReq.currency || "YER",
-            visibility: "SHARED_WORKSPACE",
-            status: "ACTIVE_DRAFT",
-            createdById: params.actor.userId || "u1",
-            createdByName: params.actor.userDisplay,
-            updatedById: params.actor.userId || "u1",
-            updatedByName: params.actor.userDisplay,
-          },
-        });
-        linkedDraftId = createdDraft.id;
-      } else if (freshReq.linkedDraftId) {
-        const existingDraft = await tx.workspaceDraft.findUnique({
-          where: { id: freshReq.linkedDraftId },
-          select: { id: true, status: true },
-        });
-        if (existingDraft && existingDraft.status === "ACTIVE_DRAFT") {
-          await tx.workspaceDraft.update({
-            where: { id: existingDraft.id },
-            data: {
-              payloadJson: JSON.stringify(draftPayload),
-              totalAmount: totalConfirmed,
-              updatedById: params.actor.userId || "u1",
-              updatedByName: params.actor.userDisplay,
-            },
-          });
-        }
-      }
+      const refreshedWithLines = await tx.clientGoodsRequest.findUniqueOrThrow({
+        where: { id: freshReq.id },
+        include: { clientAccount: true, lines: { orderBy: { lineOrder: "asc" } } },
+      });
+      refreshedWithLines.pickupLocation = resolvedPatch.pickupLocation;
+
+      const salesLink = await initiateOrUpdateLinkedSalesDraftTx(tx, {
+        freshReq: refreshedWithLines,
+        projectId: params.projectId,
+        subProjectId: params.subProjectId,
+        harvestName: params.harvestName,
+        treasuryId: params.treasuryId,
+        immediatePaidAmount: params.immediatePaidAmount,
+        overrideCreditLimit: params.overrideCreditLimit,
+        actor: params.actor,
+      });
 
       const now = new Date();
       const rec = await tx.clientGoodsRequest.update({
         where: { id: freshReq.id },
         data: {
           status: nextStatus,
-          customerId: customer.id,
+          pickupType: resolvedPatch.pickupType,
+          pickupLocation: resolvedPatch.pickupLocation,
+          pickupNotes: resolvedPatch.pickupNotes,
+          customerId: salesLink.customer.id,
           reserveStock,
           reservedSummaryJson: JSON.stringify(reservedSummary),
-          totalConfirmed,
-          creditPaidPlanned: plannedCreditPaid,
-          debitPlanned: plannedDebit,
-          linkedDraftId,
-          linkedSalesRecordId: freshReq.linkedSalesRecordId || linkedDraftId,
-          projectId: params.projectId ?? targetProject?.id ?? freshReq.projectId,
+          totalConfirmed: salesLink.totalConfirmed,
+          creditPaidPlanned: salesLink.plannedCreditPaid,
+          debitPlanned: salesLink.plannedDebit,
+          linkedDraftId: salesLink.linkedDraftId,
+          linkedSalesRecordId: freshReq.linkedSalesRecordId || salesLink.linkedDraftId,
+          projectId: params.projectId ?? salesLink.targetProject?.id ?? freshReq.projectId,
           subProjectId: params.subProjectId ?? freshReq.subProjectId,
           harvestName: params.harvestName ?? freshReq.harvestName,
           staffNotes: params.staffNotes?.trim() || freshReq.staffNotes,
+          ...(amendmentDiffs.length > 0
+            ? {
+              amendmentDiffJson: JSON.stringify(amendmentDiffs),
+              beforeSnapshotJson: JSON.stringify(beforeSnap),
+              afterSnapshotJson: JSON.stringify(afterSnapPreview),
+            }
+            : {}),
           approvedByUserId: freshReq.approvedByUserId ?? params.actor.userId ?? null,
           approvedByName: freshReq.approvedByName ?? params.actor.userDisplay,
           approvedAt: freshReq.approvedAt ?? now,
@@ -1495,7 +2187,7 @@ export async function staffProcessGoodsRequest(params: {
             companyName: profile?.legalNameAr || "المنشأة",
             requestNumber: rec.requestNumber,
             pickupLocation: rec.pickupLocation,
-            totalAmount: totalConfirmed.toLocaleString("en-US"),
+            totalAmount: salesLink.totalConfirmed.toLocaleString("en-US"),
             currency: rec.currency || "YER",
           },
         });
@@ -1507,7 +2199,7 @@ export async function staffProcessGoodsRequest(params: {
         userRole: params.actor.userRole,
         actionType: `CLIENT_REQUEST_${nextStatus}`,
         entityReference: rec.requestNumber,
-        details: `[tenant:${tenantSlugLabel}] اعتماد/تحديث طلب ${rec.requestNumber} -> ${REQUEST_STATUS_LABELS_AR[nextStatus]} | سجل المبيعات المرتبط: ${linkedDraftId} | الإجمالي: ${totalConfirmed} | مقبوض: ${plannedCreditPaid} | آجل: ${plannedDebit} | المستخدم: ${params.actor.userDisplay} (${params.actor.userId || "staff"}) في ${now.toISOString()}`,
+        details: `[tenant:${tenantSlugLabel}] اعتماد/تحديث طلب ${rec.requestNumber} -> ${REQUEST_STATUS_LABELS_AR[nextStatus]} | سجل المبيعات المرتبط: ${salesLink.linkedDraftId} | الإجمالي: ${salesLink.totalConfirmed} | مقبوض: ${salesLink.plannedCreditPaid} | آجل: ${salesLink.plannedDebit} | المستخدم: ${params.actor.userDisplay} (${params.actor.userId || "staff"}) في ${now.toISOString()}`,
       });
 
       return { rec, idempotentReplay: false };
@@ -1517,6 +2209,7 @@ export async function staffProcessGoodsRequest(params: {
   }
 
   // HANDOVER ("تم الاستلام"): Post accounting SalesInvoice + SaleTransaction + optional ReceiptVoucher
+  const updatedLinesData = resolvedPatch.resolvedLines;
   const effectiveTotal = totalConfirmed > 0 ? totalConfirmed : Number(reqRecord.totalEstimated || 0);
   if (effectiveTotal <= 0) {
     throw new Error("يرجى تحديد سعر وكمية مؤكدة أكبر من الصفر قبل إتمام التسليم وإصدار الفاتورة");
@@ -1536,6 +2229,25 @@ export async function staffProcessGoodsRequest(params: {
     if (freshReq.status === "COMPLETED" || freshReq.linkedSaleId || freshReq.linkedInvoiceId) {
       throw new Error("REQUEST_ALREADY_COMPLETED");
     }
+
+    await tx.clientGoodsRequestLine.deleteMany({ where: { requestId: freshReq.id } });
+    await tx.clientGoodsRequestLine.createMany({
+      data: updatedLinesData.map((l, idx) => ({
+        ...(l.existingId ? { id: l.existingId } : {}),
+        requestId: freshReq.id,
+        lineOrder: idx + 1,
+        itemId: l.itemId,
+        itemTitle: l.itemTitle,
+        requestedQty: l.requestedQty,
+        confirmedQty: l.confirmedQty,
+        unitCode: l.unitCode,
+        unitLabel: l.unitLabel,
+        customUnitLabel: l.customUnitLabel,
+        unitPrice: l.unitPrice,
+        lineTotal: l.lineTotal,
+        notes: l.notes,
+      })),
+    });
 
     await ensure6GenerationCoaHierarchy(tx);
 
@@ -1562,17 +2274,6 @@ export async function staffProcessGoodsRequest(params: {
       (await tx.project.findFirst({ orderBy: { createdAt: "asc" } }));
     if (!targetProject) {
       throw new Error("لا يوجد مشروع فعال لربط فاتورة التسليم به");
-    }
-
-    for (const l of updatedLinesData) {
-      await tx.clientGoodsRequestLine.update({
-        where: { id: l.id },
-        data: {
-          confirmedQty: l.confirmedQty,
-          unitPrice: l.unitPrice,
-          lineTotal: l.lineTotal,
-        },
-      });
     }
 
     const invoiceItems = updatedLinesData
@@ -1726,9 +2427,164 @@ export async function staffProcessGoodsRequest(params: {
   return serializeRequest(handoverResult);
 }
 
+/**
+ * Phase 13: Client review response on a RETURNED_TO_CLIENT request.
+ * Allows approving staff amendments (advancing to CONFIRMED + idempotent sales cycle handoff)
+ * or declining / requesting further modifications back to PENDING_REVIEW.
+ */
+export async function clientRespondToAmendedRequest(params: {
+  requestId: string;
+  clientAccountId: string;
+  decision: "APPROVE_AMENDMENTS" | "DECLINE_AMENDMENTS";
+  clientResponseNote?: string;
+  cancelOrder?: boolean;
+  tenantSlug?: string;
+}) {
+  const existing = await prisma.clientGoodsRequest.findUnique({
+    where: { id: params.requestId },
+    include: {
+      clientAccount: true,
+      lines: { orderBy: { lineOrder: "asc" } },
+    },
+  });
+  if (!existing || existing.clientAccountId !== params.clientAccountId) {
+    throw new Error("NOT_FOUND: الطلب غير موجود أو غير مصرح بالوصول إليه");
+  }
+  if (existing.status !== "RETURNED_TO_CLIENT") {
+    throw new Error("هذا الطلب ليس في حالة بانتظار موافقة العميل على التعديلات");
+  }
+
+  const tenantSlugLabel = (params.tenantSlug || "default").trim() || "default";
+  const now = new Date();
+
+  if (params.decision === "APPROVE_AMENDMENTS") {
+    const approvedRec = await prisma.$transaction(async (tx) => {
+      const freshReq = await tx.clientGoodsRequest.findUniqueOrThrow({
+        where: { id: existing.id },
+        include: { clientAccount: true, lines: { orderBy: { lineOrder: "asc" } } },
+      });
+
+      const salesLink = await initiateOrUpdateLinkedSalesDraftTx(tx, {
+        freshReq,
+        actor: {
+          userId: freshReq.returnedByUserId ?? freshReq.approvedByUserId ?? null,
+          userDisplay: freshReq.returnedByName || freshReq.clientAccount.fullName,
+        },
+      });
+
+      const rec = await tx.clientGoodsRequest.update({
+        where: { id: freshReq.id },
+        data: {
+          status: "CONFIRMED",
+          customerId: salesLink.customer.id,
+          totalConfirmed: salesLink.totalConfirmed,
+          creditPaidPlanned: salesLink.plannedCreditPaid,
+          debitPlanned: salesLink.plannedDebit,
+          linkedDraftId: salesLink.linkedDraftId,
+          linkedSalesRecordId: freshReq.linkedSalesRecordId || salesLink.linkedDraftId,
+          projectId: salesLink.targetProject?.id ?? freshReq.projectId,
+          clientResponseStatus: "CLIENT_APPROVED",
+          clientResponseNote: params.clientResponseNote?.trim() || "موافق على التعديلات",
+          clientRespondedAt: now,
+          approvedAt: freshReq.approvedAt ?? now,
+          approvedByUserId: freshReq.approvedByUserId ?? freshReq.returnedByUserId ?? null,
+          approvedByName: freshReq.approvedByName ?? freshReq.returnedByName ?? "اعتماد العميل",
+        },
+        include: { clientAccount: true, lines: { orderBy: { lineOrder: "asc" } } },
+      });
+
+      const profile = await tx.enterpriseProfile.findUnique({ where: { id: "default" } }).catch(() => null);
+      await createWhatsAppDraftTx(tx, {
+        eventType: "REQUEST_CONFIRMED",
+        clientAccountId: rec.clientAccountId,
+        customerId: rec.customerId,
+        requestId: rec.id,
+        recipientName: rec.clientAccount.fullName,
+        recipientPhone: rec.clientAccount.phone,
+        variables: {
+          companyName: profile?.legalNameAr || "المنشأة",
+          requestNumber: rec.requestNumber,
+          pickupLocation: rec.pickupLocation,
+          totalAmount: salesLink.totalConfirmed.toLocaleString("en-US"),
+          currency: rec.currency || "YER",
+        },
+      });
+
+      await appendAuditLogTx(tx, {
+        userId: null,
+        userDisplay: rec.clientAccount.fullName,
+        userRole: "CLIENT_PORTAL",
+        actionType: "CLIENT_APPROVED_AMENDMENTS",
+        entityReference: rec.requestNumber,
+        details: `[tenant:${tenantSlugLabel}] وافق العميل (${rec.clientAccount.fullName}) على التعديلات للطلب ${rec.requestNumber} وتم ربطه بأمر البيع (${salesLink.linkedDraftId})`,
+      });
+
+      return rec;
+    });
+
+    await emitNotification({
+      eventType: "SYSTEM_ALERT",
+      severity: "INFO",
+      titleAr: `اعتماد العميل لتعديلات الطلب (${approvedRec.requestNumber})`,
+      titleEn: `Client Approved Amendments (${approvedRec.requestNumber})`,
+      messageAr: `اعتمد العميل ${approvedRec.clientAccount.fullName} التعديلات وأُنشئ/تُحدث أمر البيع المرتبط.`,
+      messageEn: `Client approved amended request ${approvedRec.requestNumber}.`,
+      targetTab: "customers",
+      targetEntityType: "ClientGoodsRequest",
+      targetEntityId: approvedRec.id,
+    }).catch(() => null);
+
+    return serializeRequest(approvedRec);
+  }
+
+  // DECLINE_AMENDMENTS
+  const cleanNote =
+    params.clientResponseNote?.trim() || "رفض التعديلات وطلب إعادة المراجعة من الموظف";
+  const nextStatus = params.cancelOrder ? "CANCELLED" : "PENDING_REVIEW";
+
+  const declinedRec = await prisma.$transaction(async (tx) => {
+    const rec = await tx.clientGoodsRequest.update({
+      where: { id: existing.id },
+      data: {
+        status: nextStatus,
+        clientResponseStatus: "CLIENT_DECLINED",
+        clientResponseNote: cleanNote,
+        clientRespondedAt: now,
+      },
+      include: { clientAccount: true, lines: { orderBy: { lineOrder: "asc" } } },
+    });
+
+    await appendAuditLogTx(tx, {
+      userId: null,
+      userDisplay: rec.clientAccount.fullName,
+      userRole: "CLIENT_PORTAL",
+      actionType: "CLIENT_DECLINED_AMENDMENTS",
+      entityReference: rec.requestNumber,
+      details: `[tenant:${tenantSlugLabel}] رفض/أعاد العميل (${rec.clientAccount.fullName}) تعديلات الطلب ${rec.requestNumber} بملاحظة: ${cleanNote}`,
+    });
+
+    return rec;
+  });
+
+  await emitNotification({
+    eventType: "SYSTEM_ALERT",
+    severity: "WARNING",
+    titleAr: `ملاحظات عميل على تعديلات الطلب (${declinedRec.requestNumber})`,
+    titleEn: `Client Declined Amendments (${declinedRec.requestNumber})`,
+    messageAr: `${declinedRec.clientAccount.fullName}: ${cleanNote}`,
+    messageEn: `Client declined amendments on ${declinedRec.requestNumber}: ${cleanNote}`,
+    targetTab: "customers",
+    targetEntityType: "ClientGoodsRequest",
+    targetEntityId: declinedRec.id,
+  }).catch(() => null);
+
+  return serializeRequest(declinedRec);
+}
+
 const WA_EVENT_LABELS_AR: Record<string, string> = {
   CLIENT_APPROVED: "اعتماد الحساب",
   REQUEST_RECEIVED: "استلام طلب",
+  REQUEST_RETURNED_FOR_APPROVAL: "معاد للعميل للموافقة",
   REQUEST_CONFIRMED: "تأكيد طلب",
   READY_FOR_PICKUP: "جاهز للاستلام",
   HANDOVER_INVOICE: "فاتورة وتسليم",

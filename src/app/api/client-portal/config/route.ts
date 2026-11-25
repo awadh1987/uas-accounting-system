@@ -3,6 +3,7 @@ import { prisma, withTenantRoute } from "@/lib/prisma";
 import { corsOptionsResponse, jsonError } from "@/lib/apiHelpers";
 import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
 import { resolveRequestTenantScope } from "@/lib/clientPortal/clientAuth";
+import { listPublishedClientCatalogBoard } from "@/lib/clientPortal/catalogBoard";
 import { getTenantFormConfig } from "@/lib/clientPortal/portalConfig";
 import { resolveEffectiveBrandInfo } from "@/lib/branding";
 
@@ -21,7 +22,7 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
   try {
     await ensurePortalSchemaReady();
     const scope = resolveRequestTenantScope(req);
-    const [formConfig, profile, catalogItems] = await Promise.all([
+    const [formConfig, profile, catalogItems, publishedBoard] = await Promise.all([
       getTenantFormConfig(),
       prisma.enterpriseProfile.findUnique({ where: { id: "default" } }).catch(() => null),
       prisma.inventoryItem.findMany({
@@ -47,6 +48,7 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
         orderBy: { nameAr: "asc" },
         take: 150,
       }),
+      listPublishedClientCatalogBoard(),
     ]);
 
     const brand = resolveEffectiveBrandInfo(profile, scope.tenantSlug === "default" ? null : scope.tenantSlug);
@@ -61,6 +63,8 @@ export const GET = withTenantRoute(async function GET(req: NextRequest) {
       contactPhone: profile?.contactPhone || "",
       contactAddress: profile?.contactAddress || "",
       formConfig,
+      boardItems: publishedBoard.items,
+      boardStats: publishedBoard.stats,
       items: catalogItems.map((it) => {
         const basePrice = Number(it.wholesalePrice || it.retailPrice || 0);
         const unitPrices: Record<string, number> = {};

@@ -537,7 +537,7 @@ describe("Phase 9 — External Client Portal, Requests, Accounting Handover & Wh
     assert.equal(stmt1.summary.creditLimit, 500000);
     assert.equal(stmt1.summary.creditAvailable, 450000);
     assert.equal(stmt1.bills[0].billStatus, "PARTIALLY_PAID");
-    assert.equal(stmt1.bills[0].billStatusAr, "مدفوعة جزئياً");
+    assert.equal(stmt1.bills[0].billStatusAr, "جزئية");
 
     const stmt2 = await (
       await portalStatementGET(

@@ -81,6 +81,8 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       actionRaw === "CONFIRM" ||
       actionRaw === "MARK_READY" ||
       actionRaw === "HANDOVER" ||
+      actionRaw === "AMEND" ||
+      actionRaw === "RETURN_TO_CLIENT" ||
       actionRaw === "REJECT" ||
       actionRaw === "CANCEL"
         ? actionRaw
@@ -99,17 +101,31 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
 
     const lines = Array.isArray(body.lines)
       ? (body.lines as Array<Record<string, unknown>>).map((l) => ({
-          id: String(l.id || ""),
+          id: l.id ? String(l.id) : undefined,
+          itemId: l.itemId !== undefined ? (l.itemId ? String(l.itemId) : null) : undefined,
+          itemTitle: l.itemTitle !== undefined ? String(l.itemTitle) : undefined,
           confirmedQty: l.confirmedQty !== undefined ? Number(l.confirmedQty) : undefined,
+          unitCode: l.unitCode !== undefined ? String(l.unitCode) : undefined,
+          unitLabel: l.unitLabel !== undefined ? String(l.unitLabel) : undefined,
+          customUnitLabel:
+            l.customUnitLabel !== undefined
+              ? l.customUnitLabel
+                ? String(l.customUnitLabel)
+                : null
+              : undefined,
           unitPrice: l.unitPrice !== undefined ? Number(l.unitPrice) : undefined,
+          notes: l.notes !== undefined ? (l.notes ? String(l.notes) : null) : undefined,
+          remove: Boolean(l.remove),
         }))
       : undefined;
 
     const scope = resolveRequestTenantScope(req);
+    const portalOrigin = req.nextUrl?.origin || "https://qat.world";
     const result = await staffProcessGoodsRequest({
       requestId,
       action,
       tenantSlug: scope.tenantSlug,
+      portalUrl: `${portalOrigin}/portal`,
       projectId: body.projectId ? String(body.projectId) : undefined,
       subProjectId: body.subProjectId ? String(body.subProjectId) : null,
       harvestName: body.harvestName ? String(body.harvestName) : undefined,
@@ -121,6 +137,15 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
         Boolean(body.overrideCreditLimit) &&
         (auth.actor.userRole === "SUPER_ADMIN" || auth.actor.userRole === "CHIEF_ACCOUNTANT"),
       staffNotes: body.staffNotes !== undefined ? String(body.staffNotes) : undefined,
+      reviewerRemarks:
+        body.reviewerRemarks !== undefined ? String(body.reviewerRemarks) : undefined,
+      pickupType: body.pickupType ? String(body.pickupType) : undefined,
+      pickupLocation:
+        body.pickupLocation !== undefined ? String(body.pickupLocation) : undefined,
+      customPickupLocation:
+        body.customPickupLocation !== undefined ? String(body.customPickupLocation) : undefined,
+      pickupNotes:
+        body.pickupNotes !== undefined ? (body.pickupNotes ? String(body.pickupNotes) : null) : undefined,
       lines,
       actor: {
         userId: auth.actor.userId,
@@ -137,6 +162,10 @@ export const POST = withTenantRoute(async function POST(req: NextRequest) {
       message:
         action === "HANDOVER"
           ? "✅ تم تسليم الطلب وترحيل الفاتورة والقيد المحاسبي وإعداد مسودة واتساب"
+          : action === "RETURN_TO_CLIENT"
+          ? "✅ تم حفظ التعديلات وإعادة الطلب للعميل للموافقة وإدراج مسودة واتساب"
+          : action === "AMEND"
+          ? "✅ تم حفظ تعديلات المراجع وتحديث الفروقات"
           : replay
           ? "ℹ️ هذا الطلب معتمد ومرتبط مسبقاً بسجل المبيعات (تم الحفاظ على عدم التكرار)"
           : "✅ تم اعتماد الطلب وفتح دورة البيع في المبيعات والعملاء بنجاح",

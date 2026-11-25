@@ -4,6 +4,7 @@ import { corsOptionsResponse, jsonError } from "@/lib/apiHelpers";
 import { ensurePortalSchemaReady } from "@/lib/clientPortal/ensurePortalSchema";
 import { resolveAuthenticatedClient } from "@/lib/clientPortal/clientAuth";
 import {
+  clientRespondToAmendedRequest,
   serializeRequest,
   updatePendingClientRequest,
 } from "@/lib/clientPortal/portalService";
@@ -59,6 +60,27 @@ export const PATCH = withTenantRoute(async function PATCH(
       });
     }
 
+    if (action === "APPROVE_AMENDMENTS" || action === "DECLINE_AMENDMENTS") {
+      const updated = await clientRespondToAmendedRequest({
+        requestId: id,
+        clientAccountId: auth.account.id,
+        decision: action,
+        clientResponseNote:
+          body.clientResponseNote !== undefined ? String(body.clientResponseNote) : undefined,
+        cancelOrder: Boolean(body.cancelOrder),
+        tenantSlug: auth.scope.tenantSlug,
+      });
+
+      return NextResponse.json({
+        success: true,
+        request: updated,
+        message:
+          action === "APPROVE_AMENDMENTS"
+            ? "✅ تم اعتماد التعديلات وتأكيد الطلب بنجاح"
+            : "↩️ تم إرسال ملاحظاتك وإعادة الطلب للمراجعة",
+      });
+    }
+
     const existing = await prisma.clientGoodsRequest.findUnique({
       where: { id },
       include: { lines: { orderBy: { lineOrder: "asc" } } },
@@ -68,8 +90,17 @@ export const PATCH = withTenantRoute(async function PATCH(
       return jsonError("الطلب غير موجود أو غير مصرح بالوصول إليه", 404);
     }
 
-    if (existing.status !== "PENDING_REVIEW") {
-      return jsonError("يمكن إلغاء الطلب فقط عندما يكون بحالة (قيد المراجعة)", 400);
+    if (
+      existing.status !== "PENDING_REVIEW" ||
+      existing.reserveStock ||
+      existing.linkedSalesRecordId ||
+      existing.linkedSaleId ||
+      existing.linkedDraftId
+    ) {
+      return jsonError(
+        "يمكن إلغاء الطلب فقط عندما يكون بحالة (قيد المراجعة) وقبل الاعتماد أو حجز المخزون",
+        400
+      );
     }
 
     const updated = await prisma.clientGoodsRequest.update({
@@ -83,8 +114,11 @@ export const PATCH = withTenantRoute(async function PATCH(
       request: serializeRequest(updated),
       message: "تم إلغاء الطلب بنجاح",
     });
-  } catch (err) {
-    console.error("PATCH /api/client-portal/requests/[id] error:", err);
-    return jsonError("تعذر تحديث حالة الطلب", 500);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "تعذر تحديث حالة الطلب";
+    if (msg.startsWith("NOT_FOUND:")) {
+      return jsonError(msg.replace(/^NOT_FOUND:\s*/, ""), 404);
+    }
+    return jsonError(msg, 400);
   }
 });
