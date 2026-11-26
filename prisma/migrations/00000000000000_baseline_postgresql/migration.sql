@@ -1,6 +1,12 @@
+-- CreateSchema
+CREATE SCHEMA IF NOT EXISTS "public";
+
+-- CreateEnum
+CREATE TYPE "Role" AS ENUM ('SUPER_ADMIN', 'PROJECT_MANAGER', 'CHIEF_ACCOUNTANT', 'PROCUREMENT_OFFICER', 'SALES_COLLECTOR', 'FIELD_ACCOUNTANT', 'EXTERNAL_AUDITOR');
+
 -- CreateTable
 CREATE TABLE "Account" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
     "nameEn" TEXT NOT NULL,
@@ -9,8 +15,8 @@ CREATE TABLE "Account" (
     "isPosting" BOOLEAN NOT NULL DEFAULT false,
     "parentCode" TEXT,
     "parentId" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
     "generation" INTEGER NOT NULL DEFAULT 1,
     "parentAccountId" TEXT,
     "isPostable" BOOLEAN NOT NULL DEFAULT false,
@@ -18,16 +24,16 @@ CREATE TABLE "Account" (
     "subLedgerEntityId" TEXT,
     "defaultCostCenterId" TEXT,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "archivedAt" DATETIME,
-    CONSTRAINT "Account_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "Account_defaultCostCenterId_fkey" FOREIGN KEY ("defaultCostCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "archivedAt" TIMESTAMP(3),
+
+    CONSTRAINT "Account_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "JournalEntry" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "entryNumber" TEXT NOT NULL,
-    "date" DATETIME NOT NULL,
+    "date" TIMESTAMP(3) NOT NULL,
     "reference" TEXT,
     "narrationAr" TEXT NOT NULL,
     "narrationEn" TEXT,
@@ -39,61 +45,56 @@ CREATE TABLE "JournalEntry" (
     "projectId" TEXT,
     "subProjectId" TEXT,
     "createdById" TEXT NOT NULL,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
     "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
     "revisionNumber" INTEGER NOT NULL DEFAULT 1,
     "isReversed" BOOLEAN NOT NULL DEFAULT false,
     "reversedByEntryId" TEXT,
-    CONSTRAINT "JournalEntry_fiscalYearId_fkey" FOREIGN KEY ("fiscalYearId") REFERENCES "FiscalYear" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "JournalEntry_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "JournalEntry_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "JournalEntry_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+
+    CONSTRAINT "JournalEntry_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "JournalEntryLine" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "journalEntryId" TEXT NOT NULL,
     "accountId" TEXT NOT NULL,
-    "debit" DECIMAL NOT NULL DEFAULT 0,
-    "credit" DECIMAL NOT NULL DEFAULT 0,
+    "debit" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "credit" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
-    "exchangeRate" DECIMAL NOT NULL DEFAULT 1.0,
-    "foreignDebit" DECIMAL NOT NULL DEFAULT 0,
-    "foreignCredit" DECIMAL NOT NULL DEFAULT 0,
-    "debitBase" DECIMAL NOT NULL DEFAULT 0,
-    "creditBase" DECIMAL NOT NULL DEFAULT 0,
-    "baseDebit" DECIMAL NOT NULL DEFAULT 0,
-    "baseCredit" DECIMAL NOT NULL DEFAULT 0,
+    "exchangeRate" DECIMAL(65,30) NOT NULL DEFAULT 1.0,
+    "foreignDebit" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "foreignCredit" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "debitBase" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "creditBase" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "baseDebit" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "baseCredit" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "memo" TEXT,
     "projectId" TEXT,
     "subProjectId" TEXT,
     "harvestCycleId" TEXT,
     "costCenterId" TEXT,
-    CONSTRAINT "JournalEntryLine_journalEntryId_fkey" FOREIGN KEY ("journalEntryId") REFERENCES "JournalEntry" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "JournalEntryLine_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "JournalEntryLine_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "JournalEntryLine_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "JournalEntryLine_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "JournalEntryLine_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+
+    CONSTRAINT "JournalEntryLine_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "Attachment" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "journalEntryId" TEXT,
     "fileName" TEXT NOT NULL,
     "fileUrl" TEXT NOT NULL,
     "fileType" TEXT NOT NULL,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "Attachment_journalEntryId_fkey" FOREIGN KEY ("journalEntryId") REFERENCES "JournalEntry" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "Attachment_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "EnterpriseProfile" (
-    "id" TEXT NOT NULL PRIMARY KEY DEFAULT 'default',
+    "id" TEXT NOT NULL DEFAULT 'default',
     "legalNameAr" TEXT NOT NULL,
     "legalNameEn" TEXT NOT NULL,
     "taxNumber" TEXT,
@@ -133,12 +134,14 @@ CREATE TABLE "EnterpriseProfile" (
     "welcomeNoticeAr" TEXT NOT NULL DEFAULT '',
     "welcomeNoticeEn" TEXT NOT NULL DEFAULT '',
     "supportEmail" TEXT NOT NULL DEFAULT '',
-    "updatedAt" DATETIME NOT NULL
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EnterpriseProfile_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "SystemSettings" (
-    "id" TEXT NOT NULL PRIMARY KEY DEFAULT 'default',
+    "id" TEXT NOT NULL DEFAULT 'default',
     "orgName" TEXT NOT NULL DEFAULT 'شركة الجبري الزراعية للتنمية والاستثمار | UAS',
     "logoText" TEXT NOT NULL DEFAULT 'UAS',
     "defaultLang" TEXT NOT NULL DEFAULT 'ar',
@@ -149,8 +152,8 @@ CREATE TABLE "SystemSettings" (
     "periodLockDate" TEXT,
     "requireApprovalWorkflow" BOOLEAN NOT NULL DEFAULT false,
     "enforceThreeWayMatch" BOOLEAN NOT NULL DEFAULT true,
-    "threeWayTolerancePct" DECIMAL NOT NULL DEFAULT 0,
-    "threeWayToleranceAmount" DECIMAL NOT NULL DEFAULT 0.01,
+    "threeWayTolerancePct" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "threeWayToleranceAmount" DECIMAL(65,30) NOT NULL DEFAULT 0.01,
     "costingMethod" TEXT NOT NULL DEFAULT 'WEIGHTED_AVERAGE',
     "negativeStockPolicy" TEXT NOT NULL DEFAULT 'BLOCK',
     "printLayout" TEXT NOT NULL DEFAULT 'A4',
@@ -161,19 +164,23 @@ CREATE TABLE "SystemSettings" (
     "defaultDeviceSyncMode" TEXT NOT NULL DEFAULT 'AUTO',
     "requireDeviceApproval" BOOLEAN NOT NULL DEFAULT false,
     "tenantAdminConfigJson" TEXT NOT NULL DEFAULT '{}',
-    "updatedAt" DATETIME NOT NULL
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "SystemSettings_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "CurrencyRate" (
-    "currencyCode" TEXT NOT NULL PRIMARY KEY,
-    "rateToYER" DECIMAL NOT NULL,
-    "updatedAt" DATETIME NOT NULL
+    "currencyCode" TEXT NOT NULL,
+    "rateToYER" DECIMAL(65,30) NOT NULL,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "CurrencyRate_pkey" PRIMARY KEY ("currencyCode")
 );
 
 -- CreateTable
 CREATE TABLE "Currency" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
     "nameEn" TEXT NOT NULL,
@@ -182,27 +189,30 @@ CREATE TABLE "Currency" (
     "isBaseCurrency" BOOLEAN NOT NULL DEFAULT false,
     "isCustom" BOOLEAN NOT NULL DEFAULT false,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Currency_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ExchangeRate" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "currencyCode" TEXT NOT NULL,
-    "rateDate" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "buyRate" DECIMAL NOT NULL,
-    "sellRate" DECIMAL NOT NULL,
-    "midRate" DECIMAL NOT NULL,
+    "rateDate" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "buyRate" DECIMAL(65,30) NOT NULL,
+    "sellRate" DECIMAL(65,30) NOT NULL,
+    "midRate" DECIMAL(65,30) NOT NULL,
     "source" TEXT NOT NULL DEFAULT 'MANUAL',
     "createdBy" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "ExchangeRate_currencyCode_fkey" FOREIGN KEY ("currencyCode") REFERENCES "Currency" ("code") ON DELETE CASCADE ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ExchangeRate_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "Project" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
@@ -210,61 +220,60 @@ CREATE TABLE "Project" (
     "type" TEXT NOT NULL DEFAULT 'مشروع رئيسي',
     "parentProjectId" TEXT,
     "vendorId" TEXT,
-    "budgetTotal" DECIMAL NOT NULL DEFAULT 0,
-    "estimatedValue" DECIMAL NOT NULL DEFAULT 0,
+    "budgetTotal" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "estimatedValue" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "plannedHarvestCount" INTEGER NOT NULL DEFAULT 1,
     "status" TEXT NOT NULL DEFAULT 'ACTIVE',
-    "startDate" DATETIME,
-    "endDate" DATETIME,
+    "startDate" TIMESTAMP(3),
+    "endDate" TIMESTAMP(3),
     "notes" TEXT NOT NULL DEFAULT '',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
     "glAccountId" TEXT,
     "costCenterId" TEXT,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "archivedAt" DATETIME,
-    CONSTRAINT "Project_parentProjectId_fkey" FOREIGN KEY ("parentProjectId") REFERENCES "Project" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "Project_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "Project_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "Project_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "archivedAt" TIMESTAMP(3),
+
+    CONSTRAINT "Project_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ProjectAcquisitionCycle" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "projectId" TEXT NOT NULL,
     "cycleTitle" TEXT NOT NULL,
-    "startDate" DATETIME NOT NULL,
-    "endDate" DATETIME NOT NULL,
-    "contractAmount" DECIMAL NOT NULL DEFAULT 0,
+    "startDate" TIMESTAMP(3) NOT NULL,
+    "endDate" TIMESTAMP(3) NOT NULL,
+    "contractAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "status" TEXT NOT NULL DEFAULT 'ACTIVE',
     "notes" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "ProjectAcquisitionCycle_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ProjectAcquisitionCycle_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "SubProject" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "projectId" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
     "nameEn" TEXT NOT NULL,
-    "budget" DECIMAL NOT NULL DEFAULT 0,
+    "budget" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "status" TEXT NOT NULL DEFAULT 'ACTIVE',
     "notes" TEXT NOT NULL DEFAULT '',
     "vendorId" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "SubProject_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "SubProject_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "SubProject_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "HarvestCycle" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "projectId" TEXT NOT NULL,
     "cycleNumber" INTEGER NOT NULL DEFAULT 1,
     "name" TEXT NOT NULL,
@@ -272,14 +281,15 @@ CREATE TABLE "HarvestCycle" (
     "isLocked" BOOLEAN NOT NULL DEFAULT false,
     "lockedByUserId" TEXT,
     "lockedById" TEXT,
-    "lockedAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "HarvestCycle_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "lockedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "HarvestCycle_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "Vendor" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
     "nameEn" TEXT,
@@ -288,72 +298,71 @@ CREATE TABLE "Vendor" (
     "taxRegistration" TEXT,
     "address" TEXT,
     "accountId" TEXT NOT NULL,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
     "glAccountId" TEXT,
     "costCenterId" TEXT,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "archivedAt" DATETIME,
-    CONSTRAINT "Vendor_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "Vendor_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "Vendor_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "archivedAt" TIMESTAMP(3),
+
+    CONSTRAINT "Vendor_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "PurchaseOrder" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "poNumber" TEXT NOT NULL,
     "vendorId" TEXT NOT NULL,
     "projectId" TEXT NOT NULL,
     "subProjectId" TEXT,
     "acquisitionCycleId" TEXT,
-    "date" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "date" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "status" TEXT NOT NULL DEFAULT 'DRAFT',
-    "subTotal" DECIMAL NOT NULL DEFAULT 0,
-    "taxTotal" DECIMAL NOT NULL DEFAULT 0,
-    "grandTotal" DECIMAL NOT NULL DEFAULT 0,
+    "subTotal" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "taxTotal" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "grandTotal" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "notes" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "PurchaseOrder_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "PurchaseOrder_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "PurchaseOrder_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "PurchaseOrder_acquisitionCycleId_fkey" FOREIGN KEY ("acquisitionCycleId") REFERENCES "ProjectAcquisitionCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PurchaseOrder_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "PurchaseOrderItem" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "purchaseOrderId" TEXT NOT NULL,
     "description" TEXT NOT NULL,
     "unit" TEXT NOT NULL,
-    "quantity" DECIMAL NOT NULL,
-    "unitPrice" DECIMAL NOT NULL,
-    "totalPrice" DECIMAL NOT NULL,
-    CONSTRAINT "PurchaseOrderItem_purchaseOrderId_fkey" FOREIGN KEY ("purchaseOrderId") REFERENCES "PurchaseOrder" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "quantity" DECIMAL(65,30) NOT NULL,
+    "unitPrice" DECIMAL(65,30) NOT NULL,
+    "totalPrice" DECIMAL(65,30) NOT NULL,
+
+    CONSTRAINT "PurchaseOrderItem_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "GoodsReceipt" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "grnNumber" TEXT NOT NULL,
     "purchaseOrderId" TEXT NOT NULL,
     "warehouseId" TEXT,
     "journalEntryId" TEXT,
-    "receivedDate" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "receivedTotal" DECIMAL NOT NULL DEFAULT 0,
+    "receivedDate" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "receivedTotal" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "hasVariance" BOOLEAN NOT NULL DEFAULT false,
     "itemsSummary" TEXT,
     "itemsJson" TEXT,
     "warehouseNotes" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "GoodsReceipt_purchaseOrderId_fkey" FOREIGN KEY ("purchaseOrderId") REFERENCES "PurchaseOrder" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "GoodsReceipt_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "VendorBill" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "billNumber" TEXT NOT NULL,
     "billType" TEXT NOT NULL DEFAULT 'BILL',
     "originalBillId" TEXT,
@@ -362,70 +371,67 @@ CREATE TABLE "VendorBill" (
     "subProjectId" TEXT,
     "purchaseOrderId" TEXT,
     "acquisitionCycleId" TEXT,
-    "date" DATETIME NOT NULL,
-    "dueDate" DATETIME,
+    "date" TIMESTAMP(3) NOT NULL,
+    "dueDate" TIMESTAMP(3),
     "status" TEXT NOT NULL DEFAULT 'APPROVED',
-    "subTotal" DECIMAL NOT NULL DEFAULT 0,
-    "taxAmount" DECIMAL NOT NULL DEFAULT 0,
-    "whtAmount" DECIMAL NOT NULL DEFAULT 0,
-    "totalAmount" DECIMAL NOT NULL,
-    "paidAmount" DECIMAL NOT NULL DEFAULT 0,
-    "balanceDue" DECIMAL NOT NULL,
+    "subTotal" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "taxAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "whtAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "totalAmount" DECIMAL(65,30) NOT NULL,
+    "paidAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "balanceDue" DECIMAL(65,30) NOT NULL,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
-    "exchangeRate" DECIMAL NOT NULL DEFAULT 1.0,
-    "foreignAmount" DECIMAL NOT NULL DEFAULT 0,
-    "baseAmount" DECIMAL NOT NULL DEFAULT 0,
+    "exchangeRate" DECIMAL(65,30) NOT NULL DEFAULT 1.0,
+    "foreignAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "baseAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "isInventory" BOOLEAN NOT NULL DEFAULT false,
     "debitAccountId" TEXT,
     "journalEntryId" TEXT,
     "notes" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "costCenterId" TEXT,
     "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
     "revisionNumber" INTEGER NOT NULL DEFAULT 1,
-    CONSTRAINT "VendorBill_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "VendorBill_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "VendorBill_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "VendorBill_purchaseOrderId_fkey" FOREIGN KEY ("purchaseOrderId") REFERENCES "PurchaseOrder" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "VendorBill_acquisitionCycleId_fkey" FOREIGN KEY ("acquisitionCycleId") REFERENCES "ProjectAcquisitionCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "VendorBill_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+
+    CONSTRAINT "VendorBill_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "VendorBillItem" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "billId" TEXT NOT NULL,
     "itemId" TEXT,
     "warehouseId" TEXT,
     "taxCodeId" TEXT,
     "description" TEXT NOT NULL,
     "unitId" TEXT,
-    "quantity" DECIMAL NOT NULL,
-    "unitPrice" DECIMAL NOT NULL,
-    "netAmount" DECIMAL NOT NULL,
-    "taxAmount" DECIMAL NOT NULL DEFAULT 0,
-    "whtAmount" DECIMAL NOT NULL DEFAULT 0,
-    "totalAmount" DECIMAL NOT NULL,
-    CONSTRAINT "VendorBillItem_billId_fkey" FOREIGN KEY ("billId") REFERENCES "VendorBill" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "quantity" DECIMAL(65,30) NOT NULL,
+    "unitPrice" DECIMAL(65,30) NOT NULL,
+    "netAmount" DECIMAL(65,30) NOT NULL,
+    "taxAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "whtAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "totalAmount" DECIMAL(65,30) NOT NULL,
+
+    CONSTRAINT "VendorBillItem_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "PaymentVoucher" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "voucherNumber" TEXT NOT NULL,
-    "date" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "date" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "vendorId" TEXT NOT NULL,
     "billId" TEXT,
     "allocationsJson" TEXT,
     "treasuryId" TEXT NOT NULL,
-    "amount" DECIMAL NOT NULL,
-    "transferFee" DECIMAL NOT NULL DEFAULT 0,
+    "amount" DECIMAL(65,30) NOT NULL,
+    "transferFee" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
-    "exchangeRate" DECIMAL NOT NULL DEFAULT 1.0,
-    "foreignAmount" DECIMAL NOT NULL DEFAULT 0,
-    "baseAmount" DECIMAL NOT NULL DEFAULT 0,
+    "exchangeRate" DECIMAL(65,30) NOT NULL DEFAULT 1.0,
+    "foreignAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "baseAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "referenceNumber" TEXT,
     "notes" TEXT,
     "projectId" TEXT,
@@ -433,22 +439,17 @@ CREATE TABLE "PaymentVoucher" (
     "acquisitionCycleId" TEXT,
     "journalEntryId" TEXT,
     "qrVerificationHash" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "costCenterId" TEXT,
     "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
     "revisionNumber" INTEGER NOT NULL DEFAULT 1,
-    CONSTRAINT "PaymentVoucher_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "PaymentVoucher_billId_fkey" FOREIGN KEY ("billId") REFERENCES "VendorBill" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "PaymentVoucher_treasuryId_fkey" FOREIGN KEY ("treasuryId") REFERENCES "TreasuryAccount" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "PaymentVoucher_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "PaymentVoucher_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "PaymentVoucher_acquisitionCycleId_fkey" FOREIGN KEY ("acquisitionCycleId") REFERENCES "ProjectAcquisitionCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "PaymentVoucher_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+
+    CONSTRAINT "PaymentVoucher_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "Customer" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "tenantSlug" TEXT NOT NULL DEFAULT 'default',
     "code" TEXT NOT NULL,
     "name" TEXT NOT NULL,
@@ -456,21 +457,20 @@ CREATE TABLE "Customer" (
     "nameEn" TEXT,
     "phone" TEXT NOT NULL DEFAULT '',
     "address" TEXT,
-    "creditLimit" DECIMAL NOT NULL DEFAULT 0,
+    "creditLimit" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "accountId" TEXT NOT NULL,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "glAccountId" TEXT,
     "costCenterId" TEXT,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "archivedAt" DATETIME,
-    CONSTRAINT "Customer_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "Customer_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "Customer_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "archivedAt" TIMESTAMP(3),
+
+    CONSTRAINT "Customer_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "SalesInvoice" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "tenantSlug" TEXT NOT NULL DEFAULT 'default',
     "invoiceNumber" TEXT NOT NULL,
     "invoiceType" TEXT NOT NULL DEFAULT 'INVOICE',
@@ -485,109 +485,103 @@ CREATE TABLE "SalesInvoice" (
     "salesOfficerTitle" TEXT,
     "revenueAccountCode" TEXT DEFAULT '411101',
     "treasuryAccountId" TEXT,
-    "date" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "dueDate" DATETIME,
-    "subTotal" DECIMAL NOT NULL DEFAULT 0,
-    "taxAmount" DECIMAL NOT NULL DEFAULT 0,
-    "whtAmount" DECIMAL NOT NULL DEFAULT 0,
-    "totalAmount" DECIMAL NOT NULL,
-    "paidAmount" DECIMAL NOT NULL DEFAULT 0,
-    "balanceDue" DECIMAL NOT NULL,
+    "date" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "dueDate" TIMESTAMP(3),
+    "subTotal" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "taxAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "whtAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "totalAmount" DECIMAL(65,30) NOT NULL,
+    "paidAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "balanceDue" DECIMAL(65,30) NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'POSTED',
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
-    "exchangeRate" DECIMAL NOT NULL DEFAULT 1.0,
-    "foreignAmount" DECIMAL NOT NULL DEFAULT 0,
-    "baseAmount" DECIMAL NOT NULL DEFAULT 0,
+    "exchangeRate" DECIMAL(65,30) NOT NULL DEFAULT 1.0,
+    "foreignAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "baseAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "notes" TEXT,
     "journalEntryId" TEXT,
     "cogsJournalEntryId" TEXT,
     "qrVerificationHash" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "costCenterId" TEXT,
     "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
     "revisionNumber" INTEGER NOT NULL DEFAULT 1,
-    CONSTRAINT "SalesInvoice_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "SalesInvoice_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "SalesInvoice_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "SalesInvoice_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "SalesInvoice_treasuryAccountId_fkey" FOREIGN KEY ("treasuryAccountId") REFERENCES "TreasuryAccount" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "SalesInvoice_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+
+    CONSTRAINT "SalesInvoice_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "SalesInvoiceItem" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "invoiceId" TEXT NOT NULL,
     "itemId" TEXT,
     "warehouseId" TEXT,
     "taxCodeId" TEXT,
     "description" TEXT NOT NULL,
     "unitId" TEXT,
-    "quantity" DECIMAL NOT NULL,
-    "unitPrice" DECIMAL NOT NULL,
-    "netAmount" DECIMAL NOT NULL,
-    "taxAmount" DECIMAL NOT NULL DEFAULT 0,
-    "whtAmount" DECIMAL NOT NULL DEFAULT 0,
-    "totalAmount" DECIMAL NOT NULL,
-    "costOfGoodsSold" DECIMAL NOT NULL DEFAULT 0,
-    CONSTRAINT "SalesInvoiceItem_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "SalesInvoice" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "quantity" DECIMAL(65,30) NOT NULL,
+    "unitPrice" DECIMAL(65,30) NOT NULL,
+    "netAmount" DECIMAL(65,30) NOT NULL,
+    "taxAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "whtAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "totalAmount" DECIMAL(65,30) NOT NULL,
+    "costOfGoodsSold" DECIMAL(65,30) NOT NULL DEFAULT 0,
+
+    CONSTRAINT "SalesInvoiceItem_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ReceiptVoucher" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "tenantSlug" TEXT NOT NULL DEFAULT 'default',
     "voucherNumber" TEXT NOT NULL,
     "linkedPaymentReceiptId" TEXT,
-    "date" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "date" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "customerId" TEXT NOT NULL,
     "invoiceId" TEXT,
     "allocationsJson" TEXT,
     "treasuryId" TEXT NOT NULL,
     "subProjectId" TEXT,
-    "amount" DECIMAL NOT NULL,
+    "amount" DECIMAL(65,30) NOT NULL,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
-    "exchangeRate" DECIMAL NOT NULL DEFAULT 1.0,
-    "foreignAmount" DECIMAL NOT NULL DEFAULT 0,
-    "baseAmount" DECIMAL NOT NULL DEFAULT 0,
+    "exchangeRate" DECIMAL(65,30) NOT NULL DEFAULT 1.0,
+    "foreignAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "baseAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "notes" TEXT,
     "journalEntryId" TEXT,
     "qrVerificationHash" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "costCenterId" TEXT,
     "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
     "revisionNumber" INTEGER NOT NULL DEFAULT 1,
-    CONSTRAINT "ReceiptVoucher_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "ReceiptVoucher_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "SalesInvoice" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "ReceiptVoucher_treasuryId_fkey" FOREIGN KEY ("treasuryId") REFERENCES "TreasuryAccount" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "ReceiptVoucher_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "ReceiptVoucher_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+
+    CONSTRAINT "ReceiptVoucher_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "InventoryLot" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "lotNumber" TEXT NOT NULL,
     "projectId" TEXT,
     "harvestCycleId" TEXT,
     "itemId" TEXT,
     "warehouseId" TEXT,
     "grade" TEXT NOT NULL,
-    "initialQuantity" DECIMAL NOT NULL,
-    "currentQuantity" DECIMAL NOT NULL,
-    "shrinkageCount" DECIMAL NOT NULL DEFAULT 0,
-    "unitCost" DECIMAL NOT NULL DEFAULT 0,
-    "receivedDate" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "InventoryLot_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "InventoryLot_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "initialQuantity" DECIMAL(65,30) NOT NULL,
+    "currentQuantity" DECIMAL(65,30) NOT NULL,
+    "shrinkageCount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "unitCost" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "receivedDate" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "InventoryLot_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "HarvestInventoryBatch" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "projectId" TEXT NOT NULL,
     "subProjectId" TEXT,
     "harvestCycleId" TEXT,
@@ -596,15 +590,14 @@ CREATE TABLE "HarvestInventoryBatch" (
     "harvestedBundles" INTEGER NOT NULL,
     "shrinkageBundles" INTEGER NOT NULL DEFAULT 0,
     "notes" TEXT NOT NULL DEFAULT '',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "HarvestInventoryBatch_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "HarvestInventoryBatch_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "HarvestInventoryBatch_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "HarvestInventoryBatch_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "TreasuryAccount" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
@@ -616,15 +609,15 @@ CREATE TABLE "TreasuryAccount" (
     "accountNumber" TEXT NOT NULL,
     "ibanOrSwift" TEXT NOT NULL DEFAULT '',
     "branchOrAgent" TEXT NOT NULL DEFAULT '',
-    "transferFeePercent" DECIMAL NOT NULL DEFAULT 0,
-    "dailyLimit" DECIMAL NOT NULL DEFAULT 0,
+    "transferFeePercent" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "dailyLimit" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "isDefaultReceipts" BOOLEAN NOT NULL DEFAULT false,
     "isDefaultPayments" BOOLEAN NOT NULL DEFAULT false,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
     "notes" TEXT NOT NULL DEFAULT '',
     "accountId" TEXT NOT NULL,
-    "balance" DECIMAL NOT NULL DEFAULT 0,
-    "balanceYER" DECIMAL NOT NULL DEFAULT 0,
+    "balance" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "balanceYER" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
     "gatewayProvider" TEXT NOT NULL DEFAULT 'MANUAL',
@@ -632,84 +625,81 @@ CREATE TABLE "TreasuryAccount" (
     "gatewayEndpointUrl" TEXT,
     "gatewayCredentialsEnc" TEXT,
     "isSandbox" BOOLEAN NOT NULL DEFAULT true,
-    "dailyUsedAmount" DECIMAL NOT NULL DEFAULT 0,
+    "dailyUsedAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "lastDailyResetDate" TEXT,
-    "archivedAt" DATETIME,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "TreasuryAccount_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    "archivedAt" TIMESTAMP(3),
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "TreasuryAccount_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "OperatingExpense" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "projectId" TEXT NOT NULL,
     "subProjectId" TEXT,
     "harvestCycleId" TEXT,
     "harvestName" TEXT NOT NULL,
     "category" TEXT NOT NULL,
     "subType" TEXT NOT NULL,
-    "quantity" DECIMAL NOT NULL DEFAULT 1,
-    "unitPrice" DECIMAL NOT NULL DEFAULT 0,
+    "quantity" DECIMAL(65,30) NOT NULL DEFAULT 1,
+    "unitPrice" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "taxCodeId" TEXT,
-    "netAmount" DECIMAL NOT NULL DEFAULT 0,
-    "taxAmount" DECIMAL NOT NULL DEFAULT 0,
-    "whtAmount" DECIMAL NOT NULL DEFAULT 0,
-    "totalAmount" DECIMAL NOT NULL DEFAULT 0,
+    "netAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "taxAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "whtAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "totalAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "expenseDate" TEXT NOT NULL,
     "notes" TEXT NOT NULL DEFAULT '',
     "journalEntryId" TEXT,
     "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "OperatingExpense_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "OperatingExpense_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "OperatingExpense_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "OperatingExpense_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "Worker" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "phone" TEXT NOT NULL DEFAULT '',
-    "defaultDailyWage" DECIMAL NOT NULL DEFAULT 0,
+    "defaultDailyWage" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "accountId" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "glAccountId" TEXT,
     "costCenterId" TEXT,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "archivedAt" DATETIME,
-    CONSTRAINT "Worker_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "Worker_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "Worker_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "archivedAt" TIMESTAMP(3),
+
+    CONSTRAINT "Worker_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "WorkerWageEntry" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "workerId" TEXT NOT NULL,
     "workerName" TEXT NOT NULL,
     "projectId" TEXT NOT NULL,
     "subProjectId" TEXT,
     "harvestCycleId" TEXT,
     "harvestName" TEXT NOT NULL,
-    "dailyWage" DECIMAL NOT NULL,
-    "daysWorked" DECIMAL NOT NULL,
-    "totalWage" DECIMAL NOT NULL,
-    "creditAmount" DECIMAL NOT NULL DEFAULT 0,
-    "debitBalance" DECIMAL NOT NULL,
+    "dailyWage" DECIMAL(65,30) NOT NULL,
+    "daysWorked" DECIMAL(65,30) NOT NULL,
+    "totalWage" DECIMAL(65,30) NOT NULL,
+    "creditAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "debitBalance" DECIMAL(65,30) NOT NULL,
     "workDate" TEXT NOT NULL,
     "notes" TEXT NOT NULL DEFAULT '',
     "journalEntryId" TEXT,
     "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "WorkerWageEntry_workerId_fkey" FOREIGN KEY ("workerId") REFERENCES "Worker" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "WorkerWageEntry_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "WorkerWageEntry_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "WorkerWageEntry_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "WorkerWageEntry_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "SaleTransaction" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "sequenceNumber" TEXT,
     "dailyBatchLabel" TEXT,
     "salesOfficerId" TEXT,
@@ -726,25 +716,22 @@ CREATE TABLE "SaleTransaction" (
     "customerPhone" TEXT NOT NULL,
     "productGrade" TEXT NOT NULL,
     "bundlesCount" INTEGER NOT NULL,
-    "unitPrice" DECIMAL NOT NULL,
-    "totalAmount" DECIMAL NOT NULL,
-    "creditPaid" DECIMAL NOT NULL DEFAULT 0,
-    "debitReceivable" DECIMAL NOT NULL,
+    "unitPrice" DECIMAL(65,30) NOT NULL,
+    "totalAmount" DECIMAL(65,30) NOT NULL,
+    "creditPaid" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "debitReceivable" DECIMAL(65,30) NOT NULL,
     "saleDate" TEXT NOT NULL,
     "receiptVoucherNo" TEXT NOT NULL,
     "notes" TEXT NOT NULL DEFAULT '',
     "journalEntryId" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "SaleTransaction_treasuryAccountId_fkey" FOREIGN KEY ("treasuryAccountId") REFERENCES "TreasuryAccount" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "SaleTransaction_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "SaleTransaction_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "SaleTransaction_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "SaleTransaction_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "SaleTransaction_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "InstallmentVoucher" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "voucherNo" TEXT NOT NULL,
     "type" TEXT NOT NULL,
     "saleTransactionId" TEXT,
@@ -752,20 +739,19 @@ CREATE TABLE "InstallmentVoucher" (
     "targetName" TEXT NOT NULL,
     "phone" TEXT NOT NULL DEFAULT '',
     "treasuryAccountId" TEXT NOT NULL,
-    "amountYER" DECIMAL NOT NULL,
+    "amountYER" DECIMAL(65,30) NOT NULL,
     "qrVerificationHash" TEXT NOT NULL,
     "paymentDate" TEXT NOT NULL,
     "notes" TEXT NOT NULL DEFAULT '',
     "journalEntryId" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "InstallmentVoucher_saleTransactionId_fkey" FOREIGN KEY ("saleTransactionId") REFERENCES "SaleTransaction" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "InstallmentVoucher_workerWageEntryId_fkey" FOREIGN KEY ("workerWageEntryId") REFERENCES "WorkerWageEntry" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "InstallmentVoucher_treasuryAccountId_fkey" FOREIGN KEY ("treasuryAccountId") REFERENCES "TreasuryAccount" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "InstallmentVoucher_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "User" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "username" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "fullName" TEXT NOT NULL,
@@ -773,11 +759,11 @@ CREATE TABLE "User" (
     "phone" TEXT,
     "email" TEXT NOT NULL,
     "passwordHash" TEXT NOT NULL,
-    "role" TEXT NOT NULL DEFAULT 'FIELD_ACCOUNTANT',
+    "role" "Role" NOT NULL DEFAULT 'FIELD_ACCOUNTANT',
     "department" TEXT NOT NULL DEFAULT 'المالية والعمليات',
     "active" BOOLEAN NOT NULL DEFAULT true,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "archivedAt" DATETIME,
+    "archivedAt" TIMESTAMP(3),
     "avatarChar" TEXT NOT NULL DEFAULT 'م',
     "avatarUrl" TEXT,
     "avatarColor" TEXT NOT NULL DEFAULT '#059669',
@@ -785,33 +771,36 @@ CREATE TABLE "User" (
     "preferredCurrency" TEXT NOT NULL DEFAULT 'YER',
     "preferredTheme" TEXT NOT NULL DEFAULT 'emerald',
     "defaultModule" TEXT,
-    "lastLoginAt" DATETIME,
+    "lastLoginAt" TIMESTAMP(3),
     "useCustomPermissions" BOOLEAN NOT NULL DEFAULT false,
     "customAllowedGroups" TEXT NOT NULL DEFAULT '[]',
     "customPermissionsJson" TEXT NOT NULL DEFAULT '{}',
     "mustChangePassword" BOOLEAN NOT NULL DEFAULT false,
-    "passwordUpdatedAt" DATETIME,
+    "passwordUpdatedAt" TIMESTAMP(3),
     "assignedProjects" TEXT NOT NULL DEFAULT '[]',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "User_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "AuditLog" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "action" TEXT NOT NULL,
     "entity" TEXT NOT NULL,
     "entityId" TEXT NOT NULL,
     "details" JSONB NOT NULL,
     "ipAddress" TEXT,
-    "timestamp" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "AuditLog_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    "timestamp" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "AuditLog_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ImmutableAuditLog" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "timestamp" TEXT NOT NULL,
     "userId" TEXT,
     "userDisplay" TEXT NOT NULL,
@@ -820,93 +809,104 @@ CREATE TABLE "ImmutableAuditLog" (
     "entityReference" TEXT NOT NULL,
     "details" TEXT NOT NULL,
     "sha256Hash" TEXT NOT NULL,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ImmutableAuditLog_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "AdjustmentEntry" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "projectId" TEXT,
     "harvestCycleId" TEXT,
     "periodLabel" TEXT NOT NULL,
     "reason" TEXT NOT NULL,
-    "amountYER" DECIMAL NOT NULL,
+    "amountYER" DECIMAL(65,30) NOT NULL,
     "createdByUser" TEXT NOT NULL,
     "journalEntryId" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "AdjustmentEntry_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "AdjustmentEntry_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "AdjustmentEntry_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "LicenseState" (
-    "id" TEXT NOT NULL PRIMARY KEY DEFAULT 'active',
+    "id" TEXT NOT NULL DEFAULT 'active',
     "license_id" TEXT,
     "customer_name" TEXT,
     "hwid_hash" TEXT,
-    "last_verified_utc" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "last_verified_utc" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "status" TEXT NOT NULL DEFAULT 'UNLICENSED',
     "seat_registry_json" TEXT NOT NULL DEFAULT '[]',
     "license_data_json" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "LicenseState_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "LicenseDeviceBinding" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "licenseId" TEXT NOT NULL,
     "userEmail" TEXT NOT NULL,
     "platform" TEXT NOT NULL,
     "hwid" TEXT NOT NULL,
     "deviceName" TEXT NOT NULL DEFAULT '',
-    "activatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "lastSeenAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "active" BOOLEAN NOT NULL DEFAULT true
+    "activatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "lastSeenAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+
+    CONSTRAINT "LicenseDeviceBinding_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "TreasuryTransaction" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "treasuryId" TEXT NOT NULL,
     "direction" TEXT NOT NULL,
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
-    "exchangeRate" DECIMAL NOT NULL DEFAULT 1.0,
-    "foreignAmount" DECIMAL NOT NULL DEFAULT 0,
-    "baseAmount" DECIMAL NOT NULL DEFAULT 0,
+    "exchangeRate" DECIMAL(65,30) NOT NULL DEFAULT 1.0,
+    "foreignAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "baseAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "referenceType" TEXT,
     "referenceId" TEXT,
     "notes" TEXT,
-    "date" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "date" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "TreasuryTransaction_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "UnitOfMeasure" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
     "nameEn" TEXT NOT NULL,
     "isBaseDefault" BOOLEAN NOT NULL DEFAULT false,
     "isCustom" BOOLEAN NOT NULL DEFAULT false,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "UnitOfMeasure_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ItemCategory" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
     "nameEn" TEXT NOT NULL,
     "parentId" TEXT,
     "isCustom" BOOLEAN NOT NULL DEFAULT false,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "ItemCategory_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "ItemCategory" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ItemCategory_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "Warehouse" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
     "nameEn" TEXT NOT NULL,
@@ -914,17 +914,17 @@ CREATE TABLE "Warehouse" (
     "isDefault" BOOLEAN NOT NULL DEFAULT false,
     "isCustom" BOOLEAN NOT NULL DEFAULT false,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "archivedAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "archivedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "glAccountId" TEXT,
     "costCenterId" TEXT,
-    CONSTRAINT "Warehouse_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "Warehouse_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+
+    CONSTRAINT "Warehouse_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "InventoryItem" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "sku" TEXT NOT NULL,
     "barcode" TEXT,
     "nameAr" TEXT NOT NULL,
@@ -940,81 +940,78 @@ CREATE TABLE "InventoryItem" (
     "expiryDate" TEXT,
     "baseUnitId" TEXT NOT NULL,
     "defaultWarehouseId" TEXT,
-    "purchasePrice" DECIMAL NOT NULL DEFAULT 0,
-    "dispatchCost" DECIMAL NOT NULL DEFAULT 0,
-    "taxRate" DECIMAL NOT NULL DEFAULT 0,
-    "wholesalePrice" DECIMAL NOT NULL DEFAULT 0,
-    "retailPrice" DECIMAL NOT NULL DEFAULT 0,
-    "minSellPrice" DECIMAL NOT NULL DEFAULT 0,
-    "minStockAlert" DECIMAL NOT NULL DEFAULT 0,
-    "maxStockLevel" DECIMAL NOT NULL DEFAULT 0,
+    "purchasePrice" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "dispatchCost" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "taxRate" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "wholesalePrice" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "retailPrice" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "minSellPrice" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "minStockAlert" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "maxStockLevel" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "inventoryAccountId" TEXT,
     "cogsAccountId" TEXT,
     "revenueAccountId" TEXT,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "archivedAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "InventoryItem_categoryId_fkey" FOREIGN KEY ("categoryId") REFERENCES "ItemCategory" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "InventoryItem_baseUnitId_fkey" FOREIGN KEY ("baseUnitId") REFERENCES "UnitOfMeasure" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "InventoryItem_defaultWarehouseId_fkey" FOREIGN KEY ("defaultWarehouseId") REFERENCES "Warehouse" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "archivedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "InventoryItem_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ItemUnitConversion" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "itemId" TEXT NOT NULL,
     "unitId" TEXT NOT NULL,
     "customUnitLabel" TEXT,
-    "factorToBase" DECIMAL NOT NULL,
+    "factorToBase" DECIMAL(65,30) NOT NULL,
     "barcode" TEXT,
-    "purchasePrice" DECIMAL,
-    "sellPrice" DECIMAL,
+    "purchasePrice" DECIMAL(65,30),
+    "sellPrice" DECIMAL(65,30),
     "isDefaultSalesUnit" BOOLEAN NOT NULL DEFAULT false,
     "isDefaultPurchaseUnit" BOOLEAN NOT NULL DEFAULT false,
-    CONSTRAINT "ItemUnitConversion_itemId_fkey" FOREIGN KEY ("itemId") REFERENCES "InventoryItem" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "ItemUnitConversion_unitId_fkey" FOREIGN KEY ("unitId") REFERENCES "UnitOfMeasure" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+
+    CONSTRAINT "ItemUnitConversion_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "StockBalance" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "itemId" TEXT NOT NULL,
     "warehouseId" TEXT NOT NULL,
-    "qtyOnHandBase" DECIMAL NOT NULL DEFAULT 0,
-    "avgUnitCostBase" DECIMAL NOT NULL DEFAULT 0,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "StockBalance_itemId_fkey" FOREIGN KEY ("itemId") REFERENCES "InventoryItem" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "StockBalance_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "qtyOnHandBase" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "avgUnitCostBase" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "StockBalance_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "StockMovement" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "itemId" TEXT NOT NULL,
     "warehouseId" TEXT NOT NULL,
     "movementType" TEXT NOT NULL,
-    "enteredQty" DECIMAL NOT NULL,
+    "enteredQty" DECIMAL(65,30) NOT NULL,
     "enteredUnitId" TEXT NOT NULL,
-    "factorToBase" DECIMAL NOT NULL DEFAULT 1,
-    "baseQtyDelta" DECIMAL NOT NULL,
-    "unitCostBase" DECIMAL NOT NULL DEFAULT 0,
+    "factorToBase" DECIMAL(65,30) NOT NULL DEFAULT 1,
+    "baseQtyDelta" DECIMAL(65,30) NOT NULL,
+    "unitCostBase" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "referenceType" TEXT,
     "referenceId" TEXT,
     "notes" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "costCenterId" TEXT,
     "documentStatus" TEXT NOT NULL DEFAULT 'POSTED',
     "revisionNumber" INTEGER NOT NULL DEFAULT 1,
-    CONSTRAINT "StockMovement_itemId_fkey" FOREIGN KEY ("itemId") REFERENCES "InventoryItem" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "StockMovement_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "StockMovement_enteredUnitId_fkey" FOREIGN KEY ("enteredUnitId") REFERENCES "UnitOfMeasure" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "StockMovement_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+
+    CONSTRAINT "StockMovement_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "CostCenter" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
     "nameEn" TEXT NOT NULL,
@@ -1024,84 +1021,91 @@ CREATE TABLE "CostCenter" (
     "customLabel" TEXT,
     "isCustom" BOOLEAN NOT NULL DEFAULT false,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "archivedAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "CostCenter_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "CostCenter" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "archivedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "CostCenter_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "FiscalYear" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
     "nameEn" TEXT NOT NULL,
-    "startDate" DATETIME NOT NULL,
-    "endDate" DATETIME NOT NULL,
+    "startDate" TIMESTAMP(3) NOT NULL,
+    "endDate" TIMESTAMP(3) NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'OPEN',
     "closingJournalEntryId" TEXT,
     "openingJournalEntryId" TEXT,
     "retainedEarningsAccountId" TEXT,
-    "netProfitLossBase" DECIMAL,
+    "netProfitLossBase" DECIMAL(65,30),
     "closedById" TEXT,
     "closedByName" TEXT,
-    "closedAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "closedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "FiscalYear_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "AccountingPeriod" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "fiscalYearId" TEXT,
     "year" INTEGER NOT NULL,
     "month" INTEGER NOT NULL,
     "code" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
     "nameEn" TEXT NOT NULL,
-    "startDate" DATETIME NOT NULL,
-    "endDate" DATETIME NOT NULL,
+    "startDate" TIMESTAMP(3) NOT NULL,
+    "endDate" TIMESTAMP(3) NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'OPEN',
     "closedById" TEXT,
-    "closedAt" DATETIME,
+    "closedAt" TIMESTAMP(3),
     "notes" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "AccountingPeriod_fiscalYearId_fkey" FOREIGN KEY ("fiscalYearId") REFERENCES "FiscalYear" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "AccountingPeriod_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "TaxCode" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "nameAr" TEXT NOT NULL,
     "nameEn" TEXT NOT NULL,
     "taxType" TEXT NOT NULL DEFAULT 'VAT',
-    "ratePct" DECIMAL NOT NULL DEFAULT 0,
+    "ratePct" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "isCompound" BOOLEAN NOT NULL DEFAULT false,
     "isInclusive" BOOLEAN NOT NULL DEFAULT false,
     "salesTaxAccountCode" TEXT DEFAULT '214101',
     "purchaseTaxAccountCode" TEXT DEFAULT '114301',
     "whtAccountCode" TEXT DEFAULT '214201',
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "TaxCode_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "TaxRate" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "taxCodeId" TEXT NOT NULL,
-    "ratePct" DECIMAL NOT NULL,
-    "effectiveFrom" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "effectiveTo" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "TaxRate_taxCodeId_fkey" FOREIGN KEY ("taxCodeId") REFERENCES "TaxCode" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "ratePct" DECIMAL(65,30) NOT NULL,
+    "effectiveFrom" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "effectiveTo" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "TaxRate_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "WorkspaceDraft" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "draftNumber" TEXT NOT NULL,
     "module" TEXT NOT NULL,
     "formType" TEXT NOT NULL,
@@ -1109,7 +1113,7 @@ CREATE TABLE "WorkspaceDraft" (
     "titleAr" TEXT NOT NULL,
     "titleEn" TEXT NOT NULL DEFAULT '',
     "payloadJson" TEXT NOT NULL,
-    "totalAmount" DECIMAL,
+    "totalAmount" DECIMAL(65,30),
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
     "visibility" TEXT NOT NULL DEFAULT 'SHARED_WORKSPACE',
     "status" TEXT NOT NULL DEFAULT 'ACTIVE_DRAFT',
@@ -1118,28 +1122,32 @@ CREATE TABLE "WorkspaceDraft" (
     "createdByName" TEXT NOT NULL,
     "updatedById" TEXT,
     "updatedByName" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "WorkspaceDraft_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ApprovalRule" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "module" TEXT NOT NULL,
     "actionType" TEXT NOT NULL,
-    "minAmountBase" DECIMAL NOT NULL DEFAULT 0,
+    "minAmountBase" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
     "requiredRole" TEXT NOT NULL DEFAULT 'CHIEF_ACCOUNTANT',
     "approverUserIdsJson" TEXT NOT NULL DEFAULT '[]',
     "allowSelfApproval" BOOLEAN NOT NULL DEFAULT false,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ApprovalRule_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ApprovalRequest" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "requestNumber" TEXT NOT NULL,
     "ruleId" TEXT,
     "module" TEXT NOT NULL,
@@ -1149,7 +1157,7 @@ CREATE TABLE "ApprovalRequest" (
     "documentNumber" TEXT NOT NULL,
     "summaryAr" TEXT NOT NULL,
     "summaryEn" TEXT NOT NULL DEFAULT '',
-    "amountBase" DECIMAL NOT NULL DEFAULT 0,
+    "amountBase" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
     "beforeSnapshotJson" TEXT,
     "afterSnapshotJson" TEXT NOT NULL,
@@ -1160,39 +1168,42 @@ CREATE TABLE "ApprovalRequest" (
     "reviewedById" TEXT,
     "reviewedByName" TEXT,
     "reviewNotes" TEXT,
-    "reviewedAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "ApprovalRequest_ruleId_fkey" FOREIGN KEY ("ruleId") REFERENCES "ApprovalRule" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "reviewedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ApprovalRequest_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "IdempotencyRecord" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "idempotencyKey" TEXT NOT NULL,
     "endpoint" TEXT NOT NULL,
     "method" TEXT NOT NULL,
     "userId" TEXT,
     "statusCode" INTEGER NOT NULL,
     "responseJson" TEXT NOT NULL,
-    "expiresAt" DATETIME NOT NULL,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "IdempotencyRecord_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "BankPaymentDispatch" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "dispatchNumber" TEXT NOT NULL,
     "treasuryAccountId" TEXT NOT NULL,
     "sourceVoucherType" TEXT NOT NULL,
     "sourceVoucherId" TEXT NOT NULL,
     "beneficiaryName" TEXT NOT NULL,
     "beneficiaryAccountOrPhone" TEXT NOT NULL,
-    "amount" DECIMAL NOT NULL,
-    "feeAmount" DECIMAL NOT NULL DEFAULT 0,
+    "amount" DECIMAL(65,30) NOT NULL,
+    "feeAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "currencyCode" TEXT NOT NULL DEFAULT 'YER',
-    "exchangeRate" DECIMAL NOT NULL DEFAULT 1,
-    "baseAmount" DECIMAL NOT NULL,
+    "exchangeRate" DECIMAL(65,30) NOT NULL DEFAULT 1,
+    "baseAmount" DECIMAL(65,30) NOT NULL,
     "provider" TEXT NOT NULL,
     "externalReferenceId" TEXT,
     "status" TEXT NOT NULL DEFAULT 'QUEUED',
@@ -1203,15 +1214,16 @@ CREATE TABLE "BankPaymentDispatch" (
     "journalEntryId" TEXT,
     "executedById" TEXT NOT NULL,
     "executedByName" TEXT NOT NULL,
-    "executedAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "BankPaymentDispatch_treasuryAccountId_fkey" FOREIGN KEY ("treasuryAccountId") REFERENCES "TreasuryAccount" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    "executedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "BankPaymentDispatch_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "SyncChangeLog" (
-    "cursor" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "cursor" SERIAL NOT NULL,
     "entityType" TEXT NOT NULL,
     "entityId" TEXT NOT NULL,
     "operation" TEXT NOT NULL,
@@ -1219,12 +1231,14 @@ CREATE TABLE "SyncChangeLog" (
     "idempotencyKey" TEXT,
     "deviceId" TEXT,
     "actorUserId" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "SyncChangeLog_pkey" PRIMARY KEY ("cursor")
 );
 
 -- CreateTable
 CREATE TABLE "SyncConflict" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "entityType" TEXT NOT NULL,
     "entityId" TEXT NOT NULL,
     "idempotencyKey" TEXT,
@@ -1235,14 +1249,16 @@ CREATE TABLE "SyncConflict" (
     "serverSnapshotJson" TEXT NOT NULL,
     "resolutionNotes" TEXT,
     "resolvedById" TEXT,
-    "resolvedAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "resolvedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "SyncConflict_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "NotificationEvent" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "eventType" TEXT NOT NULL,
     "channel" TEXT NOT NULL DEFAULT 'general',
     "severity" TEXT NOT NULL DEFAULT 'INFO',
@@ -1256,14 +1272,16 @@ CREATE TABLE "NotificationEvent" (
     "recipientUserId" TEXT,
     "actorUserId" TEXT,
     "isRead" BOOLEAN NOT NULL DEFAULT false,
-    "readAt" DATETIME,
+    "readAt" TIMESTAMP(3),
     "metadataJson" TEXT NOT NULL DEFAULT '{}',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "NotificationEvent_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "TenantDevice" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "deviceId" TEXT NOT NULL,
     "tenantSlug" TEXT NOT NULL DEFAULT 'default',
     "activationKey" TEXT,
@@ -1274,24 +1292,26 @@ CREATE TABLE "TenantDevice" (
     "userId" TEXT,
     "userEmail" TEXT,
     "userDisplay" TEXT,
-    "lastSeenAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "lastSeenAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "ipAddress" TEXT,
     "status" TEXT NOT NULL DEFAULT 'ACTIVE',
     "syncMode" TEXT NOT NULL DEFAULT 'AUTO',
     "syncIntervalSec" INTEGER NOT NULL DEFAULT 60,
     "pendingQueueCount" INTEGER NOT NULL DEFAULT 0,
     "lastCursor" INTEGER NOT NULL DEFAULT 0,
-    "lastSyncAt" DATETIME,
+    "lastSyncAt" TIMESTAMP(3),
     "lastSyncError" TEXT,
     "pendingCommand" TEXT,
-    "pendingCommandAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "pendingCommandAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "TenantDevice_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ClientPortalAccount" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "tenantSlug" TEXT NOT NULL DEFAULT 'default',
     "globalClientId" TEXT,
     "customerId" TEXT,
@@ -1305,8 +1325,11 @@ CREATE TABLE "ClientPortalAccount" (
     "avatarUrl" TEXT,
     "avatarColor" TEXT NOT NULL DEFAULT '#059669',
     "mustChangePassword" BOOLEAN NOT NULL DEFAULT false,
-    "passwordUpdatedAt" DATETIME,
+    "passwordUpdatedAt" TIMESTAMP(3),
     "sessionVersion" INTEGER NOT NULL DEFAULT 1,
+    "sectorMode" TEXT NOT NULL DEFAULT 'INHERIT',
+    "suspendedAt" TIMESTAMP(3),
+    "archivedAt" TIMESTAMP(3),
     "deviceLimit" INTEGER NOT NULL DEFAULT 3,
     "clientType" TEXT NOT NULL DEFAULT 'DIRECT_CLIENT',
     "customClientType" TEXT,
@@ -1316,31 +1339,34 @@ CREATE TABLE "ClientPortalAccount" (
     "notes" TEXT,
     "approvedById" TEXT,
     "approvedByName" TEXT,
-    "approvedAt" DATETIME,
+    "approvedAt" TIMESTAMP(3),
     "rejectedReason" TEXT,
-    "lastLoginAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "lastLoginAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ClientPortalAccount_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ClientPasswordResetToken" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "clientAccountId" TEXT NOT NULL,
     "codeHash" TEXT NOT NULL,
     "initiatedBy" TEXT NOT NULL DEFAULT 'SELF',
     "staffUserId" TEXT,
     "staffUserName" TEXT,
-    "expiresAt" DATETIME NOT NULL,
-    "usedAt" DATETIME,
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+    "usedAt" TIMESTAMP(3),
     "attempts" INTEGER NOT NULL DEFAULT 0,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "ClientPasswordResetToken_clientAccountId_fkey" FOREIGN KEY ("clientAccountId") REFERENCES "ClientPortalAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ClientPasswordResetToken_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ClientGoodsRequest" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "tenantSlug" TEXT NOT NULL DEFAULT 'default',
     "requestNumber" TEXT NOT NULL,
     "clientAccountId" TEXT NOT NULL,
@@ -1352,8 +1378,8 @@ CREATE TABLE "ClientGoodsRequest" (
     "customDataJson" TEXT NOT NULL DEFAULT '{}',
     "reserveStock" BOOLEAN NOT NULL DEFAULT false,
     "reservedSummaryJson" TEXT NOT NULL DEFAULT '[]',
-    "totalEstimated" DECIMAL NOT NULL DEFAULT 0,
-    "totalConfirmed" DECIMAL NOT NULL DEFAULT 0,
+    "totalEstimated" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "totalConfirmed" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "projectId" TEXT,
     "subProjectId" TEXT,
@@ -1363,69 +1389,72 @@ CREATE TABLE "ClientGoodsRequest" (
     "linkedReceiptId" TEXT,
     "linkedSalesRecordId" TEXT,
     "linkedDraftId" TEXT,
-    "creditPaidPlanned" DECIMAL NOT NULL DEFAULT 0,
-    "debitPlanned" DECIMAL NOT NULL DEFAULT 0,
+    "creditPaidPlanned" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "debitPlanned" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "approvedByUserId" TEXT,
     "approvedByName" TEXT,
-    "approvedAt" DATETIME,
+    "approvedAt" TIMESTAMP(3),
     "reviewedById" TEXT,
     "reviewedByName" TEXT,
-    "reviewedAt" DATETIME,
-    "readyAt" DATETIME,
+    "reviewedAt" TIMESTAMP(3),
+    "readyAt" TIMESTAMP(3),
     "handedOverById" TEXT,
     "handedOverByName" TEXT,
-    "handedOverAt" DATETIME,
+    "handedOverAt" TIMESTAMP(3),
     "staffNotes" TEXT,
     "reviewerRemarks" TEXT,
     "amendmentDiffJson" TEXT NOT NULL DEFAULT '[]',
     "beforeSnapshotJson" TEXT,
     "afterSnapshotJson" TEXT,
     "revisionNumber" INTEGER NOT NULL DEFAULT 1,
-    "returnedToClientAt" DATETIME,
+    "returnedToClientAt" TIMESTAMP(3),
     "returnedByUserId" TEXT,
     "returnedByName" TEXT,
+    "returnEditPermissionsJson" TEXT NOT NULL DEFAULT '{}',
     "clientResponseStatus" TEXT,
     "clientResponseNote" TEXT,
-    "clientRespondedAt" DATETIME,
+    "clientRespondedAt" TIMESTAMP(3),
     "sectorType" TEXT NOT NULL DEFAULT 'HARVEST',
     "submissionType" TEXT NOT NULL DEFAULT 'catalog_order',
     "isArchived" BOOLEAN NOT NULL DEFAULT false,
-    "archivedAt" DATETIME,
+    "archivedAt" TIMESTAMP(3),
     "archivedBy" TEXT,
     "isArchivedByClient" BOOLEAN NOT NULL DEFAULT false,
-    "archivedByClientAt" DATETIME,
+    "archivedByClientAt" TIMESTAMP(3),
     "isHiddenByClient" BOOLEAN NOT NULL DEFAULT false,
-    "hiddenByClientAt" DATETIME,
+    "hiddenByClientAt" TIMESTAMP(3),
     "isHiddenByStaff" BOOLEAN NOT NULL DEFAULT false,
-    "hiddenByStaffAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "ClientGoodsRequest_clientAccountId_fkey" FOREIGN KEY ("clientAccountId") REFERENCES "ClientPortalAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "hiddenByStaffAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ClientGoodsRequest_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ClientGoodsRequestLine" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "requestId" TEXT NOT NULL,
     "lineOrder" INTEGER NOT NULL DEFAULT 1,
     "itemId" TEXT,
     "catalogBoardItemId" TEXT,
     "itemTitle" TEXT NOT NULL,
-    "requestedQty" DECIMAL NOT NULL,
-    "confirmedQty" DECIMAL,
+    "requestedQty" DECIMAL(65,30) NOT NULL,
+    "confirmedQty" DECIMAL(65,30),
     "unitCode" TEXT NOT NULL DEFAULT 'QAT_BUNCH',
     "unitLabel" TEXT NOT NULL DEFAULT 'علاقية قات',
     "customUnitLabel" TEXT,
-    "unitPrice" DECIMAL NOT NULL DEFAULT 0,
-    "lineTotal" DECIMAL NOT NULL DEFAULT 0,
+    "unitPrice" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "lineTotal" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "saleMode" TEXT NOT NULL DEFAULT 'BULK',
     "notes" TEXT,
-    CONSTRAINT "ClientGoodsRequestLine_requestId_fkey" FOREIGN KEY ("requestId") REFERENCES "ClientGoodsRequest" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+
+    CONSTRAINT "ClientGoodsRequestLine_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "WhatsAppOutboxMessage" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "draftNumber" TEXT NOT NULL,
     "eventType" TEXT NOT NULL,
     "clientAccountId" TEXT,
@@ -1440,17 +1469,19 @@ CREATE TABLE "WhatsAppOutboxMessage" (
     "dispatchChannel" TEXT NOT NULL DEFAULT 'WHATSAPP_LINK',
     "approvedByUserId" TEXT,
     "approvedByName" TEXT,
-    "approvedAt" DATETIME,
-    "sentAt" DATETIME,
+    "approvedAt" TIMESTAMP(3),
+    "sentAt" TIMESTAMP(3),
     "skippedReason" TEXT,
     "providerResponseJson" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "WhatsAppOutboxMessage_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "TenantIntegrationSetting" (
-    "id" TEXT NOT NULL PRIMARY KEY DEFAULT 'whatsapp',
+    "id" TEXT NOT NULL DEFAULT 'whatsapp',
     "provider" TEXT NOT NULL DEFAULT 'WHATSAPP_WEB_LINK',
     "gatewayUrl" TEXT,
     "credentialsEnc" TEXT,
@@ -1461,12 +1492,14 @@ CREATE TABLE "TenantIntegrationSetting" (
     "configJson" TEXT NOT NULL DEFAULT '{}',
     "isActive" BOOLEAN NOT NULL DEFAULT true,
     "updatedById" TEXT,
-    "updatedAt" DATETIME NOT NULL
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "TenantIntegrationSetting_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "PortalCatalogBoardItem" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "inventoryItemId" TEXT,
     "harvestBatchId" TEXT,
     "projectId" TEXT,
@@ -1483,18 +1516,18 @@ CREATE TABLE "PortalCatalogBoardItem" (
     "countryOfOrigin" TEXT,
     "productionDate" TEXT,
     "expiryDate" TEXT,
-    "taxRate" DECIMAL NOT NULL DEFAULT 0,
+    "taxRate" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "unitCode" TEXT NOT NULL DEFAULT 'QAT_BUNCH',
     "unitLabel" TEXT NOT NULL DEFAULT 'علاقية قات',
     "customUnitLabel" TEXT,
-    "unitPrice" DECIMAL NOT NULL DEFAULT 0,
+    "unitPrice" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "bulkUnitLabel" TEXT,
     "partialUnitLabel" TEXT,
-    "partialUnitPrice" DECIMAL NOT NULL DEFAULT 0,
-    "multiplierToBase" DECIMAL NOT NULL DEFAULT 1,
-    "publishedQty" DECIMAL,
-    "remainingQty" DECIMAL,
-    "lowStockThreshold" DECIMAL NOT NULL DEFAULT 5,
+    "partialUnitPrice" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "multiplierToBase" DECIMAL(65,30) NOT NULL DEFAULT 1,
+    "publishedQty" DECIMAL(65,30),
+    "remainingQty" DECIMAL(65,30),
+    "lowStockThreshold" DECIMAL(65,30) NOT NULL DEFAULT 5,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "availabilityStatus" TEXT NOT NULL DEFAULT 'AVAILABLE',
     "pickupLocation" TEXT,
@@ -1503,19 +1536,21 @@ CREATE TABLE "PortalCatalogBoardItem" (
     "validityNote" TEXT,
     "displayOrder" INTEGER NOT NULL DEFAULT 1,
     "isPublished" BOOLEAN NOT NULL DEFAULT false,
-    "publishedAt" DATETIME,
+    "publishedAt" TIMESTAMP(3),
     "publishedById" TEXT,
     "publishedByName" TEXT,
     "notes" TEXT,
     "createdById" TEXT,
     "createdByName" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PortalCatalogBoardItem_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "CommercialDispatchOrder" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "dispatchNumber" TEXT NOT NULL,
     "requestId" TEXT,
     "sectorType" TEXT NOT NULL DEFAULT 'COMMERCIAL',
@@ -1524,20 +1559,22 @@ CREATE TABLE "CommercialDispatchOrder" (
     "vehicleInfo" TEXT,
     "tripStatus" TEXT NOT NULL DEFAULT 'PENDING_PICK',
     "podNotes" TEXT,
-    "pickedAt" DATETIME,
-    "packedAt" DATETIME,
-    "dispatchedAt" DATETIME,
-    "deliveredAt" DATETIME,
+    "pickedAt" TIMESTAMP(3),
+    "packedAt" TIMESTAMP(3),
+    "dispatchedAt" TIMESTAMP(3),
+    "deliveredAt" TIMESTAMP(3),
     "itemsJson" TEXT NOT NULL DEFAULT '[]',
     "createdById" TEXT,
     "createdByName" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "CommercialDispatchOrder_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "tenants" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "tenantId" TEXT NOT NULL,
     "slug" TEXT NOT NULL,
     "companyName" TEXT NOT NULL,
@@ -1553,13 +1590,15 @@ CREATE TABLE "tenants" (
     "allowedModesJson" TEXT NOT NULL DEFAULT '["local","lan","cloud"]',
     "maxSeats" INTEGER NOT NULL DEFAULT 10,
     "status" TEXT NOT NULL DEFAULT 'ACTIVE',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "tenants_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "GlobalClientIdentity" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "normalizedPhone" TEXT NOT NULL,
     "normalizedEmail" TEXT NOT NULL,
     "fullName" TEXT NOT NULL,
@@ -1568,14 +1607,16 @@ CREATE TABLE "GlobalClientIdentity" (
     "avatarUrl" TEXT,
     "avatarColor" TEXT NOT NULL DEFAULT '#059669',
     "sessionVersion" INTEGER NOT NULL DEFAULT 1,
-    "lastLoginAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "lastLoginAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "GlobalClientIdentity_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "GlobalClientMembership" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "globalClientId" TEXT NOT NULL,
     "tenantSlug" TEXT NOT NULL,
     "tenantId" TEXT NOT NULL,
@@ -1585,18 +1626,19 @@ CREATE TABLE "GlobalClientMembership" (
     "normalizedPhone" TEXT NOT NULL,
     "normalizedEmail" TEXT NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'PENDING_APPROVAL',
-    "creditLimit" DECIMAL NOT NULL DEFAULT 0,
-    "balance" DECIMAL NOT NULL DEFAULT 0,
+    "creditLimit" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "balance" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "deviceLimit" INTEGER NOT NULL DEFAULT 3,
-    "lastSyncedAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "GlobalClientMembership_globalClientId_fkey" FOREIGN KEY ("globalClientId") REFERENCES "GlobalClientIdentity" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "lastSyncedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "GlobalClientMembership_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "TenantPaymentChannel" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "tenantSlug" TEXT NOT NULL DEFAULT 'default',
     "category" TEXT NOT NULL,
     "providerCode" TEXT NOT NULL DEFAULT 'CUSTOM',
@@ -1614,13 +1656,15 @@ CREATE TABLE "TenantPaymentChannel" (
     "isActive" BOOLEAN NOT NULL DEFAULT true,
     "createdById" TEXT,
     "createdByName" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "TenantPaymentChannel_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ClientPaymentReceipt" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "submissionNumber" TEXT NOT NULL,
     "tenantSlug" TEXT NOT NULL DEFAULT 'default',
     "clientAccountId" TEXT NOT NULL,
@@ -1629,11 +1673,11 @@ CREATE TABLE "ClientPaymentReceipt" (
     "channelCategory" TEXT NOT NULL,
     "channelNameAr" TEXT NOT NULL,
     "treasuryAccountId" TEXT NOT NULL,
-    "amount" DECIMAL NOT NULL,
+    "amount" DECIMAL(65,30) NOT NULL,
     "currency" TEXT NOT NULL DEFAULT 'YER',
     "transferReference" TEXT NOT NULL,
     "normalizedReference" TEXT NOT NULL,
-    "transferAt" DATETIME NOT NULL,
+    "transferAt" TIMESTAMP(3) NOT NULL,
     "transferDateDmy" TEXT NOT NULL,
     "transferTimeHm" TEXT NOT NULL,
     "linkedInvoiceIdsJson" TEXT NOT NULL DEFAULT '[]',
@@ -1649,13 +1693,14 @@ CREATE TABLE "ClientPaymentReceipt" (
     "rejectionReason" TEXT,
     "reviewedByUserId" TEXT,
     "reviewedByName" TEXT,
-    "reviewedAt" DATETIME,
+    "reviewedAt" TIMESTAMP(3),
     "linkedReceiptVoucherId" TEXT,
     "linkedJournalEntryId" TEXT,
     "auditHistoryJson" TEXT NOT NULL DEFAULT '[]',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "ClientPaymentReceipt_clientAccountId_fkey" FOREIGN KEY ("clientAccountId") REFERENCES "ClientPortalAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ClientPaymentReceipt_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
@@ -2043,4 +2088,338 @@ CREATE INDEX "ClientPaymentReceipt_tenantSlug_status_createdAt_idx" ON "ClientPa
 CREATE INDEX "ClientPaymentReceipt_customerId_status_idx" ON "ClientPaymentReceipt"("customerId", "status");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "ClientPaymentReceipt_tenantSlug_channelId_normalizedReference_key" ON "ClientPaymentReceipt"("tenantSlug", "channelId", "normalizedReference");
+CREATE UNIQUE INDEX "ClientPaymentReceipt_tenantSlug_channelId_normalizedReferen_key" ON "ClientPaymentReceipt"("tenantSlug", "channelId", "normalizedReference");
+
+-- AddForeignKey
+ALTER TABLE "Account" ADD CONSTRAINT "Account_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "Account"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Account" ADD CONSTRAINT "Account_defaultCostCenterId_fkey" FOREIGN KEY ("defaultCostCenterId") REFERENCES "CostCenter"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JournalEntry" ADD CONSTRAINT "JournalEntry_fiscalYearId_fkey" FOREIGN KEY ("fiscalYearId") REFERENCES "FiscalYear"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JournalEntry" ADD CONSTRAINT "JournalEntry_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JournalEntry" ADD CONSTRAINT "JournalEntry_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JournalEntry" ADD CONSTRAINT "JournalEntry_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JournalEntryLine" ADD CONSTRAINT "JournalEntryLine_journalEntryId_fkey" FOREIGN KEY ("journalEntryId") REFERENCES "JournalEntry"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JournalEntryLine" ADD CONSTRAINT "JournalEntryLine_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JournalEntryLine" ADD CONSTRAINT "JournalEntryLine_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JournalEntryLine" ADD CONSTRAINT "JournalEntryLine_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JournalEntryLine" ADD CONSTRAINT "JournalEntryLine_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JournalEntryLine" ADD CONSTRAINT "JournalEntryLine_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Attachment" ADD CONSTRAINT "Attachment_journalEntryId_fkey" FOREIGN KEY ("journalEntryId") REFERENCES "JournalEntry"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ExchangeRate" ADD CONSTRAINT "ExchangeRate_currencyCode_fkey" FOREIGN KEY ("currencyCode") REFERENCES "Currency"("code") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Project" ADD CONSTRAINT "Project_parentProjectId_fkey" FOREIGN KEY ("parentProjectId") REFERENCES "Project"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Project" ADD CONSTRAINT "Project_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Project" ADD CONSTRAINT "Project_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Project" ADD CONSTRAINT "Project_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ProjectAcquisitionCycle" ADD CONSTRAINT "ProjectAcquisitionCycle_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SubProject" ADD CONSTRAINT "SubProject_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SubProject" ADD CONSTRAINT "SubProject_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "HarvestCycle" ADD CONSTRAINT "HarvestCycle_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Vendor" ADD CONSTRAINT "Vendor_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Vendor" ADD CONSTRAINT "Vendor_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Vendor" ADD CONSTRAINT "Vendor_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PurchaseOrder" ADD CONSTRAINT "PurchaseOrder_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PurchaseOrder" ADD CONSTRAINT "PurchaseOrder_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PurchaseOrder" ADD CONSTRAINT "PurchaseOrder_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PurchaseOrder" ADD CONSTRAINT "PurchaseOrder_acquisitionCycleId_fkey" FOREIGN KEY ("acquisitionCycleId") REFERENCES "ProjectAcquisitionCycle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PurchaseOrderItem" ADD CONSTRAINT "PurchaseOrderItem_purchaseOrderId_fkey" FOREIGN KEY ("purchaseOrderId") REFERENCES "PurchaseOrder"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "GoodsReceipt" ADD CONSTRAINT "GoodsReceipt_purchaseOrderId_fkey" FOREIGN KEY ("purchaseOrderId") REFERENCES "PurchaseOrder"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorBill" ADD CONSTRAINT "VendorBill_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorBill" ADD CONSTRAINT "VendorBill_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorBill" ADD CONSTRAINT "VendorBill_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorBill" ADD CONSTRAINT "VendorBill_purchaseOrderId_fkey" FOREIGN KEY ("purchaseOrderId") REFERENCES "PurchaseOrder"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorBill" ADD CONSTRAINT "VendorBill_acquisitionCycleId_fkey" FOREIGN KEY ("acquisitionCycleId") REFERENCES "ProjectAcquisitionCycle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorBill" ADD CONSTRAINT "VendorBill_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorBillItem" ADD CONSTRAINT "VendorBillItem_billId_fkey" FOREIGN KEY ("billId") REFERENCES "VendorBill"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PaymentVoucher" ADD CONSTRAINT "PaymentVoucher_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "Vendor"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PaymentVoucher" ADD CONSTRAINT "PaymentVoucher_billId_fkey" FOREIGN KEY ("billId") REFERENCES "VendorBill"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PaymentVoucher" ADD CONSTRAINT "PaymentVoucher_treasuryId_fkey" FOREIGN KEY ("treasuryId") REFERENCES "TreasuryAccount"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PaymentVoucher" ADD CONSTRAINT "PaymentVoucher_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PaymentVoucher" ADD CONSTRAINT "PaymentVoucher_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PaymentVoucher" ADD CONSTRAINT "PaymentVoucher_acquisitionCycleId_fkey" FOREIGN KEY ("acquisitionCycleId") REFERENCES "ProjectAcquisitionCycle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PaymentVoucher" ADD CONSTRAINT "PaymentVoucher_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Customer" ADD CONSTRAINT "Customer_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Customer" ADD CONSTRAINT "Customer_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Customer" ADD CONSTRAINT "Customer_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SalesInvoice" ADD CONSTRAINT "SalesInvoice_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SalesInvoice" ADD CONSTRAINT "SalesInvoice_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SalesInvoice" ADD CONSTRAINT "SalesInvoice_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SalesInvoice" ADD CONSTRAINT "SalesInvoice_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SalesInvoice" ADD CONSTRAINT "SalesInvoice_treasuryAccountId_fkey" FOREIGN KEY ("treasuryAccountId") REFERENCES "TreasuryAccount"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SalesInvoice" ADD CONSTRAINT "SalesInvoice_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SalesInvoiceItem" ADD CONSTRAINT "SalesInvoiceItem_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "SalesInvoice"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReceiptVoucher" ADD CONSTRAINT "ReceiptVoucher_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReceiptVoucher" ADD CONSTRAINT "ReceiptVoucher_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "SalesInvoice"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReceiptVoucher" ADD CONSTRAINT "ReceiptVoucher_treasuryId_fkey" FOREIGN KEY ("treasuryId") REFERENCES "TreasuryAccount"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReceiptVoucher" ADD CONSTRAINT "ReceiptVoucher_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReceiptVoucher" ADD CONSTRAINT "ReceiptVoucher_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "InventoryLot" ADD CONSTRAINT "InventoryLot_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "InventoryLot" ADD CONSTRAINT "InventoryLot_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "HarvestInventoryBatch" ADD CONSTRAINT "HarvestInventoryBatch_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "HarvestInventoryBatch" ADD CONSTRAINT "HarvestInventoryBatch_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "HarvestInventoryBatch" ADD CONSTRAINT "HarvestInventoryBatch_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TreasuryAccount" ADD CONSTRAINT "TreasuryAccount_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "OperatingExpense" ADD CONSTRAINT "OperatingExpense_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "OperatingExpense" ADD CONSTRAINT "OperatingExpense_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "OperatingExpense" ADD CONSTRAINT "OperatingExpense_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Worker" ADD CONSTRAINT "Worker_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Worker" ADD CONSTRAINT "Worker_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Worker" ADD CONSTRAINT "Worker_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "WorkerWageEntry" ADD CONSTRAINT "WorkerWageEntry_workerId_fkey" FOREIGN KEY ("workerId") REFERENCES "Worker"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "WorkerWageEntry" ADD CONSTRAINT "WorkerWageEntry_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "WorkerWageEntry" ADD CONSTRAINT "WorkerWageEntry_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "WorkerWageEntry" ADD CONSTRAINT "WorkerWageEntry_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SaleTransaction" ADD CONSTRAINT "SaleTransaction_treasuryAccountId_fkey" FOREIGN KEY ("treasuryAccountId") REFERENCES "TreasuryAccount"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SaleTransaction" ADD CONSTRAINT "SaleTransaction_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SaleTransaction" ADD CONSTRAINT "SaleTransaction_subProjectId_fkey" FOREIGN KEY ("subProjectId") REFERENCES "SubProject"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SaleTransaction" ADD CONSTRAINT "SaleTransaction_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SaleTransaction" ADD CONSTRAINT "SaleTransaction_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "InstallmentVoucher" ADD CONSTRAINT "InstallmentVoucher_saleTransactionId_fkey" FOREIGN KEY ("saleTransactionId") REFERENCES "SaleTransaction"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "InstallmentVoucher" ADD CONSTRAINT "InstallmentVoucher_workerWageEntryId_fkey" FOREIGN KEY ("workerWageEntryId") REFERENCES "WorkerWageEntry"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "InstallmentVoucher" ADD CONSTRAINT "InstallmentVoucher_treasuryAccountId_fkey" FOREIGN KEY ("treasuryAccountId") REFERENCES "TreasuryAccount"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AuditLog" ADD CONSTRAINT "AuditLog_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AdjustmentEntry" ADD CONSTRAINT "AdjustmentEntry_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AdjustmentEntry" ADD CONSTRAINT "AdjustmentEntry_harvestCycleId_fkey" FOREIGN KEY ("harvestCycleId") REFERENCES "HarvestCycle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ItemCategory" ADD CONSTRAINT "ItemCategory_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "ItemCategory"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Warehouse" ADD CONSTRAINT "Warehouse_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Warehouse" ADD CONSTRAINT "Warehouse_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "InventoryItem" ADD CONSTRAINT "InventoryItem_categoryId_fkey" FOREIGN KEY ("categoryId") REFERENCES "ItemCategory"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "InventoryItem" ADD CONSTRAINT "InventoryItem_baseUnitId_fkey" FOREIGN KEY ("baseUnitId") REFERENCES "UnitOfMeasure"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "InventoryItem" ADD CONSTRAINT "InventoryItem_defaultWarehouseId_fkey" FOREIGN KEY ("defaultWarehouseId") REFERENCES "Warehouse"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ItemUnitConversion" ADD CONSTRAINT "ItemUnitConversion_itemId_fkey" FOREIGN KEY ("itemId") REFERENCES "InventoryItem"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ItemUnitConversion" ADD CONSTRAINT "ItemUnitConversion_unitId_fkey" FOREIGN KEY ("unitId") REFERENCES "UnitOfMeasure"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "StockBalance" ADD CONSTRAINT "StockBalance_itemId_fkey" FOREIGN KEY ("itemId") REFERENCES "InventoryItem"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "StockBalance" ADD CONSTRAINT "StockBalance_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "StockMovement" ADD CONSTRAINT "StockMovement_itemId_fkey" FOREIGN KEY ("itemId") REFERENCES "InventoryItem"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "StockMovement" ADD CONSTRAINT "StockMovement_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "StockMovement" ADD CONSTRAINT "StockMovement_enteredUnitId_fkey" FOREIGN KEY ("enteredUnitId") REFERENCES "UnitOfMeasure"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "StockMovement" ADD CONSTRAINT "StockMovement_costCenterId_fkey" FOREIGN KEY ("costCenterId") REFERENCES "CostCenter"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "CostCenter" ADD CONSTRAINT "CostCenter_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "CostCenter"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AccountingPeriod" ADD CONSTRAINT "AccountingPeriod_fiscalYearId_fkey" FOREIGN KEY ("fiscalYearId") REFERENCES "FiscalYear"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TaxRate" ADD CONSTRAINT "TaxRate_taxCodeId_fkey" FOREIGN KEY ("taxCodeId") REFERENCES "TaxCode"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ApprovalRequest" ADD CONSTRAINT "ApprovalRequest_ruleId_fkey" FOREIGN KEY ("ruleId") REFERENCES "ApprovalRule"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "BankPaymentDispatch" ADD CONSTRAINT "BankPaymentDispatch_treasuryAccountId_fkey" FOREIGN KEY ("treasuryAccountId") REFERENCES "TreasuryAccount"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ClientPasswordResetToken" ADD CONSTRAINT "ClientPasswordResetToken_clientAccountId_fkey" FOREIGN KEY ("clientAccountId") REFERENCES "ClientPortalAccount"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ClientGoodsRequest" ADD CONSTRAINT "ClientGoodsRequest_clientAccountId_fkey" FOREIGN KEY ("clientAccountId") REFERENCES "ClientPortalAccount"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ClientGoodsRequestLine" ADD CONSTRAINT "ClientGoodsRequestLine_requestId_fkey" FOREIGN KEY ("requestId") REFERENCES "ClientGoodsRequest"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "GlobalClientMembership" ADD CONSTRAINT "GlobalClientMembership_globalClientId_fkey" FOREIGN KEY ("globalClientId") REFERENCES "GlobalClientIdentity"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ClientPaymentReceipt" ADD CONSTRAINT "ClientPaymentReceipt_clientAccountId_fkey" FOREIGN KEY ("clientAccountId") REFERENCES "ClientPortalAccount"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
